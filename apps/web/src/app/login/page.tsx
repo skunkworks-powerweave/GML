@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { loginAction, type LoginState } from "./actions";
+import { EmailLinkForm } from "./email-link-form";
 
 export default function LoginPage() {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
@@ -50,6 +51,8 @@ export default function LoginPage() {
           {pending ? "Signing in…" : "Sign in"}
         </button>
       </form>
+
+      <EmailLinkForm />
 
       <p className="text-xs text-neutral-500">
         Trouble signing in? Contact your programme administrator.

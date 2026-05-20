@@ -1,5 +1,6 @@
 import NextAuth, { type DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import Nodemailer from "next-auth/providers/nodemailer";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -29,6 +30,24 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     signIn: "/login",
   },
   providers: [
+    // Magic-link email provider (admin / mentor staff use this; teachers stay on credentials).
+    // Gated on SMTP_HOST being configured — if not set, the provider effectively no-ops.
+    ...(process.env.SMTP_HOST
+      ? [
+          Nodemailer({
+            server: {
+              host: process.env.SMTP_HOST,
+              port: Number(process.env.SMTP_PORT ?? 587),
+              auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS,
+              },
+            },
+            from: process.env.SMTP_FROM ?? "lms@goldenmilelearning.org",
+            maxAge: 10 * 60, // 10-minute links
+          }),
+        ]
+      : []),
     Credentials({
       credentials: {
         email: { label: "Email", type: "email" },
