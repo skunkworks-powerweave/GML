@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./api-contracts/*": "./src/api-contracts/*.ts"
+    "./api-contracts/*": "./src/api-contracts/*.ts",
+    "./auth/*": "./src/auth/*.ts"
   },
   "dependencies": {
     "zod": "^3.23.0"
