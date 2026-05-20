@@ -1,0 +1,190 @@
+# GML LMS — single-host stack.
+# `docker compose up -d` from this directory brings up the 7-service deployment.
+# All secrets, the domain, and ports come from the sibling `.env` file
+# (copy from `.env.example`).
+#
+# Start order (depends_on): postgres → redis → minio → tusd → app → worker → caddy.
+# Hot data lives in named volumes (NOT bind mounts) so OneDrive sync never touches it.
+
+name: gml-lms
+
+services:
+
+  postgres:
+    # role: primary relational store (RTT data, audit log, sessions, etc.)
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gml_lms}
+      POSTGRES_USER: ${POSTGRES_USER:-gml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - lms_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gml} -d ${POSTGRES_DB:-gml_lms}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  redis:
+    # role: BullMQ queue + rate-limit cache + session-gate attempt counters
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redisdata:/data
+    networks:
+      - lms_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  minio:
+    # role: S3-compatible object storage for video originals + HLS chunks + PDFs
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+    volumes:
+      - miniodata:/data
+    networks:
+      - lms_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  tusd:
+    # role: resumable upload endpoint (tus protocol); writes through to MinIO via S3 API
+    image: tusproject/tusd:v2.6.0
+    restart: unless-stopped
+    command:
+      - "-s3-bucket=${MINIO_BUCKET:-gml-media}"
+      - "-s3-endpoint=${MINIO_ENDPOINT:-http://minio:9000}"
+      - "-behind-proxy"
+      - "-base-path=/uploads/"
+      - "-max-size=2147483648"  # 2 GB
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: us-east-1
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - lms_net
+
+  app:
+    # role: Next.js web + API + Server Actions (the LMS UI)
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-gml}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gml_lms}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-gml_lms}
+      POSTGRES_USER: ${POSTGRES_USER:-gml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_BUCKET: ${MINIO_BUCKET:-gml-media}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set}
+      AUTH_URL: ${AUTH_URL:-https://localhost}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:?SUPER_ADMIN_EMAIL must be set}
+      SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:?SUPER_ADMIN_INITIAL_PASSWORD must be set}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - lms_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    # role: BullMQ consumer for ffmpeg transcoding + WhatsApp media ingest (real entry in spec 024)
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-gml}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gml_lms}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_BUCKET: ${MINIO_BUCKET:-gml-media}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - lms_net
+    tmpfs:
+      - /tmp:size=2g  # ffmpeg scratch space — wiped on restart
+
+  caddy:
+    # role: TLS termination, reverse proxy to app + tusd, static cache, auto-LE for prod domains
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_started
+    networks:
+      - lms_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  miniodata:
+  redisdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  lms_net:
+    driver: bridge

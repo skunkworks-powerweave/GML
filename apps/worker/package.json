@@ -1,0 +1,6 @@
+{
+  "name": "@gml/worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "BullMQ consumer for video transcoding + WhatsApp media fetch (real entry point in spec 024)."
+}

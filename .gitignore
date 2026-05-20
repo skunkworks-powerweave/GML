@@ -1,0 +1,40 @@
+# Node / pnpm
+node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.local.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.example.json
+
+# Harness runtime state (regenerated per-machine)
+workspace/
+!workspace/.gitkeep
+
+# Docker bind data
+.docker-volumes/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# TypeScript build info
+*.tsbuildinfo
+next-env.d.ts

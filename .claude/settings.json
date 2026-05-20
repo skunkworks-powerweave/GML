@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "node scripts/session_start.mjs"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/block_destructive.mjs \"$TOOL_INPUT\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "pathGlob": "**/packages/db/src/schema/**",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/warn_schema_change.mjs \"$TOOL_INPUT\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "pathGlob": "**/apps/web/src/middleware.ts",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/warn_middleware_change.mjs \"$TOOL_INPUT\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "pathGlob": "**/apps/web/src/db/migrations/**",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/check_migration_reversible.mjs \"$TOOL_INPUT\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node scripts/stop_session.mjs"
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+# GML LMS — Caddy reverse-proxy + auto-TLS.
+# {$DOMAIN} is interpolated from the env at container start.
+# Locally set DOMAIN=localhost; Caddy issues a self-signed cert via its internal CA.
+
+{$DOMAIN} {
+    encode zstd gzip
+
+    # Self-signed TLS for localhost; production domains fall through to Let's Encrypt.
+    @localhost host localhost
+    tls internal {
+        on_demand
+    }
+
+    # ── Resumable uploads (tusd) ───────────────────────────────────────────────
+    @uploads path /uploads/*
+    handle @uploads {
+        reverse_proxy tusd:1080 {
+            transport http {
+                read_timeout 1h
+                write_timeout 1h
+            }
+        }
+    }
+
+    # ── WhatsApp webhook (large media; generous body cap) ──────────────────────
+    @whatsapp path /api/webhooks/whatsapp*
+    handle @whatsapp {
+        request_body {
+            max_size 200MB
+        }
+        reverse_proxy app:3000
+    }
+
+    # ── App (Next.js) ──────────────────────────────────────────────────────────
+    handle {
+        reverse_proxy app:3000
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
