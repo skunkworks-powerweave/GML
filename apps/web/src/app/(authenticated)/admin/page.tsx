@@ -59,10 +59,15 @@ export default async function AdminIndexPage() {
             </Link>
           </li>
           <li>
-            <span className="block rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 text-neutral-400">
+            <Link
+              href="/admin/gates"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
               <div className="text-sm font-medium">Section gates</div>
-              <div className="text-xs">Lands in spec 021 / 035 (re-skin)</div>
-            </span>
+              <div className="text-xs text-neutral-500">
+                Rotate gate passwords · super_admin only
+              </div>
+            </Link>
           </li>
           <li>
             <span className="block rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 text-neutral-400">

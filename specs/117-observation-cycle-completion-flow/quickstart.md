@@ -1,0 +1,3 @@
+# Quickstart 117
+
+Log in as teacher → visit `/observation/<cycleId>` of a `nominated` cycle → fill the Pre-form textarea → "Submit pre-form" — page reloads with status `pre_submitted`, `observation_forms` row inserted, `audit_log` row `observation.pre_form.submitted` appears. Repeat as observer → "Submit observer-form" (`observed`), back to teacher → "Submit post-form" (`post_submitted`), then as mentor → "Sign off cycle" header button → status flips to `complete`, audit row `observation.signed_off` with `signedByUserId` in metadata. Add-note textarea persists into `observation_cycles.remark`; lesson-video upload via the inline `UploadProgress` lands `video_submissions.context_type='observation_cycle'`, `context_id=<cycleId>` automatically.

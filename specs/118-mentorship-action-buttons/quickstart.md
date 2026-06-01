@@ -1,0 +1,2 @@
+# Quickstart 118
+Sign in as a mentor → /mentorship/<some-pairing-id> → click "+ Log meeting" → page reveals an inline form with `scheduledAt` / `durationMin` / `notes` → submit → row appears in Meetings & touchpoints, pairing's `meetings_count` chip bumps, `mentor.meeting.logged` audit row lands. Click "WhatsApp" → `wa.me/<mentee-phone>?text=...` opens in a new tab. Click a Q2 quarter card → `/forms/progress_1-mentor-1?pairingId=<id>&quarter=2`. As a programme_admin/super_admin only: click "Complete pairing" → status flips to `complete`, `ended_at` populated, audit fires.

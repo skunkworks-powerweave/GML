@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { desc, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog, users } from "@gml/db/schema";
@@ -44,6 +45,17 @@ export default async function AuditViewer({
     .limit(PAGE_SIZE)
     .offset(page * PAGE_SIZE);
 
+  // Build the export query string — mirrors the filter form's params (action,
+  // user) plus drops `page` so the CSV always covers the full filtered slice.
+  // Wired by spec 116 to /api/admin/audit/export which streams text/csv with
+  // a Content-Disposition attachment header.
+  const exportQs = new URLSearchParams();
+  if (sp.action) exportQs.set("action", sp.action);
+  if (sp.user) exportQs.set("user", sp.user);
+  const exportHref = exportQs.toString()
+    ? `/api/admin/audit/export?${exportQs.toString()}`
+    : `/api/admin/audit/export`;
+
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
       <header>
@@ -68,6 +80,13 @@ export default async function AuditViewer({
           <input name="user" defaultValue={sp.user ?? ""} className="rounded-md border border-neutral-300 px-2 py-1" />
         </label>
         <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">Filter</button>
+        <Link
+          href={exportHref}
+          download
+          className="ml-auto rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50"
+        >
+          Export CSV
+        </Link>
       </form>
 
       <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">

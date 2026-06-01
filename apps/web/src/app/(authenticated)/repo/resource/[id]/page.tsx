@@ -89,6 +89,14 @@ export default async function RepoResourceDetailPage({
             </p>
           </div>
 
+          {/*
+            Spec 119 (frontend-parity Tier H) ratifies the "View PDF" CTA
+            shipped by spec 087: the JSX prototype labelled this "Download
+            PDF", which is misleading — anti-download is part of the SM-4
+            deterrence contract. The link must point at the in-browser
+            viewer at /repo/resource/<id>/view (watermark + audit + signed
+            URL); no path here should advertise a download.
+          */}
           <div style={{ display: "flex", gap: 6 }}>
             {res.fileKey ? (
               <Link

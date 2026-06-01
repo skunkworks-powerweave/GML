@@ -1,11 +1,25 @@
 // /observation/[cycleId] — cycle drill-in with 5-step flow diagram.
 // Status: nominated → pre_submitted → observed → post_submitted → complete
+//
+// Spec 117 (frontend-parity Tier B): wires the six interactive elements the
+// JSX prototype (`LMS GML Frontend/observation-detail.jsx`) ships but the
+// real page did not — pre/observer/post form submit, sign-off CTA, add-note,
+// and the video-upload context handle. All status transitions go through
+// guarded server actions in ./actions.ts.
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, teachers, subjects, observationForms, observationEvidence } from "@gml/db/schema";
+import { UploadProgress } from "@/components/video/UploadProgress";
+import {
+  submitPreFormAction,
+  submitObserverFormAction,
+  submitPostFormAction,
+  signOffCycleAction,
+  addNoteAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +31,16 @@ const CYCLE_STAGES = [
   { id: "complete", label: "Complete" },
 ];
 
-export default async function CycleDetailPage({ params }: { params: Promise<{ cycleId: string }> }) {
+export default async function CycleDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ cycleId: string }>;
+  searchParams?: Promise<{ error?: string }>;
+}) {
   const { cycleId } = await params;
+  const sp = (await searchParams) ?? {};
+  const error = (sp.error ?? "").trim();
 
   const [cycle] = await db
     .select()
@@ -51,6 +73,13 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
           ? "chip chip-indigo"
           : "chip";
 
+  // CTA gating — each form may only be submitted once, and only when the
+  // cycle is in the expected upstream status.
+  const canSubmitPre = cycle.status === "nominated";
+  const canSubmitObserver = cycle.status === "pre_submitted";
+  const canSubmitPost = cycle.status === "observed";
+  const canSignOff = cycle.status === "post_submitted";
+
   return (
     <div>
       <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
@@ -81,7 +110,47 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
               : null}
           </p>
         </div>
+        {canSignOff ? (
+          <form action={signOffCycleAction}>
+            <input type="hidden" name="cycleId" value={cycleId} />
+            <button type="submit" className="btn btn-primary">
+              Sign off cycle
+            </button>
+          </form>
+        ) : null}
       </header>
+
+      {error === "invalid_transition" ? (
+        <div
+          role="alert"
+          style={{
+            background: "var(--rust-soft)",
+            color: "var(--rust)",
+            border: "1px solid var(--rust)",
+            borderRadius: "var(--r-2)",
+            padding: 12,
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          That action can&apos;t be performed in the cycle&apos;s current status. The page has been refreshed.
+        </div>
+      ) : null}
+      {error === "empty_note" ? (
+        <div
+          role="alert"
+          style={{
+            background: "var(--saffron-soft)",
+            border: "1px solid oklch(0.82 0.08 60)",
+            borderRadius: "var(--r-2)",
+            padding: 12,
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          Note text can&apos;t be empty.
+        </div>
+      ) : null}
 
       {/* Cycle Flow Diagram */}
       <section style={{ marginBottom: 24 }}>
@@ -127,6 +196,63 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
               ))}
             </ul>
           )}
+
+          {/* CTA: Submit pre-form */}
+          {canSubmitPre ? (
+            <form action={submitPreFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
+              <input type="hidden" name="cycleId" value={cycleId} />
+              <label className="label" style={{ fontSize: 11 }}>Lesson plan summary</label>
+              <textarea
+                name="lessonPlanSummary"
+                rows={3}
+                required
+                className="text"
+                placeholder="What will you teach today?"
+                style={{ fontSize: 13 }}
+              />
+              <button type="submit" className="btn btn-primary btn-sm">
+                Submit pre-form
+              </button>
+            </form>
+          ) : null}
+
+          {/* CTA: Submit observer-form */}
+          {canSubmitObserver ? (
+            <form action={submitObserverFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
+              <input type="hidden" name="cycleId" value={cycleId} />
+              <label className="label" style={{ fontSize: 11 }}>Observer rubric notes</label>
+              <textarea
+                name="narrativeComments"
+                rows={3}
+                required
+                className="text"
+                placeholder="Rubric narrative…"
+                style={{ fontSize: 13 }}
+              />
+              <button type="submit" className="btn btn-primary btn-sm">
+                Submit observer-form
+              </button>
+            </form>
+          ) : null}
+
+          {/* CTA: Submit post-form */}
+          {canSubmitPost ? (
+            <form action={submitPostFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
+              <input type="hidden" name="cycleId" value={cycleId} />
+              <label className="label" style={{ fontSize: 11 }}>What worked / What didn&apos;t</label>
+              <textarea
+                name="whatWorked"
+                rows={3}
+                required
+                className="text"
+                placeholder="Reflect on the lesson…"
+                style={{ fontSize: 13 }}
+              />
+              <button type="submit" className="btn btn-primary btn-sm">
+                Submit post-form
+              </button>
+            </form>
+          ) : null}
         </article>
 
         <article className="card card-hi" style={{ padding: 16 }}>
@@ -159,16 +285,41 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
               ))}
             </ul>
           )}
+
+          {/* CTA: direct browser video upload — context wired to this cycle. */}
+          <div style={{ marginTop: 12 }}>
+            <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+          </div>
         </article>
       </section>
 
-      {cycle.remark ? (
-        <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
-          <div className="label" style={{ marginBottom: 6 }}>Remark</div>
-          <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor note</h2>
-          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5 }}>{cycle.remark}</p>
-        </section>
-      ) : null}
+      {/* Add / edit mentor note */}
+      <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
+        <div className="label" style={{ marginBottom: 6 }}>Remark</div>
+        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor note</h2>
+        {cycle.remark ? (
+          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, marginBottom: 12 }}>{cycle.remark}</p>
+        ) : (
+          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No mentor note yet.</p>
+        )}
+        <form action={addNoteAction} style={{ display: "grid", gap: 8 }}>
+          <input type="hidden" name="cycleId" value={cycleId} />
+          <textarea
+            name="note"
+            rows={3}
+            required
+            defaultValue={cycle.remark ?? ""}
+            className="text"
+            placeholder="Add or update the mentor note…"
+            style={{ fontSize: 13 }}
+          />
+          <div>
+            <button type="submit" className="btn btn-sm">
+              {cycle.remark ? "Update note" : "Add note"}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }

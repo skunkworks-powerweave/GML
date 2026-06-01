@@ -1,10 +1,27 @@
 // /mentorship/[pairingId] — pairing detail: concept note + meetings + feedback lifecycle.
+//
+// Spec 118 (Workflow Run 9 — frontend parity Tier C) wired the action buttons:
+//   - "Log meeting"   → native form POSTs to logMeetingAction (actions.ts).
+//   - "WhatsApp"      → external link to wa.me/<phone>?text=<msg>.
+//   - "Message"       → /inbox link (internal messaging deferred; see
+//                       specs/118-.../research.md design deviations).
+//   - Q1-Q4 strip     → links to /forms/<kind>-<audience>-1?pairingId=&quarter=.
+//   - Commitments     → audit-only toggle via toggleCommitmentAction (no
+//                       persistence column yet; see research.md).
+//   - "Complete"      → completePairingAction (super_admin + programme_admin).
 
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { eq, desc } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorPairings, mentors, teachers, mentorMeetings, feedbackResponses } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { hasAnyRole } from "@gml/shared/auth/roles";
+import {
+  logMeetingAction,
+  completePairingAction,
+  toggleCommitmentAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -16,13 +33,50 @@ const QUARTER_LABEL: Record<string, string> = {
   final: "Q4 · Final",
 };
 
-export default async function PairingDetailPage({ params }: { params: Promise<{ pairingId: string }> }) {
+// Quarter index (1..4) → feedback_forms.kind value used in the /forms/ slug.
+const QUARTER_TO_KIND: Record<number, (typeof QUARTERS)[number]> = {
+  1: "baseline",
+  2: "progress_1",
+  3: "progress_2",
+  4: "final",
+};
+
+// Default form audience when opening a quarter form. We pick "mentor" because
+// the pairing-detail surface is mentor-first in the prototype; mentees reach
+// their forms via /inbox. The audience is overridable via the URL once on the
+// form page.
+const DEFAULT_AUDIENCE = "mentor";
+const FORM_VERSION = "1";
+
+export default async function PairingDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ pairingId: string }>;
+  searchParams?: Promise<{ logMeeting?: string }>;
+}) {
   const { pairingId } = await params;
+  const sp = (await searchParams) ?? {};
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const canComplete = hasAnyRole(session.user.role, ["programme_admin", "super_admin"]);
+  const showLogMeetingForm = sp.logMeeting === "1";
 
   const [pairing] = await db.select().from(mentorPairings).where(eq(mentorPairings.id, pairingId)).limit(1);
   if (!pairing) notFound();
   const [mentor] = await db.select().from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+
+  // Pick a WhatsApp/Message target — the mentee (teacher) is the primary
+  // contact for a mentor-led pairing. Phone may be NULL.
+  const contactPhone = teacher?.phone ?? null;
+  const contactName = teacher?.fullName ?? "Mentee";
+  const waText = `Hi ${contactName}, checking in on our mentorship pairing.`;
+  const waHref =
+    contactPhone && contactPhone.replace(/[^0-9]/g, "").length >= 10
+      ? `https://wa.me/${contactPhone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(waText)}`
+      : null;
+  const messageHref = teacher?.userId ? `/inbox?to=${teacher.userId}` : `/inbox`;
 
   const meetings = await db
     .select()
@@ -74,7 +128,118 @@ export default async function PairingDetailPage({ params }: { params: Promise<{ 
               {pairing.meetingsCount != null ? ` · ${pairing.meetingsCount} meetings` : ""}
             </p>
           </div>
+
+          {/* Action buttons (spec 118) — Message / WhatsApp / Log meeting / Complete */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Link href={messageHref} className="btn btn-sm" aria-label="Open message thread">
+              Message
+            </Link>
+            {waHref ? (
+              <a
+                href={waHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-sm"
+                aria-label="Open WhatsApp chat"
+              >
+                WhatsApp
+              </a>
+            ) : (
+              <span
+                className="btn btn-sm"
+                style={{ opacity: 0.45, cursor: "not-allowed" }}
+                title="No phone on file for mentee"
+                aria-disabled="true"
+              >
+                WhatsApp
+              </span>
+            )}
+            <Link
+              href={`/mentorship/${pairingId}?logMeeting=1`}
+              className="btn btn-sm btn-primary"
+              aria-label="Log a new meeting"
+            >
+              + Log meeting
+            </Link>
+            {canComplete && pairing.status !== "complete" ? (
+              <form action={completePairingAction}>
+                <input type="hidden" name="pairingId" value={pairingId} />
+                <button
+                  type="submit"
+                  className="btn btn-sm"
+                  aria-label="Mark pairing complete"
+                  style={{ background: "var(--lichen)", color: "white", borderColor: "var(--lichen)" }}
+                >
+                  Complete pairing
+                </button>
+              </form>
+            ) : null}
+          </div>
         </div>
+
+        {/* Inline "Log meeting" form — shown when ?logMeeting=1 */}
+        {showLogMeetingForm ? (
+          <form
+            action={logMeetingAction}
+            className="card"
+            style={{ padding: 14, marginTop: 12, background: "var(--paper-2)", display: "grid", gap: 10 }}
+          >
+            <input type="hidden" name="pairingId" value={pairingId} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+              <label style={{ fontSize: 12 }}>
+                <div className="label" style={{ marginBottom: 4 }}>When *</div>
+                <input
+                  type="datetime-local"
+                  name="scheduledAt"
+                  required
+                  style={{
+                    width: "100%",
+                    padding: "6px 8px",
+                    border: "1px solid var(--line)",
+                    borderRadius: 4,
+                  }}
+                />
+              </label>
+              <label style={{ fontSize: 12 }}>
+                <div className="label" style={{ marginBottom: 4 }}>Duration (min)</div>
+                <input
+                  type="text"
+                  name="durationMin"
+                  placeholder="42"
+                  style={{
+                    width: "100%",
+                    padding: "6px 8px",
+                    border: "1px solid var(--line)",
+                    borderRadius: 4,
+                  }}
+                />
+              </label>
+            </div>
+            <label style={{ fontSize: 12 }}>
+              <div className="label" style={{ marginBottom: 4 }}>Notes</div>
+              <textarea
+                name="notes"
+                rows={3}
+                placeholder="What was discussed, what did the mentee commit to?"
+                style={{
+                  width: "100%",
+                  padding: "6px 8px",
+                  border: "1px solid var(--line)",
+                  borderRadius: 4,
+                  resize: "vertical",
+                }}
+              />
+            </label>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost">
+                Cancel
+              </Link>
+              <button type="submit" className="btn btn-sm btn-primary">
+                Save meeting
+              </button>
+            </div>
+          </form>
+        ) : null}
 
         {/* Quarterly progress strip */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 18 }}>
@@ -89,6 +254,9 @@ export default async function PairingDetailPage({ params }: { params: Promise<{ 
                   : qNum === 3
                     ? "Mid-year evaluation"
                     : "Endline + certification";
+            const formKind = QUARTER_TO_KIND[qNum];
+            const formSlug = `${formKind}-${DEFAULT_AUDIENCE}-${FORM_VERSION}`;
+            const formHref = `/forms/${formSlug}?pairingId=${pairingId}&quarter=${qNum}`;
             return (
               <div
                 key={q}
@@ -128,6 +296,25 @@ export default async function PairingDetailPage({ params }: { params: Promise<{ 
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
+                {state === "current" ? (
+                  <Link
+                    href={formHref}
+                    className="btn btn-sm"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Fill Q${qNum} progress form`}
+                  >
+                    Fill progress form →
+                  </Link>
+                ) : state === "future" ? null : (
+                  <Link
+                    href={formHref}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`View Q${qNum} responses`}
+                  >
+                    View responses →
+                  </Link>
+                )}
               </div>
             );
           })}
@@ -268,6 +455,73 @@ export default async function PairingDetailPage({ params }: { params: Promise<{ 
               </div>
             </div>
           ) : null}
+
+          {/* Commitments register (spec 118) — v1 audit-only stub. The
+              `commitments` jsonb column is not yet on mentor_pairings; the
+              toggle action records an audit row instead so clicks are not
+              silently dropped. See specs/118-.../research.md. */}
+          <div className="card card-hi">
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
+              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
+                Commitments register
+              </h2>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Click a row to mark/unmark. Persistence lands in the next migration.
+              </div>
+            </div>
+            <div style={{ padding: 4 }}>
+              {[
+                { t: "Use 4-minute cool-down in every lesson", who: "mentee", due: "Wk 8" },
+                { t: "Share sound-box video with cohort", who: "mentor", due: "Wk 7" },
+                { t: "Co-teach with mentee at school visit", who: "mentor", due: "Wk 6" },
+                { t: "Track exit-ticket completion daily", who: "mentee", due: "Wk 7" },
+              ].map((c, i) => (
+                <form
+                  key={i}
+                  action={toggleCommitmentAction}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "20px 1fr 60px",
+                    gap: 10,
+                    padding: "8px 12px",
+                    borderTop: i ? "1px solid var(--line)" : "none",
+                    fontSize: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <input type="hidden" name="pairingId" value={pairingId} />
+                  <input type="hidden" name="index" value={i} />
+                  <input type="hidden" name="text" value={c.t} />
+                  <input type="hidden" name="done" value="true" />
+                  <button
+                    type="submit"
+                    aria-label={`Toggle commitment: ${c.t}`}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      border: "1px solid var(--ink-3)",
+                      background: "var(--card)",
+                      borderRadius: 3,
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  />
+                  <div>
+                    <div style={{ color: "var(--ink)" }}>{c.t}</div>
+                    <div style={{ fontSize: 10, color: "var(--ink-3)" }}>
+                      {c.who} · {c.due}
+                    </div>
+                  </div>
+                  <span
+                    className="mono"
+                    style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right" }}
+                  >
+                    {c.due}
+                  </span>
+                </form>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>
