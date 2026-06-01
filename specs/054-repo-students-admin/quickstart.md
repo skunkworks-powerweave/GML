@@ -1,0 +1,1 @@
+Route `/repo/students` renders the JSX `RepoStudentsIndex` section (repository.jsx lines 938–975) with a saffron-soft PII warning, the Name/Class/School/Age/Guardian/Attendance table, role-gated to programme_admin+, audited on every view, super_admin-only CSV export.

@@ -1,0 +1,1 @@
+test (red) → page.tsx (server component with requireRole gate → drizzle select learners+leftJoin classes+schools → recordAudit("learners.bulk_view") → render JSX 938-975 layout → super_admin-only CSV link → pagination) → green → commit

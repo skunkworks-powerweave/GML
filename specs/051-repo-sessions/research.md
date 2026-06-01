@@ -1,0 +1,1 @@
+Filters are URL-param-driven (server-side `searchParams`) rather than client-state useState, because both index pages in `/repo/*` need shareable filter links and the JSX prototype's `useStateR` was a placeholder for a server-rendered filter. Row count limited to 200 — pagination will land in a future spec when total session volume warrants it.
