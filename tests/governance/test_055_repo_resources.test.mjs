@@ -107,11 +107,12 @@ test("spec 055 — detail KV sidebar renders every prototype label", () => {
   }
 });
 
-test("spec 055 — detail page differentiates fileKey download vs externalUrl link", () => {
+test("spec 055 — detail page differentiates fileKey viewer vs externalUrl link", () => {
   const src = read(DETAIL_PATH);
-  // fileKey → Download PDF button; externalUrl → Open external link
+  // fileKey → "View PDF" button routing to /view (spec 087 relabel — viewer is in-browser only);
+  // externalUrl → "Open external link".
   assert.match(src, /res\.fileKey/);
-  assert.match(src, /Download PDF/);
+  assert.match(src, /View PDF/);
   assert.match(src, /res\.externalUrl/);
   assert.match(src, /Open external link/);
 });

@@ -7,7 +7,14 @@ import type { ReactNode } from "react";
 import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
 import { DesktopShell, MobileShell } from "@/components/shells";
+import AntiDownloadGuard from "@/components/AntiDownloadGuard";
 import type { RoleName } from "@gml/shared/auth/roles";
+
+// Spec 088 — every authenticated route renders the AntiDownloadGuard alongside
+// the shell. The guard is a 'use client' island that attaches global keydown
+// listeners (Ctrl/Cmd+S/P, PrintScreen) + a DevTools-open heuristic; it
+// renders no visible chrome unless a transient "screenshots are logged" toast
+// is active. Deterrence, not prevention — see component JSDoc.
 
 export default async function AuthenticatedLayout({ children }: { children: ReactNode }) {
   const session = await auth();
@@ -25,7 +32,17 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   };
 
   if (device === "mobile") {
-    return <MobileShell user={user}>{children}</MobileShell>;
+    return (
+      <>
+        <AntiDownloadGuard />
+        <MobileShell user={user}>{children}</MobileShell>
+      </>
+    );
   }
-  return <DesktopShell user={user}>{children}</DesktopShell>;
+  return (
+    <>
+      <AntiDownloadGuard />
+      <DesktopShell user={user}>{children}</DesktopShell>
+    </>
+  );
 }

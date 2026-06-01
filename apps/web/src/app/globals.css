@@ -104,3 +104,32 @@ body.a11y-reduced-motion *, body.a11y-reduced-motion ::before, body.a11y-reduced
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
 }
+
+/* Spec 088 — anti-download deterrence chrome (CSS layer).
+   Deterrence, not prevention. Pairs with <AntiDownloadGuard /> for keydown
+   interception and the SM-4 watermark / SM-9 audit trail. */
+.no-select { user-select: none; -webkit-user-select: none; }
+.no-context * { -webkit-touch-callout: none; }
+.media-frame { position: relative; }
+.media-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 40px,
+    rgba(0, 0, 0, 0.012) 40px 41px
+  );
+}
+
+@media print {
+  .no-print, video, iframe, [data-pdf-viewer] { display: none !important; }
+  body::before {
+    content: 'Printing of confidential materials is prohibited.';
+    display: block;
+    padding: 20mm;
+    font: 600 18pt var(--serif);
+    color: var(--rust);
+  }
+}

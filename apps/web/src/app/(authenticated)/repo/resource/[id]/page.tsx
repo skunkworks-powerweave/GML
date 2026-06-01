@@ -1,8 +1,8 @@
 // /repo/resource/[id] — single reading-material document.
 // 1:1 port of `RepoResourcePage` (repository.jsx 1014-1063): header with kind +
-// mono id, optional Download/External buttons, "About this document" main
+// mono id, optional View/External buttons, "About this document" main
 // SectionCard and a Details KV sidebar (Kind / Owner / Pages / Updated / Subjects /
-// Tags). PDF inline preview is intentionally deferred to spec 087.
+// Tags). The "View PDF" button routes to the in-browser viewer shipped in spec 087.
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
@@ -105,7 +105,7 @@ export default async function RepoResourceDetailPage({
                   fontWeight: 500,
                 }}
               >
-                Download PDF
+                View PDF
               </Link>
             ) : null}
             {res.externalUrl ? (
@@ -153,8 +153,7 @@ export default async function RepoResourceDetailPage({
               {subjectCount === 1 ? "" : "s"}.
             </p>
             <p style={{ color: "var(--ink-3)", fontSize: 12, fontStyle: "italic" }}>
-              Full document preview not available here — open via the buttons above. Inline PDF
-              viewer ships in spec 087.
+              Full document preview opens in the in-browser viewer via the buttons above.
             </p>
           </div>
         </SectionCard>
