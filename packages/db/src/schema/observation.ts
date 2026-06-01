@@ -1,9 +1,11 @@
 // Classroom observation — cycles, forms (pre/post/observer/summary), evidence videos.
 
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { observationKindEnum, observationStatusEnum } from "./enums";
 import { teachers } from "./geography";
 import { users } from "./identity";
+import { subjects } from "./subjects";
 
 export const observationCycles = pgTable(
   "observation_cycles",
@@ -15,6 +17,10 @@ export const observationCycles = pgTable(
     kind: observationKindEnum("kind").notNull(),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: "date" }),
     status: observationStatusEnum("status").notNull().default("nominated"),
+    // v2 (spec 020): subject FK + topic + video duration
+    subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "set null" }),
+    topic: varchar("topic", { length: 240 }),
+    videoMin: integer("video_min"),
     topicTaught: text("topic_taught"),
     gradeSection: varchar("grade_section", { length: 64 }),
     studentsPresent: text("students_present"),
@@ -25,6 +31,8 @@ export const observationCycles = pgTable(
   (t) => [
     index("observation_cycles_teacher_idx").on(t.teacherId, t.kind),
     index("observation_cycles_status_idx").on(t.status, t.scheduledAt),
+    index("observation_cycles_subject_idx").on(t.subjectId),
+    check("observation_cycles_video_min_check", sql`${t.videoMin} IS NULL OR ${t.videoMin} >= 0`),
   ],
 );
 
@@ -47,7 +55,7 @@ export const observationEvidence = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     cycleId: uuid("cycle_id").notNull().references(() => observationCycles.id, { onDelete: "cascade" }),
-    videoSubmissionId: uuid("video_submission_id"), // FK to video_submissions in spec 022
+    videoSubmissionId: uuid("video_submission_id"), // FK to video_submissions in spec 036
     caption: text("caption"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

@@ -1,7 +1,8 @@
 // Geography hierarchy: districts → zones → schools → teachers.
-// Seeded with Leh + Kargil (districts) and the 6 Kargil zones in spec 061.
+// Seeded with Leh + Kargil (districts) and the 6 Kargil zones in spec 086.
 
 import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { phases } from "./rtt";
 import { users } from "./identity";
 
 export const districts = pgTable("districts", {
@@ -27,6 +28,7 @@ export const schools = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     zoneId: uuid("zone_id").notNull().references(() => zones.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 16 }).notNull().unique(), // v2 (spec 020): e.g. "GPS-CHU", "GMS-KHA"
     name: varchar("name", { length: 160 }).notNull(),
     address: text("address"),
     contactPhone: varchar("contact_phone", { length: 32 }),
@@ -45,9 +47,11 @@ export const teachers = pgTable(
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
     fullName: varchar("full_name", { length: 160 }).notNull(),
+    hindiName: varchar("hindi_name", { length: 160 }), // v2 (spec 020) — SM-7: always NULLABLE
     phone: varchar("phone", { length: 32 }),
     subjectSpecialism: varchar("subject_specialism", { length: 80 }),
     joinedPhase: varchar("joined_phase", { length: 16 }),
+    currentPhaseId: uuid("current_phase_id").references(() => phases.id, { onDelete: "set null" }), // v2 (spec 020)
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

@@ -64,6 +64,13 @@
       "when": 1780317951140,
       "tag": "0008_learners",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780318110794,
+      "tag": "0009_schema_additions",
+      "breakpoints": true
     }
   ]
 }

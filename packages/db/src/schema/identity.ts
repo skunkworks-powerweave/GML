@@ -22,6 +22,7 @@ export const users = pgTable(
     email: varchar("email", { length: 320 }).notNull().unique(),
     emailVerified: timestamp("email_verified", { withTimezone: true, mode: "date" }),
     name: text("name"),
+    hindiName: varchar("hindi_name", { length: 160 }), // v2 (spec 020) — SM-7: always NULLABLE
     phone: varchar("phone", { length: 32 }),
     image: text("image"),
     passwordHash: text("password_hash"), // null when only magic-link is configured

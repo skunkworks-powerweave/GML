@@ -2,15 +2,19 @@
 
 import {
   boolean,
+  check,
   index,
+  integer,
   jsonb,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { feedbackAudienceEnum, feedbackKindEnum, pairingStatusEnum } from "./enums";
 import { teachers } from "./geography";
 import { users } from "./identity";
@@ -21,6 +25,8 @@ export const mentors = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     name: varchar("name", { length: 160 }).notNull(),
+    hindiName: varchar("hindi_name", { length: 160 }), // v2 (spec 020) — SM-7: always NULLABLE
+    baseLocation: varchar("base_location", { length: 80 }), // v2 (spec 020) — "Leh" / "Kargil"
     bio: text("bio"),
     expertiseAreas: jsonb("expertise_areas").$type<string[]>().default([]),
     photoUrl: text("photo_url"),
@@ -40,10 +46,16 @@ export const mentorPairings = pgTable(
     endedAt: timestamp("ended_at", { withTimezone: true, mode: "date" }),
     status: pairingStatusEnum("status").notNull().default("active"),
     conceptNote: text("concept_note"),
+    // v2 (spec 020): quarter strip + cached counters
+    currentQuarter: smallint("current_quarter"),
+    meetingsCount: integer("meetings_count").notNull().default(0),
+    lastMeetingAt: timestamp("last_meeting_at", { withTimezone: true, mode: "date" }),
   },
   (t) => [
     uniqueIndex("mentor_pairings_mentor_teacher_started_uq").on(t.mentorId, t.teacherId, t.startedAt),
     index("mentor_pairings_status_idx").on(t.status),
+    check("mentor_pairings_quarter_check", sql`${t.currentQuarter} IS NULL OR (${t.currentQuarter} BETWEEN 1 AND 4)`),
+    check("mentor_pairings_meetings_count_check", sql`${t.meetingsCount} >= 0`),
   ],
 );
 
