@@ -1,0 +1,5 @@
+# Plan 123
+
+CREATED: `specs/123-ftux-tour/{spec,plan,research,quickstart,tasks}.md`, `tests/governance/test_123_ftux_tour.test.mjs`, `apps/web/src/components/ftux/FTUXTour.tsx`
+EDITED: `apps/web/src/app/(authenticated)/layout.tsx` (select user_prefs.ftuxSeenAt, mount FTUXTour with role + ISO timestamp), `apps/web/src/components/nav/Sidebar.tsx` (prefix data-help-anchor with `nav-`), `apps/web/src/components/nav/Topbar.tsx` (tag bell with data-help-anchor='topbar-help'), `apps/web/src/app/globals.css` (append `.ftux-*` selectors + `@keyframes ftux-pulse` from help.jsx lines 670-705), `apps/web/src/app/(authenticated)/settings/settings-form.tsx` (Replay tour → button in the Account section that PUTs `{ftuxSeenAt: null}` and reloads)
+MIGRATED: none — `user_prefs.ftux_seen_at` column already exists on the schema (declared in `packages/db/src/schema/prefs.ts` and shipped by the 0008 migration); the `/api/user-prefs` PUT already validates the nullable `ftuxSeenAt` string and upserts a `Date` object.

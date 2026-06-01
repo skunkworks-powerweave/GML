@@ -1,10 +1,18 @@
 // /videos — library of all video_submissions, filter by status.
 // 1:1 port of `videos.jsx` layout.
+//
+// Spec 126 (Workflow Run 10 frontend parity) — the "WhatsApp ingest log"
+// header button used to point at /admin/audit?action=whatsapp. which
+// matched zero rows (the audit-log surface has no LIKE filter). It now
+// links to the dedicated /admin/whatsapp-log surface and is hidden from
+// roles other than programme_admin + super_admin (programme oversight).
 
 import Link from "next/link";
 import { desc } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions, observationCycles, teachers } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +39,16 @@ const STATE_CHIP: Record<string, string> = {
 export default async function VideoLibraryPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   const sp = await searchParams;
   const filter = sp.status;
+
+  // Spec 126: only programme-oversight roles see the WhatsApp ingest log
+  // header button. Teachers / observers / mentors get no affordance at all
+  // (they would 403 at the page boundary anyway, but rendering a dead
+  // button breaks the trust contract — same reasoning as Tier H spec 119).
+  const session = await auth();
+  const canSeeWhatsappLog = hasAnyRole(session?.user?.role, [
+    "programme_admin",
+    "super_admin",
+  ]);
 
   const baseRows = await db
     .select({
@@ -69,7 +87,9 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Link href="/uploads" className="btn btn-primary">Upload</Link>
-            <Link href="/admin/audit?action=whatsapp." className="btn">WhatsApp ingest log</Link>
+            {canSeeWhatsappLog && (
+              <Link href="/admin/whatsapp-log" className="btn">WhatsApp ingest log</Link>
+            )}
           </div>
         </div>
       </div>

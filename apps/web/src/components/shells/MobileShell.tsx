@@ -1,5 +1,10 @@
 // Mobile shell: top app bar + content + bottom tabs. Used for viewport ≤ 768px.
 // Floating ? button + sheet overlay land in spec 032.
+//
+// Spec 125 — the BottomTabs subcomponent has become an async server component
+// (it calls `getTranslations()`). RSC handles awaiting async children at the
+// render boundary; this wrapper stays a plain sync function so the spec 026
+// "export function MobileShell" contract still matches.
 
 import type { ReactNode } from "react";
 import type { RoleName } from "@gml/shared/auth/roles";

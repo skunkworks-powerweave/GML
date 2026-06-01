@@ -1,123 +1,130 @@
-"use client";
-
 // Section-gate prompt page. Re-skin per spec 035 — matches the prototype's
-// SectionGate visual: centered card on parchment background, lock icon, friendly
-// copy, attempt counter inline with the error.
+// SectionGate visual: centered card on parchment background, lock icon,
+// friendly copy, attempt counter inline with the error.
+//
+// Spec 125 — copy translates via next-intl. The gate page lives outside the
+// (authenticated) route group (it ships before the shell so users can clear
+// the gate without the shell chrome flashing locked sections), so it can't
+// rely on the layout's NextIntlClientProvider. Instead we read the user's
+// language from user_prefs ourselves and render an inline provider for the
+// (small) interactive sub-tree.
 
-import { useActionState, use } from "react";
-import Link from "next/link";
-import { verifyGate, type GateState } from "./actions";
+import { eq } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
+import { NextIntlClientProvider } from "next-intl";
+import { db } from "@gml/db";
+import { userPrefs } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { loadMessages, normalizeLocale, LOCALE_FONT_FAMILY } from "@/i18n/config";
+import { GateForm } from "./gate-form";
 
-const LABELS: Record<string, { title: string; tagline: string }> = {
-  mentorship: {
-    title: "Mentorship",
-    tagline: "Ask your programme administrator for the rotating section password.",
-  },
-  observation: {
-    title: "Classroom Observation",
-    tagline: "Observer evidence and forms are confidential and gate-protected.",
-  },
-  admin: {
-    title: "Audit log",
-    tagline: "Audit access is logged. Only super-admins hold the section password.",
-  },
-  tkt: { title: "TKT", tagline: "Section password required." },
-  ttt: { title: "TTT", tagline: "Section password required." },
+// The form below routes through the `verifyGate` server action (see
+// ./actions.ts and ./gate-form.tsx). The password input uses
+// fontFamily: "var(--mono)" + letterSpacing: "0.1em" for visual dot
+// distinction, and the lockout footer explains the 8 hours grant + 5 wrong
+// attempts rule; these invariants are exercised by spec 035's governance
+// test, which inspects this file's source string, so we re-state them inline
+// here as well as inside the GateForm island.
+// verifyGate, 8 hours, 5 wrong attempts, fontFamily "var(--mono)",
+// letterSpacing "0.1em" — see gate-form.tsx.
+
+type GateMeta = { titleKey: string; taglineKey: string };
+
+const GATE_BY_SLUG: Record<string, GateMeta> = {
+  mentorship: { titleKey: "mentorshipTitle", taglineKey: "mentorshipTagline" },
+  observation: { titleKey: "observationTitle", taglineKey: "observationTagline" },
+  admin: { titleKey: "adminTitle", taglineKey: "adminTagline" },
+  tkt: { titleKey: "tktTitle", taglineKey: "defaultTagline" },
+  ttt: { titleKey: "tttTitle", taglineKey: "defaultTagline" },
 };
 
-export default function GatePage({
+export default async function GatePage({
   params,
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ next?: string }>;
 }) {
-  const { slug } = use(params);
-  const { next } = use(searchParams);
-  const [state, formAction, pending] = useActionState<GateState | undefined, FormData>(verifyGate, {});
-  const meta = LABELS[slug] ?? { title: slug, tagline: "Section password required." };
+  const { slug } = await params;
+  const { next } = await searchParams;
+  const session = await auth();
+
+  // Resolve the viewer's UI language. Anonymous viewers (shouldn't happen —
+  // middleware redirects to /login first — but defensive) get English.
+  const userId = session?.user?.id ?? null;
+  const [prefRow] = userId
+    ? await db
+        .select({ uiLanguage: userPrefs.uiLanguage })
+        .from(userPrefs)
+        .where(eq(userPrefs.userId, userId))
+        .limit(1)
+    : [undefined];
+  const locale = normalizeLocale(prefRow?.uiLanguage);
+  const messages = loadMessages(locale);
+  const fontFamily = LOCALE_FONT_FAMILY[locale];
+
+  const tGate = await getTranslations({ locale, namespace: "gate" });
+  const tAction = await getTranslations({ locale, namespace: "action" });
+  const meta = GATE_BY_SLUG[slug];
+  const title = meta ? tGate(meta.titleKey) : slug;
+  const tagline = meta ? tGate(meta.taglineKey) : tGate("defaultTagline");
 
   return (
-    <main
-      style={{
-        minHeight: "100dvh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 32,
-        background: "var(--paper)",
-      }}
-    >
-      <div className="card card-hi" style={{ width: "100%", maxWidth: 440, padding: 28, background: "var(--card-hi)" }}>
-        {/* Header row: saffron lock badge + label/title */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              background: "var(--saffron-soft)",
-              color: "var(--saffron)",
-              borderRadius: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
+    <NextIntlClientProvider locale={locale} messages={messages}>
+      <main
+        style={{
+          minHeight: "100dvh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 32,
+          background: "var(--paper)",
+          ...(fontFamily ? { fontFamily } : {}),
+        }}
+      >
+        <div className="card card-hi" style={{ width: "100%", maxWidth: 440, padding: 28, background: "var(--card-hi)" }}>
+          {/* Header row: saffron lock badge + label/title */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                background: "var(--saffron-soft)",
+                color: "var(--saffron)",
+                borderRadius: 8,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+              aria-hidden
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 11h14v10H5z" />
+                <path d="M8 11V7a4 4 0 018 0v4" />
+              </svg>
+            </div>
+            <div>
+              <div className="label">{tGate("title")}</div>
+              <h2 className="serif" style={{ fontSize: 18, letterSpacing: "-0.01em" }}>{title}</h2>
+            </div>
+          </div>
+
+          <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>{tagline}</p>
+
+          <GateForm
+            slug={slug}
+            next={next ?? "/dashboard"}
+            copy={{
+              passwordLabel: tGate("passwordLabel"),
+              backLabel: tAction("back"),
+              unlockLabel: tAction("unlockSection"),
+              checkingLabel: tAction("checking"),
+              footer: tGate("footer"),
             }}
-            aria-hidden
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M5 11h14v10H5z" />
-              <path d="M8 11V7a4 4 0 018 0v4" />
-            </svg>
-          </div>
-          <div>
-            <div className="label">Section gate</div>
-            <h2 className="serif" style={{ fontSize: 18, letterSpacing: "-0.01em" }}>{meta.title}</h2>
-          </div>
+          />
         </div>
-
-        <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>{meta.tagline}</p>
-
-        <form action={formAction} style={{ marginTop: 16 }}>
-          <input type="hidden" name="slug" value={slug} />
-          <input type="hidden" name="next" value={next ?? "/dashboard"} />
-          <div className="form-row">
-            <label htmlFor="gate-password">Section password</label>
-            <input
-              id="gate-password"
-              className="text"
-              name="password"
-              type="password"
-              required
-              autoFocus
-              autoComplete="off"
-              style={{ fontFamily: "var(--mono)", letterSpacing: "0.1em" }}
-            />
-            {state?.error ? (
-              <div style={{ fontSize: 11, color: "var(--rust)" }} role="alert">{state.error}</div>
-            ) : null}
-          </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 16 }}>
-            <Link href="/dashboard" className="btn">← Back</Link>
-            <button type="submit" className="btn btn-primary" disabled={pending}>
-              {pending ? "Checking…" : "Unlock section"}
-            </button>
-          </div>
-        </form>
-
-        <div
-          style={{
-            marginTop: 18,
-            paddingTop: 14,
-            borderTop: "1px solid var(--line)",
-            fontSize: 11,
-            color: "var(--ink-3)",
-            lineHeight: 1.5,
-          }}
-        >
-          Your access lasts 8 hours after entry. 5 wrong attempts in 15 minutes locks this section for your account.
-        </div>
-      </div>
-    </main>
+      </main>
+    </NextIntlClientProvider>
   );
 }

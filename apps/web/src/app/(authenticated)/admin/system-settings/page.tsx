@@ -1,0 +1,338 @@
+// /admin/system-settings — five-section platform configuration surface.
+//
+// Spec 124 (Workflow Run 10 frontend-parity) — ports the JSX prototype
+// tweaks-panel.jsx admin settings panel (Programme / Video pipeline /
+// Notifications / Backups & retention / status display) into a real
+// Drizzle-backed admin page. Closes the deviation noted in spec 071 where the
+// surface was deferred because no system_settings table existed.
+//
+// The page is a server component. The form posts to an inline server action
+// (`updateSystemSettings`) which validates with the same zod schema as
+// /api/admin/system-settings PUT and audits "system_settings.update". Using a
+// server action (rather than a client fetch) means the page stays a pure
+// server boundary with no client-side bundle cost for plain form inputs.
+//
+// SM-2 (gate moat): super_admin only. The requireRole() helper redirects to
+// /forbidden if the session role is anything else, so a programme_admin who
+// somehow reaches this URL by typing it gets bounced.
+//
+// SM-4 (anti-download): the videoDefaultQuality dropdown only allows "480p".
+// 720p and 1080p render as disabled options with a tooltip explaining spec 041
+// deferred them. Hardcoding the disable here means a future drive-by edit
+// can't quietly enable them without also touching the zod allow-list.
+
+import { revalidatePath } from "next/cache";
+import { desc, eq, sql } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "@gml/db";
+import { systemSettings, SYSTEM_SETTINGS_ID, auditLog } from "@gml/db/schema";
+import { requireRole } from "@/lib/guards";
+import { recordAudit } from "@/lib/audit";
+
+export const dynamic = "force-dynamic";
+
+// Notification catalog — keep in sync with /api/admin/system-settings route.
+const NOTIFICATION_CATEGORIES: Array<{ key: string; label: string; hint: string }> = [
+  { key: "cycle.assigned", label: "Cycle assigned", hint: "Observer/mentor notified when a new cycle is created" },
+  { key: "cycle.complete", label: "Cycle complete", hint: "All parties notified when a cycle closes" },
+  { key: "video.transcoded", label: "Video transcoded", hint: "Uploader notified when ffmpeg pipeline finishes" },
+  { key: "video.review_pending", label: "Video review pending", hint: "Programme admin alerted on quality flags" },
+  { key: "meeting.scheduled", label: "Meeting scheduled", hint: "Mentor + teacher receive calendar entry" },
+  { key: "meeting.cancelled", label: "Meeting cancelled", hint: "Both parties notified of cancellations" },
+  { key: "digest.weekly", label: "Weekly digest", hint: "Friday roll-up across all activities" },
+];
+
+// Same enums the route enforces — duplicated here for the zod parse on the action side.
+const VIDEO_QUALITIES = ["480p"] as const;
+const NOTIFICATION_KEYS = NOTIFICATION_CATEGORIES.map((c) => c.key) as [string, ...string[]];
+
+const ServerActionSchema = z.object({
+  programmeName: z.string().min(1).max(200),
+  academicYear: z
+    .string()
+    .min(1)
+    .max(16)
+    .regex(/^\d{4}-\d{2}$/, "academicYear must be YYYY-YY"),
+  videoDefaultQuality: z.enum(VIDEO_QUALITIES),
+  videoMaxUploadMb: z.number().int().min(10).max(2000),
+  notificationsEnabled: z.array(z.enum(NOTIFICATION_KEYS)),
+  backupRetentionDays: z.number().int().min(7).max(365),
+});
+
+async function updateSystemSettings(formData: FormData) {
+  "use server";
+  // Re-gate inside the action — never trust the page-level gate alone, since
+  // an attacker could replay the form-data against the action endpoint.
+  await requireRole(["super_admin"]);
+
+  const rawNotifications = formData.getAll("notificationsEnabled").map(String);
+  const parsed = ServerActionSchema.safeParse({
+    programmeName: String(formData.get("programmeName") ?? "").trim(),
+    academicYear: String(formData.get("academicYear") ?? "").trim(),
+    videoDefaultQuality: String(formData.get("videoDefaultQuality") ?? "480p"),
+    videoMaxUploadMb: Number(formData.get("videoMaxUploadMb") ?? 500),
+    notificationsEnabled: rawNotifications,
+    backupRetentionDays: Number(formData.get("backupRetentionDays") ?? 14),
+  });
+
+  if (!parsed.success) {
+    // Server actions don't have a great error-channel surface in plain forms; the
+    // page re-renders with the previous values via the redirect-back convention.
+    // We still record the failure for the audit trail so an operator can see what
+    // happened.
+    void recordAudit({
+      action: "system_settings.update",
+      entityType: "system_settings",
+      entityId: SYSTEM_SETTINGS_ID,
+      metadata: { error: "validation_failed", issues: parsed.error.issues },
+    });
+    return;
+  }
+
+  await db
+    .update(systemSettings)
+    .set({ ...parsed.data, updatedAt: new Date() })
+    .where(eq(systemSettings.id, SYSTEM_SETTINGS_ID));
+
+  void recordAudit({
+    action: "system_settings.update",
+    entityType: "system_settings",
+    entityId: SYSTEM_SETTINGS_ID,
+    metadata: { keys: Object.keys(parsed.data) },
+  });
+
+  // Refresh the SSR view so the operator sees the new values immediately.
+  revalidatePath("/admin/system-settings");
+}
+
+export default async function SystemSettingsPage() {
+  await requireRole(["super_admin"]);
+
+  // SM-1 view-side audit — record that an admin opened this surface. The query
+  // below is plain SELECTs only, no PII.
+  void recordAudit({
+    action: "system_settings.surface_viewed",
+    entityType: "system_settings",
+    entityId: SYSTEM_SETTINGS_ID,
+  });
+
+  const [row] = await db
+    .select()
+    .from(systemSettings)
+    .where(eq(systemSettings.id, SYSTEM_SETTINGS_ID))
+    .limit(1);
+
+  // Status display — query the latest "backup" / "restore" audit log row. The
+  // backup.sh script does not yet emit audit rows (it writes /backups/last-backup.txt
+  // on the host), so until that ships these queries return null and the UI shows
+  // "never" — better than fabricating a timestamp.
+  const [lastBackup] = await db
+    .select({ at: auditLog.createdAt })
+    .from(auditLog)
+    .where(sql`${auditLog.action} LIKE 'backup.%'`)
+    .orderBy(desc(auditLog.createdAt))
+    .limit(1);
+
+  const [lastRestore] = await db
+    .select({ at: auditLog.createdAt })
+    .from(auditLog)
+    .where(sql`${auditLog.action} LIKE 'restore.%'`)
+    .orderBy(desc(auditLog.createdAt))
+    .limit(1);
+
+  const settings = row ?? {
+    programmeName: "Goldenmile RTT",
+    academicYear: "2026-27",
+    videoDefaultQuality: "480p" as const,
+    videoMaxUploadMb: 500,
+    notificationsEnabled: ["cycle.assigned", "video.transcoded", "meeting.scheduled"],
+    backupRetentionDays: 14,
+    updatedAt: null,
+  };
+  const enabledSet = new Set<string>(settings.notificationsEnabled ?? []);
+
+  return (
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
+      <header>
+        <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          System
+        </div>
+        <h1 className="mt-1 font-serif text-2xl">System settings</h1>
+        <p className="mt-1 text-sm text-neutral-600">
+          Platform-wide configuration. Super admin only. Changes are audited.
+        </p>
+      </header>
+
+      <form action={updateSystemSettings} className="flex flex-col gap-8">
+        {/* Section 1 — Programme */}
+        <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="font-serif text-lg">Programme</h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-neutral-500">Programme name</span>
+              <input
+                type="text"
+                name="programmeName"
+                defaultValue={settings.programmeName}
+                maxLength={200}
+                required
+                className="rounded border border-neutral-300 px-2 py-1"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-neutral-500">Academic year</span>
+              <input
+                type="text"
+                name="academicYear"
+                defaultValue={settings.academicYear}
+                pattern="\d{4}-\d{2}"
+                title="Use YYYY-YY format, e.g. 2026-27"
+                required
+                className="rounded border border-neutral-300 px-2 py-1 font-mono"
+              />
+            </label>
+          </div>
+        </section>
+
+        {/* Section 2 — Video pipeline */}
+        <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="font-serif text-lg">Video pipeline</h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-neutral-500">Default quality</span>
+              <select
+                name="videoDefaultQuality"
+                defaultValue={settings.videoDefaultQuality}
+                className="rounded border border-neutral-300 px-2 py-1"
+              >
+                <option value="480p">480p (current)</option>
+                <option value="720p" disabled title="Deferred per spec 041 — worker pipeline does not transcode 720p today">
+                  720p (deferred — spec 041)
+                </option>
+                <option value="1080p" disabled title="Not a goal — bandwidth-tight Ladakh deployments">
+                  1080p (out of scope)
+                </option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-neutral-500">Max upload (MB)</span>
+              <input
+                type="number"
+                name="videoMaxUploadMb"
+                defaultValue={settings.videoMaxUploadMb}
+                min={10}
+                max={2000}
+                step={10}
+                required
+                className="rounded border border-neutral-300 px-2 py-1 font-mono"
+              />
+            </label>
+          </div>
+        </section>
+
+        {/* Section 3 — Notifications */}
+        <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="font-serif text-lg">Notifications</h2>
+          <p className="text-xs text-neutral-500">
+            Per-category enable/disable. Disabling a category stops the worker from
+            emitting rows in the notifications inbox for that event class.
+          </p>
+          <ul className="grid grid-cols-1 gap-2">
+            {NOTIFICATION_CATEGORIES.map((cat) => (
+              <li key={cat.key} className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  id={`notif-${cat.key}`}
+                  name="notificationsEnabled"
+                  value={cat.key}
+                  defaultChecked={enabledSet.has(cat.key)}
+                  className="mt-1"
+                />
+                <label htmlFor={`notif-${cat.key}`} className="flex flex-col text-sm">
+                  <span className="font-medium">{cat.label}</span>
+                  <span className="text-xs text-neutral-500">{cat.hint}</span>
+                  <code className="font-mono text-[10px] text-neutral-400">{cat.key}</code>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* Section 4 — Backups & retention */}
+        <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+          <h2 className="font-serif text-lg">Backups & retention</h2>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs text-neutral-500">Retention window (days)</span>
+            <input
+              type="number"
+              name="backupRetentionDays"
+              defaultValue={settings.backupRetentionDays}
+              min={7}
+              max={365}
+              step={1}
+              required
+              className="w-40 rounded border border-neutral-300 px-2 py-1 font-mono"
+            />
+          </label>
+          <p className="text-xs text-neutral-500">
+            scripts/backup.sh prunes daily dumps older than this many days.
+            Weekly Sunday snapshots persist independently for 4 weeks.
+          </p>
+        </section>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="submit"
+            className="rounded bg-neutral-900 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-700"
+          >
+            Save changes
+          </button>
+          <span className="text-xs text-neutral-500">
+            Last updated:{" "}
+            <span className="font-mono">
+              {settings.updatedAt
+                ? new Date(settings.updatedAt).toISOString().slice(0, 16).replace("T", " ")
+                : "—"}
+            </span>
+          </span>
+        </div>
+      </form>
+
+      {/* Section 5 — Status display (read-only) */}
+      <section
+        data-system-status
+        className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4"
+      >
+        <h2 className="font-serif text-lg">Backup & restore status</h2>
+        <dl className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+          <div>
+            <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
+              Last successful backup
+            </dt>
+            <dd className="font-mono">
+              {lastBackup?.at
+                ? new Date(lastBackup.at).toISOString().slice(0, 16).replace("T", " ")
+                : "never (no backup.* audit rows yet)"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
+              Last restore drill
+            </dt>
+            <dd className="font-mono">
+              {lastRestore?.at
+                ? new Date(lastRestore.at).toISOString().slice(0, 16).replace("T", " ")
+                : "never (no restore.* audit rows yet)"}
+            </dd>
+          </div>
+        </dl>
+        <p className="text-xs text-neutral-500">
+          Sources: latest <code className="font-mono">backup.*</code> and{" "}
+          <code className="font-mono">restore.*</code> rows in audit_log. The
+          backup script writes <code className="font-mono">/backups/last-backup.txt</code> on
+          the host; an admin route can surface that file when audit emission lands.
+        </p>
+      </section>
+    </main>
+  );
+}

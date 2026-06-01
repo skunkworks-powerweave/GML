@@ -1,7 +1,14 @@
 // Desktop sidebar. 1:1 ports `shell.jsx::Sidebar`. Reads NAV_BY_ROLE, renders
 // grouped sections with optional gate badges and counts.
+//
+// Spec 125 — section headings and item labels translate via next-intl. Each
+// nav entry's `id` is mapped (via ITEM_KEY) to a translation key under
+// `nav.*`; section literals map (via SECTION_KEY) to `navSection.*`. Missing
+// keys fall through to the original English label so the chrome stays
+// readable while translation work catches up.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { Icon } from "./Icon";
@@ -12,8 +19,48 @@ type SidebarProps = {
   activeId?: string;
 };
 
-export function Sidebar({ role, activeId }: SidebarProps) {
+/** Section heading literal → `navSection.*` key. */
+const SECTION_KEY: Record<string, string> = {
+  "Programme": "programme",
+  "My work": "myWork",
+  "My learning": "myLearning",
+  "Repository": "repository",
+  "Data": "data",
+  "System": "system",
+  "Resources": "resources",
+};
+
+/** Nav item id → `nav.*` key. Items not in the map fall back to item.label. */
+const ITEM_KEY: Record<string, string> = {
+  "dashboard": "dashboard",
+  "observation": "observation",
+  "mentorship": "mentorship",
+  "rtt": "rtt",
+  "videos": "videos",
+  "repo": "repoHome",
+  "repo-schools": "schools",
+  "repo-subjects": "subjects",
+  "repo-outlines": "outlines",
+  "repo-sessions": "sessions",
+  "repo-resources": "resources",
+  "tbl-teachers": "teachers",
+  "tbl-schools": "schools",
+  "tbl-mentors": "mentors",
+  "tbl-pairings": "pairings",
+  "tbl-attendance": "attendance",
+  "audit": "audit",
+  "gates": "gates",
+  "forms": "forms",
+  "settings": "settings",
+  "uploads": "uploads",
+};
+
+export async function Sidebar({ role, activeId }: SidebarProps) {
   const sections = NAV_BY_ROLE[role] ?? NAV_BY_ROLE.teacher;
+  const tNav = await getTranslations("nav");
+  const tSection = await getTranslations("navSection");
+  const tStatus = await getTranslations("status");
+  const tBrand = await getTranslations("brand");
 
   return (
     <aside
@@ -43,14 +90,17 @@ export function Sidebar({ role, activeId }: SidebarProps) {
             color: "var(--ink)",
           }}
         >
-          GML LMS
+          {tBrand("name")}
         </div>
         <div style={{ fontSize: 11, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-          RTT · {role.replace("_", " ")}
+          {tBrand("subtitle")} · {role.replace("_", " ")}
         </div>
       </div>
 
-      {sections.map((section) => (
+      {sections.map((section) => {
+        const sectionKey = SECTION_KEY[section.section];
+        const sectionLabel = sectionKey ? tSection(sectionKey) : section.section;
+        return (
         <div key={section.section}>
           <div
             style={{
@@ -62,16 +112,18 @@ export function Sidebar({ role, activeId }: SidebarProps) {
               padding: "0 8px 6px",
             }}
           >
-            {section.section}
+            {sectionLabel}
           </div>
           <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
             {section.items.map((item) => {
               const isActive = activeId === item.id;
+              const itemKey = ITEM_KEY[item.id];
+              const itemLabel = itemKey ? tNav(itemKey) : item.label;
               return (
                 <Link
                   key={item.id}
                   href={item.href}
-                  data-help-anchor={item.id}
+                  data-help-anchor={`nav-${item.id}`}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -87,7 +139,7 @@ export function Sidebar({ role, activeId }: SidebarProps) {
                   }}
                 >
                   <Icon name={item.icon} size={14} />
-                  <span style={{ flex: 1 }}>{item.label}</span>
+                  <span style={{ flex: 1 }}>{itemLabel}</span>
                   {item.gate ? (
                     <span
                       title={`Section gate: ${item.gate}`}
@@ -124,7 +176,8 @@ export function Sidebar({ role, activeId }: SidebarProps) {
             })}
           </nav>
         </div>
-      ))}
+        );
+      })}
 
       {/* Network status — cosmetic per v2 plan (no PWA / offline queue) */}
       <div
@@ -148,7 +201,7 @@ export function Sidebar({ role, activeId }: SidebarProps) {
             display: "inline-block",
           }}
         />
-        Online · synced
+        {tStatus("online")}
       </div>
     </aside>
   );

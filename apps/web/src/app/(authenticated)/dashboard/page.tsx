@@ -1,7 +1,13 @@
 // Role-aware dashboard — 1:1 ports `LMS GML Frontend/dashboard.jsx`.
+//
+// Spec 125 — the time-of-day greeting and the two right-column card headings
+// (What's next / Today, Confidentiality) are now translated via next-intl.
+// The rest of the page body stays English per the prototype's intentional
+// "chrome translates, content doesn't" line.
 
 import { count, eq } from "drizzle-orm";
 import { db } from "@gml/db";
+import { getTranslations } from "next-intl/server";
 import { auth } from "@/auth";
 import {
   mentorPairings,
@@ -43,6 +49,7 @@ export default async function DashboardPage() {
   const role = session.user.role ?? "teacher";
   const name = session.user.name ?? session.user.email ?? "there";
   const counts = await getCounts();
+  const tDash = await getTranslations("dashboard");
 
   const stats: Stat[] =
     role === "super_admin" || role === "programme_admin"
@@ -75,10 +82,10 @@ export default async function DashboardPage() {
 
   const greeting = (() => {
     const h = new Date().getUTCHours();
-    if (h < 5) return "Late night";
-    if (h < 12) return "Good morning";
-    if (h < 17) return "Good afternoon";
-    return "Good evening";
+    if (h < 5) return tDash("lateNight");
+    if (h < 12) return tDash("morning");
+    if (h < 17) return tDash("afternoon");
+    return tDash("evening");
   })();
 
   const firstName = name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").split(/\s+/)[0];
@@ -124,7 +131,7 @@ export default async function DashboardPage() {
           <article className="card card-hi">
             <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
               <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
-                {role === "teacher" ? "What's next" : "Today"}
+                {role === "teacher" ? tDash("whatsNext") : tDash("today")}
               </h2>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                 {role === "teacher" ? "Your training queue + observation prep." : "Things waiting on you."}
@@ -140,10 +147,10 @@ export default async function DashboardPage() {
           <article className="card card-hi">
             <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
               <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
-                Confidentiality
+                {tDash("confidentiality")}
               </h2>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                Reminder for every viewer.
+                {tDash("reminderForViewer")}
               </div>
             </header>
             <div style={{ padding: 14 }}>

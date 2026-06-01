@@ -76,10 +76,15 @@ export default async function AdminIndexPage() {
             </span>
           </li>
           <li>
-            <span className="block rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 text-neutral-400">
-              <div className="text-sm font-medium">Settings</div>
-              <div className="text-xs">Lands in spec 071</div>
-            </span>
+            <Link
+              href="/admin/system-settings"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">System settings</div>
+              <div className="text-xs text-neutral-500">
+                Programme · video pipeline · notifications · backups — super_admin only
+              </div>
+            </Link>
           </li>
         </ul>
       </section>

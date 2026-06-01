@@ -15,6 +15,10 @@ type DesktopShellProps = {
 };
 
 export function DesktopShell({ user, breadcrumbs, activeNavId, children }: DesktopShellProps) {
+  // Spec 125 — Topbar and Sidebar are now async server components (they call
+  // `getTranslations()`). React renders them as ordinary children because
+  // RSC understands awaiting promise children at the framework boundary; no
+  // Suspense fallback is needed because the JSON bundles are bundled in.
   return (
     <div style={{ display: "grid", gridTemplateColumns: "248px 1fr", minHeight: "100dvh", background: "var(--paper)" }}>
       <Sidebar role={user.role} activeId={activeNavId} />

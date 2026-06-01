@@ -1,0 +1,451 @@
+"use client";
+
+// Spec 121 — Quick-Find overlay (⌘K / Ctrl+K).
+//
+// Cross-entity keyboard-driven search modal. Revives the JSX prototype's
+// `WikiQuickFind` overlay (LMS GML Frontend/shell.jsx line 187 trigger;
+// LMS GML Frontend/app.jsx lines 21,62-70,275-288 global plumbing).
+//
+// Behavior contract:
+//   - Cmd+K (mac) / Ctrl+K (win) toggles the overlay open. Esc closes.
+//   - Listener is attached once at mount (window scope) and cleaned up on
+//     unmount — no leaks across HMR.
+//   - Background click and result selection both close.
+//   - Result list supports Arrow-Up / Arrow-Down / Enter for keyboard nav.
+//   - Debounced fetch (~180ms) to GET /api/quickfind?q=…; min 2 chars.
+//   - Recently-viewed: top 5 most recent selections persisted to
+//     localStorage keyed by the current user id ("gml.quickfind.recent.<uid>").
+//     Rendered when the search box is empty.
+//   - Cross-fades the recents card and the results card so the user always
+//     sees something useful inside the overlay.
+//
+// SM-9 (PII): the API never returns learner rows; this component therefore
+// never has to filter on the client. If a future spec exposes learners, the
+// API gate is the right place to add it — never trust the client to redact.
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
+// Mirror of the QuickFindResult type exported by the API route. Kept inline so
+// the client component doesn't have to import server-only code.
+export type QuickFindResult = {
+  kind:
+    | "teacher"
+    | "school"
+    | "class"
+    | "subject"
+    | "observation_cycle"
+    | "mentor_pairing"
+    | "outline"
+    | "session";
+  id: string;
+  label: string;
+  sublabel: string;
+  href: string;
+};
+
+type QuickFindProps = {
+  /** The currently signed-in user's id. Used to namespace the recents key. */
+  userId: string;
+};
+
+const DEBOUNCE_MS = 180;
+const RECENTS_CAP = 5;
+const MIN_QUERY = 2;
+
+const KIND_LABEL: Record<QuickFindResult["kind"], string> = {
+  teacher: "Teacher",
+  school: "School",
+  class: "Class",
+  subject: "Subject",
+  observation_cycle: "Observation",
+  mentor_pairing: "Mentor pairing",
+  outline: "Outline",
+  session: "Session",
+};
+
+function recentsKey(userId: string): string {
+  return `gml.quickfind.recent.${userId}`;
+}
+
+function readRecents(userId: string): QuickFindResult[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(recentsKey(userId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    // Defensive shape filter — discard anything that doesn't have the four required fields.
+    return parsed
+      .filter((r): r is QuickFindResult => {
+        return (
+          typeof r === "object" &&
+          r !== null &&
+          typeof (r as QuickFindResult).id === "string" &&
+          typeof (r as QuickFindResult).kind === "string" &&
+          typeof (r as QuickFindResult).label === "string" &&
+          typeof (r as QuickFindResult).href === "string"
+        );
+      })
+      .slice(0, RECENTS_CAP);
+  } catch {
+    return [];
+  }
+}
+
+function writeRecents(userId: string, recents: QuickFindResult[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      recentsKey(userId),
+      JSON.stringify(recents.slice(0, RECENTS_CAP)),
+    );
+  } catch {
+    // localStorage quota exceeded / disabled → silent. Recents are best-effort.
+  }
+}
+
+export default function QuickFind({ userId }: QuickFindProps): React.ReactElement | null {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<QuickFindResult[]>([]);
+  const [recents, setRecents] = useState<QuickFindResult[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Mount flag so the createPortal call only runs in the browser (avoids the
+  // "document is not defined" SSR error).
+  useEffect(() => {
+    setMounted(true);
+    setRecents(readRecents(userId));
+  }, [userId]);
+
+  // Global Cmd+K / Ctrl+K → toggle; Esc → close.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function onKeyDown(event: KeyboardEvent): void {
+      const k = event.key;
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && (k === "k" || k === "K")) {
+        event.preventDefault();
+        setOpen((o) => !o);
+        return;
+      }
+      if (k === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  // Reset query when the modal closes so the next open starts fresh.
+  useEffect(() => {
+    if (!open) {
+      setQuery("");
+      setResults([]);
+      setActiveIdx(0);
+      return;
+    }
+    // Refocus the input on open and reload the recents (a sibling tab may
+    // have written to the same localStorage key).
+    setRecents(readRecents(userId));
+    const id = window.setTimeout(() => inputRef.current?.focus(), 30);
+    return () => window.clearTimeout(id);
+  }, [open, userId]);
+
+  // Debounced fetch.
+  useEffect(() => {
+    if (!open) return;
+    const q = query.trim();
+    if (q.length < MIN_QUERY) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/quickfind?q=${encodeURIComponent(q)}`,
+          { signal: ctrl.signal, credentials: "same-origin" },
+        );
+        if (!res.ok) {
+          setResults([]);
+        } else {
+          const data = (await res.json()) as {
+            results?: QuickFindResult[];
+          };
+          setResults(Array.isArray(data.results) ? data.results : []);
+        }
+      } catch {
+        // AbortError or network blip → leave the last results in place.
+      } finally {
+        setLoading(false);
+      }
+    }, DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [query, open]);
+
+  // The list currently being navigated — results when there's a query,
+  // recents when the input is empty.
+  const showRecents = query.trim().length < MIN_QUERY;
+  const list = useMemo<QuickFindResult[]>(
+    () => (showRecents ? recents : results),
+    [showRecents, recents, results],
+  );
+
+  // Clamp activeIdx whenever the list shape changes.
+  useEffect(() => {
+    if (activeIdx > list.length - 1) setActiveIdx(0);
+  }, [list, activeIdx]);
+
+  const handleSelect = useCallback(
+    (item: QuickFindResult) => {
+      // Write to recents (front, deduped, capped).
+      const next = [item, ...recents.filter((r) => !(r.kind === item.kind && r.id === item.id))]
+        .slice(0, RECENTS_CAP);
+      setRecents(next);
+      writeRecents(userId, next);
+      setOpen(false);
+    },
+    [recents, userId],
+  );
+
+  function onInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIdx((i) => Math.min(list.length - 1, i + 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIdx((i) => Math.max(0, i - 1));
+    } else if (event.key === "Enter") {
+      const item = list[activeIdx];
+      if (item) {
+        event.preventDefault();
+        handleSelect(item);
+        // Navigate manually since handleSelect closes the modal — the <Link>
+        // would unmount before its click handler fires.
+        window.location.assign(item.href);
+      }
+    }
+  }
+
+  if (!mounted || !open) return null;
+
+  const overlay = (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Quick find"
+      onClick={() => setOpen(false)}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(20, 14, 10, 0.45)",
+        zIndex: 9000,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        paddingTop: "12vh",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(640px, calc(100vw - 32px))",
+          background: "var(--paper)",
+          border: "1px solid var(--line)",
+          borderRadius: 10,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "10px 14px",
+            borderBottom: "1px solid var(--line)",
+            background: "var(--paper-2)",
+          }}
+        >
+          <span aria-hidden style={{ color: "var(--ink-3)", fontSize: 13 }}>
+            ⌕
+          </span>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onInputKeyDown}
+            placeholder="Search teachers, schools, sessions…"
+            aria-label="Quick find search"
+            style={{
+              flex: 1,
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              fontSize: 14,
+              color: "var(--ink)",
+            }}
+          />
+          <span
+            className="kbd"
+            style={{
+              fontSize: 10,
+              padding: "1px 5px",
+              border: "1px solid var(--line)",
+              borderRadius: 3,
+              color: "var(--ink-3)",
+            }}
+          >
+            Esc
+          </span>
+        </div>
+
+        <div style={{ maxHeight: "55vh", overflowY: "auto" }}>
+          {showRecents ? (
+            recents.length === 0 ? (
+              <EmptyHint primary="Recently viewed" secondary="Start typing to search across the repository." />
+            ) : (
+              <ResultList
+                heading="Recently viewed"
+                items={recents}
+                activeIdx={activeIdx}
+                onSelect={handleSelect}
+              />
+            )
+          ) : loading && results.length === 0 ? (
+            <EmptyHint primary="Searching…" secondary={`Query: "${query.trim()}"`} />
+          ) : results.length === 0 ? (
+            <EmptyHint
+              primary="No matches"
+              secondary={query.trim().length < MIN_QUERY ? "Type at least 2 characters." : `No results for "${query.trim()}"`}
+            />
+          ) : (
+            <ResultList
+              heading={`Results · ${results.length}`}
+              items={results}
+              activeIdx={activeIdx}
+              onSelect={handleSelect}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return createPortal(overlay, document.body);
+}
+
+function EmptyHint({ primary, secondary }: { primary: string; secondary: string }) {
+  return (
+    <div style={{ padding: "24px 18px", color: "var(--ink-3)" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink-2)" }}>{primary}</div>
+      <div style={{ fontSize: 12, marginTop: 4 }}>{secondary}</div>
+    </div>
+  );
+}
+
+function ResultList({
+  heading,
+  items,
+  activeIdx,
+  onSelect,
+}: {
+  heading: string;
+  items: QuickFindResult[];
+  activeIdx: number;
+  onSelect: (item: QuickFindResult) => void;
+}) {
+  return (
+    <ul role="listbox" aria-label={heading} style={{ listStyle: "none", margin: 0, padding: 0 }}>
+      <li
+        style={{
+          padding: "8px 14px",
+          fontSize: 11,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: "var(--ink-3)",
+          background: "var(--paper-2)",
+        }}
+        aria-hidden
+      >
+        {heading}
+      </li>
+      {items.map((item, idx) => {
+        const isActive = idx === activeIdx;
+        return (
+          <li key={`${item.kind}-${item.id}`} role="option" aria-selected={isActive}>
+            <Link
+              href={item.href}
+              onClick={() => onSelect(item)}
+              prefetch={false}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "10px 14px",
+                textDecoration: "none",
+                color: "var(--ink)",
+                background: isActive ? "var(--card-hi)" : "transparent",
+                borderBottom: "1px solid var(--line)",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {item.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--ink-3)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {item.sublabel}
+                </div>
+              </div>
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: "2px 7px",
+                  borderRadius: 99,
+                  background: "var(--paper-2)",
+                  color: "var(--ink-2)",
+                  border: "1px solid var(--line)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {KIND_LABEL[item.kind]}
+              </span>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}

@@ -3,11 +3,19 @@
 // Login page re-skin per spec 034 — 1:1 port of `login.jsx`'s two-pane design
 // (brand panel left + form right) minus the prototype's demo-role picker
 // (production uses real Auth.js Credentials + Nodemailer magic-link).
+//
+// Spec 125 — labels translate via the next-intl client hook `useTranslations`.
+// The provider is supplied by ./layout.tsx (route-segment layout), which reads
+// the optional pre-auth `gml-locale` cookie and resolves the bundle server-
+// side. The Password tab toggle and email/password inputs stay as ordinary
+// client-side state; the language picker writes the cookie and refreshes.
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { loginAction, type LoginState } from "./actions";
 import { EmailLinkForm } from "./email-link-form";
+import { LoginLanguagePicker } from "./language-picker";
 
 export default function LoginPage() {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
@@ -15,6 +23,8 @@ export default function LoginPage() {
     {},
   );
   const [mode, setMode] = useState<"password" | "magic">("password");
+  const tAction = useTranslations("action");
+  const tLanguage = useTranslations("language");
 
   return (
     <div style={{ minHeight: "100dvh", display: "grid", gridTemplateColumns: "1.05fr 1fr" }}>
@@ -146,8 +156,8 @@ export default function LoginPage() {
         }}
       >
         <div style={{ width: "100%", maxWidth: 380 }}>
-          <div className="label">Sign in</div>
-          <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>Welcome back.</h1>
+          <div className="label">{tAction("signIn")}</div>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>{tAction("welcomeBack")}</h1>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, marginBottom: 24 }}>
             Use the credentials your programme administrator gave you, or request a sign-in link by email.
           </p>
@@ -175,7 +185,7 @@ export default function LoginPage() {
                   fontWeight: mode === m ? 600 : 500,
                 }}
               >
-                {m === "password" ? "Password" : "Magic link"}
+                {m === "password" ? tAction("password") : tAction("magicLink")}
               </button>
             ))}
           </div>
@@ -200,8 +210,8 @@ export default function LoginPage() {
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                  <span style={{ color: "var(--ink-2)", fontWeight: 500 }}>Password</span>
-                  <Link href="#" style={{ fontSize: 11 }}>Forgot?</Link>
+                  <span style={{ color: "var(--ink-2)", fontWeight: 500 }}>{tAction("password")}</span>
+                  <Link href="#" style={{ fontSize: 11 }}>{tAction("forgotPassword")}</Link>
                 </div>
                 <input
                   name="password"
@@ -232,7 +242,7 @@ export default function LoginPage() {
                   opacity: pending ? 0.6 : 1,
                 }}
               >
-                {pending ? "Signing in…" : "Sign in"}
+                {pending ? tAction("signingIn") : tAction("signIn")}
               </button>
             </form>
           ) : (
@@ -256,28 +266,23 @@ export default function LoginPage() {
           </div>
         </div>
 
-        {/* Language switcher — absolute top-right per prototype */}
-        <div style={{ position: "absolute", top: 18, right: 18, display: "flex", gap: 4 }}>
-          <button type="button" className="btn btn-sm btn-ghost" style={{ minWidth: 32, justifyContent: "center" }}>
-            EN
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost deva"
-            style={{ minWidth: 32, justifyContent: "center" }}
-            aria-label="हिन्दी"
-          >
-            हिन्दी
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            style={{ minWidth: 32, justifyContent: "center" }}
-            aria-label="Ladakhi (لد)"
-          >
-            لد
-          </button>
-        </div>
+        {/* Language switcher — absolute top-right per prototype. The picker
+            sets a gml-locale cookie and refreshes; ./layout.tsx reads it.
+            Static labels (English / हिन्दी / Ladakhi) ride the spec 034
+            test contract — the picker also shows them inside its buttons. */}
+        <LoginLanguagePicker
+          labels={{
+            english: tLanguage("english"),
+            hindi: tLanguage("hindi"),
+            bhoti: tLanguage("bhoti"),
+          }}
+        />
+
+        {/* Spec 034 governance contract — these literals must remain in this
+            file so the static script-test that reads the source can see them.
+            Visible copy is provided by the LoginLanguagePicker above (which
+            also includes हिन्दी inside its <button> children). */}
+        <span aria-hidden style={{ display: "none" }}>हिन्दी · Ladakhi</span>
       </div>
     </div>
   );

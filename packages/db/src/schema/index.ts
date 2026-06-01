@@ -17,3 +17,5 @@ export * from "./prefs";
 export * from "./notifications";
 export * from "./videos";
 export * from "./formDrafts";
+export * from "./quizzes";
+export * from "./systemSettings";

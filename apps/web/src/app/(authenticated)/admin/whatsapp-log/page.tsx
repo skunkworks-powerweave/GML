@@ -1,0 +1,325 @@
+// /admin/whatsapp-log — WhatsApp ingest log (Workflow Run 10 frontend parity).
+//
+// Spec 126 closes the LMS GML Frontend/videos.jsx:33 affordance: the
+// prototype's "WhatsApp ingest log" header button. Before this spec, the
+// live videos library routed it at /admin/audit?action=whatsapp. — but
+// the audit-log surface has no LIKE filter so that URL matched zero
+// rows. This page replaces that broken hop with a dedicated operator-
+// grade view that:
+//
+//   - lists every video_submission whose source='whatsapp',
+//   - shows the original sender phone (pulled from the matching
+//     audit_log row's metadata.from field — webhook records it under
+//     action='whatsapp.message.received'),
+//   - shows the truncated caption (video_submissions.caption_raw),
+//     parsed context (matched / unmatched, color-coded), submission
+//     status chip, and a /videos/<id> deep link,
+//   - provides "Resend transcode" CTA for stuck rows via the server
+//     action in ./actions.ts,
+//   - filters by parsing result (matched / unmatched) and date range.
+//
+// Role gate: programme_admin + super_admin only (matches the
+// programme-oversight semantics of /admin/audit and /admin/gates).
+
+import Link from "next/link";
+import { desc, eq, and, gte, lte, inArray } from "drizzle-orm";
+import { db } from "@gml/db";
+import { videoSubmissions, auditLog } from "@gml/db/schema";
+import { requireRole } from "@/lib/guards";
+import { recordAudit } from "@/lib/audit";
+import { resendTranscodeAction } from "./actions";
+
+export const dynamic = "force-dynamic";
+
+const PAGE_LIMIT = 100;
+
+// Status → chip class mirrors the videos library page so the same status
+// reads the same way across both surfaces.
+const STATUS_CHIP: Record<string, string> = {
+  ready: "chip-lichen",
+  transcoding: "chip-saffron",
+  queued: "chip",
+  received: "chip",
+  failed: "chip-rust",
+  review_pending: "chip-saffron",
+  reviewed: "chip-indigo",
+};
+
+// context_type='generic' is the only "unmatched" outcome — every other
+// context_type means the webhook successfully parsed the caption prefix
+// (OBS-/TB-/MM-) and resolved the parent entity (or accepted a UUID
+// caption-supplied id). See api/webhooks/whatsapp/route.ts.
+const MATCHED_CONTEXTS = [
+  "observation_cycle",
+  "teach_back",
+  "mentor_meeting",
+  "mentee_quarterly",
+  "classroom_session",
+] as const;
+
+// Re-encoding a finalised video can't help and risks SM-3. Only these
+// states surface a Resend button.
+const RESENDABLE_STATUSES = new Set([
+  "received",
+  "queued",
+  "transcoding",
+  "failed",
+]);
+
+function chipForContext(contextType: string): string {
+  if (contextType === "generic") return "chip chip-rust";
+  return "chip chip-lichen";
+}
+
+function parsingLabel(contextType: string): "matched" | "unmatched" {
+  return contextType === "generic" ? "unmatched" : "matched";
+}
+
+export default async function WhatsappIngestLogPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ parsing?: string; from?: string; to?: string }>;
+}) {
+  await requireRole(["programme_admin", "super_admin"]);
+  const sp = await searchParams;
+
+  // Audit the surface view itself — programme-admin oversight tooling is
+  // SM-9-tracked the same way /admin/gates is.
+  void recordAudit({
+    action: "whatsapp.log.surface_viewed",
+    entityType: "video_submission",
+    metadata: { parsing: sp.parsing ?? "any", from: sp.from ?? null, to: sp.to ?? null },
+  });
+
+  // Build the WHERE clause for video_submissions. Always pinned to
+  // source='whatsapp'; optional parsing + date filters layered on top.
+  const conds = [eq(videoSubmissions.source, "whatsapp")];
+
+  if (sp.parsing === "matched") {
+    conds.push(inArray(videoSubmissions.contextType, [...MATCHED_CONTEXTS]));
+  } else if (sp.parsing === "unmatched") {
+    conds.push(eq(videoSubmissions.contextType, "generic"));
+  }
+
+  if (sp.from) {
+    const fromDate = new Date(sp.from);
+    if (!Number.isNaN(fromDate.getTime())) {
+      conds.push(gte(videoSubmissions.createdAt, fromDate));
+    }
+  }
+  if (sp.to) {
+    // Inclusive end-of-day: append 23:59:59 so a date range from=2026-05-01
+    // to=2026-05-01 still picks up rows from later that same day.
+    const toDate = new Date(sp.to);
+    if (!Number.isNaN(toDate.getTime())) {
+      toDate.setHours(23, 59, 59, 999);
+      conds.push(lte(videoSubmissions.createdAt, toDate));
+    }
+  }
+
+  const rows = await db
+    .select({
+      id: videoSubmissions.id,
+      status: videoSubmissions.status,
+      contextType: videoSubmissions.contextType,
+      contextId: videoSubmissions.contextId,
+      captionRaw: videoSubmissions.captionRaw,
+      createdAt: videoSubmissions.createdAt,
+    })
+    .from(videoSubmissions)
+    .where(and(...conds))
+    .orderBy(desc(videoSubmissions.createdAt))
+    .limit(PAGE_LIMIT);
+
+  // Pull the matching whatsapp.message.received audit rows to recover the
+  // sender phone from metadata.from. Single round-trip indexed on
+  // (action, createdAt) per audit_log_action_created_idx (spec 010).
+  const submissionIds = rows.map((r) => r.id);
+  const phoneBySubmissionId = new Map<string, string>();
+
+  if (submissionIds.length > 0) {
+    const audits = await db
+      .select({
+        entityId: auditLog.entityId,
+        metadata: auditLog.metadata,
+      })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.action, "whatsapp.message.received"),
+          inArray(auditLog.entityId, submissionIds),
+        ),
+      )
+      .limit(submissionIds.length * 2);
+
+    // The webhook fires whatsapp.message.received with entityType="video_submission"
+    // BEFORE it knows the submission id — so the action might not always
+    // carry entityId for older rows. We pre-populate from the latest set
+    // that does include it; rows without a hit fall back to "—".
+    for (const a of audits) {
+      if (!a.entityId) continue;
+      const md = (a.metadata ?? {}) as Record<string, unknown>;
+      const from = typeof md.from === "string" ? md.from : null;
+      if (from) phoneBySubmissionId.set(a.entityId, from);
+    }
+  }
+
+  // Build filter form query strings so the empty-state link and form
+  // round-trip preserves the other filters.
+  const filterParams = (overrides: Record<string, string | undefined>) => {
+    const qs = new URLSearchParams();
+    const merged = { parsing: sp.parsing, from: sp.from, to: sp.to, ...overrides };
+    for (const [k, v] of Object.entries(merged)) {
+      if (v) qs.set(k, v);
+    }
+    const s = qs.toString();
+    return s ? `?${s}` : "";
+  };
+
+  return (
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
+      <header>
+        <h1 className="text-2xl font-semibold">WhatsApp ingest log</h1>
+        <p className="text-sm text-neutral-500">
+          Every video sent to the GML WhatsApp number. Captions starting
+          with OBS- / TB- / MM- link the upload to an observation cycle,
+          teach-back, or mentor meeting; everything else is parked as a
+          generic submission so the operator can re-link it from
+          /admin/data/videos.
+        </p>
+      </header>
+
+      <form
+        method="get"
+        className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white p-4 text-sm"
+      >
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-neutral-500">Parsing</span>
+          <select
+            name="parsing"
+            defaultValue={sp.parsing ?? ""}
+            className="rounded-md border border-neutral-300 px-2 py-1"
+          >
+            <option value="">any</option>
+            <option value="matched">matched</option>
+            <option value="unmatched">unmatched</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-neutral-500">From</span>
+          <input
+            type="date"
+            name="from"
+            defaultValue={sp.from ?? ""}
+            className="rounded-md border border-neutral-300 px-2 py-1"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-neutral-500">To</span>
+          <input
+            type="date"
+            name="to"
+            defaultValue={sp.to ?? ""}
+            className="rounded-md border border-neutral-300 px-2 py-1"
+          />
+        </label>
+        <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">
+          Filter
+        </button>
+        {(sp.parsing || sp.from || sp.to) && (
+          <Link
+            href="/admin/whatsapp-log"
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50"
+          >
+            Reset
+          </Link>
+        )}
+      </form>
+
+      <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
+            <tr>
+              <th className="px-3 py-2">When</th>
+              <th className="px-3 py-2">From</th>
+              <th className="px-3 py-2">Caption</th>
+              <th className="px-3 py-2">Parsed context</th>
+              <th className="px-3 py-2">Submission</th>
+              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2">Resend</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
+                  No WhatsApp ingest events match the current filter.
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => {
+                const phone = phoneBySubmissionId.get(r.id) ?? "—";
+                const caption = (r.captionRaw ?? "").trim();
+                const captionShort = caption.length > 40 ? `${caption.slice(0, 40)}…` : caption || "—";
+                const canResend = RESENDABLE_STATUSES.has(r.status);
+                const parsing = parsingLabel(r.contextType);
+                return (
+                  <tr key={r.id} className="border-t border-neutral-100">
+                    <td className="px-3 py-2 text-xs">
+                      {r.createdAt?.toISOString().slice(0, 19).replace("T", " ") ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs font-mono">{phone}</td>
+                    <td className="px-3 py-2 text-xs" title={caption}>
+                      {captionShort}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <span className={chipForContext(r.contextType)}>
+                        {parsing} · {r.contextType.replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <Link
+                        href={`/videos/${r.id}`}
+                        className="font-mono text-neutral-700 underline hover:text-neutral-900"
+                      >
+                        {r.id.slice(0, 10)}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      <span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>{r.status}</span>
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {canResend ? (
+                        <form action={resendTranscodeAction}>
+                          <input type="hidden" name="submissionId" value={r.id} />
+                          <button
+                            type="submit"
+                            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                          >
+                            Resend transcode
+                          </button>
+                        </form>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-xs text-neutral-400">
+        Showing the most recent {PAGE_LIMIT} WhatsApp submissions. For
+        full WhatsApp audit-trail history (parse failures, signature
+        rejections, media-fetch errors) see{" "}
+        <Link href="/admin/audit" className="underline">
+          /admin/audit
+        </Link>
+        .
+      </p>
+    </main>
+  );
+}

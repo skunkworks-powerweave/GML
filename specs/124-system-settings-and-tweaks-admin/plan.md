@@ -1,0 +1,5 @@
+# Plan 124
+
+CREATED: `specs/124-system-settings-and-tweaks-admin/{spec,plan,research,quickstart,tasks}.md`, `tests/governance/test_124_system_settings_and_tweaks_admin.test.mjs`, `packages/db/src/schema/systemSettings.ts`, `packages/db/src/migrations/0015_system_settings.sql`, `packages/db/src/migrations/meta/0015_snapshot.json`, `apps/web/src/app/api/admin/system-settings/route.ts`, `apps/web/src/app/(authenticated)/admin/system-settings/page.tsx`
+EDITED: `packages/db/src/schema/index.ts` (barrel export), `packages/db/src/migrations/meta/_journal.json` (0015 entry), `packages/db/src/scripts/seed.ts` (bootstrapSystemSettings helper + main() call), `apps/web/src/app/(authenticated)/admin/page.tsx` (replace "Lands in spec 071" placeholder with real Link), `docs/audit-actions.md` (system_settings.*, backup.*, restore.* prefixes)
+MIGRATED: 0015_system_settings.sql — new singleton table with CHECK constraint pinning id; seed-row INSERT folded into migration so migrate-only deployments are self-consistent

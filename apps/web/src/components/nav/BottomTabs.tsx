@@ -1,6 +1,10 @@
 // Mobile bottom tab bar. Ports `mobile-shell.jsx::MobBottomNav`.
+//
+// Spec 125 — tab labels translate via next-intl. Each tab id maps to a key
+// under `nav.*`; tabs without an entry fall back to their English literal.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { TABS_BY_ROLE } from "@/config/nav";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { Icon } from "./Icon";
@@ -10,8 +14,21 @@ type BottomTabsProps = {
   activeTab?: string;
 };
 
-export function BottomTabs({ role, activeTab }: BottomTabsProps) {
+/** Tab id → `nav.*` translation key. */
+const TAB_KEY: Record<string, string> = {
+  "home": "dashboard",
+  "learn": "rtt",
+  "observe": "observation",
+  "pairings": "mentorship",
+  "repo": "repo",
+  "inbox": "inbox",
+  "data": "data",
+  "audit": "audit",
+};
+
+export async function BottomTabs({ role, activeTab }: BottomTabsProps) {
   const tabs = TABS_BY_ROLE[role] ?? TABS_BY_ROLE.teacher;
+  const tNav = await getTranslations("nav");
   return (
     <nav
       className="m-bottomnav"
@@ -60,7 +77,7 @@ export function BottomTabs({ role, activeTab }: BottomTabsProps) {
               }}
             />
             <Icon name={tab.icon} size={20} stroke={1.5} />
-            <span>{tab.label}</span>
+            <span>{TAB_KEY[tab.id] ? tNav(TAB_KEY[tab.id]) : tab.label}</span>
           </Link>
         );
       })}

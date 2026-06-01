@@ -1,7 +1,12 @@
 // Topbar (desktop). Breadcrumbs + bell + lang picker + user pill.
 // 1:1 port from `shell.jsx::Topbar`. ⌘K Quick-Find (028), Help (029), FTUX (030)
 // are explicitly cut from v2; their slots stay empty visually.
+//
+// Spec 125 — the bell aria-label, sign-out title and language picker labels
+// pull their copy from next-intl `getTranslations()` so the chrome renders in
+// the user's UI language. Pure server-side translation: no 'use client'.
 
+import { getTranslations } from "next-intl/server";
 import { signOut } from "@/auth";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { Icon } from "./Icon";
@@ -25,7 +30,9 @@ function initials(name?: string | null, email?: string | null): string {
   return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
-export function Topbar({ user, breadcrumbs = [] }: TopbarProps) {
+export async function Topbar({ user, breadcrumbs = [] }: TopbarProps) {
+  const tAction = await getTranslations("action");
+  const tLanguage = await getTranslations("language");
   return (
     <header
       style={{
@@ -59,10 +66,14 @@ export function Topbar({ user, breadcrumbs = [] }: TopbarProps) {
 
       {/* Right cluster */}
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-        {/* Bell — count badge wired in spec 070 (inbox) */}
+        {/* Bell — count badge wired in spec 070 (inbox).
+            data-help-anchor='topbar-help' is the FTUX (spec 123) coach-mark target for the
+            "Help is always here" step — it is the right-cluster's info affordance until
+            spec 029's full help panel ships. */}
         <button
           type="button"
-          aria-label="Notifications"
+          aria-label={tAction("notifications")}
+          data-help-anchor="topbar-help"
           style={{
             position: "relative",
             background: "transparent",
@@ -107,9 +118,9 @@ export function Topbar({ user, breadcrumbs = [] }: TopbarProps) {
               zIndex: 20,
             }}
           >
-            <li style={{ padding: "6px 10px", fontSize: 12 }}>English</li>
-            <li style={{ padding: "6px 10px", fontSize: 12 }}>हिन्दी</li>
-            <li style={{ padding: "6px 10px", fontSize: 12, fontFamily: "var(--deva)" }}>Ladakhi (لد)</li>
+            <li style={{ padding: "6px 10px", fontSize: 12 }}>{tLanguage("english")}</li>
+            <li style={{ padding: "6px 10px", fontSize: 12, fontFamily: "var(--deva)" }}>{tLanguage("hindi")}</li>
+            <li style={{ padding: "6px 10px", fontSize: 12 }}>{tLanguage("bhoti")}</li>
           </ul>
         </details>
 
@@ -122,7 +133,7 @@ export function Topbar({ user, breadcrumbs = [] }: TopbarProps) {
         >
           <button
             type="submit"
-            title={`Sign out ${user.email ?? ""}`}
+            title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
             style={{
               display: "flex",
               alignItems: "center",

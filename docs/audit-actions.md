@@ -20,6 +20,9 @@
 | `<entity>.bulk_export` | `learners.bulk_export` | SM-9 bulk-export ops |
 | `pairing.*` | `pairing.created`, `pairing.advanced_to_quarter_2`, `pairing.ended` | mentorship lifecycle (spec 061) |
 | `cycle.*` | `cycle.nominated`, `cycle.pre_submitted`, `cycle.complete` | observation lifecycle (spec 059) |
+| `system_settings.*` | `system_settings.update`, `system_settings.surface_viewed` | platform-wide admin tweaks (spec 124) |
+| `backup.*` | `backup.complete`, `backup.failed` | nightly backup script audit emission (deferred — spec 091/109) |
+| `restore.*` | `restore.complete`, `restore.failed` | restore drill audit emission (deferred — spec 091/109) |
 
 ## Substrate moats
 

@@ -225,6 +225,9 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
             Change on security page →
           </a>
         </KvRow>
+        <KvRow label="Replay tour">
+          <ReplayTourButton />
+        </KvRow>
         <KvRow label="Sign out">
           <a href="/api/auth/signout" style={{ color: "var(--rust)", fontSize: 12, textDecoration: "none" }}>
             End this session →
@@ -232,6 +235,50 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
         </KvRow>
       </SectionCard>
     </>
+  );
+}
+
+// Spec 123 — "Replay tour" PUTs {ftuxSeenAt: null} into /api/user-prefs and
+// then reloads the page so the (authenticated)/layout.tsx server component
+// reads the cleared timestamp and re-mounts <FTUXTour>. The reload is the
+// simplest way to re-arm the overlay without bubbling client state up out of
+// a deep tree; FTUX is a once-a-quarter affordance so the page hit is
+// acceptable.
+function ReplayTourButton() {
+  const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+  const replay = async () => {
+    setState("saving");
+    try {
+      const res = await fetch("/api/user-prefs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ftuxSeenAt: null }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Full reload so the layout's server-side user_prefs read picks up the
+      // cleared timestamp and re-mounts the FTUXTour overlay.
+      window.location.reload();
+    } catch {
+      setState("error");
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={replay}
+      disabled={state === "saving"}
+      style={{
+        background: "transparent",
+        border: "none",
+        padding: 0,
+        color: state === "error" ? "var(--rust)" : "var(--indigo)",
+        fontSize: 12,
+        cursor: state === "saving" ? "wait" : "pointer",
+        textDecoration: "none",
+      }}
+    >
+      {state === "saving" ? "Re-arming…" : state === "error" ? "Failed — retry" : "Replay tour →"}
+    </button>
   );
 }
 

@@ -1,0 +1,5 @@
+# Plan 121
+
+CREATED: `specs/121-quick-find-cmdk/{spec,plan,research,quickstart,tasks}.md`, `tests/governance/test_121_quick_find_cmdk.test.mjs`, `apps/web/src/app/api/quickfind/route.ts` (GET handler with cross-entity ILIKE fan-out + audit), `apps/web/src/components/quickfind/QuickFind.tsx` (Cmd+K/Ctrl+K modal client island with debounce, arrow-key nav, localStorage recents)
+EDITED: `apps/web/src/app/(authenticated)/layout.tsx` (mounted `<QuickFind userId={user.id} />` in both desktop and mobile branches between FTUXTour and the shell content; added the spec-121 doc comment that explains why it sits at the layout level)
+MIGRATED: none — every column referenced is already present (teachers.full_name, schools.name+code, classes.grade+class_teacher_name, subjects.name+code, observation_cycles.code, mentor_pairings via mentors.name + teachers.full_name joins, course_outlines.name, sessions.topic+scheduled_date); the audit table already accepts arbitrary dotted-action strings (spec 021) so `quickfind.query` requires no enum addition
