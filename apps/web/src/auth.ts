@@ -4,7 +4,7 @@ import Nodemailer from "next-auth/providers/nodemailer";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { users, accounts, sessions, verificationTokens } from "@gml/db/schema";
+import { users, accounts, authSessions, verificationTokens } from "@gml/db/schema";
 import { verifyPassword } from "@/lib/password";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -22,7 +22,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: DrizzleAdapter(db, {
     usersTable: users,
     accountsTable: accounts,
-    sessionsTable: sessions,
+    sessionsTable: authSessions,
     verificationTokensTable: verificationTokens,
   }),
   session: { strategy: "jwt", maxAge: 60 * 60 * 8 /* 8h */ },

@@ -20,6 +20,7 @@ import { subjectsEntity } from "./entities/subjects";
 import { classesEntity } from "./entities/classes";
 import { courseOutlinesEntity } from "./entities/course-outlines";
 import { outlineLessonsEntity } from "./entities/outline-lessons";
+import { sessionsEntity } from "./entities/sessions";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   schools: schoolsEntity,
@@ -33,6 +34,7 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   classes: classesEntity,
   "course-outlines": courseOutlinesEntity,
   "outline-lessons": outlineLessonsEntity,
+  sessions: sessionsEntity,
 };
 
 export type AdminEntitySlug = keyof typeof ADMIN_ENTITIES;

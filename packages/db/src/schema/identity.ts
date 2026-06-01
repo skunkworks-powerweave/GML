@@ -57,8 +57,10 @@ export const accounts = pgTable(
   (t) => [primaryKey({ columns: [t.provider, t.providerAccountId] })],
 );
 
-// ── sessions (DB-backed sessions if we ever opt-in; JWT default) ───────────────
-export const sessions = pgTable("sessions", {
+// ── auth sessions (DB-backed Auth.js sessions if we ever opt-in; JWT default) ─
+// v2 rename (spec 017): was `sessions`. Renamed to `auth_sessions` to free the bare
+// `sessions` table name for the classroom-sessions module (curriculum-side).
+export const authSessions = pgTable("auth_sessions", {
   sessionToken: text("session_token").primaryKey(),
   userId: uuid("user_id")
     .notNull()
@@ -81,4 +83,4 @@ export const verificationTokens = pgTable(
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Account = typeof accounts.$inferSelect;
-export type Session = typeof sessions.$inferSelect;
+export type AuthSession = typeof authSessions.$inferSelect;

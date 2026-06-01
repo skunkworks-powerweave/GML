@@ -31,9 +31,15 @@ test("schema/enums.ts exports roleEnum with 5 roles", () => {
 
 test("schema/identity.ts has Auth.js v5 tables", () => {
   const src = read("packages/db/src/schema/identity.ts");
-  for (const t of ["users", "accounts", "sessions", "verificationTokens"]) {
+  for (const t of ["users", "accounts", "verificationTokens"]) {
     assert.match(src, new RegExp(`export const ${t}`), `${t} must be exported`);
   }
+  // v2 (spec 017): the Auth.js session table is exported as either `sessions` (v1) or
+  // `authSessions` (v2 — bare `sessions` name freed for the classroom-sessions module).
+  assert.ok(
+    /export const (sessions|authSessions)\b/.test(src),
+    "Auth.js session table must be exported as `sessions` or `authSessions`",
+  );
 });
 
 test("client.ts creates a pg Pool + drizzle client", () => {
