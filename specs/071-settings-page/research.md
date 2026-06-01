@@ -1,0 +1,1 @@
+Delta-PUT (only changed fields are posted) keeps audit log noise low — the `/api/user-prefs` PUT already records a `user_prefs.update` audit row with a `keys` metadata array, so sparse posts produce sparse audit records. Save-on-change with 400ms debounce mirrors the prototype's Tweaks Panel ergonomic (no Submit button).

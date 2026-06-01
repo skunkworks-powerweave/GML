@@ -1,0 +1,1 @@
+T-064-1 → ship /rtt/online/synchronous page (Mon-Fri × 3-week calendar of rtt_sessions where type ∈ {synchronous, webinar, quiz}; upcoming-5 side panel; empty state → /admin/data/sessions; auth-gated; governance test).

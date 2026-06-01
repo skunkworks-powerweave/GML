@@ -10,6 +10,8 @@ import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { getDeviceType } from "@/lib/device";
+import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { RowForm } from "./row-form";
 import { deleteRowAction } from "./actions";
 
@@ -33,6 +35,12 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
 
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
+
+  // Spec 023: choose grid (desktop) vs cards (mobile) by reading the device
+  // cookie set by useDeviceType(). The client effect keeps the cookie in
+  // sync with the real viewport on each navigation, so SSR picks the right
+  // layout from the first request after the cookie is established.
+  const device = await getDeviceType();
 
   // Drizzle's loose table typing here is acceptable for the generic grid path.
   // Specific admin views (spec 047+) can replace this with typed selects.
@@ -87,7 +95,48 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
         <RowForm entitySlug={slug} mode="create" />
       </section>
 
-      <section className="rounded-lg border border-neutral-200 bg-white">
+      {device === "mobile" ? (
+        <>
+          <section className="mb-4">
+            <MobileEntityCardList
+              entitySlug={slug}
+              entityLabel={entity.label}
+              rows={rows}
+              columns={entity.displayColumns.map((c) => ({
+                key: c.key,
+                label: c.label,
+                format: c.format,
+              }))}
+            />
+          </section>
+          <nav
+            className="mb-6 flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-500"
+            aria-label="Card list pagination"
+          >
+            <div>
+              {pageNum > 1 ? (
+                <Link href={`?page=${pageNum - 1}`} className="hover:underline">← Prev</Link>
+              ) : (
+                <span className="text-neutral-300">← Prev</span>
+              )}
+            </div>
+            <div>Page {pageNum}</div>
+            <div>
+              {rows.length === PAGE_SIZE ? (
+                <Link href={`?page=${pageNum + 1}`} className="hover:underline">Next →</Link>
+              ) : (
+                <span className="text-neutral-300">Next →</span>
+              )}
+            </div>
+          </nav>
+        </>
+      ) : null}
+
+      <section
+        className="rounded-lg border border-neutral-200 bg-white"
+        style={device === "mobile" ? { display: "none" } : undefined}
+        aria-hidden={device === "mobile"}
+      >
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">

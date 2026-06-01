@@ -1,0 +1,1 @@
+Validate: `pnpm test -- tests/governance/test_072_form_renderer.test.mjs` — asserts FormRenderer file exists with `use client`, all 9 field kinds, autosave hook, plus draft API route with GET/PUT/DELETE and zod validation.

@@ -1,0 +1,3 @@
+# Research 075
+- Idempotency uses the same `(kind, audience, version)` unique index from spec 020 (`feedback_forms_kind_audience_version_uq`) — `SELECT` first rather than `ON CONFLICT DO NOTHING` so the script can log skips and emit an explicit summary line for operator visibility.
+- The brief calls Q1/Q2 "progress" with version="2" on Q2 — mapped to the locked enum vocabulary as `progress_1` (version "1") and `progress_2` (version "2"), since `feedbackKindEnum` is `baseline | progress_1 | progress_2 | final`. Version "2" on `progress_2` matches the brief intent (a new revision of that quarter's template) while staying inside the locked enum.

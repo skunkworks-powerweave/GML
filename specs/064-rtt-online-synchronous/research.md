@@ -1,0 +1,1 @@
+Facilitator name comes from `rtt_sessions.notes` (locked schema has no facilitator FK); SYNC_TYPES is the {synchronous, webinar, quiz} subset of `rtt_sessions.type` — `asynchronous` is excluded and belongs to the sibling /rtt/online/asynchronous route.

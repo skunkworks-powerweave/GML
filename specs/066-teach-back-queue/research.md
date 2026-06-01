@@ -1,0 +1,3 @@
+# Research 066
+One non-obvious choice: drive the right-pane selection via a `?id=` searchParam instead of `'use client'` state. Keeps the route a pure server component (matches `/videos` and `/mentorship`), avoids a hydration boundary, and means each "open" is a fresh DB read — the reviewer always sees the live status. Trade-off: a row click is a full navigation, but Next.js's prefetch + the small payload make that imperceptible on Ladakh-grade bandwidth.
+The brief's `submitted_at` is mapped onto `video_submissions.created_at` because the schema has no separate submitted-at column and the two would be set at the same instant for a teach-back upload anyway.

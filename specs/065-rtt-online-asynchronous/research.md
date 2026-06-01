@@ -1,0 +1,2 @@
+# Research 065
+One non-obvious choice: subject filtering uses string-match against `resources.tags` JSONB and `video_submissions.caption_raw` rather than a new join table, because the RTT-subjects ↔ external-content seam is intentionally loose — a formal join would force schema churn that the brief explicitly forbids ("schema is locked"). The match is documented in spec.md as a known approximation.

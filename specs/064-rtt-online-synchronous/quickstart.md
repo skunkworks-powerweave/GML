@@ -1,0 +1,1 @@
+Run `pnpm test -- tests/governance/test_064_rtt_online_synchronous.test.mjs`; for live UX visit `/rtt/online/synchronous` after `pnpm dev` and confirm the 3-week grid + upcoming-5 side panel render (or the empty-state if no `rtt_sessions` rows match).

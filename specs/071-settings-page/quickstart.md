@@ -1,0 +1,1 @@
+Run `pnpm test -- tests/governance/test_071_settings_page.test.mjs`; visit `/settings` after `pnpm dev` and toggle high_contrast — confirm Network panel shows a PUT /api/user-prefs with `{ highContrast: true }`.
