@@ -13,15 +13,15 @@ test("admin registry exists with ADMIN_ENTITIES export", () => {
 });
 
 test("admin/data/[entity] route exists", () => {
-  assert.ok(existsSync(resolve(root, "apps/web/src/app/admin/data/[entity]/page.tsx")));
-  assert.ok(existsSync(resolve(root, "apps/web/src/app/admin/data/[entity]/actions.ts")));
+  assert.ok(existsSync(resolve(root, "apps/web/src/app/(authenticated)/admin/data/[entity]/page.tsx")));
+  assert.ok(existsSync(resolve(root, "apps/web/src/app/(authenticated)/admin/data/[entity]/actions.ts")));
 });
 
 test("admin actions use withAudit", () => {
-  const src = read("apps/web/src/app/admin/data/[entity]/actions.ts");
+  const src = read("apps/web/src/app/(authenticated)/admin/data/[entity]/actions.ts");
   assert.match(src, /withAudit/);
 });
 
 test("admin index page exists", () => {
-  assert.ok(existsSync(resolve(root, "apps/web/src/app/admin/page.tsx")));
+  assert.ok(existsSync(resolve(root, "apps/web/src/app/(authenticated)/admin/page.tsx")));
 });

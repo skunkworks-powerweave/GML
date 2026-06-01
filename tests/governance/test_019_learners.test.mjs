@@ -35,7 +35,7 @@ test("learners entity is piiAudited and super_admin-only mutate", () => {
 });
 
 test("SM-9 enforcement: admin page calls recordAudit when piiAudited", () => {
-  const src = read("apps/web/src/app/admin/data/[entity]/page.tsx");
+  const src = read("apps/web/src/app/(authenticated)/admin/data/[entity]/page.tsx");
   assert.match(src, /piiAudited/);
   assert.match(src, /recordAudit/);
   assert.match(src, /\$\{entity\.slug\}\.view/);

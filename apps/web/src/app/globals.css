@@ -1,26 +1,106 @@
 @import "tailwindcss";
 
+/* GML LMS — design tokens ported 1:1 from prototype's app.css */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Palette: Ladakh-inspired, warm + grounded */
+  --paper: #f6f1e6;
+  --paper-2: #efe7d3;
+  --paper-3: #e6dcc4;
+  --ink: #1c1816;
+  --ink-2: #3a342e;
+  --ink-3: #6b6357;
+  --ink-4: #9b9080;
+  --line: #d6c9ac;
+  --line-2: #c4b58f;
+  --hairline: rgba(28, 24, 22, 0.08);
+
+  --card: #fbf7ec;
+  --card-hi: #ffffff;
+
+  /* Accents */
+  --indigo: oklch(0.42 0.1 268);
+  --indigo-2: oklch(0.55 0.1 268);
+  --indigo-soft: oklch(0.92 0.04 268);
+  --saffron: oklch(0.65 0.13 60);
+  --saffron-soft: oklch(0.92 0.05 60);
+  --lichen: oklch(0.55 0.08 145);
+  --lichen-soft: oklch(0.92 0.04 145);
+  --rust: oklch(0.55 0.13 30);
+  --rust-soft: oklch(0.92 0.05 30);
+
+  /* Type */
+  --sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Crimson Pro", ui-serif, Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --deva: "Noto Sans Devanagari", var(--sans);
+
+  /* Geometry */
+  --r-1: 3px;
+  --r-2: 6px;
+  --r-3: 10px;
+  --r-4: 14px;
+  --shadow-1: 0 1px 0 rgba(28, 24, 22, 0.04), 0 1px 2px rgba(28, 24, 22, 0.04);
+  --shadow-2: 0 1px 0 rgba(28, 24, 22, 0.04), 0 6px 14px -8px rgba(28, 24, 22, 0.18);
+  --shadow-3: 0 24px 48px -24px rgba(28, 24, 22, 0.35);
 }
 
+/* Tailwind v4 inline theme — exposes the GML tokens as utility classes */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-paper-3: var(--paper-3);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-card: var(--card);
+  --color-card-hi: var(--card-hi);
+  --color-indigo-gml: var(--indigo);
+  --color-saffron: var(--saffron);
+  --color-lichen: var(--lichen);
+  --color-rust: var(--rust);
+  --font-sans: var(--sans);
+  --font-serif: var(--serif);
+  --font-mono: var(--mono);
+  --radius-1: var(--r-1);
+  --radius-2: var(--r-2);
+  --radius-3: var(--r-3);
+  --radius-4: var(--r-4);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+* { box-sizing: border-box; }
+html, body, #__next { height: 100%; }
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  font-family: var(--sans);
+  font-feature-settings: "cv11", "ss01", "ss03";
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(rgba(28, 24, 22, 0.025) 1px, transparent 1px),
+    radial-gradient(rgba(28, 24, 22, 0.018) 1px, transparent 1px);
+  background-size: 22px 22px, 22px 22px;
+  background-position: 0 0, 11px 11px;
+}
+
+button { font-family: inherit; cursor: pointer; }
+input, textarea, select { font-family: inherit; }
+a { color: var(--indigo); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+
+/* a11y tweaks driven by user_prefs (spec 024) — body-class toggles */
+body.a11y-font-large { font-size: 15.5px; }
+body.a11y-font-xlarge { font-size: 17px; }
+body.a11y-high-contrast { --ink: #000; --ink-2: #111; --ink-3: #222; --paper: #fff; --paper-2: #f5f5f5; --line: #888; }
+body.a11y-reduced-motion *, body.a11y-reduced-motion ::before, body.a11y-reduced-motion ::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }

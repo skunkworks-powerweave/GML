@@ -23,7 +23,7 @@ test("lib/audit.ts has recordAudit + withAudit", () => {
 });
 
 test("/admin/audit viewer exists", () => {
-  assert.ok(existsSync(resolve(root, "apps/web/src/app/admin/audit/page.tsx")));
+  assert.ok(existsSync(resolve(root, "apps/web/src/app/(authenticated)/admin/audit/page.tsx")));
 });
 
 test("schema/index exports audit", () => {

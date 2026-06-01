@@ -1,7 +1,7 @@
 // POST /api/admin/data/[entity]/import → consume CSV body, bulk-insert, return summary.
 
 import { NextResponse } from "next/server";
-import { importCsv } from "@/app/admin/data/[entity]/csv";
+import { importCsv } from "@/app/(authenticated)/admin/data/[entity]/csv";
 
 export async function POST(req: Request, ctx: { params: Promise<{ entity: string }> }) {
   const { entity } = await ctx.params;

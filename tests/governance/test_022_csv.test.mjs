@@ -8,7 +8,7 @@ const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
 test("CSV helpers exist with exportCsv + importCsv", () => {
-  const src = read("apps/web/src/app/admin/data/[entity]/csv.ts");
+  const src = read("apps/web/src/app/(authenticated)/admin/data/[entity]/csv.ts");
   assert.match(src, /export async function exportCsv/);
   assert.match(src, /export async function importCsv/);
   assert.match(src, /from "papaparse"/);
@@ -26,18 +26,18 @@ test("CSV import route consumes CSV body", () => {
 });
 
 test("admin grid has Export CSV link", () => {
-  const src = read("apps/web/src/app/admin/data/[entity]/page.tsx");
+  const src = read("apps/web/src/app/(authenticated)/admin/data/[entity]/page.tsx");
   assert.match(src, /Export CSV/);
   assert.match(src, /\/api\/admin\/data\/\$\{slug\}\/export/);
 });
 
 test("learners CSV export requires super_admin (SM-9)", () => {
-  const src = read("apps/web/src/app/admin/data/[entity]/csv.ts");
+  const src = read("apps/web/src/app/(authenticated)/admin/data/[entity]/csv.ts");
   assert.match(src, /piiAudited.*learners[\s\S]{0,200}requireRole\(\["super_admin"\]\)/);
 });
 
 test("bulk import/export actions follow dotted notation", () => {
-  const src = read("apps/web/src/app/admin/data/[entity]/csv.ts");
+  const src = read("apps/web/src/app/(authenticated)/admin/data/[entity]/csv.ts");
   assert.match(src, /\$\{entity\.slug\}\.bulk_export/);
   assert.match(src, /\$\{entity\.slug\}\.bulk_import/);
 });

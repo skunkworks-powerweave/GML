@@ -33,5 +33,5 @@ test("forbidden page exists", () => {
 });
 
 test("dashboard page exists", () => {
-  assert.ok(existsSync(resolve(root, "apps/web/src/app/dashboard/page.tsx")));
+  assert.ok(existsSync(resolve(root, "apps/web/src/app/(authenticated)/dashboard/page.tsx")));
 });
