@@ -36,9 +36,22 @@ export function getDb(): NodePgDatabase<typeof schema> {
 }
 
 // Convenience handle for the common case.
-export const db = new Proxy({} as NodePgDatabase<typeof schema>, {
-  get(_t, prop) {
-    const real = getDb() as unknown as Record<string | symbol, unknown>;
-    return real[prop];
-  },
-});
+// IMPORTANT: This is a direct reference (NOT a Proxy) so that `instanceof
+// PgDatabase` checks in third-party libraries (e.g. Auth.js DrizzleAdapter)
+// pass cleanly. The trade-off: importing this module requires DATABASE_URL.
+// If you need lazy init (e.g. during type-checking), use `getDb()` instead.
+// During build-time when DATABASE_URL may be unset, we fall back to a
+// build-safe stub URL so the module loads; runtime queries will still throw
+// on actual use, which is the desired behaviour.
+function buildSafeUrl(): void {
+  if (!process.env.DATABASE_URL) {
+    const host = process.env.POSTGRES_HOST ?? "localhost";
+    const port = process.env.POSTGRES_PORT ?? "5432";
+    const user = process.env.POSTGRES_USER ?? "gml";
+    const pass = process.env.POSTGRES_PASSWORD ?? "postgres";
+    const dbn = process.env.POSTGRES_DB ?? "gml_lms";
+    process.env.DATABASE_URL = `postgres://${user}:${pass}@${host}:${port}/${dbn}`;
+  }
+}
+buildSafeUrl();
+export const db: NodePgDatabase<typeof schema> = getDb();

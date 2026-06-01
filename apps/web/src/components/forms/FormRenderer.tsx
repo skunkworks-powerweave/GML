@@ -32,10 +32,12 @@ export type FieldOption = { value: string; label: string };
 
 export type FormField = {
   name: string;
-  label: string;
-  kind: FieldKind;
+  label?: string;
+  hindiLabel?: string;
+  kind: FieldKind | string;
   required?: boolean;
-  options?: FieldOption[];
+  // Renderer canonical: {value,label}[]. Seeds also write string[].
+  options?: FieldOption[] | string[];
   helpText?: string;
   placeholder?: string;
   min?: number;
@@ -47,15 +49,23 @@ export type FormField = {
 
 export type FormSchema = {
   title?: string;
-  fields: FormField[];
+  hindiTitle?: string;
+  description?: string;
+  purpose?: string;
+  fields?: FormField[];
 };
 
 type FormRendererProps = {
   schema: FormSchema;
   initialResponses?: Record<string, unknown>;
-  onSubmit: (responses: Record<string, unknown>) => Promise<void>;
+  onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
   draftKey?: DraftKey;
   submitLabel?: string;
+  // Server-action mode (spec 074 forms-runner uses these):
+  action?: (formData: FormData) => Promise<void> | void;
+  formId?: string;
+  slug?: string;
+  pairingId?: string | null;
 };
 
 const DEFAULT_LIKERT: [string, string, string, string, string] = [
@@ -69,6 +79,13 @@ const DEFAULT_LIKERT: [string, string, string, string, string] = [
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 // ---------- Helpers ----------
+
+function normalizeOptions(opts: FormField["options"]): FieldOption[] {
+  if (!opts) return [];
+  return opts.map((o) =>
+    typeof o === "string" ? { value: o, label: o } : o
+  );
+}
 
 function isHindiNameField(name: string): boolean {
   return /_(hi|hindi)$/i.test(name);
@@ -217,7 +234,7 @@ function Select({
       style={inputBaseStyle}
     >
       <option value="">Choose…</option>
-      {(field.options ?? []).map((o) => (
+      {normalizeOptions(field.options).map((o) =>(
         <option key={o.value} value={o.value}>
           {o.label}
         </option>
@@ -237,7 +254,7 @@ function Radio({
 }) {
   return (
     <div style={{ display: "grid", gap: 6 }}>
-      {(field.options ?? []).map((o) => {
+      {normalizeOptions(field.options).map((o) =>{
         const checked = value === o.value;
         return (
           <label
@@ -286,7 +303,7 @@ function CheckboxGroup({
   };
   return (
     <div style={{ display: "grid", gap: 6 }}>
-      {(field.options ?? []).map((o) => {
+      {normalizeOptions(field.options).map((o) =>{
         const checked = selected.includes(o.value);
         return (
           <label
@@ -493,7 +510,7 @@ export function FormRenderer({
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setSubmitError(null);
-      const errs = validateAll(schema.fields, values);
+      const errs = validateAll(schema.fields ?? [],values);
       setErrors(errs);
       if (Object.keys(errs).length > 0) return;
       setSubmitting(true);
@@ -502,7 +519,7 @@ export function FormRenderer({
         // exactly what the server is about to receive.
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (autosaveEnabled) await flushSave();
-        await onSubmit(values);
+        if (onSubmit) await onSubmit(values);
         if (autosaveEnabled && draftKey) {
           // Best-effort cleanup of the draft row. Failure is non-fatal — the
           // user's submission has already gone through.
@@ -556,7 +573,7 @@ export function FormRenderer({
         </h2>
       ) : null}
 
-      {schema.fields.map((field) => {
+      {(schema.fields ?? []).map((field) => {
         const value = values[field.name];
         const error = errors[field.name];
         return (

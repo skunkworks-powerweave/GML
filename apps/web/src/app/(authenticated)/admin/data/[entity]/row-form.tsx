@@ -16,10 +16,10 @@ type Props = {
 function inferInputType(zodType: z.ZodTypeAny): "text" | "number" | "checkbox" | "textarea" {
   // Unwrap optional/nullable/default to look at the inner shape.
   let inner: z.ZodTypeAny = zodType;
-  // @ts-expect-error access internals
-  while (inner._def?.innerType) inner = inner._def.innerType;
-  // @ts-expect-error access internals
-  const name = inner._def?.typeName as string | undefined;
+  // zod 3 exposes _def on ZodTypeAny; cast through unknown to access the internals.
+  const peek = (z: z.ZodTypeAny) => z as unknown as { _def?: { innerType?: z.ZodTypeAny; typeName?: string } };
+  while (peek(inner)._def?.innerType) inner = peek(inner)._def!.innerType!;
+  const name = peek(inner)._def?.typeName as string | undefined;
   if (name === "ZodNumber") return "number";
   if (name === "ZodBoolean") return "checkbox";
   return "text";
@@ -41,8 +41,9 @@ export function RowForm({ entitySlug, mode = "create" }: Props) {
   }
 
   // Pull the Zod object's shape so we can iterate fields.
-  // @ts-expect-error access shape
-  const shape = (entity.formSchema._def?.shape?.() ?? entity.formSchema._def?.shape ?? {}) as Record<string, z.ZodTypeAny>;
+  const formDef = entity.formSchema._def as unknown as { shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny> };
+  const rawShape = typeof formDef.shape === "function" ? formDef.shape() : formDef.shape;
+  const shape = (rawShape ?? {}) as Record<string, z.ZodTypeAny>;
 
   return (
     <form action={formAction} className="grid grid-cols-1 gap-3 md:grid-cols-2">

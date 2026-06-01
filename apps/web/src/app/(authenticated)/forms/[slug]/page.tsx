@@ -76,7 +76,7 @@ type FormSchemaShape = {
   hindiTitle?: string;
   description?: string;
   fields?: Array<{
-    id: string;
+    name: string;
     kind: string;
     label?: string;
     hindiLabel?: string;
@@ -132,7 +132,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   }
 
   const schema = readSchema(form);
-  const fieldIds = new Set((schema.fields ?? []).map((f) => f.id));
+  const fieldIds = new Set((schema.fields ?? []).map((f) => f.name));
 
   const responses: Record<string, unknown> = {};
   for (const [key, value] of formData.entries()) {

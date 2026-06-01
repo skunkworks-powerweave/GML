@@ -3,7 +3,7 @@
 // Table by subject × grade × term with status pill; click-through to detail.
 
 import Link from "next/link";
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { courseOutlines, subjects, teachers } from "@gml/db/schema";
 
@@ -32,8 +32,8 @@ export default async function RepoOutlinesIndexPage() {
       ownerHindi: teachers.hindiName,
     })
     .from(courseOutlines)
-    .leftJoin(subjects, eqCol(courseOutlines.subjectId, subjects.id))
-    .leftJoin(teachers, eqCol(courseOutlines.ownerTeacherId, teachers.id))
+    .leftJoin(subjects, eq(courseOutlines.subjectId, subjects.id))
+    .leftJoin(teachers, eq(courseOutlines.ownerTeacherId, teachers.id))
     .orderBy(asc(subjects.name), asc(courseOutlines.grade), asc(courseOutlines.term))
     .limit(200);
 
@@ -220,8 +220,3 @@ function Td({ children, align = "left", mono = false }: { children?: React.React
   );
 }
 
-// Tiny local FK join helper — mirrors mentorship/page.tsx + observation/page.tsx.
-function eqCol<T>(a: T, b: T) {
-  // @ts-expect-error drizzle's eq is the right type here; this wrapper exists only to shorten imports
-  return require("drizzle-orm").eq(a, b);
-}

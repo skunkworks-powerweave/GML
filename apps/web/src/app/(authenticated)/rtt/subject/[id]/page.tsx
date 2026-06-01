@@ -15,8 +15,8 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
   const [term] = await db.select().from(terms).where(eq(terms.id, subject.termId)).limit(1);
   const [phase] = term ? await db.select().from(phases).where(eq(phases.id, term.phaseId)).limit(1) : [null];
 
-  const modules = await db.select().from(rttModules).where(eq(rttModules.subjectId, id)).orderBy(rttModules.sequence);
-  const sessions = await db.select().from(rttSessions).where(eq(rttSessions.subjectId, id)).orderBy(rttSessions.sequence);
+  const modules = await db.select().from(rttModules).where(eq(rttModules.rttSubjectId, id)).orderBy(rttModules.sequence);
+  const sessions = await db.select().from(rttSessions).where(eq(rttSessions.rttSubjectId, id)).orderBy(rttSessions.sequence);
   const readings = await db.select().from(rttReadings).where(eq(rttReadings.rttSubjectId, id)).orderBy(rttReadings.sequence);
 
   return (

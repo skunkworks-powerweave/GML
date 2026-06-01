@@ -1,7 +1,7 @@
 // /mentorship — pairings list with quarter chip + status.
 
 import Link from "next/link";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorPairings, mentors, teachers } from "@gml/db/schema";
 
@@ -30,8 +30,8 @@ export default async function MentorshipListPage() {
       teacherHindi: teachers.hindiName,
     })
     .from(mentorPairings)
-    .leftJoin(mentors, eqCol(mentorPairings.mentorId, mentors.id))
-    .leftJoin(teachers, eqCol(mentorPairings.teacherId, teachers.id))
+    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
+    .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
     .orderBy(desc(mentorPairings.startedAt))
     .limit(80);
 
@@ -123,7 +123,3 @@ export default async function MentorshipListPage() {
   );
 }
 
-function eqCol<T>(a: T, b: T) {
-  // @ts-expect-error narrow drizzle import wrapper
-  return require("drizzle-orm").eq(a, b);
-}

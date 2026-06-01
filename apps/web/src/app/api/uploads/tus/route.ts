@@ -21,9 +21,8 @@ export async function POST(req: Request) {
       method: "POST",
       headers: req.headers,
       body: req.body,
-      // @ts-expect-error duplex required by Node fetch for streaming bodies
       duplex: "half",
-    });
+    } as RequestInit & { duplex: "half" });
     const headers = new Headers(r.headers);
     return new Response(r.body, { status: r.status, headers });
   }
@@ -47,9 +46,8 @@ export async function PATCH(req: Request) {
       method: "PATCH",
       headers: req.headers,
       body: req.body,
-      // @ts-expect-error duplex required by Node fetch
       duplex: "half",
-    });
+    } as RequestInit & { duplex: "half" });
     return new Response(r.body, { status: r.status, headers: new Headers(r.headers) });
   }
   return new Response(null, { status: 501 });

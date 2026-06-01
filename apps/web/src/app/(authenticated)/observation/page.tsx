@@ -2,7 +2,7 @@
 // Filter by kind (baseline | developmental | evaluative) and status.
 
 import Link from "next/link";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, teachers, subjects } from "@gml/db/schema";
 
@@ -37,8 +37,8 @@ export default async function ObservationListPage() {
       subjectName: subjects.name,
     })
     .from(observationCycles)
-    .leftJoin(teachers, eqCol(observationCycles.teacherId, teachers.id))
-    .leftJoin(subjects, eqCol(observationCycles.subjectId, subjects.id))
+    .leftJoin(teachers, eq(observationCycles.teacherId, teachers.id))
+    .leftJoin(subjects, eq(observationCycles.subjectId, subjects.id))
     .orderBy(desc(observationCycles.scheduledAt))
     .limit(80);
 
@@ -154,8 +154,3 @@ function Chip({ kind, children }: { kind: { bg: string; ink: string }; children:
   );
 }
 
-// Tiny local FK join helper since drizzle's eq+leftJoin imports get long
-function eqCol<T>(a: T, b: T) {
-  // @ts-expect-error drizzle's eq is the right type here; this wrapper exists only to shorten imports
-  return require("drizzle-orm").eq(a, b);
-}

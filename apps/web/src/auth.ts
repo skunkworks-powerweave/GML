@@ -19,12 +19,17 @@ declare module "next-auth" {
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  // DrizzleAdapter's column-name types are strict snake_case for table-key names;
+  // our Drizzle schema uses camelCase JS / snake_case DB. Runtime is identical, so
+  // we cast the *table descriptor* through unknown — but NOT the db connection,
+  // which DrizzleAdapter inspects at runtime to detect the SQL dialect.
   adapter: DrizzleAdapter(db, {
     usersTable: users,
     accountsTable: accounts,
     sessionsTable: authSessions,
     verificationTokensTable: verificationTokens,
-  }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any),
   session: { strategy: "jwt", maxAge: 60 * 60 * 8 /* 8h */ },
   pages: {
     signIn: "/login",

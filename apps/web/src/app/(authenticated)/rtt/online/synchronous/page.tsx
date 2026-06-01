@@ -6,7 +6,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, asc, gte, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { rttSessions, rttSubjects, terms, phases } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -96,9 +96,9 @@ export default async function RttOnlineSynchronousPage() {
       phaseLabel: phases.label,
     })
     .from(rttSessions)
-    .leftJoin(rttSubjects, eqCol(rttSessions.rttSubjectId, rttSubjects.id))
-    .leftJoin(terms, eqCol(rttSubjects.termId, terms.id))
-    .leftJoin(phases, eqCol(terms.phaseId, phases.id))
+    .leftJoin(rttSubjects, eq(rttSessions.rttSubjectId, rttSubjects.id))
+    .leftJoin(terms, eq(rttSubjects.termId, terms.id))
+    .leftJoin(phases, eq(terms.phaseId, phases.id))
     .where(
       and(
         isNotNull(rttSessions.scheduledAt),
@@ -402,9 +402,3 @@ function WeekRow({
   );
 }
 
-function eqCol<T>(a: T, b: T) {
-  // narrow drizzle import wrapper — mirrors the eqCol used in mentorship/page.tsx
-  // so the shape of the JOIN stays consistent across server components.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("drizzle-orm").eq(a, b);
-}
