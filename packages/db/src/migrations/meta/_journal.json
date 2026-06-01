@@ -50,6 +50,13 @@
       "when": 1780317558768,
       "tag": "0006_classroom_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780317784204,
+      "tag": "0007_resources",
+      "breakpoints": true
     }
   ]
 }

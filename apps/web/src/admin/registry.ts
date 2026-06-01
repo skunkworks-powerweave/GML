@@ -21,6 +21,8 @@ import { classesEntity } from "./entities/classes";
 import { courseOutlinesEntity } from "./entities/course-outlines";
 import { outlineLessonsEntity } from "./entities/outline-lessons";
 import { sessionsEntity } from "./entities/sessions";
+import { resourcesEntity } from "./entities/resources";
+import { resourceSubjectsEntity } from "./entities/resource-subjects";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   schools: schoolsEntity,
@@ -35,6 +37,8 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   "course-outlines": courseOutlinesEntity,
   "outline-lessons": outlineLessonsEntity,
   sessions: sessionsEntity,
+  resources: resourcesEntity,
+  "resource-subjects": resourceSubjectsEntity,
 };
 
 export type AdminEntitySlug = keyof typeof ADMIN_ENTITIES;

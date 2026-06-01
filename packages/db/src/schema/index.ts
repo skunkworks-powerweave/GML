@@ -11,3 +11,4 @@ export * from "./subjects";
 export * from "./classes";
 export * from "./outlines";
 export * from "./sessions";
+export * from "./resources";
