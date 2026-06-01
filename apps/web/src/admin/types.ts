@@ -25,4 +25,11 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
   formFields: string[];
   /** Optional human-friendly identifier function for row labels in audit log. */
   describeRow?: (row: Record<string, unknown>) => string;
+  /**
+   * SM-9: when true, every server-side list/read of this entity writes an
+   * `audit_log` row (action `<slug>.view`). Used for PII-bearing tables like
+   * `learners`. The generic admin grid page checks this flag and calls
+   * `recordAudit` after the DB fetch.
+   */
+  piiAudited?: boolean;
 };

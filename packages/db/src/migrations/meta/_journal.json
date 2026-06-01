@@ -57,6 +57,13 @@
       "when": 1780317784204,
       "tag": "0007_resources",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780317951140,
+      "tag": "0008_learners",
+      "breakpoints": true
     }
   ]
 }

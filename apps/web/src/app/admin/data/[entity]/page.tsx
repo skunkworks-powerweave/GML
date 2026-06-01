@@ -9,6 +9,7 @@ import Link from "next/link";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
+import { recordAudit } from "@/lib/audit";
 import { RowForm } from "./row-form";
 import { deleteRowAction } from "./actions";
 
@@ -40,6 +41,17 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     .from(entity.table as never)
     .limit(PAGE_SIZE)
     .offset(offset)) as Record<string, unknown>[];
+
+  // SM-9 enforcement: PII-bearing entities (e.g. learners) must record every
+  // server-side read in the audit log. recordAudit is fire-and-forget so a
+  // failure here never breaks the page render.
+  if (entity.piiAudited) {
+    void recordAudit({
+      action: `${entity.slug}.view`,
+      entityType: entity.slug,
+      metadata: { rowCount: rows.length, page: pageNum },
+    });
+  }
 
   const fmt = (col: { key: string; format?: (v: unknown) => string }, row: Record<string, unknown>) => {
     const v = row[col.key];
