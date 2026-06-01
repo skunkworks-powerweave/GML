@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "description": "BullMQ consumer for video transcoding (ffmpeg → HLS 480p) + WhatsApp media post-fetch.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./queues": "./src/queues.ts"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts"

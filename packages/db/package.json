@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
     "./schema/*": "./src/schema/*.ts",
-    "./client": "./src/client.ts"
+    "./client": "./src/client.ts",
+    "./scripts/retention": "./src/scripts/retention.ts"
   },
   "scripts": {
     "generate": "drizzle-kit generate",

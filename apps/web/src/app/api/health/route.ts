@@ -1,20 +1,26 @@
 import { NextResponse } from "next/server";
-import { pingDb, pingMinio, pingRedis } from "@/lib/health";
+import { pingDb, pingMigrations, pingMinio, pingRedis } from "@/lib/health";
 
 // Disable Next.js caching for this route — health must reflect current state.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
-  const [db, redis, minio] = await Promise.all([pingDb(), pingRedis(), pingMinio()]);
-  const ok = true; // the route itself responding ⇒ app is up; sub-systems reported separately
+  const [db, redis, minio, migrations] = await Promise.all([
+    pingDb(),
+    pingRedis(),
+    pingMinio(),
+    pingMigrations(),
+  ]);
+  const ok = db.ok && redis.ok && minio.ok && migrations.ok;
   return NextResponse.json({
     ok,
     app: true,
     db: db.ok,
     redis: redis.ok,
     minio: minio.ok,
-    details: { db, redis, minio },
+    migrations: migrations.ok,
+    details: { db, redis, minio, migrations },
     ts: new Date().toISOString(),
   });
 }

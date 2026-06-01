@@ -30,15 +30,32 @@ cd /srv/gml-lms
 cp .env.example .env
 nano .env       # fill in DOMAIN, POSTGRES_PASSWORD, AUTH_SECRET, SMTP_*, WHATSAPP_*, SUPER_ADMIN_EMAIL, SUPER_ADMIN_INITIAL_PASSWORD
 
-# 3. Boot the stack (first time will pull ~2 GB images)
+# 3. Boot the stack with SM-5 pre-flight + health-wait + migrations + seed (spec 108)
+./scripts/deploy.sh        # OR: make deploy
+# What this does: checks the SM-5 restore-drill stamp (refuses if older than
+# 30 days in production), then `docker compose up -d` (~2 GB first-time pull),
+# waits up to 60 s for /api/health to return 200, then runs migrations and the
+# spec-104 seed_all orchestrator. Aborts on first failure (set -euo pipefail).
+
+# 4. Verify
+curl -sS https://$DOMAIN/api/health    # expect {"ok": true, ...}
+```
+
+### Manual fallback
+
+If `./scripts/deploy.sh` aborts halfway and you need to debug the stack step
+by step, the original commands the wrapper runs are below. **Note:** running
+these by hand bypasses the SM-5 restore-drill gate — only do this on a host
+where you've already exercised `./scripts/restore.sh` within the last 30 days
+(or you're knowingly accepting the SM-5 risk).
+
+```bash
+# 3a. Boot the stack manually (first time will pull ~2 GB images)
 docker compose up -d
 
-# 4. Wait ~60 seconds for postgres to be ready, then run migrations + seed
+# 3b. Wait ~60 seconds for postgres to be ready, then run migrations + seed
 docker compose exec app pnpm --filter @gml/db migrate
-docker compose exec app pnpm --filter @gml/db exec tsx packages/db/src/scripts/seed.ts
-
-# 5. Verify
-curl -sS https://$DOMAIN/api/health    # expect {"ok": true, ...}
+docker compose exec app pnpm --filter @gml/db exec tsx packages/db/src/scripts/seed_all.ts
 ```
 
 Open `https://<your-domain>` in a browser, sign in as `SUPER_ADMIN_EMAIL`, then immediately change the password from the user pill menu.

@@ -1,0 +1,3 @@
+# Quickstart 106
+
+Send four test WhatsApp videos with captions: `OBS-2026-001`, `TB-<valid-uuid>`, `MM-<valid-uuid-of-real-mentor-meeting>`, and `lunch-break-2024` (no prefix). After ingest, `SELECT context_type, context_id, caption_raw FROM video_submissions ORDER BY created_at DESC LIMIT 4;` should show: row 1 `observation_cycle` + the cycle id, row 2 `teach_back` + the captioned uuid, row 3 `mentor_meeting` + the meeting id, row 4 `generic` + null + the raw caption. `SELECT action, metadata->>'reason' FROM audit_log WHERE action = 'whatsapp.context.unmatched' ORDER BY created_at DESC LIMIT 1;` should show `no_prefix_match` for row 4.

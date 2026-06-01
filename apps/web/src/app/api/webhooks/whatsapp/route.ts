@@ -16,10 +16,16 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@gml/db";
-import { files, videoSubmissions, observationCycles } from "@gml/db/schema";
+import { files, videoSubmissions, observationCycles, mentorMeetings } from "@gml/db/schema";
 import { eq } from "drizzle-orm";
 import { putObject, BUCKETS } from "@/lib/video/minio";
 import { recordAudit } from "@/lib/audit";
+import { transcodeQueue } from "@gml/worker/queues";
+
+// Caption-format UUID validator. TB-<uuid> and MM-<uuid> branches require a
+// canonical lowercase-or-uppercase 8-4-4-4-12 hex group; anything else falls
+// through to the generic context_type so audit + ops can see the raw caption.
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 // GET handler: Meta verifies the webhook URL on initial setup
 export async function GET(req: Request) {
@@ -131,32 +137,106 @@ async function ingestVideoMessage(
     })
     .returning({ id: files.id });
 
-  // Resolve context_id (look up the parent entity by caption code)
+  // Resolve context_id by looking up the parent entity using the caption
+  // prefix. Each branch falls through to 'generic' on lookup failure so a
+  // typo never blocks the upload — the operator sees the raw caption in
+  // /admin/data/videos and can re-link manually.
+  let contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic" = ctx.type;
   let contextId: string | null = null;
+
   if (ctx.type === "observation_cycle" && ctx.code) {
     const [cycle] = await db
       .select({ id: observationCycles.id })
       .from(observationCycles)
       .where(eq(observationCycles.code, ctx.code))
       .limit(1);
-    contextId = cycle?.id ?? null;
+    if (cycle?.id) {
+      contextId = cycle.id;
+    } else {
+      contextType = "generic";
+      void recordAudit({
+        action: "whatsapp.context.unmatched",
+        entityType: "video_submission",
+        metadata: { msgId: msg.id, caption, reason: "observation_cycle.code_not_found" },
+      });
+    }
+  } else if (ctx.type === "teach_back" && ctx.code) {
+    if (UUID_RE.test(ctx.code)) {
+      // We accept the caption-supplied uuid as the teach_back id. The
+      // teach_backs surface (spec 066) is the source of truth for the id
+      // namespace; no FK exists on video_submissions.context_id by design.
+      contextId = ctx.code;
+    } else {
+      contextType = "generic";
+      void recordAudit({
+        action: "whatsapp.context.unmatched",
+        entityType: "video_submission",
+        metadata: { msgId: msg.id, caption, reason: "teach_back.invalid_uuid" },
+      });
+    }
+  } else if (ctx.type === "mentor_meeting" && ctx.code) {
+    if (UUID_RE.test(ctx.code)) {
+      const [mtg] = await db
+        .select({ id: mentorMeetings.id })
+        .from(mentorMeetings)
+        .where(eq(mentorMeetings.id, ctx.code))
+        .limit(1);
+      if (mtg?.id) {
+        contextId = mtg.id;
+      } else {
+        contextType = "generic";
+        void recordAudit({
+          action: "whatsapp.context.unmatched",
+          entityType: "video_submission",
+          metadata: { msgId: msg.id, caption, reason: "mentor_meeting.id_not_found" },
+        });
+      }
+    } else {
+      contextType = "generic";
+      void recordAudit({
+        action: "whatsapp.context.unmatched",
+        entityType: "video_submission",
+        metadata: { msgId: msg.id, caption, reason: "mentor_meeting.invalid_uuid" },
+      });
+    }
+  } else if (ctx.type === "generic") {
+    // Caption didn't match any known prefix — record it so ops can see
+    // what teachers are actually sending.
+    void recordAudit({
+      action: "whatsapp.context.unmatched",
+      entityType: "video_submission",
+      metadata: { msgId: msg.id, caption, reason: "no_prefix_match" },
+    });
   }
-  // teach_back, mentor_meeting, mentee_quarterly resolution lands as those
-  // surfaces ship (specs 066, 045, 046 respectively).
 
-  await db.insert(videoSubmissions).values({
+  const [sub] = await db
+    .insert(videoSubmissions)
+    .values({
+      fileId: fileRow.id,
+      source: "whatsapp",
+      status: "received",
+      contextType,
+      contextId,
+      captionRaw: caption,
+    })
+    .returning({ id: videoSubmissions.id });
+
+  // 6. Enqueue the BullMQ transcode job. The worker (apps/worker) picks it
+  //    up, runs ffmpeg → HLS 480p, uploads segments to MinIO, then flips
+  //    video_submissions.status to 'ready'.
+  await transcodeQueue.add("transcode", {
+    videoSubmissionId: sub.id,
     fileId: fileRow.id,
+    bucket: BUCKETS.videosOriginal,
+    objectKey,
     source: "whatsapp",
-    status: "received",
-    contextType: ctx.type,
-    contextId: contextId,
-    captionRaw: caption,
   });
-
-  // 6. (Spec 039+040) — enqueue the transcode job. Implementation lands when
-  //    BullMQ + ffmpeg worker ship. The video stays in 'received' until then;
-  //    operators see it in /admin/data/videos and can manually flip when
-  //    transcoding ships.
+  void recordAudit({
+    action: "transcode.enqueued",
+    entityType: "video_submission",
+    entityId: sub.id,
+    metadata: { source: "whatsapp", msgId: msg.id, bucket: BUCKETS.videosOriginal, objectKey },
+  });
 }
 
 function parseCaption(caption: string): { type: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic"; code?: string } {

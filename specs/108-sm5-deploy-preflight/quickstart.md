@@ -1,0 +1,3 @@
+# Quickstart 108
+
+From the repo root on the deploy host: `./scripts/deploy.sh` (or `make deploy`). On a fresh box this runs the SM-5 restore-drill gate → `docker compose up -d` → 60 s health-wait on `/api/health` → migrations → `seed_all.ts`, exiting non-zero on any single failure. To force-skip the SM-5 gate (e.g. very first deploy with no backup history yet), run with `NODE_ENV=development ./scripts/deploy.sh` — the check-restore-drill script self-skips on non-production. For partial-stack debugging, drop down to the "Manual fallback" subsection of README-IT.md and run each `docker compose exec` step by hand.

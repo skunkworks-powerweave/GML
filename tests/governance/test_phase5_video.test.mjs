@@ -108,7 +108,12 @@ test("worker entry exists with transcode queue", () => {
   const src = read("apps/worker/src/index.ts");
   assert.match(src, /from "bullmq"/);
   assert.match(src, /new Worker</);
-  assert.match(src, /export const transcodeQueue/);
+  // transcodeQueue moved to queues.ts (split from index.ts so the web app can
+  // import producers without dragging the Worker bootstrap). index.ts now
+  // re-exports it via `export { transcodeQueue, ... }`.
+  assert.match(src, /export\s*\{[^}]*\btranscodeQueue\b/);
+  const queues = read("apps/worker/src/queues.ts");
+  assert.match(queues, /export\s+const\s+transcodeQueue/);
 });
 
 // Spec 040 — ffmpeg 480p transcode
