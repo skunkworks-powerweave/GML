@@ -1,45 +1,202 @@
-import Link from "next/link";
-import { getSessionOrRedirect } from "@/lib/guards";
-import { hasAnyRole } from "@gml/shared/auth/roles";
+// Role-aware dashboard — 1:1 ports `LMS GML Frontend/dashboard.jsx`.
 
-export default async function Dashboard() {
-  const session = await getSessionOrRedirect("/dashboard");
+import { count, eq } from "drizzle-orm";
+import { db } from "@gml/db";
+import { auth } from "@/auth";
+import {
+  mentorPairings,
+  observationCycles,
+  videoSubmissions,
+  teachers,
+  schools,
+  mentors,
+} from "@gml/db/schema";
+import { redirect } from "next/navigation";
+import Link from "next/link";
+
+export const dynamic = "force-dynamic";
+
+type Stat = { label: string; value: string | number; hint?: string };
+
+async function getCounts() {
+  const [pairingsTotal, cyclesTotal, teachersTotal, schoolsTotal, mentorsTotal, videosReady] = await Promise.all([
+    db.select({ c: count() }).from(mentorPairings),
+    db.select({ c: count() }).from(observationCycles),
+    db.select({ c: count() }).from(teachers),
+    db.select({ c: count() }).from(schools),
+    db.select({ c: count() }).from(mentors),
+    db.select({ c: count() }).from(videoSubmissions).where(eq(videoSubmissions.status, "ready")),
+  ]);
+  return {
+    pairings: pairingsTotal[0]?.c ?? 0,
+    cycles: cyclesTotal[0]?.c ?? 0,
+    teachers: teachersTotal[0]?.c ?? 0,
+    schools: schoolsTotal[0]?.c ?? 0,
+    mentors: mentorsTotal[0]?.c ?? 0,
+    videosReady: videosReady[0]?.c ?? 0,
+  };
+}
+
+export default async function DashboardPage() {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
   const role = session.user.role ?? "teacher";
-  const isAdmin = hasAnyRole(role, ["programme_admin", "super_admin"]);
+  const name = session.user.name ?? session.user.email ?? "there";
+  const counts = await getCounts();
+
+  const stats: Stat[] =
+    role === "super_admin" || role === "programme_admin"
+      ? [
+          { label: "Teachers", value: counts.teachers, hint: `across ${counts.schools} schools` },
+          { label: "Active pairings", value: counts.pairings, hint: `${counts.mentors} mentors` },
+          { label: "Observation cycles", value: counts.cycles, hint: "this term" },
+          { label: "Videos ready", value: counts.videosReady, hint: "awaiting review" },
+        ]
+      : role === "mentor"
+        ? [
+            { label: "Active mentees", value: counts.pairings, hint: `of ${counts.teachers} teachers` },
+            { label: "Observation cycles", value: counts.cycles, hint: "this term" },
+            { label: "Pending video reviews", value: counts.videosReady, hint: "target: < 48 h" },
+            { label: "Schools you cover", value: counts.schools },
+          ]
+        : role === "observer"
+          ? [
+              { label: "Observation cycles", value: counts.cycles },
+              { label: "Schools", value: counts.schools },
+              { label: "Videos ready", value: counts.videosReady },
+              { label: "Teachers", value: counts.teachers },
+            ]
+          : [
+              { label: "My phase progress", value: "Term 2 · Week 7" },
+              { label: "My observations", value: counts.cycles },
+              { label: "My uploads", value: counts.videosReady },
+              { label: "Resources available", value: "—" },
+            ];
+
+  const greeting = (() => {
+    const h = new Date().getUTCHours();
+    if (h < 5) return "Late night";
+    if (h < 12) return "Good morning";
+    if (h < 17) return "Good afternoon";
+    return "Good evening";
+  })();
+
+  const firstName = name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").split(/\s+/)[0];
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-3xl flex-col gap-6 p-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-neutral-500">
-          Welcome <span className="font-medium">{session.user.name ?? session.user.email}</span> · role: <code>{role}</code>
+    <div>
+      <header style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
+          {role.replace("_", " ")} dashboard
+        </div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>
+          {greeting}, {firstName}.
+        </h1>
+        <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13 }}>
+          {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+          {" · Term 2 Week 7 of 12 · "}
+          {role === "teacher" ? "RTT Phase 2" : `${role.replace("_", " ")} view`}
         </p>
       </header>
 
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Link href="/observation/baseline" className="rounded-lg border border-neutral-200 bg-white p-4 hover:bg-neutral-50">
-          <h2 className="font-medium">Classroom Observation</h2>
-          <p className="text-xs text-neutral-500">Baseline / developmental / evaluative cycles + video evidence.</p>
-        </Link>
-        <Link href="/rtt" className="rounded-lg border border-neutral-200 bg-white p-4 hover:bg-neutral-50">
-          <h2 className="font-medium">RTT Phases</h2>
-          <p className="text-xs text-neutral-500">Phase 1-3 content by district / zone / term / subject.</p>
-        </Link>
-        <Link href="/mentorship" className="rounded-lg border border-neutral-200 bg-white p-4 hover:bg-neutral-50">
-          <h2 className="font-medium">Mentorship</h2>
-          <p className="text-xs text-neutral-500">Mentor/mentee directories, pairings, feedback, recordings.</p>
-        </Link>
-        {isAdmin ? (
-          <Link href="/admin/data/teachers" className="rounded-lg border border-neutral-200 bg-white p-4 hover:bg-neutral-50">
-            <h2 className="font-medium">Admin · Data</h2>
-            <p className="text-xs text-neutral-500">Edit teachers, zones, schools, mentors, attendance.</p>
-          </Link>
-        ) : null}
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 14,
+          marginBottom: 24,
+        }}
+      >
+        {stats.map((s) => (
+          <article
+            key={s.label}
+            style={{
+              padding: 14,
+              background: "var(--card-hi)",
+              border: "1px solid var(--line)",
+              borderRadius: "var(--r-3)",
+            }}
+          >
+            <div style={{ fontSize: 11, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              {s.label}
+            </div>
+            <div style={{ fontFamily: "var(--serif)", fontSize: 32, marginTop: 6 }}>{s.value}</div>
+            {s.hint ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{s.hint}</div> : null}
+          </article>
+        ))}
       </section>
 
-      <footer className="text-xs text-neutral-500">
-        Confidential — internal programme use only. © Goldenmile Learning.
-      </footer>
-    </main>
+      <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
+        <article
+          style={{
+            background: "var(--card-hi)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--r-3)",
+          }}
+        >
+          <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
+            <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 600 }}>
+              {role === "teacher" ? "What's next" : "Today"}
+            </h2>
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+              {role === "teacher" ? "Your training queue + observation prep." : "Things waiting on you."}
+            </div>
+          </header>
+          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            <TodoRow text="Review pending video submissions" href="/videos" />
+            <TodoRow text="Confirm school visits this week" href="/observation" />
+            <TodoRow text="Check today's cohort attendance" href="/admin/data/rtt-attendance" />
+          </div>
+        </article>
+
+        <article
+          style={{
+            background: "var(--card-hi)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--r-3)",
+          }}
+        >
+          <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
+            <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 600 }}>Confidentiality</h2>
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>Reminder for every viewer.</div>
+          </header>
+          <div style={{ padding: 14 }}>
+            <p style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
+              All resources here are confidential. Videos are watermarked with your name and timestamp; downloads are
+              disabled. Section passwords rotate periodically — ask your programme admin if a section appears locked.
+            </p>
+            <Link
+              href="/inbox"
+              style={{ fontSize: 12, color: "var(--indigo)", display: "inline-block", marginTop: 10 }}
+            >
+              Notifications →
+            </Link>
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
+function TodoRow({ text, href }: { text: string; href: string }) {
+  return (
+    <Link
+      href={href}
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "8px 10px",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--r-2)",
+        background: "var(--paper)",
+        fontSize: 13,
+        color: "var(--ink-2)",
+        textDecoration: "none",
+      }}
+    >
+      <span>{text}</span>
+      <span style={{ fontSize: 12, color: "var(--ink-3)" }}>→</span>
+    </Link>
   );
 }
