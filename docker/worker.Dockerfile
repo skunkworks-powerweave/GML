@@ -34,6 +34,11 @@ COPY --from=deps --chown=worker:worker /repo /app
 
 USER worker
 
-# Real entrypoint lands in spec 024. For spec 002 we want the container to start
-# successfully and stay running so `docker compose up -d` reports it as up.
-CMD ["node", "-e", "console.log('worker idle — real consumer lands in spec 024'); setInterval(() => {}, 1<<30);"]
+# Spec 100 (Workflow Run 6, Tier A1) — real BullMQ consumer entrypoint.
+# Invokes the @gml/worker package's `start` script which runs `tsx src/index.ts`.
+# tsx + ioredis + bullmq are installed via `pnpm install --frozen-lockfile` in the
+# deps stage above, so no additional install is needed at runtime. The worker
+# connects to REDIS_URL, drains the `transcode` queue, and shells out to the
+# `ffmpeg` apt package installed in this image's deps + runner stages.
+WORKDIR /app/apps/worker
+CMD ["pnpm", "--filter", "@gml/worker", "exec", "tsx", "src/index.ts"]

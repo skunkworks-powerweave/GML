@@ -61,6 +61,39 @@ services:
       timeout: 5s
       retries: 6
 
+  minio-init:
+    # role: one-shot bucket bootstrapper — runs once per `docker compose up`, creates the
+    # four private buckets the app + worker + signed-URL helper rely on, then exits 0.
+    # Buckets must match the BUCKETS constant in apps/web/src/lib/video/minio.ts:
+    #   gml-videos-original, gml-videos-hls, gml-posters, gml-pdfs.
+    # `mc mb ... --ignore-existing` makes the step idempotent across restarts.
+    # `mc anonymous set none ...` enforces PRIVATE policy — all reads go through the
+    # signed-URL proxy at /api/media/[token], never direct from MinIO.
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+      mc mb local/gml-videos-original --ignore-existing;
+      mc mb local/gml-videos-hls --ignore-existing;
+      mc mb local/gml-posters --ignore-existing;
+      mc mb local/gml-pdfs --ignore-existing;
+      mc anonymous set none local/gml-videos-original;
+      mc anonymous set none local/gml-videos-hls;
+      mc anonymous set none local/gml-posters;
+      mc anonymous set none local/gml-pdfs;
+      echo 'minio-init: buckets ready';
+      "
+    networks:
+      - lms_net
+
   tusd:
     # role: resumable upload endpoint (tus protocol); writes through to MinIO via S3 API
     image: tusproject/tusd:v2.6.0
@@ -105,6 +138,8 @@ services:
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?WHATSAPP_APP_SECRET must be set in .env (webhook signature verification)}
+      MEDIA_SIGN_SECRET: ${MEDIA_SIGN_SECRET:?MEDIA_SIGN_SECRET must be set in .env (signed-URL HMAC for video + PDF proxy)}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-}
       SMTP_USER: ${SMTP_USER:-}
@@ -163,6 +198,7 @@ services:
       - "443:443"
     environment:
       DOMAIN: ${DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set in .env (Let's Encrypt registration contact for production TLS)}
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

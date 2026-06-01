@@ -135,6 +135,9 @@ importers:
 
   packages/db:
     dependencies:
+      bcryptjs:
+        specifier: ^2.4.3
+        version: 2.4.3
       drizzle-orm:
         specifier: ^0.39.0
         version: 0.39.3(@types/pg@8.20.0)(pg@8.21.0)
@@ -142,6 +145,9 @@ importers:
         specifier: ^8.13.1
         version: 8.21.0
     devDependencies:
+      '@types/bcryptjs':
+        specifier: ^2.4.6
+        version: 2.4.6
       '@types/node':
         specifier: ^22
         version: 22.19.19

@@ -4,6 +4,7 @@
 // Run: `tsx packages/db/src/scripts/seed_forms_mentee.ts`
 
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -361,7 +362,7 @@ const ROWS: FormSeedRow[] = [
   { kind: "final", audience: "mentee", version: "1", schema: finalMentee },
 ];
 
-async function main() {
+export async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error("[seed:forms-mentee] DATABASE_URL not set");
@@ -429,7 +430,11 @@ async function main() {
   await pool.end();
 }
 
-main().catch((err) => {
-  console.error("[seed:forms-mentee] failed:", err);
-  process.exit(1);
-});
+// Auto-run only when invoked directly (e.g. `tsx seed_forms_mentee.ts`), not
+// when imported by the seed_all.ts orchestrator (spec 104).
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err) => {
+    console.error("[seed:forms-mentee] failed:", err);
+    process.exit(1);
+  });
+}

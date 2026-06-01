@@ -1,0 +1,5 @@
+# Research 101
+
+- Spec 002's `docker-compose.yml` already uses the strict-fail form `${VAR:?msg}` for `POSTGRES_PASSWORD`, `AUTH_SECRET`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_INITIAL_PASSWORD` — matching that pattern keeps the file internally consistent.
+- `apps/web/src/lib/video/signed-url.ts` reads `process.env.MEDIA_SIGN_SECRET` with NO fallback in the signing path but falls back to `""` in some verify paths — meaning a missing var causes silent any-token-verifies behaviour rather than a hard error. Strict-fail at the compose layer is therefore the correct insertion point: refusing to boot is safer than refusing to verify, which is safer than verifying everything.
+- `docker/Caddyfile` uses `{$ACME_EMAIL:lms-admin@example.org}` — Caddy's own default-value syntax. Compose strict-fail catches the problem one layer earlier; if it ever does fail open at compose, the Caddyfile fallback is still a meaningful (if unmonitored) address, so the layered approach is intentional defence-in-depth.

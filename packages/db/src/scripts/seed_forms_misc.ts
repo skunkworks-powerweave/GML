@@ -15,6 +15,7 @@
 // Dry run:  SEED_DRY_RUN=true pnpm --filter @gml/db exec tsx src/scripts/seed_forms_misc.ts
 
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { and, eq } from "drizzle-orm";
 import { Pool } from "pg";
@@ -187,7 +188,7 @@ const ROWS: SeedRow[] = [
 // Main.
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error("[seed-forms-misc] DATABASE_URL not set");
@@ -262,7 +263,11 @@ async function main(): Promise<void> {
   await pool.end();
 }
 
-main().catch((err) => {
-  console.error("[seed-forms-misc] unhandled:", err);
-  process.exit(1);
-});
+// Auto-run only when invoked directly (e.g. `tsx seed_forms_misc.ts`), not
+// when imported by the seed_all.ts orchestrator (spec 104).
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err) => {
+    console.error("[seed-forms-misc] unhandled:", err);
+    process.exit(1);
+  });
+}

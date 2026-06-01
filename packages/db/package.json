@@ -14,14 +14,17 @@
     "generate": "drizzle-kit generate",
     "migrate": "tsx scripts/migrate.ts",
     "retention": "tsx src/scripts/retention.ts",
+    "seed:all": "tsx src/scripts/seed_all.ts",
     "studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "drizzle-orm": "^0.39.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22",
     "@types/pg": "^8.11.10",
     "dotenv": "^16.4.7",

@@ -1,15 +1,18 @@
 // Spec 086 — Ladakh v2 seed data.
+// Spec 103 — extended with super_admin bootstrap (Workflow Run 6 Tier B1).
 // Idempotent: skips inserts if rows already exist for any seed key.
 
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
+import bcrypt from "bcryptjs";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import * as schema from "../schema/index.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
-async function main() {
+export async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error("DATABASE_URL not set");
@@ -17,6 +20,12 @@ async function main() {
   }
   const pool = new Pool({ connectionString: url });
   const db = drizzle(pool);
+
+  // Spec 103 — super_admin bootstrap (runs first, idempotent, independent of district seed).
+  // README-IT previously instructed operators to manually run an UPDATE on `users.role`
+  // after first login because no seeded super_admin existed. This block creates that user
+  // from environment variables so a fresh deployment has a working super_admin out-of-box.
+  await bootstrapSuperAdmin(db);
 
   console.log("[seed] checking existing rows…");
   const [districtsCount] = await db.execute(sql`SELECT COUNT(*)::int AS c FROM districts`);
@@ -200,7 +209,57 @@ async function main() {
   await pool.end();
 }
 
-main().catch((err) => {
-  console.error("[seed] failed:", err);
-  process.exit(1);
-});
+// ── Spec 103 — Super admin bootstrap ──────────────────────────────────────────
+// Idempotent: env-gated + onConflictDoNothing on the unique email constraint.
+// - Skips silently when SUPER_ADMIN_EMAIL or SUPER_ADMIN_INITIAL_PASSWORD is not set
+//   (e.g. CI test runs, ephemeral dev DBs).
+// - Skips silently when a user with that email already exists, regardless of role.
+// - On success, prints "✓ super_admin user created: <email>" so the operator can
+//   correlate the deployment log line with the SQL row they'll see in audit_log.
+async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
+  const email = process.env.SUPER_ADMIN_EMAIL;
+  const password = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
+
+  if (!email || !password) {
+    console.log("[seed] super_admin bootstrap skipped — SUPER_ADMIN_EMAIL not set");
+    return;
+  }
+
+  // Existence check (SELECT-then-INSERT) — a friendlier log line than catching
+  // onConflict silently, and lets us short-circuit the bcrypt cost when not needed.
+  const existing = await db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(eq(schema.users.email, email))
+    .limit(1);
+
+  if (existing.length > 0) {
+    console.log(`[seed] exists — skipping super_admin bootstrap for ${email}`);
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+
+  await db
+    .insert(schema.users)
+    .values({
+      email,
+      passwordHash,
+      role: "super_admin",
+      defaultLocale: "en",
+      name: "Super Admin",
+      active: true,
+    })
+    .onConflictDoNothing({ target: schema.users.email });
+
+  console.log(`[seed] ✓ super_admin user created: ${email}`);
+}
+
+// Auto-run only when invoked directly (e.g. `tsx seed.ts`), not when imported
+// by the seed_all.ts orchestrator (spec 104).
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((err) => {
+    console.error("[seed] failed:", err);
+    process.exit(1);
+  });
+}
