@@ -1,5 +1,12 @@
-// RTT content hierarchy: phases → terms → subjects → modules / sessions / readings.
-// Attendance per session-teacher.
+// RTT-content hierarchy (training programme spine): phases → terms → rttSubjects → rttModules → rttLessons.
+// Plus rttSessions (cohort training sessions) + rttReadings + rttAttendance.
+//
+// v2 rename (2026-06-01, spec 013): the bare names (`subjects`, `lessons`, `sessions`)
+// are reserved for curriculum-side concepts (school subjects, classroom sessions)
+// shipped in specs 014-019. All RTT-content tables get the `rtt_` prefix here.
+//
+// Existing FK references within this file are internal — all use the same module's
+// renamed exports.
 
 import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { attendanceStatusEnum } from "./enums";
@@ -25,8 +32,8 @@ export const terms = pgTable(
   (t) => [uniqueIndex("terms_phase_name_uq").on(t.phaseId, t.name)],
 );
 
-export const subjects = pgTable(
-  "subjects",
+export const rttSubjects = pgTable(
+  "rtt_subjects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     termId: uuid("term_id").notNull().references(() => terms.id, { onDelete: "cascade" }),
@@ -34,14 +41,14 @@ export const subjects = pgTable(
     code: varchar("code", { length: 32 }),
     active: boolean("active").notNull().default(true),
   },
-  (t) => [uniqueIndex("subjects_term_name_uq").on(t.termId, t.name)],
+  (t) => [uniqueIndex("rtt_subjects_term_name_uq").on(t.termId, t.name)],
 );
 
-export const subjectModules = pgTable(
-  "subject_modules",
+export const rttModules = pgTable(
+  "rtt_modules",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     description: text("description"),
@@ -51,15 +58,15 @@ export const subjectModules = pgTable(
     evaluationCriteria: text("evaluation_criteria"),
     textbookRefs: text("textbook_refs"),
   },
-  (t) => [index("subject_modules_subject_idx").on(t.subjectId, t.sequence)],
+  (t) => [index("rtt_modules_subject_idx").on(t.rttSubjectId, t.sequence)],
 );
 
-export const sessionsRtt = pgTable(
-  "sessions_rtt",
+export const rttSessions = pgTable(
+  "rtt_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
-    moduleId: uuid("module_id").references(() => subjectModules.id, { onDelete: "set null" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttModuleId: uuid("rtt_module_id").references(() => rttModules.id, { onDelete: "set null" }),
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: "date" }),
@@ -69,56 +76,56 @@ export const sessionsRtt = pgTable(
     notes: text("notes"),
     linkOrRecording: text("link_or_recording"),
   },
-  (t) => [index("sessions_rtt_subject_idx").on(t.subjectId, t.sequence)],
+  (t) => [index("rtt_sessions_subject_idx").on(t.rttSubjectId, t.sequence)],
 );
 
-export const lessons = pgTable(
-  "lessons",
+export const rttLessons = pgTable(
+  "rtt_lessons",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    moduleId: uuid("module_id").notNull().references(() => subjectModules.id, { onDelete: "cascade" }),
+    rttModuleId: uuid("rtt_module_id").notNull().references(() => rttModules.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     bodyMd: text("body_md"),
-    videoId: uuid("video_id"), // FK to video_submissions (spec 022+)
+    videoId: uuid("video_id"), // FK to video_submissions (lands with spec 036)
   },
-  (t) => [index("lessons_module_idx").on(t.moduleId, t.sequence)],
+  (t) => [index("rtt_lessons_module_idx").on(t.rttModuleId, t.sequence)],
 );
 
-export const readings = pgTable(
-  "readings",
+export const rttReadings = pgTable(
+  "rtt_readings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
     title: varchar("title", { length: 240 }).notNull(),
-    fileKey: text("file_key"), // MinIO object key (lands with spec 022)
+    fileKey: text("file_key"), // MinIO object key (lands with spec 037)
     externalUrl: text("external_url"),
     sequence: integer("sequence").notNull().default(0),
   },
-  (t) => [index("readings_subject_idx").on(t.subjectId, t.sequence)],
+  (t) => [index("rtt_readings_subject_idx").on(t.rttSubjectId, t.sequence)],
 );
 
-export const attendance = pgTable(
-  "attendance",
+export const rttAttendance = pgTable(
+  "rtt_attendance",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    sessionId: uuid("session_id").notNull().references(() => sessionsRtt.id, { onDelete: "cascade" }),
+    rttSessionId: uuid("rtt_session_id").notNull().references(() => rttSessions.id, { onDelete: "cascade" }),
     teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "cascade" }),
     status: attendanceStatusEnum("status").notNull().default("absent"),
     markedByUserId: uuid("marked_by_user_id").references(() => users.id, { onDelete: "set null" }),
     markedAt: timestamp("marked_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("attendance_session_teacher_uq").on(t.sessionId, t.teacherId),
-    index("attendance_teacher_idx").on(t.teacherId, t.markedAt),
+    uniqueIndex("rtt_attendance_session_teacher_uq").on(t.rttSessionId, t.teacherId),
+    index("rtt_attendance_teacher_idx").on(t.teacherId, t.markedAt),
   ],
 );
 
 export type Phase = typeof phases.$inferSelect;
 export type Term = typeof terms.$inferSelect;
-export type Subject = typeof subjects.$inferSelect;
-export type SubjectModule = typeof subjectModules.$inferSelect;
-export type SessionRtt = typeof sessionsRtt.$inferSelect;
-export type Lesson = typeof lessons.$inferSelect;
-export type Reading = typeof readings.$inferSelect;
-export type Attendance = typeof attendance.$inferSelect;
+export type RttSubject = typeof rttSubjects.$inferSelect;
+export type RttModule = typeof rttModules.$inferSelect;
+export type RttSession = typeof rttSessions.$inferSelect;
+export type RttLesson = typeof rttLessons.$inferSelect;
+export type RttReading = typeof rttReadings.$inferSelect;
+export type RttAttendance = typeof rttAttendance.$inferSelect;

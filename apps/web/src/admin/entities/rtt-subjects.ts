@@ -1,11 +1,14 @@
 import { z } from "zod";
-import { subjects } from "@gml/db/schema";
+import { rttSubjects } from "@gml/db/schema";
 import type { AdminEntity } from "../types";
 
-export const subjectsEntity: AdminEntity = {
-  slug: "subjects",
-  label: "Subjects",
-  table: subjects,
+// RTT-content subjects (training units bound to a term inside a phase).
+// v2 rename of v1's `subjects` → `rtt_subjects` (spec 013).
+// Distinct from the curriculum-side `subjects` table that ships in spec 014.
+export const rttSubjectsEntity: AdminEntity = {
+  slug: "rtt-subjects",
+  label: "RTT Subjects",
+  table: rttSubjects,
   readRoles: ["programme_admin", "super_admin", "mentor", "observer"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
@@ -21,5 +24,5 @@ export const subjectsEntity: AdminEntity = {
     active: z.boolean().default(true),
   }),
   formFields: ["name", "code", "termId", "active"],
-  describeRow: (r) => `subject:${r.name ?? r.id}`,
+  describeRow: (r) => `rtt-subject:${r.name ?? r.id}`,
 };

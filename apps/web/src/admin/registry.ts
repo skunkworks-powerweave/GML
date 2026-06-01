@@ -1,18 +1,21 @@
 import type { AdminEntity } from "./types";
 
-// Registry — populated by individual specs (013-019 marathon adds the 7 baseline entities).
-// Adding a new admin-editable table = appending an AdminEntity to this map.
+// Registry — entities grow spec-by-spec across Phase 2 (specs 012-019).
 //
 // SM-1 reminder: actions.ts wraps every mutation with `withAudit({entityType, action})`.
 // Don't bypass — the grep gate doesn't catch it, but a code review will.
+//
+// v2 note (spec 013): `attendance` and `subjects` were renamed to `rtt-attendance`
+// and `rtt-subjects` to free the bare slugs for curriculum-side entities
+// (spec 014 ships the curriculum `subjects` entity at slug `subjects`).
 
 import { schoolsEntity } from "./entities/schools";
 import { zonesEntity } from "./entities/zones";
 import { teachersEntity } from "./entities/teachers";
 import { mentorsEntity } from "./entities/mentors";
 import { mentorPairingsEntity } from "./entities/mentor-pairings";
-import { attendanceEntity } from "./entities/attendance";
-import { subjectsEntity } from "./entities/subjects";
+import { rttAttendanceEntity } from "./entities/rtt-attendance";
+import { rttSubjectsEntity } from "./entities/rtt-subjects";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   schools: schoolsEntity,
@@ -20,8 +23,8 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   teachers: teachersEntity,
   mentors: mentorsEntity,
   "mentor-pairings": mentorPairingsEntity,
-  attendance: attendanceEntity,
-  subjects: subjectsEntity,
+  "rtt-attendance": rttAttendanceEntity,
+  "rtt-subjects": rttSubjectsEntity,
 };
 
 export type AdminEntitySlug = keyof typeof ADMIN_ENTITIES;
