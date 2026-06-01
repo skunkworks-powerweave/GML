@@ -45,20 +45,32 @@ test("_journal references the renamed migration tag", () => {
   assert.ok(e1.tag?.startsWith("0001_") && !e1.tag.includes("spicy_doorman"), `journal tag must be descriptive (got: ${e1.tag})`);
 });
 
-test("admin registry has rtt-prefixed slugs (no bare attendance/subjects)", () => {
+test("admin registry has rtt-prefixed slugs for the renamed RTT entities", () => {
   const src = read("apps/web/src/admin/registry.ts");
-  assert.match(src, /"rtt-attendance"/);
-  assert.match(src, /"rtt-subjects"/);
-  // Bare slugs must not appear as registry keys (curriculum-side entities own those in spec 014+).
-  assert.ok(!/^\s*attendance:\s/m.test(src), "no bare 'attendance' slug in registry");
-  assert.ok(!/^\s*subjects:\s/m.test(src), "no bare 'subjects' slug in registry");
+  assert.match(src, /"rtt-attendance"\s*:\s*rttAttendanceEntity/);
+  assert.match(src, /"rtt-subjects"\s*:\s*rttSubjectsEntity/);
+  // The bare slugs `attendance` and `subjects` are FREED for curriculum entities
+  // (spec 014 ships `subjects: subjectsEntity` for the curriculum spine). What we
+  // forbid is the OLD RTT entity being aliased back under the bare slug:
+  assert.ok(!/^\s*attendance:\s*rttAttendanceEntity/m.test(src), "RTT attendance must not be aliased as bare `attendance`");
+  assert.ok(!/^\s*subjects:\s*rttSubjectsEntity/m.test(src), "RTT subjects must not be aliased as bare `subjects`");
 });
 
-test("admin entity files renamed to rtt-attendance / rtt-subjects", () => {
+test("admin entity files renamed: rtt-attendance and rtt-subjects exist; any reused bare name is curriculum-bound", () => {
   const dir = resolve(root, "apps/web/src/admin/entities");
   const files = readdirSync(dir);
   assert.ok(files.includes("rtt-attendance.ts"), "rtt-attendance.ts must exist");
   assert.ok(files.includes("rtt-subjects.ts"), "rtt-subjects.ts must exist");
-  assert.ok(!files.includes("attendance.ts"), "v1 attendance.ts must be removed (mv to rtt-attendance.ts)");
-  assert.ok(!files.includes("subjects.ts"), "v1 subjects.ts must be removed (mv to rtt-subjects.ts)");
+  // If `subjects.ts` reappears (spec 014 ships curriculum subjects under the freed
+  // bare name), it must import the curriculum `subjects` table, not the renamed rttSubjects.
+  if (files.includes("subjects.ts")) {
+    const src = read("apps/web/src/admin/entities/subjects.ts");
+    assert.ok(/import\s*\{\s*subjects\b/.test(src), "subjects.ts must import the curriculum `subjects` Drizzle table");
+    assert.ok(!/rttSubjects/.test(src), "subjects.ts must not reference rttSubjects (those live in rtt-subjects.ts)");
+  }
+  // Same rule for `attendance.ts` should it ever come back (e.g. classroom-session attendance).
+  if (files.includes("attendance.ts")) {
+    const src = read("apps/web/src/admin/entities/attendance.ts");
+    assert.ok(!/rttAttendance/.test(src), "attendance.ts must not reference rttAttendance");
+  }
 });

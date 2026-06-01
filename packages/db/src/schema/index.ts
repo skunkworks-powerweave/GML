@@ -7,3 +7,4 @@ export * from "./geography";
 export * from "./rtt";
 export * from "./mentorship";
 export * from "./observation";
+export * from "./subjects";

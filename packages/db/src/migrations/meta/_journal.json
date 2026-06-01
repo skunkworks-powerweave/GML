@@ -15,6 +15,13 @@
       "when": 1780315206514,
       "tag": "0001_v2_rtt_rename_plus_geography_mentorship_observation",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780315597639,
+      "tag": "0002_curriculum_subjects",
+      "breakpoints": true
     }
   ]
 }
