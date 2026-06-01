@@ -17,6 +17,7 @@ import { mentorPairingsEntity } from "./entities/mentor-pairings";
 import { rttAttendanceEntity } from "./entities/rtt-attendance";
 import { rttSubjectsEntity } from "./entities/rtt-subjects";
 import { subjectsEntity } from "./entities/subjects";
+import { classesEntity } from "./entities/classes";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   schools: schoolsEntity,
@@ -27,6 +28,7 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   "rtt-attendance": rttAttendanceEntity,
   "rtt-subjects": rttSubjectsEntity,
   subjects: subjectsEntity,
+  classes: classesEntity,
 };
 
 export type AdminEntitySlug = keyof typeof ADMIN_ENTITIES;

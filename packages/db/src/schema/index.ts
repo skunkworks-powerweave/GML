@@ -8,3 +8,4 @@ export * from "./rtt";
 export * from "./mentorship";
 export * from "./observation";
 export * from "./subjects";
+export * from "./classes";
