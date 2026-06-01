@@ -105,6 +105,236 @@ body.a11y-reduced-motion *, body.a11y-reduced-motion ::before, body.a11y-reduced
   scroll-behavior: auto !important;
 }
 
+/* ============================================================
+   Utility classes — ported 1:1 from JSX prototype's app.css
+   so all pages can use className="chip chip-indigo", "card", "t", "btn", etc.
+   ============================================================ */
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-2);
+  background: var(--card-hi);
+  color: var(--ink);
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow-1);
+  transition: transform 0.06s ease, background 0.12s ease;
+}
+.btn:hover { background: var(--paper-2); }
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn-primary:hover { background: var(--ink-2); }
+.btn-ghost { background: transparent; border-color: transparent; box-shadow: none; }
+.btn-ghost:hover { background: var(--hairline); }
+.btn-sm { padding: 4px 8px; font-size: 12px; }
+
+/* Chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 99px;
+  background: var(--paper-2);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  letter-spacing: 0.01em;
+}
+.chip-indigo { background: var(--indigo-soft); border-color: oklch(0.82 0.06 268); color: oklch(0.32 0.10 268); }
+.chip-saffron { background: var(--saffron-soft); border-color: oklch(0.82 0.08 60); color: oklch(0.42 0.13 60); }
+.chip-lichen { background: var(--lichen-soft); border-color: oklch(0.82 0.06 145); color: oklch(0.32 0.08 145); }
+.chip-rust { background: var(--rust-soft); border-color: oklch(0.82 0.08 30); color: oklch(0.40 0.13 30); }
+.chip-ink { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+/* Cards */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-3); box-shadow: var(--shadow-1); }
+.card-hi { background: var(--card-hi); }
+
+/* Inline kbd / mono / serif / deva utilities */
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--ink-2);
+}
+.mono { font-family: var(--mono); }
+.serif { font-family: var(--serif); }
+.deva { font-family: var(--deva); }
+
+/* Eyebrow label */
+.label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+/* Form inputs (when not using inline style) */
+input.text, textarea.text, select.text {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--card-hi);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-2);
+  font-size: 13px;
+  color: var(--ink);
+}
+input.text:focus, textarea.text:focus, select.text:focus {
+  outline: 2px solid var(--indigo);
+  outline-offset: -1px;
+  border-color: var(--indigo);
+}
+
+.divider { height: 1px; background: var(--line); }
+
+/* Page shell helpers */
+.page-header { padding: 24px 32px 12px; border-bottom: 1px solid var(--line); }
+.page-body { padding: 20px 32px 80px; }
+
+/* Watermark — used by HlsPlayer + PdfViewer */
+.wm-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.18);
+  letter-spacing: 0.06em;
+  z-index: 5;
+}
+.wm-overlay > div { position: absolute; white-space: nowrap; transform: rotate(-22deg); transform-origin: 0 0; }
+
+/* Tables — className="t" */
+table.t {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+table.t th, table.t td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+table.t th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-3);
+  font-weight: 600;
+  background: var(--paper-2);
+  position: sticky;
+  top: 0;
+}
+table.t tbody tr { transition: background 0.08s ease; }
+table.t tbody tr:hover td { background: var(--paper-2); }
+table.t tbody tr:hover td:first-child { border-left: 2px solid var(--saffron); padding-left: 10px; }
+table.t tbody tr td:first-child { border-left: 2px solid transparent; }
+table.t tbody tr.selected { background: var(--saffron-soft); }
+table.t td em.dash, .empty-dash { color: var(--ink-4); font-style: italic; font-size: 0.92em; }
+
+/* Status dots */
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.dot-green { background: var(--lichen); }
+.dot-amber { background: var(--saffron); }
+.dot-red { background: var(--rust); }
+.dot-gray { background: var(--ink-4); }
+
+/* Stripe placeholder */
+.stripe {
+  background-image: repeating-linear-gradient(135deg, var(--paper-3), var(--paper-3) 8px, var(--paper-2) 8px, var(--paper-2) 16px);
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Confidentiality footer */
+.confidential-footer {
+  border-top: 1px solid var(--line);
+  padding: 16px 32px;
+  font-size: 11px;
+  color: var(--ink-3);
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font-family: var(--mono);
+  background: var(--paper-2);
+}
+
+/* Form grouping */
+.form-row { display: grid; gap: 6px; margin-bottom: 14px; }
+.form-row label { font-size: 12px; font-weight: 500; color: var(--ink-2); }
+.form-row .hint { font-size: 11px; color: var(--ink-3); }
+
+/* Stepper (CYCLE_STAGES flow diagram) */
+.stepper { display: flex; align-items: center; gap: 8px; }
+.stepper .step { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); }
+.stepper .step .num {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 11px;
+  background: var(--paper-2); border: 1px solid var(--line);
+}
+.stepper .step.done .num { background: var(--lichen); color: white; border-color: var(--lichen); }
+.stepper .step.active .num { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.stepper .step.active { color: var(--ink); font-weight: 500; }
+.stepper .sep { color: var(--ink-4); }
+
+/* Progress bar */
+.bar { height: 4px; background: var(--paper-3); border-radius: 99px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--ink); }
+
+/* Audit log row layout */
+.audit-row {
+  display: grid;
+  grid-template-columns: 140px 110px 90px 1fr 180px;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--mono);
+  border-bottom: 1px solid var(--line);
+}
+.audit-row:hover { background: var(--paper-2); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; border: 2px solid var(--paper); }
+::-webkit-scrollbar-thumb:hover { background: var(--line-2); }
+
+/* Modal */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(28, 24, 22, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--card);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-4);
+  box-shadow: var(--shadow-3);
+  max-width: 90vw;
+  max-height: 86vh;
+  overflow: auto;
+}
+
+/* Page fade animation (PageFade wrapper) */
+@keyframes page-fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+
 /* Spec 088 — anti-download deterrence chrome (CSS layer).
    Deterrence, not prevention. Pairs with <AntiDownloadGuard /> for keydown
    interception and the SM-4 watermark / SM-9 audit trail. */

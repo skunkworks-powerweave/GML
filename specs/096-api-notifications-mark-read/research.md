@@ -1,0 +1,4 @@
+# Research 096
+- Spec 070's inbox renders a native `<form action="/api/notifications/mark-read" method="post">` — no JSON, no client component. The route must therefore tolerate empty/form-encoded bodies and return a 303 redirect back to `/inbox` for non-JSON callers so the browser lands on the refreshed page instead of a stranded JSON blob.
+- `recordAudit` (apps/web/src/lib/audit.ts) is the project's existing audit helper — no new helper needed. Action strings became varchar(64) in spec 021, so `notifications.mark_read` lands without an enum migration.
+- The `(user_id, read_at, created_at)` partial index from spec 025 (`notifications_user_unread_idx`) makes the WHERE clause `user_id = $1 AND read_at IS NULL` index-only, so the UPDATE is cheap even when a user has thousands of stale notifications.
