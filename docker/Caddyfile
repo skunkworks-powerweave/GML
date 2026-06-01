@@ -1,43 +1,60 @@
-# GML LMS — Caddy reverse-proxy + auto-TLS.
-# {$DOMAIN} is interpolated from the env at container start.
-# Locally set DOMAIN=localhost; Caddy issues a self-signed cert via its internal CA.
+# Spec 092 — Caddy reverse proxy with auto-TLS via Let's Encrypt.
+# In production, set DOMAIN=lms.your-domain.org in .env; Caddy auto-provisions.
+# Locally DOMAIN=localhost; Caddy issues a self-signed cert via its internal CA.
 
-{$DOMAIN} {
-    encode zstd gzip
+{
+  email {$ACME_EMAIL:lms-admin@example.org}
+}
 
-    # Self-signed TLS for localhost; production domains fall through to Let's Encrypt.
-    @localhost host localhost
-    tls internal {
-        on_demand
+{$DOMAIN:localhost} {
+  encode gzip zstd
+
+  request_body {
+    max_size 5GB
+  }
+
+  # tus resumable uploads — proxy directly to tusd
+  handle_path /api/uploads/tus/* {
+    reverse_proxy tusd:1080 {
+      flush_interval -1
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-Host {host}
+      transport http {
+        read_timeout  10m
+        write_timeout 10m
+      }
     }
+  }
 
-    # ── Resumable uploads (tusd) ───────────────────────────────────────────────
-    @uploads path /uploads/*
-    handle @uploads {
-        reverse_proxy tusd:1080 {
-            transport http {
-                read_timeout 1h
-                write_timeout 1h
-            }
-        }
+  # WhatsApp webhook → Next.js
+  handle /api/webhooks/whatsapp* {
+    reverse_proxy app:3000 {
+      transport http {
+        read_timeout  60s
+        write_timeout 60s
+      }
     }
+  }
 
-    # ── WhatsApp webhook (large media; generous body cap) ──────────────────────
-    @whatsapp path /api/webhooks/whatsapp*
-    handle @whatsapp {
-        request_body {
-            max_size 200MB
-        }
-        reverse_proxy app:3000
+  # Default: everything else → Next.js
+  handle {
+    reverse_proxy app:3000 {
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Real-IP {remote_host}
     }
+  }
 
-    # ── App (Next.js) ──────────────────────────────────────────────────────────
-    handle {
-        reverse_proxy app:3000
-    }
+  log {
+    output stdout
+    format console
+    level INFO
+  }
 
-    log {
-        output stdout
-        format console
-    }
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
 }
