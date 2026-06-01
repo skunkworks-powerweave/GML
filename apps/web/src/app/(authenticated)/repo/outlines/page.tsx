@@ -9,11 +9,11 @@ import { courseOutlines, subjects, teachers } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_STYLE: Record<string, { bg: string; ink: string; label: string }> = {
-  planned: { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "Planned" },
-  in_progress: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "In progress" },
-  complete: { bg: "var(--lichen-soft)", ink: "var(--lichen)", label: "Complete" },
-  archived: { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "Archived" },
+const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
+  planned: { kind: "chip-ink", label: "Planned" },
+  in_progress: { kind: "chip-saffron", label: "In progress" },
+  complete: { kind: "chip-lichen", label: "Complete" },
+  archived: { kind: "", label: "Archived" },
 };
 
 export default async function RepoOutlinesIndexPage() {
@@ -39,184 +39,93 @@ export default async function RepoOutlinesIndexPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Course outlines</h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4, maxWidth: 760 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
           Term-level units per subject × grade. Each outline holds the learning outcomes, weekly lessons and the
           sessions delivered against it.
         </p>
-      </header>
-
-      <section
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          overflow: "hidden",
-        }}
-      >
-        {rows.length === 0 ? (
-          <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-            No outlines yet. Seed via <code style={{ fontFamily: "var(--mono)", fontSize: 12 }}>/admin/data/course-outlines</code>.
-          </div>
-        ) : (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 13,
-            }}
-          >
-            <thead>
-              <tr style={{ background: "var(--paper-2)" }}>
-                <Th>Outline</Th>
-                <Th>Subject</Th>
-                <Th align="right">Grade</Th>
-                <Th align="right">Term</Th>
-                <Th align="right">Sessions</Th>
-                <Th align="right">Weeks</Th>
-                <Th>Owner</Th>
-                <Th>Status</Th>
-                <Th aria-label="open" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((o, i) => {
-                const style = STATUS_STYLE[o.status] ?? STATUS_STYLE.planned;
-                return (
-                  <tr
-                    key={o.id}
-                    style={{
-                      borderTop: i ? "1px solid var(--line)" : "none",
-                    }}
-                  >
-                    <Td>
-                      <Link
-                        href={`/repo/outline/${o.id}`}
-                        style={{ color: "var(--ink)", fontWeight: 500, textDecoration: "none" }}
-                      >
-                        {o.name}
-                      </Link>
-                    </Td>
-                    <Td>
-                      {o.subjectName ? (
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            background: o.subjectColor ?? "var(--paper-2)",
-                            color: "var(--ink-2)",
-                            borderRadius: 999,
-                            fontSize: 11,
-                          }}
+      </div>
+      <div className="page-body">
+        <div className="card card-hi" style={{ overflow: "hidden" }}>
+          {rows.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
+              No outlines yet. Seed via <code className="mono" style={{ fontSize: 12 }}>/admin/data/course-outlines</code>.
+            </div>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Outline</th>
+                  <th>Subject</th>
+                  <th>Grade</th>
+                  <th>Term</th>
+                  <th>Sessions</th>
+                  <th>Weeks</th>
+                  <th>Owner</th>
+                  <th>Status</th>
+                  <th aria-label="open" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((o) => {
+                  const chip = STATUS_CHIP[o.status] ?? STATUS_CHIP.planned;
+                  return (
+                    <tr key={o.id}>
+                      <td style={{ fontWeight: 500 }}>
+                        <Link
+                          href={`/repo/outline/${o.id}`}
+                          style={{ color: "var(--ink)", textDecoration: "none" }}
                         >
-                          {o.subjectName}
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--ink-3)" }}>—</span>
-                      )}
-                    </Td>
-                    <Td align="right" mono>
-                      {o.grade}
-                    </Td>
-                    <Td align="right" mono>
-                      {o.term}
-                    </Td>
-                    <Td align="right" mono>
-                      {o.sessionsCount}
-                    </Td>
-                    <Td align="right" mono>
-                      {o.weeks ?? "—"}
-                    </Td>
-                    <Td>
-                      {o.ownerName ? (
-                        <>
-                          {o.ownerName}
-                          {o.ownerHindi ? (
-                            <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 6, fontSize: 12 }}>
-                              {o.ownerHindi}
-                            </span>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span style={{ color: "var(--ink-3)" }}>—</span>
-                      )}
-                    </Td>
-                    <Td>
-                      <span
-                        style={{
-                          padding: "2px 8px",
-                          background: style.bg,
-                          color: style.ink,
-                          borderRadius: 999,
-                          fontSize: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {style.label}
-                      </span>
-                    </Td>
-                    <Td align="right">
-                      <Link
-                        href={`/repo/outline/${o.id}`}
-                        style={{
-                          fontSize: 11,
-                          color: "var(--ink-3)",
-                          textDecoration: "none",
-                        }}
-                        aria-label={`Open ${o.name}`}
-                      >
-                        ›
-                      </Link>
-                    </Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+                          {o.name}
+                        </Link>
+                      </td>
+                      <td>
+                        {o.subjectName ?? <span style={{ color: "var(--ink-3)" }}>—</span>}
+                      </td>
+                      <td>{o.grade}</td>
+                      <td>{o.term}</td>
+                      <td>{o.sessionsCount}</td>
+                      <td>{o.weeks ?? <span style={{ color: "var(--ink-3)" }}>—</span>}</td>
+                      <td>
+                        {o.ownerName ? (
+                          <>
+                            {o.ownerName}
+                            {o.ownerHindi ? (
+                              <span
+                                className="deva"
+                                style={{ color: "var(--ink-3)", marginLeft: 6, fontSize: 12, fontFamily: "var(--deva)" }}
+                              >
+                                {o.ownerHindi}
+                              </span>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span style={{ color: "var(--ink-3)" }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`chip ${chip.kind}`.trim()}>{chip.label}</span>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <Link
+                          href={`/repo/outline/${o.id}`}
+                          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+                          aria-label={`Open ${o.name}`}
+                        >
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
-  );
-}
-
-function Th({ children, align = "left", ...rest }: { children?: React.ReactNode; align?: "left" | "right" } & React.ThHTMLAttributes<HTMLTableCellElement>) {
-  return (
-    <th
-      {...rest}
-      style={{
-        textAlign: align,
-        padding: "10px 14px",
-        fontSize: 10,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        color: "var(--ink-3)",
-        fontWeight: 600,
-        borderBottom: "1px solid var(--line)",
-      }}
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, align = "left", mono = false }: { children?: React.ReactNode; align?: "left" | "right"; mono?: boolean }) {
-  return (
-    <td
-      style={{
-        padding: "12px 14px",
-        textAlign: align,
-        fontFamily: mono ? "var(--mono)" : undefined,
-        fontSize: mono ? 12 : undefined,
-        color: mono ? "var(--ink-2)" : undefined,
-      }}
-    >
-      {children}
-    </td>
   );
 }
 

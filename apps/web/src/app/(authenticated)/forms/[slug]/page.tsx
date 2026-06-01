@@ -234,23 +234,19 @@ export default async function FormRunnerPage({
   const description = schema.description;
 
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto" }}>
-      <header style={{ marginBottom: 22 }}>
-        <Link href="/inbox" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+    <div>
+      <div className="page-header">
+        <Link
+          href="/inbox"
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 6, textDecoration: "none" }}
+        >
           ← Inbox
         </Link>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-            marginTop: 8,
-          }}
-        >
+        <div className="label">
           Form · {parsed.kind.replace("_", " ")} · {parsed.audience}
         </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4, lineHeight: 1.2 }}>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4, lineHeight: 1.2 }}>
           {title}
           {hindiTitle ? (
             <span
@@ -266,30 +262,32 @@ export default async function FormRunnerPage({
           ) : null}
         </h1>
         {description ? (
-          <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-            {description}
-          </p>
+          <p style={{ color: "var(--ink-3)", marginTop: 4 }}>{description}</p>
         ) : null}
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            alignItems: "center",
+            marginTop: 12,
+            flexWrap: "wrap",
+          }}
+        >
           <span
+            className="chip"
             style={{
-              padding: "2px 8px",
-              background: "var(--paper-2)",
-              color: "var(--ink-3)",
-              borderRadius: 4,
-              fontSize: 10,
               fontFamily: "var(--mono)",
+              background: "var(--paper-2)",
               textTransform: "uppercase",
-              letterSpacing: "0.05em",
             }}
           >
             v{form.version}
           </span>
           {draft ? (
-            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+            <span className="chip chip-lichen">
               Draft loaded · saved{" "}
-              <span style={{ fontFamily: "var(--mono)" }}>
+              <span className="mono">
                 {new Date(draft.updatedAt).toLocaleString("en-IN", {
                   dateStyle: "medium",
                   timeStyle: "short",
@@ -297,60 +295,66 @@ export default async function FormRunnerPage({
               </span>
             </span>
           ) : (
-            <span style={{ fontSize: 11, color: "var(--ink-4)" }}>No draft yet</span>
+            <span className="chip">No draft yet</span>
           )}
         </div>
-      </header>
+      </div>
 
-      {error === "missing_pairing" ? (
-        <div
+      <div className="page-body" style={{ maxWidth: 760, margin: "0 auto" }}>
+        {error === "missing_pairing" ? (
+          <div
+            style={{
+              background: "var(--rust-soft)",
+              color: "var(--rust)",
+              border: "1px solid var(--rust)",
+              borderRadius: "var(--r-2)",
+              padding: 12,
+              fontSize: 13,
+              marginBottom: 16,
+            }}
+            role="alert"
+          >
+            This form must be opened from your inbox so we can attach the
+            response to the right mentorship pairing. Head back to{" "}
+            <Link href="/inbox" style={{ color: "var(--indigo)" }}>
+              your inbox
+            </Link>{" "}
+            and click the form card.
+          </div>
+        ) : null}
+
+        <section
+          className="card card-hi"
           style={{
-            background: "var(--rust-soft)",
-            color: "var(--rust)",
-            border: "1px solid var(--rust)",
-            borderRadius: "var(--r-2)",
-            padding: 12,
-            fontSize: 13,
-            marginBottom: 16,
+            background: "var(--card-hi)",
+            border: "1px solid var(--line)",
+            padding: 20,
           }}
-          role="alert"
         >
-          This form must be opened from your inbox so we can attach the response
-          to the right mentorship pairing. Head back to <Link href="/inbox" style={{ color: "var(--indigo)" }}>your inbox</Link> and click the form card.
-        </div>
-      ) : null}
+          <FormRenderer
+            schema={schema}
+            initialResponses={(draft?.responses as Record<string, unknown> | undefined) ?? {}}
+            draftKey={{ templateId: form.id }}
+            action={submitFormAction}
+            formId={form.id}
+            slug={slug}
+            pairingId={pairingId || null}
+          />
+        </section>
 
-      <section
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          padding: 20,
-        }}
-      >
-        <FormRenderer
-          schema={schema}
-          initialResponses={(draft?.responses as Record<string, unknown> | undefined) ?? {}}
-          draftKey={{ templateId: form.id }}
-          action={submitFormAction}
-          formId={form.id}
-          slug={slug}
-          pairingId={pairingId || null}
-        />
-      </section>
-
-      <footer
-        style={{
-          marginTop: 20,
-          fontSize: 11,
-          color: "var(--ink-4)",
-          lineHeight: 1.5,
-        }}
-      >
-        Your responses are saved as you type (draft) and only sealed into the
-        record when you press <em>Submit</em>. Until then you can navigate away
-        and return without losing what you typed.
-      </footer>
+        <footer
+          style={{
+            marginTop: 20,
+            fontSize: 11,
+            color: "var(--ink-4)",
+            lineHeight: 1.5,
+          }}
+        >
+          Your responses are saved as you type (draft) and only sealed into the
+          record when you press <em>Submit</em>. Until then you can navigate
+          away and return without losing what you typed.
+        </footer>
+      </div>
     </div>
   );
 }
@@ -361,25 +365,19 @@ export default async function FormRunnerPage({
 
 function NotFoundShell({ slug }: { slug: string }) {
   return (
-    <div style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }}>
-      <div
-        style={{
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          color: "var(--ink-3)",
-        }}
-      >
-        Form not found
-      </div>
-      <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 6 }}>
+    <div className="page-body" style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }}>
+      <div className="label">Form not found</div>
+      <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
         No active form matches this URL.
       </h1>
       <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 8 }}>
-        Slug <code style={{ fontFamily: "var(--mono)" }}>{slug}</code> doesn&apos;t resolve to
-        any active <code style={{ fontFamily: "var(--mono)" }}>feedback_forms</code> row.
-        Head back to your <Link href="/inbox" style={{ color: "var(--indigo)" }}>inbox</Link>
-        {" "}and open the form from there.
+        Slug <code className="mono">{slug}</code> doesn&apos;t resolve to any
+        active <code className="mono">feedback_forms</code> row. Head back to
+        your{" "}
+        <Link href="/inbox" style={{ color: "var(--indigo)" }}>
+          inbox
+        </Link>{" "}
+        and open the form from there.
       </p>
     </div>
   );

@@ -8,19 +8,21 @@ import { observationCycles, teachers, subjects } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_COLOR: Record<string, string> = {
-  nominated: "var(--ink-3)",
-  pre_submitted: "var(--saffron)",
-  observed: "var(--indigo)",
-  post_submitted: "var(--saffron)",
-  complete: "var(--lichen)",
+const KIND_CHIP: Record<string, string> = {
+  baseline: "",
+  developmental: "chip-indigo",
+  evaluative: "chip-saffron",
 };
 
-const KIND_COLOR: Record<string, { bg: string; ink: string }> = {
-  baseline: { bg: "var(--paper-2)", ink: "var(--ink-2)" },
-  developmental: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
-  evaluative: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
+const STATUS_LABEL: Record<string, string> = {
+  nominated: "Nominated",
+  pre_submitted: "Pre submitted",
+  observed: "Observed",
+  post_submitted: "Post submitted",
+  complete: "Complete",
 };
+
+const CYCLE_STAGES = ["nominated", "pre_submitted", "observed", "post_submitted", "complete"];
 
 export default async function ObservationListPage() {
   const rows = await db
@@ -44,113 +46,117 @@ export default async function ObservationListPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          Classroom Observation
-        </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Observation cycles
-        </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          Pre-form → observation → post-form. Three kinds: baseline, developmental, evaluative.
-        </p>
-      </header>
-
-      <section
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          overflow: "hidden",
-        }}
-      >
-        {rows.length === 0 ? (
-          <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-            No observation cycles yet. They appear once observers nominate teachers.
+      <div className="page-header">
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+          <div>
+            <div className="label">Classroom observation</div>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Observation cycles</h1>
+            <p style={{ color: "var(--ink-3)", marginTop: 6 }}>
+              A cycle has three steps: <b>Pre-form</b> from teacher → <b>Observation</b> (live or video) → <b>Post-debrief</b> with mentor.
+              Every step is time-stamped and signed.
+            </p>
           </div>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {rows.map((c, i) => (
-              <li
-                key={c.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "auto 1fr auto auto",
-                  gap: 14,
-                  alignItems: "center",
-                  padding: "14px 16px",
-                  borderTop: i ? "1px solid var(--line)" : "none",
-                }}
-              >
-                <code
-                  style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: 11,
-                    color: "var(--ink-3)",
-                    minWidth: 84,
-                  }}
-                >
-                  {c.code}
-                </code>
-                <div>
-                  <div style={{ fontWeight: 500 }}>
-                    {c.teacherName ?? "—"}
-                    {c.teacherHindi ? (
-                      <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 8, fontSize: 12 }}>
-                        {c.teacherHindi}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                    {c.subjectName ?? c.topic ?? "no subject"} ·{" "}
-                    {c.scheduledAt
-                      ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
-                      : "unscheduled"}
-                    {c.videoMin ? ` · ${c.videoMin} min` : ""}
-                  </div>
-                </div>
-                <Chip kind={KIND_COLOR[c.kind] ?? KIND_COLOR.baseline}>{c.kind}</Chip>
-                <span style={{ fontSize: 11, color: STATUS_COLOR[c.status] ?? "var(--ink-3)", fontFamily: "var(--mono)" }}>
-                  {c.status.replace("_", " ")}
-                </span>
-                <Link
-                  href={`/observation/${c.id}`}
-                  style={{
-                    fontSize: 12,
-                    padding: "4px 10px",
-                    background: "var(--ink)",
-                    color: "var(--paper)",
-                    borderRadius: "var(--r-2)",
-                    textDecoration: "none",
-                  }}
-                >
-                  Open →
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        </div>
+      </div>
+
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        <div className="card">
+          {rows.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
+              No observation cycles yet. They appear once observers nominate teachers.
+            </div>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Cycle</th>
+                  <th>Teacher</th>
+                  <th>Subject / Topic</th>
+                  <th>Kind</th>
+                  <th>Stage</th>
+                  <th>Date</th>
+                  <th>Video</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c) => (
+                  <tr key={c.id}>
+                    <td className="mono" style={{ fontSize: 11 }}>{c.code}</td>
+                    <td>
+                      <div style={{ fontWeight: 500 }}>{c.teacherName ?? "—"}</div>
+                      {c.teacherHindi ? (
+                        <div className="deva" style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--deva)" }}>
+                          {c.teacherHindi}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <div>{c.subjectName ?? "—"}</div>
+                      {c.topic ? (
+                        <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{c.topic}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>{c.kind}</span>
+                    </td>
+                    <td>
+                      <CycleStage status={c.status} />
+                    </td>
+                    <td className="mono" style={{ fontSize: 12 }}>
+                      {c.scheduledAt
+                        ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
+                        : <span style={{ color: "var(--ink-4)" }}>—</span>}
+                    </td>
+                    <td>
+                      {c.videoMin ? (
+                        <span style={{ fontSize: 12 }}>{c.videoMin}m</span>
+                      ) : (
+                        <span style={{ color: "var(--ink-4)" }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      <Link
+                        href={`/observation/${c.id}`}
+                        style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+                      >
+                        ›
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function Chip({ kind, children }: { kind: { bg: string; ink: string }; children: React.ReactNode }) {
+function CycleStage({ status }: { status: string }) {
+  const idx = CYCLE_STAGES.indexOf(status);
   return (
-    <span
-      style={{
-        padding: "2px 8px",
-        background: kind.bg,
-        color: kind.ink,
-        borderRadius: 999,
-        fontSize: 10,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        fontWeight: 600,
-      }}
-    >
-      {children}
-    </span>
+    <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+      {CYCLE_STAGES.map((s, i) => (
+        <div
+          key={s}
+          style={{
+            width: 22,
+            height: 5,
+            borderRadius: 2,
+            background:
+              i <= idx
+                ? i === CYCLE_STAGES.length - 1 && i <= idx
+                  ? "var(--lichen)"
+                  : "var(--ink)"
+                : "var(--paper-3)",
+          }}
+        />
+      ))}
+      <span style={{ marginLeft: 6, fontSize: 11, color: "var(--ink-3)" }}>
+        {STATUS_LABEL[status] ?? status.replace("_", " ")}
+      </span>
+    </div>
   );
 }
-

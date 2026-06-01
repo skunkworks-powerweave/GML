@@ -23,14 +23,14 @@ import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
-const SUBJECT_COLOR: Record<string, { bg: string; ink: string }> = {
-  English: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
-  Mathematics: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  Math: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  EVS: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  Science: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
-  Hindi: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
-  Urdu: { bg: "var(--rust-soft)", ink: "var(--rust)" },
+const SUBJECT_COLOR: Record<string, { chip: string }> = {
+  English: { chip: "chip-indigo" },
+  Mathematics: { chip: "chip-lichen" },
+  Math: { chip: "chip-lichen" },
+  EVS: { chip: "chip-lichen" },
+  Science: { chip: "chip-indigo" },
+  Hindi: { chip: "chip-saffron" },
+  Urdu: { chip: "chip-indigo" },
 };
 
 const SESSION_STATUS_COLOR: Record<string, string> = {
@@ -155,68 +155,65 @@ export default async function RepoTeacherDetailPage({
 
   const subjColor =
     (teacher.subjectSpecialism &&
-      SUBJECT_COLOR[teacher.subjectSpecialism]) || {
-      bg: "var(--paper-2)",
-      ink: "var(--ink-3)",
-    };
+      SUBJECT_COLOR[teacher.subjectSpecialism]) || { chip: "" };
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
+      <div className="page-header">
         <Link
           href="/repo/teachers"
-          style={{
-            fontSize: 12,
-            color: "var(--ink-3)",
-            textDecoration: "none",
-          }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
           ← Teachers
         </Link>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-            marginTop: 8,
-          }}
-        >
-          Teacher ·{" "}
-          <span style={{ fontFamily: "var(--mono)", textTransform: "none" }}>
-            {teacher.id.slice(0, 8)}
-          </span>
-        </div>
-        <h1
-          style={{
-            fontFamily: "var(--serif)",
-            fontSize: 28,
-            marginTop: 4,
-          }}
-        >
-          {teacher.fullName}
-          {teacher.hindiName ? (
+        <div>
+          <div className="label">
+            Teacher ·{" "}
             <span
+              className="mono"
               style={{
-                fontFamily: "var(--deva)",
-                fontSize: 18,
-                color: "var(--ink-3)",
-                fontWeight: 400,
-                marginLeft: 10,
+                fontFamily: "var(--mono)",
+                textTransform: "none",
+                letterSpacing: 0,
               }}
             >
-              {teacher.hindiName}
+              {teacher.id.slice(0, 8)}
             </span>
-          ) : null}
-        </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          {teacher.subjectSpecialism ? `Teaches ${teacher.subjectSpecialism}` : "Teacher"}
-          {school ? ` at ${school.code} ${school.name}` : ""}
-          {phaseRow ? `. Currently in ${phaseRow.label} of the RTT programme.` : "."}
-        </p>
-      </header>
+          </div>
+          <h1
+            style={{
+              fontFamily: "var(--serif)",
+              fontSize: 28,
+              marginTop: 4,
+            }}
+          >
+            {teacher.fullName}
+            {teacher.hindiName ? (
+              <span
+                className="deva"
+                style={{
+                  fontFamily: "var(--deva)",
+                  fontSize: 18,
+                  color: "var(--ink-3)",
+                  fontWeight: 400,
+                  marginLeft: 10,
+                }}
+              >
+                {teacher.hindiName}
+              </span>
+            ) : null}
+          </h1>
+          <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
+            {teacher.subjectSpecialism ? `Teaches ${teacher.subjectSpecialism}` : "Teacher"}
+            {school ? ` at ${school.code} ${school.name}` : ""}
+            {phaseRow ? `. Currently in ${phaseRow.label} of the RTT programme.` : "."}
+          </p>
+        </div>
+      </div>
 
       <div
+        className="page-body"
         style={{
           display: "grid",
           gridTemplateColumns: "1.6fr 1fr",
@@ -225,154 +222,100 @@ export default async function RepoTeacherDetailPage({
         }}
       >
         {/* LEFT: Sessions list */}
-        <section
-          style={{
-            background: "var(--card-hi)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-            overflow: "hidden",
-          }}
-        >
-          <header
+        <section className="card card-hi" style={{ overflow: "hidden" }}>
+          <div
             style={{
+              display: "flex",
+              alignItems: "center",
               padding: "12px 14px",
               borderBottom: "1px solid var(--line)",
-              display: "flex",
-              alignItems: "baseline",
-              justifyContent: "space-between",
             }}
           >
-            <h2
-              style={{
-                fontFamily: "var(--serif)",
-                fontSize: 16,
-                margin: 0,
-              }}
-            >
+            <div style={{ fontWeight: 600, fontSize: 13 }}>
               Sessions taught ({recentSessions.length})
-            </h2>
-            <Link
-              href="/sessions"
-              style={{
-                fontSize: 11,
-                color: "var(--ink-3)",
-                textDecoration: "none",
-              }}
-            >
-              All sessions →
-            </Link>
-          </header>
+            </div>
+            <div style={{ marginLeft: "auto" }}>
+              <Link href="/sessions" className="btn btn-sm">
+                All sessions →
+              </Link>
+            </div>
+          </div>
           {recentSessions.length === 0 ? (
             <p
               style={{
                 padding: 24,
-                fontSize: 12,
+                textAlign: "center",
                 color: "var(--ink-3)",
                 margin: 0,
               }}
             >
-              No sessions logged yet.
+              No sessions recorded yet.
             </p>
           ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {recentSessions.map((s, i) => (
-                <li
-                  key={s.id}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "auto 1fr auto",
-                    gap: 12,
-                    alignItems: "center",
-                    padding: "12px 14px",
-                    borderTop: i ? "1px solid var(--line)" : "none",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: "var(--mono)",
-                      fontSize: 11,
-                      color: "var(--ink-3)",
-                      minWidth: 84,
-                    }}
-                  >
-                    {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
-                      day: "numeric",
-                      month: "short",
-                    })}
-                    {s.scheduledTime ? ` · ${s.scheduledTime.slice(0, 5)}` : ""}
-                  </span>
-                  <div>
-                    <div style={{ fontWeight: 500, fontSize: 13 }}>
-                      {s.topic ?? s.subjectName ?? "Untitled session"}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "var(--ink-3)",
-                        marginTop: 2,
-                      }}
-                    >
-                      {s.classGrade ? `Grade ${s.classGrade}` : "—"}
-                      {s.subjectName ? ` · ${s.subjectName}` : ""}
-                      {s.totalCount > 0
-                        ? ` · ${s.attendedCount}/${s.totalCount} present`
-                        : ""}
-                      {s.durationMin ? ` · ${s.durationMin} min` : ""}
-                    </div>
-                  </div>
-                  <span
-                    style={{
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      color:
-                        SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
-                      fontFamily: "var(--mono)",
-                    }}
-                  >
-                    {s.status.replace("_", " ")}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Time</th>
+                  <th>Grade</th>
+                  <th>Subject</th>
+                  <th>Topic</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentSessions.map((s) => (
+                  <tr key={s.id}>
+                    <td className="mono" style={{ fontSize: 12 }}>
+                      {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </td>
+                    <td className="mono" style={{ fontSize: 12 }}>
+                      {s.scheduledTime ? s.scheduledTime.slice(0, 5) : "—"}
+                    </td>
+                    <td>{s.classGrade ? `Grade ${s.classGrade}` : "—"}</td>
+                    <td>{s.subjectName ?? "—"}</td>
+                    <td>{s.topic ?? "—"}</td>
+                    <td>
+                      <span
+                        className="mono"
+                        style={{
+                          fontSize: 10,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.06em",
+                          color:
+                            SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
+                        }}
+                      >
+                        {s.status.replace("_", " ")}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </section>
 
         {/* RIGHT: Details + pairing + cycles */}
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <section
-            style={{
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              padding: 14,
-            }}
-          >
-            <h2
+          <section className="card card-hi">
+            <div
               style={{
-                fontFamily: "var(--serif)",
-                fontSize: 16,
-                marginTop: 0,
-                marginBottom: 12,
+                display: "flex",
+                alignItems: "center",
+                padding: "12px 14px",
+                borderBottom: "1px solid var(--line)",
               }}
             >
-              Details
-            </h2>
-            <dl style={{ display: "grid", gap: 8, margin: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Details</div>
+            </div>
+            <dl style={{ padding: "0 14px 8px", margin: 0 }}>
               <KVRow label="Subject">
                 {teacher.subjectSpecialism ? (
-                  <span
-                    style={{
-                      padding: "2px 8px",
-                      background: subjColor.bg,
-                      color: subjColor.ink,
-                      borderRadius: 999,
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      fontWeight: 600,
-                    }}
-                  >
+                  <span className={`chip ${subjColor.chip}`}>
                     {teacher.subjectSpecialism}
                   </span>
                 ) : (
@@ -385,7 +328,7 @@ export default async function RepoTeacherDetailPage({
                     href={`/repo/school/${school.id}`}
                     style={{ color: "var(--indigo)", textDecoration: "none" }}
                   >
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
+                    <span className="mono" style={{ fontSize: 11 }}>
                       {school.code}
                     </span>{" "}
                     {school.name}
@@ -404,11 +347,8 @@ export default async function RepoTeacherDetailPage({
               <KVRow label="Phone">
                 {teacher.phone ? (
                   <span
-                    style={{
-                      fontFamily: "var(--mono)",
-                      fontSize: 12,
-                      color: "var(--ink-2)",
-                    }}
+                    className="mono"
+                    style={{ fontSize: 12, color: "var(--ink-2)" }}
                   >
                     {teacher.phone}
                   </span>
@@ -418,11 +358,8 @@ export default async function RepoTeacherDetailPage({
               </KVRow>
               <KVRow label="Onboarded">
                 <span
-                  style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: 12,
-                    color: "var(--ink-2)",
-                  }}
+                  className="mono"
+                  style={{ fontSize: 12, color: "var(--ink-2)" }}
                 >
                   {new Date(teacher.createdAt).toLocaleDateString("en-IN", {
                     day: "numeric",
@@ -433,18 +370,7 @@ export default async function RepoTeacherDetailPage({
               </KVRow>
               <KVRow label="Status">
                 <span
-                  style={{
-                    padding: "2px 8px",
-                    background: teacher.active
-                      ? "var(--lichen-soft)"
-                      : "var(--paper-2)",
-                    color: teacher.active ? "var(--lichen)" : "var(--ink-3)",
-                    borderRadius: 999,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    fontWeight: 600,
-                  }}
+                  className={`chip ${teacher.active ? "chip-lichen" : ""}`}
                 >
                   {teacher.active ? "active" : "inactive"}
                 </span>
@@ -452,184 +378,155 @@ export default async function RepoTeacherDetailPage({
             </dl>
           </section>
 
-          <section
-            style={{
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              padding: 14,
-            }}
-          >
-            <h2
+          <section className="card card-hi">
+            <div
               style={{
-                fontFamily: "var(--serif)",
-                fontSize: 16,
-                marginTop: 0,
-                marginBottom: 12,
+                display: "flex",
+                alignItems: "center",
+                padding: "12px 14px",
+                borderBottom: "1px solid var(--line)",
               }}
             >
-              Mentor pairing
-            </h2>
-            {activePairing && activePairing.mentorId ? (
-              <Link
-                href={`/mentorship/${activePairing.id}`}
-                style={{
-                  display: "block",
-                  textDecoration: "none",
-                  color: "var(--ink)",
-                  border: "1px solid var(--line)",
-                  borderRadius: "var(--r-2)",
-                  padding: 12,
-                }}
-              >
-                <div
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Mentor pairing</div>
+            </div>
+            <div style={{ padding: 14 }}>
+              {activePairing && activePairing.mentorId ? (
+                <Link
+                  href={`/mentorship/${activePairing.id}`}
                   style={{
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.05em",
-                    color: "var(--ink-3)",
+                    display: "block",
+                    textDecoration: "none",
+                    color: "var(--ink)",
+                    border: "1px solid var(--line)",
+                    borderRadius: "var(--r-2)",
+                    padding: 12,
                   }}
                 >
-                  {activePairing.mentorBase
-                    ? `${activePairing.mentorBase} · mentor`
-                    : "mentor"}
-                </div>
-                <div style={{ fontWeight: 500, marginTop: 4 }}>
-                  {activePairing.mentorName ?? "—"}
-                  {activePairing.mentorHindi ? (
-                    <span
-                      style={{
-                        fontFamily: "var(--deva)",
-                        color: "var(--ink-3)",
-                        marginLeft: 8,
-                        fontSize: 13,
-                      }}
-                    >
-                      {activePairing.mentorHindi}
+                  <div className="label">
+                    {activePairing.mentorBase
+                      ? `${activePairing.mentorBase} · mentor`
+                      : "mentor"}
+                  </div>
+                  <div style={{ fontWeight: 500, marginTop: 4 }}>
+                    {activePairing.mentorName ?? "—"}
+                    {activePairing.mentorHindi ? (
+                      <span
+                        className="deva"
+                        style={{
+                          color: "var(--ink-3)",
+                          marginLeft: 8,
+                          fontSize: 13,
+                        }}
+                      >
+                        {activePairing.mentorHindi}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "center",
+                      marginTop: 8,
+                    }}
+                  >
+                    <span className="chip">
+                      Q{activePairing.currentQuarter ?? 1}
                     </span>
-                  ) : null}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    fontFamily: "var(--mono)",
-                    fontSize: 11,
-                    color: "var(--ink-3)",
-                    marginTop: 8,
-                  }}
-                >
-                  <span
-                    style={{
-                      padding: "2px 6px",
-                      background: "var(--paper-2)",
-                      borderRadius: 4,
-                    }}
-                  >
-                    Q{activePairing.currentQuarter ?? 1}
-                  </span>
-                  <span>{activePairing.meetingsCount ?? 0} meetings</span>
-                  <span
-                    style={{
-                      marginLeft: "auto",
-                      color:
-                        activePairing.status === "active"
-                          ? "var(--lichen)"
-                          : "var(--ink-3)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {activePairing.status}
-                  </span>
-                </div>
-              </Link>
-            ) : (
-              <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                No mentor paired yet.
-              </p>
-            )}
+                    <span
+                      className="mono"
+                      style={{ fontSize: 11, color: "var(--ink-3)" }}
+                    >
+                      {activePairing.meetingsCount ?? 0} meetings
+                    </span>
+                    <span
+                      className={`chip ${activePairing.status === "active" ? "chip-lichen" : ""}`}
+                      style={{ marginLeft: "auto" }}
+                    >
+                      {activePairing.status}
+                    </span>
+                  </div>
+                </Link>
+              ) : (
+                <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+                  No mentor paired yet.
+                </p>
+              )}
+            </div>
           </section>
 
-          <section
-            style={{
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              padding: 14,
-            }}
-          >
-            <h2
+          <section className="card card-hi">
+            <div
               style={{
-                fontFamily: "var(--serif)",
-                fontSize: 16,
-                marginTop: 0,
-                marginBottom: 12,
+                display: "flex",
+                alignItems: "center",
+                padding: "12px 14px",
+                borderBottom: "1px solid var(--line)",
               }}
             >
-              Recent observation cycles ({recentCycles.length})
-            </h2>
-            {recentCycles.length === 0 ? (
-              <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                No cycles yet.
-              </p>
-            ) : (
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                }}
-              >
-                {recentCycles.map((c) => (
-                  <li key={c.id}>
-                    <Link
-                      href={`/observation/${c.id}`}
-                      style={{
-                        display: "flex",
-                        gap: 8,
-                        alignItems: "baseline",
-                        justifyContent: "space-between",
-                        textDecoration: "none",
-                        color: "var(--ink)",
-                        padding: "6px 10px",
-                        border: "1px solid var(--line)",
-                        borderRadius: "var(--r-2)",
-                      }}
-                    >
-                      <span
+              <div style={{ fontWeight: 600, fontSize: 13 }}>
+                Recent observation cycles ({recentCycles.length})
+              </div>
+            </div>
+            <div style={{ padding: 14 }}>
+              {recentCycles.length === 0 ? (
+                <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+                  No cycles yet.
+                </p>
+              ) : (
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  {recentCycles.map((c) => (
+                    <li key={c.id}>
+                      <Link
+                        href={`/observation/${c.id}`}
                         style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 11,
-                          color: "var(--ink-3)",
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "baseline",
+                          justifyContent: "space-between",
+                          textDecoration: "none",
+                          color: "var(--ink)",
+                          padding: "6px 10px",
+                          border: "1px solid var(--line)",
+                          borderRadius: "var(--r-2)",
                         }}
                       >
-                        {c.code}
-                      </span>
-                      <span style={{ fontSize: 12, flex: 1, marginLeft: 8 }}>
-                        {c.topic ?? c.kind}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          color:
-                            CYCLE_STATUS_COLOR[c.status] ?? "var(--ink-3)",
-                          fontFamily: "var(--mono)",
-                        }}
-                      >
-                        {c.status.replace("_", " ")}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
+                        <span
+                          className="mono"
+                          style={{ fontSize: 11, color: "var(--ink-3)" }}
+                        >
+                          {c.code}
+                        </span>
+                        <span style={{ fontSize: 12, flex: 1, marginLeft: 8 }}>
+                          {c.topic ?? c.kind}
+                        </span>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 10,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.06em",
+                            color:
+                              CYCLE_STATUS_COLOR[c.status] ?? "var(--ink-3)",
+                          }}
+                        >
+                          {c.status.replace("_", " ")}
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
         </div>
       </div>
@@ -648,24 +545,37 @@ function KVRow({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "110px 1fr",
-        gap: 12,
-        alignItems: "baseline",
-        fontSize: 13,
+        gridTemplateColumns: "120px 1fr",
+        gap: 10,
+        padding: "8px 0",
+        borderTop: "1px solid var(--line)",
+        alignItems: "flex-start",
       }}
     >
       <dt
         style={{
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
+          fontSize: 11,
           color: "var(--ink-3)",
-          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+          fontWeight: 500,
+          paddingTop: 2,
         }}
       >
         {label}
       </dt>
-      <dd style={{ margin: 0 }}>{children}</dd>
+      <dd
+        style={{
+          margin: 0,
+          fontSize: 13,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 4,
+          alignItems: "center",
+        }}
+      >
+        {children}
+      </dd>
     </div>
   );
 }

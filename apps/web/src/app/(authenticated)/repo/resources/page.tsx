@@ -4,7 +4,11 @@
 // joined to a per-row aggregate of subject names from resource_subjects.
 //
 // Filter via `?kind=Policy|Guide|Handbook|...` (matches the resources_kind_check
-// CHECK constraint). Active filter pill renders inverted (--ink ground).
+// CHECK constraint). Active filter pill renders with chip-saffron emphasis.
+//
+// Visuals: page-header + page-body shells, `.card` wraps `table.t` (sticky
+// var(--paper-2) header row, var(--line) bottom-border per cell, saffron
+// left-border hover). Chips use `.chip` utility for kind pills.
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -90,149 +94,109 @@ export default async function RepoResourcesIndexPage({
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
           Reading material
         </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4, maxWidth: 640 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
           Handbooks, policy documents, lesson templates, routines and worksheets.
         </p>
-      </header>
-
-      <section style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
-        <FilterPill href="/repo/resources" active={!kindFilter} label="All" count={totalActive} />
-        {KIND_FILTERS.map((k) => (
+      </div>
+      <div className="page-body">
+        <section style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
           <FilterPill
-            key={k}
-            href={`/repo/resources?kind=${encodeURIComponent(k)}`}
-            active={kindFilter === k}
-            label={k}
-            count={countMap.get(k) ?? 0}
+            href="/repo/resources"
+            active={!kindFilter}
+            label="All"
+            count={totalActive}
           />
-        ))}
-      </section>
+          {KIND_FILTERS.map((k) => (
+            <FilterPill
+              key={k}
+              href={`/repo/resources?kind=${encodeURIComponent(k)}`}
+              active={kindFilter === k}
+              label={k}
+              count={countMap.get(k) ?? 0}
+            />
+          ))}
+        </section>
 
-      <section
-        style={{
-          background: "var(--card)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          overflow: "hidden",
-        }}
-      >
-        {rows.length === 0 ? (
-          <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
-            No reading material matches this filter.
-          </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 13 }}>
-            <thead>
-              <tr>
-                {["Title", "Kind", "Subjects", "Owner", "Pages", "Updated", ""].map((h, i) => (
-                  <th
-                    key={i}
-                    style={{
-                      padding: "9px 12px",
-                      textAlign: "left",
-                      fontSize: 11,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                      color: "var(--ink-3)",
-                      fontWeight: 600,
-                      background: "var(--paper-2)",
-                      borderBottom: "1px solid var(--line)",
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const subs = r.subjectsAgg ?? [];
-                const head = subs.slice(0, 2);
-                const overflow = subs.length - head.length;
-                return (
-                  <tr key={r.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                    <td style={cellTd}>
-                      <Link
-                        href={`/repo/resource/${r.id}`}
-                        style={{
-                          color: "var(--ink)",
-                          textDecoration: "none",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {r.name}
-                      </Link>
-                    </td>
-                    <td style={cellTd}>
-                      <Chip>{r.kind}</Chip>
-                    </td>
-                    <td style={{ ...cellTd, fontSize: 12 }}>
-                      {head.length === 0 ? (
-                        <span style={{ color: "var(--ink-4)" }}>—</span>
-                      ) : (
-                        <>
-                          {head.map((s, i) => (
-                            <span key={s.id} style={{ color: "var(--ink-3)" }}>
-                              {s.name}
-                              {i < head.length - 1 ? ", " : ""}
-                            </span>
-                          ))}
-                          {overflow > 0 ? (
-                            <span style={{ color: "var(--ink-4)", marginLeft: 4 }}>
-                              {" "}+{overflow}
-                            </span>
-                          ) : null}
-                        </>
-                      )}
-                    </td>
-                    <td style={{ ...cellTd, fontSize: 12, color: "var(--ink-3)" }}>
-                      {r.owner ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
-                    </td>
-                    <td style={cellTd}>
-                      {r.pages ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
-                    </td>
-                    <td
-                      style={{
-                        ...cellTd,
-                        fontFamily: "var(--mono)",
-                        fontSize: 12,
-                        color: "var(--ink-3)",
-                      }}
-                    >
-                      {r.updatedAt
-                        ? new Date(r.updatedAt).toLocaleDateString("en-IN", {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric",
-                          })
-                        : "—"}
-                    </td>
-                    <td style={{ ...cellTd, color: "var(--ink-4)", textAlign: "right" }}>
-                      <Link href={`/repo/resource/${r.id}`} style={{ color: "var(--ink-4)" }}>
-                        ›
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+        <div className="card" style={{ overflow: "hidden" }}>
+          {rows.length === 0 ? (
+            <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
+              No reading material matches this filter.
+            </div>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  {["Title", "Kind", "Subjects", "Owner", "Pages", "Updated", ""].map((h, i) => (
+                    <th key={i}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const subs = r.subjectsAgg ?? [];
+                  const head = subs.slice(0, 2);
+                  const overflow = subs.length - head.length;
+                  return (
+                    <tr key={r.id}>
+                      <td style={{ fontWeight: 500 }}>
+                        <Link
+                          href={`/repo/resource/${r.id}`}
+                          style={{ color: "var(--ink)", textDecoration: "none" }}
+                        >
+                          {r.name}
+                        </Link>
+                      </td>
+                      <td>
+                        <span className="chip">{r.kind}</span>
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {head.length === 0 ? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        ) : (
+                          <>
+                            {head.map((s, i) => (
+                              <span key={s.id} style={{ color: "var(--ink-3)" }}>
+                                {s.name}
+                                {i < head.length - 1 ? ", " : ""}
+                              </span>
+                            ))}
+                            {overflow > 0 ? (
+                              <span style={{ color: "var(--ink-4)" }}> +{overflow}</span>
+                            ) : null}
+                          </>
+                        )}
+                      </td>
+                      <td style={{ fontSize: 12 }}>
+                        {r.owner ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
+                      </td>
+                      <td>{r.pages ?? <span style={{ color: "var(--ink-4)" }}>—</span>}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {r.updatedAt
+                          ? new Date(r.updatedAt).toLocaleDateString("en-IN", {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            })
+                          : "—"}
+                      </td>
+                      <td style={{ color: "var(--ink-4)", textAlign: "right" }}>
+                        <Link href={`/repo/resource/${r.id}`} style={{ color: "var(--ink-4)" }}>
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -251,42 +215,10 @@ function FilterPill({
   return (
     <Link
       href={href}
-      style={{
-        padding: "6px 12px",
-        background: active ? "var(--ink)" : "transparent",
-        color: active ? "var(--paper)" : "var(--ink-2)",
-        border: active ? "1px solid var(--ink)" : "1px solid transparent",
-        borderRadius: "var(--r-2)",
-        fontSize: 12,
-        textDecoration: "none",
-      }}
+      className={`chip ${active ? "chip-saffron" : ""}`}
+      style={{ textDecoration: "none", cursor: "pointer" }}
     >
       {label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count}</span>
     </Link>
   );
 }
-
-function Chip({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        padding: "2px 8px",
-        background: "var(--paper-2)",
-        color: "var(--ink-2)",
-        border: "1px solid var(--line)",
-        borderRadius: 999,
-        fontSize: 11,
-        fontWeight: 500,
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-const cellTd: React.CSSProperties = {
-  padding: "9px 12px",
-  textAlign: "left",
-  borderBottom: "1px solid var(--line)",
-  verticalAlign: "middle",
-};

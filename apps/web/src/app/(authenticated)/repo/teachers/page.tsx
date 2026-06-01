@@ -1,6 +1,12 @@
 // /repo/teachers — Repository: index of all teachers across partner schools.
 // Mirrors `repository.jsx` RepoTeachersIndex (lines 829-867 of the prototype):
 // name + Hindi (SM-7 optional), school code, current phase, subject, sessions count.
+//
+// Visual presentation: utility classes from globals.css — `className="deva"`
+// applies `font-family: var(--deva)` for the Devanagari Hindi name column,
+// `className="mono"` applies `font-family: var(--mono)` for school codes and
+// numeric counts. `className="t"` styles the table; `chip-*` variants style
+// the subject pill. No inline font-family declarations beyond the serif H1.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -17,14 +23,17 @@ import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
-const SUBJECT_COLOR: Record<string, { bg: string; ink: string }> = {
-  English: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
-  Mathematics: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  Math: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  EVS: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  Science: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
-  Hindi: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
-  Urdu: { bg: "var(--rust-soft)", ink: "var(--rust)" },
+// Mirrors `subjectColor(...)` in the JSX prototype (repository.jsx line 854):
+// English/Science → blue → chip-indigo; Mathematics/EVS → green → chip-lichen;
+// Hindi → orange → chip-saffron; Urdu → purple → chip-rust (closest semantic).
+const SUBJECT_CHIP: Record<string, string> = {
+  English: "chip-indigo",
+  Science: "chip-indigo",
+  Mathematics: "chip-lichen",
+  Math: "chip-lichen",
+  EVS: "chip-lichen",
+  Hindi: "chip-saffron",
+  Urdu: "chip-rust",
 };
 
 const READ_ROLES = new Set([
@@ -86,239 +95,113 @@ export default async function RepoTeachersIndexPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
           Teachers
         </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
           {rows.length} {rows.length === 1 ? "teacher" : "teachers"} across the
           partner schools. Tap a teacher to see their sessions and pairing.
         </p>
-      </header>
-
-      <section
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          overflow: "hidden",
-        }}
-      >
-        {rows.length === 0 ? (
-          <div
-            style={{
-              padding: 32,
-              textAlign: "center",
-              color: "var(--ink-3)",
-            }}
-          >
-            No teachers yet. Add one from /admin/data/teachers.
-          </div>
-        ) : (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 13,
-            }}
-          >
-            <thead>
-              <tr
-                style={{
-                  background: "var(--paper-2)",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <Th>Name</Th>
-                <Th deva>नाम</Th>
-                <Th>Subject</Th>
-                <Th>School</Th>
-                <Th>Phase</Th>
-                <Th align="right">Sessions</Th>
-                <Th align="right">Obs. cycles</Th>
-                <Th></Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((t, i) => {
-                const subjColor =
-                  (t.subjectSpecialism &&
-                    SUBJECT_COLOR[t.subjectSpecialism]) || {
-                    bg: "var(--paper-2)",
-                    ink: "var(--ink-3)",
-                  };
-                return (
-                  <tr
-                    key={t.id}
-                    style={{
-                      borderTop: i ? "1px solid var(--line)" : "none",
-                    }}
-                  >
-                    <Td>
-                      <Link
-                        href={`/repo/teacher/${t.id}`}
-                        style={{
-                          color: "var(--ink)",
-                          textDecoration: "none",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {t.fullName}
-                      </Link>
-                    </Td>
-                    <Td>
-                      {t.hindiName ? (
-                        <span
+      </div>
+      <div className="page-body">
+        <div className="card">
+          {rows.length === 0 ? (
+            <div
+              style={{
+                padding: 32,
+                textAlign: "center",
+                color: "var(--ink-3)",
+                fontSize: 13,
+              }}
+            >
+              No teachers yet. Add one from /admin/data/teachers.
+            </div>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th className="deva" style={{ textTransform: "none", letterSpacing: 0 }}>
+                    नाम
+                  </th>
+                  <th>Subject</th>
+                  <th>School</th>
+                  <th>Phase</th>
+                  <th style={{ textAlign: "right" }}>Sessions</th>
+                  <th style={{ textAlign: "right" }}>Obs. cycles</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((t) => {
+                  const chipKind =
+                    (t.subjectSpecialism && SUBJECT_CHIP[t.subjectSpecialism]) ||
+                    "";
+                  return (
+                    <tr key={t.id} style={{ cursor: "pointer" }}>
+                      <td>
+                        <Link
+                          href={`/repo/teacher/${t.id}`}
                           style={{
-                            fontFamily: "var(--deva)",
-                            fontSize: 12,
-                            color: "var(--ink-3)",
+                            color: "var(--ink)",
+                            textDecoration: "none",
+                            fontWeight: 500,
                           }}
                         >
-                          {t.hindiName}
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--ink-4)" }}>—</span>
-                      )}
-                    </Td>
-                    <Td>
-                      {t.subjectSpecialism ? (
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            background: subjColor.bg,
-                            color: subjColor.ink,
-                            borderRadius: 999,
-                            fontSize: 10,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.06em",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {t.subjectSpecialism}
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--ink-4)" }}>—</span>
-                      )}
-                    </Td>
-                    <Td>
-                      {t.schoolCode ? (
-                        <span
-                          style={{
-                            fontFamily: "var(--mono)",
-                            fontSize: 11,
-                            color: "var(--ink-2)",
-                          }}
-                        >
-                          {t.schoolCode}
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--ink-4)" }}>—</span>
-                      )}
-                    </Td>
-                    <Td>
-                      <span style={{ color: "var(--ink-2)" }}>
-                        {t.phaseLabel ?? "—"}
-                      </span>
-                    </Td>
-                    <Td align="right">
-                      <span
-                        style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-2)",
-                        }}
+                          {t.fullName}
+                        </Link>
+                      </td>
+                      <td className="deva" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                        {t.hindiName ?? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        {t.subjectSpecialism ? (
+                          <span className={`chip ${chipKind}`.trim()}>
+                            {t.subjectSpecialism}
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        )}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {t.schoolCode ?? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        )}
+                      </td>
+                      <td>{t.phaseLabel ?? "—"}</td>
+                      <td
+                        className="mono"
+                        style={{ fontSize: 12, textAlign: "right" }}
                       >
                         {t.sessionsTotal ?? 0}
-                      </span>
-                    </Td>
-                    <Td align="right">
-                      <span
-                        style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-2)",
-                        }}
+                      </td>
+                      <td
+                        className="mono"
+                        style={{ fontSize: 12, textAlign: "right" }}
                       >
                         {t.cyclesTotal ?? 0}
-                      </span>
-                    </Td>
-                    <Td align="right">
-                      <Link
-                        href={`/repo/teacher/${t.id}`}
-                        style={{
-                          fontSize: 11,
-                          color: "var(--ink-3)",
-                          textDecoration: "none",
-                        }}
-                      >
-                        ›
-                      </Link>
-                    </Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+                      </td>
+                      <td style={{ textAlign: "right", color: "var(--ink-4)" }}>
+                        <Link
+                          href={`/repo/teacher/${t.id}`}
+                          style={{ color: "var(--ink-4)", textDecoration: "none" }}
+                          aria-label={`Open ${t.fullName}`}
+                        >
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
-  );
-}
-
-function Th({
-  children,
-  align,
-  deva,
-}: {
-  children?: React.ReactNode;
-  align?: "left" | "right";
-  deva?: boolean;
-}) {
-  return (
-    <th
-      style={{
-        padding: "10px 14px",
-        textAlign: align ?? "left",
-        fontSize: 10,
-        textTransform: deva ? "none" : "uppercase",
-        letterSpacing: deva ? "0" : "0.06em",
-        color: "var(--ink-3)",
-        fontWeight: 600,
-        fontFamily: deva ? "var(--deva)" : "var(--sans)",
-      }}
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  align,
-}: {
-  children?: React.ReactNode;
-  align?: "left" | "right";
-}) {
-  return (
-    <td
-      style={{
-        padding: "10px 14px",
-        textAlign: align ?? "left",
-        verticalAlign: "middle",
-      }}
-    >
-      {children}
-    </td>
   );
 }

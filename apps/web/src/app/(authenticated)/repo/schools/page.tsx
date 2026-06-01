@@ -26,16 +26,19 @@ const READ_ROLES = new Set([
   "teacher",
 ]);
 
-const DISTRICT_CHIP: Record<string, { bg: string; ink: string; label: string }> = {
-  leh: { bg: "var(--indigo-soft)", ink: "var(--indigo)", label: "Leh" },
-  kargil: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "Kargil" },
-  kgl: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "Kargil" },
+// District chip palette (utility-class form):
+//   Leh    -> chip-indigo  (background var(--indigo-soft))
+//   Kargil -> chip-saffron (background var(--saffron-soft))
+const DISTRICT_CHIP: Record<string, { kind: string; label: string }> = {
+  leh: { kind: "chip-indigo", label: "Leh" },
+  kargil: { kind: "chip-saffron", label: "Kargil" },
+  kgl: { kind: "chip-saffron", label: "Kargil" },
 };
 
 function chipFor(code: string | null | undefined) {
-  if (!code) return { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "—" };
+  if (!code) return { kind: "", label: "—" };
   const k = code.toLowerCase();
-  return DISTRICT_CHIP[k] ?? { bg: "var(--paper-2)", ink: "var(--ink-3)", label: code };
+  return DISTRICT_CHIP[k] ?? { kind: "", label: code };
 }
 
 type SearchParams = Promise<{ district?: string }>;
@@ -139,51 +142,24 @@ export default async function RepoSchoolsIndexPage({
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
           Schools
         </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
           {rows.length} government schools across Leh and Kargil districts. Click any row to see
           its classes, teachers and sessions.
         </p>
-      </header>
+      </div>
 
-      <section style={{ display: "grid", gap: 16 }}>
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
         {/* Filter card */}
         <div
-          style={{
-            background: "var(--card-hi)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-            padding: 10,
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
+          className="card"
+          style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
         >
-          <span
-            style={{
-              fontSize: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.07em",
-              color: "var(--ink-3)",
-              fontWeight: 500,
-              paddingLeft: 4,
-              paddingRight: 4,
-            }}
-          >
+          <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
             District
           </span>
           {filterTabs.map((f) => {
@@ -193,15 +169,13 @@ export default async function RepoSchoolsIndexPage({
               <Link
                 key={f.v}
                 href={href}
+                className="btn btn-sm"
                 style={{
                   background: active ? "var(--ink)" : "transparent",
                   color: active ? "var(--paper)" : "var(--ink-2)",
-                  border: `1px solid ${active ? "var(--ink)" : "transparent"}`,
-                  borderRadius: "var(--r-2)",
-                  fontSize: 12,
-                  padding: "5px 10px",
+                  borderColor: active ? "var(--ink)" : "transparent",
+                  boxShadow: "none",
                   textDecoration: "none",
-                  fontWeight: 500,
                 }}
               >
                 {f.l}
@@ -213,16 +187,8 @@ export default async function RepoSchoolsIndexPage({
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <Link
               href="/repo/schools.csv"
-              style={{
-                fontSize: 12,
-                padding: "5px 10px",
-                background: "var(--paper-2)",
-                color: "var(--ink-2)",
-                border: "1px solid var(--line)",
-                borderRadius: "var(--r-2)",
-                textDecoration: "none",
-                fontWeight: 500,
-              }}
+              className="btn btn-sm"
+              style={{ textDecoration: "none" }}
             >
               CSV
             </Link>
@@ -230,14 +196,7 @@ export default async function RepoSchoolsIndexPage({
         </div>
 
         {/* Table card */}
-        <div
-          style={{
-            background: "var(--card-hi)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-            overflow: "hidden",
-          }}
-        >
+        <div className="card">
           {visible.length === 0 ? (
             <div
               style={{
@@ -250,50 +209,28 @@ export default async function RepoSchoolsIndexPage({
               No schools match this filter.
             </div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="t">
               <thead>
-                <tr
-                  style={{
-                    background: "var(--paper-2)",
-                    textAlign: "left",
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.07em",
-                    color: "var(--ink-3)",
-                  }}
-                >
-                  <th style={{ padding: "10px 12px", fontWeight: 500 }}>Code</th>
-                  <th style={{ padding: "10px 12px", fontWeight: 500 }}>Name</th>
-                  <th style={{ padding: "10px 12px", fontWeight: 500 }}>Zone</th>
-                  <th style={{ padding: "10px 12px", fontWeight: 500 }}>District</th>
-                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Teachers</th>
-                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Classes</th>
-                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Sessions</th>
+                <tr>
+                  <th>Code</th>
+                  <th>Name</th>
+                  <th>Zone</th>
+                  <th>District</th>
+                  <th>Teachers</th>
+                  <th>Classes</th>
+                  <th>Sessions</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {visible.map((s, i) => {
+                {visible.map((s) => {
                   const chip = chipFor(s.districtCode ?? s.districtName);
                   return (
-                    <tr
-                      key={s.id}
-                      style={{
-                        borderTop: i ? "1px solid var(--line)" : "none",
-                        fontSize: 13,
-                      }}
-                    >
-                      <td
-                        style={{
-                          padding: "10px 12px",
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-2)",
-                        }}
-                      >
+                    <tr key={s.id}>
+                      <td className="mono" style={{ fontSize: 12 }}>
                         {s.code}
                       </td>
-                      <td style={{ padding: "10px 12px" }}>
+                      <td>
                         <Link
                           href={`/repo/school/${s.id}`}
                           style={{
@@ -305,66 +242,22 @@ export default async function RepoSchoolsIndexPage({
                           {s.name}
                         </Link>
                       </td>
-                      <td style={{ padding: "10px 12px", color: "var(--ink-2)" }}>
-                        {s.zoneName ?? "—"}
+                      <td>{s.zoneName ?? "—"}</td>
+                      <td>
+                        <span className={`chip ${chip.kind}`.trim()}>{chip.label}</span>
                       </td>
-                      <td style={{ padding: "10px 12px" }}>
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            background: chip.bg,
-                            color: chip.ink,
-                            borderRadius: 999,
-                            fontSize: 10,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.06em",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {chip.label}
-                        </span>
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 12px",
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-2)",
-                          textAlign: "right",
-                        }}
-                      >
-                        {s.teachersTotal ?? 0}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 12px",
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-2)",
-                          textAlign: "right",
-                        }}
-                      >
-                        {s.classesTotal ?? 0}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 12px",
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-2)",
-                          textAlign: "right",
-                        }}
-                      >
-                        {s.sessionsTotal ?? 0}
-                      </td>
-                      <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                      <td>{s.teachersTotal ?? 0}</td>
+                      <td>{s.classesTotal ?? 0}</td>
+                      <td>{s.sessionsTotal ?? 0}</td>
+                      <td style={{ textAlign: "right" }}>
                         <Link
                           href={`/repo/school/${s.id}`}
                           style={{
-                            fontSize: 11,
+                            fontSize: 12,
                             color: "var(--ink-3)",
                             textDecoration: "none",
                           }}
+                          aria-label={`Open ${s.name}`}
                         >
                           ›
                         </Link>
@@ -376,7 +269,7 @@ export default async function RepoSchoolsIndexPage({
             </table>
           )}
         </div>
-      </section>
+      </div>
     </div>
   );
 }

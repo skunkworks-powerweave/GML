@@ -44,102 +44,71 @@ export default function GatePage({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 24,
+        padding: 32,
         background: "var(--paper)",
       }}
     >
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 440,
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          padding: 32,
-          boxShadow: "var(--shadow-2)",
-        }}
-      >
-        {/* Lock badge */}
-        <div
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: "var(--r-2)",
-            background: "var(--saffron-soft)",
-            color: "var(--saffron)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            marginBottom: 18,
-          }}
-          aria-hidden
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 11h14v10H5z" />
-            <path d="M8 11V7a4 4 0 018 0v4" />
-          </svg>
+      <div className="card card-hi" style={{ width: "100%", maxWidth: 440, padding: 28, background: "var(--card-hi)" }}>
+        {/* Header row: saffron lock badge + label/title */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              background: "var(--saffron-soft)",
+              color: "var(--saffron)",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+            aria-hidden
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 11h14v10H5z" />
+              <path d="M8 11V7a4 4 0 018 0v4" />
+            </svg>
+          </div>
+          <div>
+            <div className="label">Section gate</div>
+            <h2 className="serif" style={{ fontSize: 18, letterSpacing: "-0.01em" }}>{meta.title}</h2>
+          </div>
         </div>
 
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Section gate
-        </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>{meta.title}</h1>
         <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8, lineHeight: 1.5 }}>{meta.tagline}</p>
 
-        <form action={formAction} style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 14 }}>
+        <form action={formAction} style={{ marginTop: 16 }}>
           <input type="hidden" name="slug" value={slug} />
           <input type="hidden" name="next" value={next ?? "/dashboard"} />
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>Section password</span>
+          <div className="form-row">
+            <label htmlFor="gate-password">Section password</label>
             <input
+              id="gate-password"
+              className="text"
               name="password"
               type="password"
               required
               autoFocus
               autoComplete="off"
-              style={{
-                padding: "10px 12px",
-                border: "1px solid var(--line-2)",
-                borderRadius: "var(--r-2)",
-                background: "var(--paper)",
-                fontSize: 14,
-                fontFamily: "var(--mono)",
-                letterSpacing: "0.1em",
-              }}
+              style={{ fontFamily: "var(--mono)", letterSpacing: "0.1em" }}
             />
-          </label>
-          {state?.error ? (
-            <p style={{ fontSize: 12, color: "var(--rust)" }} role="alert">{state.error}</p>
-          ) : null}
-          <button
-            type="submit"
-            disabled={pending}
-            style={{
-              padding: "10px 12px",
-              background: "var(--ink)",
-              color: "var(--paper)",
-              border: "1px solid var(--ink)",
-              borderRadius: "var(--r-2)",
-              fontSize: 14,
-              fontWeight: 500,
-              opacity: pending ? 0.6 : 1,
-            }}
-          >
-            {pending ? "Checking…" : "Continue"}
-          </button>
+            {state?.error ? (
+              <div style={{ fontSize: 11, color: "var(--rust)" }} role="alert">{state.error}</div>
+            ) : null}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 16 }}>
+            <Link href="/dashboard" className="btn">← Back</Link>
+            <button type="submit" className="btn btn-primary" disabled={pending}>
+              {pending ? "Checking…" : "Unlock section"}
+            </button>
+          </div>
         </form>
 
         <div
           style={{
-            marginTop: 20,
-            paddingTop: 16,
+            marginTop: 18,
+            paddingTop: 14,
             borderTop: "1px solid var(--line)",
             fontSize: 11,
             color: "var(--ink-3)",
@@ -147,10 +116,6 @@ export default function GatePage({
           }}
         >
           Your access lasts 8 hours after entry. 5 wrong attempts in 15 minutes locks this section for your account.
-          <br />
-          <Link href="/dashboard" style={{ color: "var(--indigo)", textDecoration: "underline" }}>
-            ← back to dashboard
-          </Link>
         </div>
       </div>
     </main>

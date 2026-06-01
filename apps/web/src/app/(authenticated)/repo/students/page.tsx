@@ -73,81 +73,58 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
           <div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Learners</h1>
-            <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13 }}>
+            <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
               Per-class learner records. Sample shown below; full database is restricted.
             </p>
           </div>
           {isSuperAdmin ? (
             <a
               href={`/api/admin/learners/export${schoolFilter ? `?school=${encodeURIComponent(schoolFilter)}` : ""}`}
-              style={{
-                padding: "7px 12px",
-                background: "var(--ink)",
-                color: "var(--paper)",
-                borderRadius: "var(--r-2)",
-                fontSize: 12,
-                textDecoration: "none",
-                fontWeight: 500,
-                whiteSpace: "nowrap",
-              }}
+              className="btn btn-primary btn-sm"
+              style={{ textDecoration: "none", whiteSpace: "nowrap" }}
               title="Bulk export learner PII as CSV — super admin only, audited"
             >
               Export CSV
             </a>
           ) : null}
         </div>
-      </header>
+      </div>
 
-      <div style={{ display: "grid", gap: 16 }}>
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
         {/* PII warning card — saffron-soft per JSX line 946 */}
         <div
+          className="card"
           style={{
             padding: 14,
             background: "var(--saffron-soft)",
-            border: "1px solid oklch(0.82 0.08 60)",
-            borderRadius: "var(--r-3)",
+            borderColor: "oklch(0.82 0.08 60)",
             display: "flex",
             gap: 10,
             alignItems: "center",
           }}
         >
           <LockGlyph />
-          <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
+          <span style={{ fontSize: 12 }}>
             Learner records contain PII (name, age, guardian). Access is restricted to school staff and programme
             leads. Bulk export is audited and requires Super Admin approval.
           </span>
         </div>
 
-        <section
-          style={{
-            background: "var(--card-hi)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-            overflow: "hidden",
-          }}
-        >
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: 13,
-            }}
-          >
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table className="t">
             <thead>
-              <tr style={{ background: "var(--paper-2)", textAlign: "left" }}>
-                <Th>Name</Th>
-                <Th>Class</Th>
-                <Th>School</Th>
-                <Th>Age</Th>
-                <Th>Guardian</Th>
-                <Th>Attendance</Th>
+              <tr>
+                <th>Name</th>
+                <th>Class</th>
+                <th>School</th>
+                <th>Age</th>
+                <th>Guardian</th>
+                <th>Attendance</th>
               </tr>
             </thead>
             <tbody>
@@ -158,48 +135,43 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
                   </td>
                 </tr>
               ) : (
-                rows.map((st, i) => {
+                rows.map((st) => {
                   const attendance = st.attendancePct ?? 0;
                   const goodAttendance = attendance > 90;
                   return (
-                    <tr
-                      key={st.id}
-                      style={{
-                        borderTop: i ? "1px solid var(--line)" : "none",
-                      }}
-                    >
-                      <Td>
+                    <tr key={st.id}>
+                      <td style={{ fontWeight: 500 }}>
                         {st.classId ? (
                           <Link
                             href={`/repo/class/${st.classId}`}
-                            style={{ color: "var(--ink)", textDecoration: "none", fontWeight: 500 }}
+                            style={{ color: "var(--ink)", textDecoration: "none" }}
                           >
                             {st.name}
                           </Link>
                         ) : (
-                          <span style={{ fontWeight: 500 }}>{st.name}</span>
+                          st.name
                         )}
-                      </Td>
-                      <Td>Grade {st.grade}</Td>
-                      <Td>
-                        <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{st.schoolCode ?? "—"}</span>
+                      </td>
+                      <td>Grade {st.grade}</td>
+                      <td>
+                        <span className="mono" style={{ fontSize: 11 }}>{st.schoolCode ?? "—"}</span>
                         {st.schoolName ? (
                           <span style={{ color: "var(--ink-3)", marginLeft: 6, fontSize: 11 }}>
                             {st.schoolName}
                           </span>
                         ) : null}
-                      </Td>
-                      <Td>{st.age ?? "—"}</Td>
-                      <Td style={{ fontSize: 12 }}>{st.guardian ?? "—"}</Td>
-                      <Td
+                      </td>
+                      <td>{st.age ?? "—"}</td>
+                      <td style={{ fontSize: 12 }}>{st.guardian ?? "—"}</td>
+                      <td
+                        className="mono"
                         style={{
-                          fontFamily: "var(--mono)",
                           fontSize: 12,
                           color: goodAttendance ? "var(--lichen)" : "var(--ink-3)",
                         }}
                       >
                         {st.attendancePct !== null ? `${st.attendancePct}%` : "—"}
-                      </Td>
+                      </td>
                     </tr>
                   );
                 })
@@ -208,6 +180,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
           </table>
 
           <nav
+            className="mono"
             style={{
               display: "flex",
               alignItems: "center",
@@ -216,7 +189,6 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
               borderTop: "1px solid var(--line)",
               fontSize: 11,
               color: "var(--ink-3)",
-              fontFamily: "var(--mono)",
             }}
           >
             <div>
@@ -247,7 +219,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
               )}
             </div>
           </nav>
-        </section>
+        </div>
       </div>
     </div>
   );
@@ -258,28 +230,6 @@ function buildHref(opts: { page: number; school?: string }) {
   qs.set("page", String(opts.page));
   if (opts.school) qs.set("school", opts.school);
   return `?${qs.toString()}`;
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th
-      style={{
-        padding: "10px 14px",
-        fontSize: 10,
-        fontWeight: 600,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        color: "var(--ink-3)",
-        borderBottom: "1px solid var(--line)",
-      }}
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <td style={{ padding: "10px 14px", verticalAlign: "middle", ...style }}>{children}</td>;
 }
 
 function LockGlyph() {

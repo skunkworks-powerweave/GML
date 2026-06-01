@@ -22,77 +22,202 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
   return (
     <div>
       <header style={{ marginBottom: 22 }}>
-        <Link href="/rtt" style={{ fontSize: 12, color: "var(--ink-3)" }}>← RTT</Link>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", marginTop: 8 }}>
+        <Link href="/rtt" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
+          ← All subjects
+        </Link>
+        <div className="label" style={{ marginTop: 8 }}>
           {phase?.label ?? "Phase ?"} · {term?.name ?? "Term ?"}
+          {subject.code ? ` · ${subject.code}` : ""}
         </div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
           {subject.name}
-          {subject.code ? (
-            <code style={{ fontFamily: "var(--mono)", fontSize: 14, color: "var(--ink-3)", marginLeft: 10 }}>{subject.code}</code>
-          ) : null}
         </h1>
       </header>
 
       <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
-        <article style={{ background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>Modules ({modules.length})</h2>
-          {modules.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No modules yet.</p>
-          ) : (
-            <ol style={{ paddingLeft: 18, display: "flex", flexDirection: "column", gap: 10 }}>
-              {modules.map((m) => (
-                <li key={m.id} style={{ fontSize: 13 }}>
-                  <div style={{ fontWeight: 500 }}>{m.title}</div>
-                  {m.description ? <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>{m.description}</div> : null}
-                </li>
-              ))}
-            </ol>
-          )}
-        </article>
-
-        <article style={{ background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>Sessions ({sessions.length})</h2>
-          {sessions.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No sessions scheduled.</p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              {sessions.map((s) => (
-                <li key={s.id} style={{ fontSize: 12, padding: 8, border: "1px solid var(--line)", borderRadius: "var(--r-2)" }}>
-                  <div style={{ fontWeight: 500 }}>{s.title}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                    {s.scheduledAt
-                      ? new Date(s.scheduledAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
-                      : "unscheduled"}
-                    {s.type ? ` · ${s.type}` : ""}
-                    {s.durationMin ? ` · ${s.durationMin} min` : ""}
+        <div style={{ display: "grid", gap: 14 }}>
+          <article className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Modules ({modules.length})</div>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Click a module to expand its lessons.
+              </div>
+            </div>
+            {modules.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No modules yet.
+              </div>
+            ) : (
+              <div>
+                {modules.map((m, i) => (
+                  <div
+                    key={m.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "36px 1fr",
+                      gap: 14,
+                      padding: 14,
+                      alignItems: "center",
+                      borderTop: i ? "1px solid var(--line)" : "none",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 6,
+                        background: "var(--paper-2)",
+                        color: "var(--ink-2)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontFamily: "var(--mono)",
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {i + 1}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>{m.title}</div>
+                      {m.description ? (
+                        <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                          {m.description}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-      </section>
+                ))}
+              </div>
+            )}
+          </article>
 
-      <section style={{ marginTop: 18, background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-        <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>Readings ({readings.length})</h2>
-        {readings.length === 0 ? (
-          <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No readings linked.</p>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-            {readings.map((r) => (
-              <li key={r.id} style={{ fontSize: 13 }}>
-                {r.externalUrl ? (
-                  <a href={r.externalUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--indigo)" }}>
-                    {r.title}
-                  </a>
-                ) : (
-                  r.title
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+          <article className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Cohort sessions ({sessions.length})</div>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Live or hybrid touchpoints with mentor &amp; peers
+              </div>
+            </div>
+            {sessions.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No sessions scheduled.
+              </div>
+            ) : (
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Session</th>
+                    <th>Type</th>
+                    <th>Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessions.map((s) => (
+                    <tr key={s.id}>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {s.scheduledAt
+                          ? new Date(s.scheduledAt).toLocaleString("en-IN", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })
+                          : <span className="empty-dash">unscheduled</span>}
+                      </td>
+                      <td>{s.title}</td>
+                      <td>
+                        {s.type ? (
+                          <span className="chip">{s.type}</span>
+                        ) : (
+                          <em className="dash">—</em>
+                        )}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </article>
+        </div>
+
+        <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+          <article className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
+            </div>
+            {readings.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No readings linked.
+              </div>
+            ) : (
+              <div>
+                {readings.map((r, i) => (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "30px 1fr auto",
+                      gap: 10,
+                      padding: 12,
+                      alignItems: "center",
+                      borderTop: i ? "1px solid var(--line)" : "none",
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        fontFamily: "var(--mono)",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        color: "var(--rust)",
+                        border: "1px solid var(--line)",
+                        borderRadius: 4,
+                        padding: "2px 4px",
+                        textAlign: "center",
+                      }}
+                    >
+                      PDF
+                    </span>
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>
+                        {r.externalUrl ? (
+                          <a
+                            href={r.externalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: "var(--ink)" }}
+                          >
+                            {r.title}
+                          </a>
+                        ) : (
+                          r.title
+                        )}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                        {r.externalUrl ? "External link" : "Reading"}
+                      </div>
+                    </div>
+                    {r.externalUrl ? (
+                      <a
+                        href={r.externalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-sm"
+                      >
+                        Open
+                      </a>
+                    ) : (
+                      <span className="chip">—</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+        </div>
       </section>
     </div>
   );

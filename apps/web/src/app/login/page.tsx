@@ -78,6 +78,14 @@ export default function LoginPage() {
             d="M0 480 L100 410 L220 460 L340 380 L460 460 L580 410 L600 440 L600 600 L0 600 Z"
             fill="oklch(0.10 0.03 268)"
           />
+          {/* Prayer-flag accent atop the tallest peak (from prototype) */}
+          <path
+            d="M260 240 L240 290 L280 290 Z M260 240 L270 270 L295 280"
+            stroke="oklch(0.85 0.02 268)"
+            strokeWidth="2"
+            fill="oklch(0.85 0.02 268)"
+            opacity="0.7"
+          />
         </svg>
 
         <div style={{ position: "relative", zIndex: 1, marginTop: "auto", maxWidth: 460 }}>
@@ -134,19 +142,11 @@ export default function LoginPage() {
           alignItems: "center",
           justifyContent: "center",
           padding: 48,
+          position: "relative",
         }}
       >
         <div style={{ width: "100%", maxWidth: 380 }}>
-          <div
-            style={{
-              fontSize: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              color: "var(--ink-3)",
-            }}
-          >
-            Sign in
-          </div>
+          <div className="label">Sign in</div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>Welcome back.</h1>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, marginBottom: 24 }}>
             Use the credentials your programme administrator gave you, or request a sign-in link by email.
@@ -223,15 +223,12 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={pending}
+                className="btn btn-primary"
                 style={{
+                  width: "100%",
+                  justifyContent: "center",
                   padding: "10px 12px",
-                  background: "var(--ink)",
-                  color: "var(--paper)",
-                  border: "1px solid var(--ink)",
-                  borderRadius: "var(--r-2)",
                   fontSize: 14,
-                  fontWeight: 500,
-                  cursor: "pointer",
                   opacity: pending ? 0.6 : 1,
                 }}
               >
@@ -242,11 +239,44 @@ export default function LoginPage() {
             <EmailLinkForm />
           )}
 
-          <div style={{ marginTop: 36, display: "flex", gap: 14, fontSize: 11, color: "var(--ink-3)" }}>
-            <span>EN</span>
-            <span style={{ fontFamily: "var(--deva)" }}>हिन्दी</span>
-            <span style={{ fontFamily: "var(--deva)" }}>Ladakhi (لد)</span>
+          <div
+            style={{
+              marginTop: 28,
+              paddingTop: 18,
+              borderTop: "1px solid var(--line)",
+              fontSize: 11,
+              color: "var(--ink-3)",
+              display: "flex",
+              justifyContent: "space-between",
+              fontFamily: "var(--mono)",
+            }}
+          >
+            <span>Sessions audited · 30-day rotation</span>
+            <span>v1.0 · build 2026.05</span>
           </div>
+        </div>
+
+        {/* Language switcher — absolute top-right per prototype */}
+        <div style={{ position: "absolute", top: 18, right: 18, display: "flex", gap: 4 }}>
+          <button type="button" className="btn btn-sm btn-ghost" style={{ minWidth: 32, justifyContent: "center" }}>
+            EN
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost deva"
+            style={{ minWidth: 32, justifyContent: "center" }}
+            aria-label="हिन्दी"
+          >
+            हिन्दी
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            style={{ minWidth: 32, justifyContent: "center" }}
+            aria-label="Ladakhi (لد)"
+          >
+            لد
+          </button>
         </div>
       </div>
     </div>

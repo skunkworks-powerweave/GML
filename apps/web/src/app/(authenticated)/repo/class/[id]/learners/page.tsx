@@ -55,171 +55,87 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
 
   return (
     <div>
-      <header style={{ marginBottom: 20 }}>
+      <div className="page-header">
         <Link
           href={`/repo/class/${id}`}
-          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8 }}
         >
           ← Grade {cls.grade}
         </Link>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-            marginTop: 8,
-          }}
-        >
-          Roster · {school?.code ?? "—"} · Grade {cls.grade}
-        </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>Learners</h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 12, marginTop: 6 }}>
-          {rows.length} of {cls.studentsCount} on record. PII access is logged (SM-9): your view of this
-          page is recorded in audit_log under <code style={{ fontFamily: "var(--mono)" }}>learners.view</code>.
-        </p>
-      </header>
-
-      <article
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          padding: 16,
-        }}
-      >
-        {rows.length === 0 ? (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", padding: 20, textAlign: "center" }}>
-            No learners on record for this class.
+        <div>
+          <div className="label">Roster · {school?.code ?? "—"} · Grade {cls.grade}</div>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Learners</h1>
+          <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
+            {rows.length} of {cls.studentsCount} on record. PII access is logged (SM-9): your view of
+            this page is recorded in audit_log under <code className="mono">learners.view</code>.
           </p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr
-                style={{
-                  textAlign: "left",
-                  fontSize: 10,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  color: "var(--ink-3)",
-                }}
-              >
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Roll</th>
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Name</th>
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Section</th>
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Age</th>
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Guardian</th>
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Attendance</th>
-                <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const att = r.attendancePct ?? null;
-                const attColor =
-                  att == null
-                    ? "var(--ink-3)"
-                    : att >= 90
-                      ? "var(--lichen)"
-                      : att >= 75
-                        ? "var(--ink-2)"
-                        : "var(--rust)";
-                return (
-                  <tr key={r.id}>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontFamily: "var(--mono)",
-                        fontSize: 12,
-                        color: "var(--ink-3)",
-                      }}
-                    >
-                      {r.rollNumber ?? "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {r.name}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontFamily: "var(--mono)",
-                        fontSize: 12,
-                      }}
-                    >
-                      {r.section ?? "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontSize: 12,
-                      }}
-                    >
-                      {r.age ?? "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontSize: 12,
-                        color: "var(--ink-2)",
-                      }}
-                    >
-                      {r.guardian ?? "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontFamily: "var(--mono)",
-                        fontSize: 12,
-                        color: attColor,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {att == null ? "—" : `${att}%`}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px",
-                        borderBottom: "1px solid var(--hairline)",
-                        fontSize: 11,
-                      }}
-                    >
-                      <span
-                        style={{
-                          padding: "2px 8px",
-                          background: r.active ? "var(--lichen-soft)" : "var(--paper-2)",
-                          color: r.active ? "var(--lichen)" : "var(--ink-3)",
-                          borderRadius: 999,
-                          fontSize: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {r.active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </article>
+        </div>
+      </div>
 
-      <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 16, fontStyle: "italic" }}>
-        Showing first 80 learners. For larger rosters, export via /admin/data/learners.
-      </p>
+      <div className="page-body">
+        <div className="card card-hi" style={{ padding: 16 }}>
+          {rows.length === 0 ? (
+            <p style={{ fontSize: 12, color: "var(--ink-3)", padding: 20, textAlign: "center" }}>
+              No learners on record for this class.
+            </p>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Roll</th>
+                  <th>Name</th>
+                  <th>Section</th>
+                  <th>Age</th>
+                  <th>Guardian</th>
+                  <th>Attendance</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const att = r.attendancePct ?? null;
+                  const attColor =
+                    att == null
+                      ? "var(--ink-3)"
+                      : att >= 90
+                        ? "var(--lichen)"
+                        : att >= 75
+                          ? "var(--ink-2)"
+                          : "var(--rust)";
+                  return (
+                    <tr key={r.id}>
+                      <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                        {r.rollNumber ?? "—"}
+                      </td>
+                      <td style={{ fontWeight: 500 }}>{r.name}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{r.section ?? "—"}</td>
+                      <td style={{ fontSize: 12 }}>{r.age ?? "—"}</td>
+                      <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.guardian ?? "—"}</td>
+                      <td
+                        className="mono"
+                        style={{ fontSize: 12, color: attColor, fontWeight: 600 }}
+                      >
+                        {att == null ? "—" : `${att}%`}
+                      </td>
+                      <td>
+                        <span className={r.active ? "chip chip-lichen" : "chip"}>
+                          <span className={r.active ? "dot dot-green" : "dot dot-gray"} />
+                          {r.active ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 16, fontStyle: "italic" }}>
+          Showing first 80 learners. For larger rosters, export via /admin/data/learners.
+        </p>
+      </div>
     </div>
   );
 }

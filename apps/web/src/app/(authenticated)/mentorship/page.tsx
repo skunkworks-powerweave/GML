@@ -7,12 +7,12 @@ import { mentorPairings, mentors, teachers } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_COLOR: Record<string, { bg: string; ink: string }> = {
-  active: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  review: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
-  paused: { bg: "var(--paper-2)", ink: "var(--ink-3)" },
-  ended: { bg: "var(--paper-2)", ink: "var(--ink-3)" },
-  complete: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
+const STATUS_CHIP: Record<string, string> = {
+  active: "chip-lichen",
+  review: "chip-saffron",
+  paused: "",
+  ended: "",
+  complete: "chip-indigo",
 };
 
 export default async function MentorshipListPage() {
@@ -37,88 +37,71 @@ export default async function MentorshipListPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          Mentorship
-        </div>
+      <div className="page-header">
+        <div className="label">Mentorship</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Pairings</h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
           Quarterly feedback cycle (Q1 → Q2 → Q3 → Q4 → final). Meetings count cached per pairing.
         </p>
-      </header>
+      </div>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-          gap: 14,
-        }}
-      >
-        {rows.length === 0 ? (
-          <div style={{ padding: 32, color: "var(--ink-3)" }}>No pairings yet.</div>
-        ) : (
-          rows.map((p) => {
-            const status = STATUS_COLOR[p.status] ?? STATUS_COLOR.active;
-            return (
-              <Link
-                key={p.id}
-                href={`/mentorship/${p.id}`}
-                style={{
-                  background: "var(--card-hi)",
-                  border: "1px solid var(--line)",
-                  borderRadius: "var(--r-3)",
-                  padding: 16,
-                  textDecoration: "none",
-                  color: "var(--ink)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
-              >
-                <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-3)" }}>
-                      {p.mentorName ?? "—"} {p.mentorBase ? `· ${p.mentorBase}` : ""}
+      <div className="page-body">
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            gap: 14,
+          }}
+        >
+          {rows.length === 0 ? (
+            <div style={{ padding: 32, color: "var(--ink-3)" }}>No pairings yet.</div>
+          ) : (
+            rows.map((p) => {
+              const chipKind = STATUS_CHIP[p.status] ?? "";
+              return (
+                <Link
+                  key={p.id}
+                  href={`/mentorship/${p.id}`}
+                  className="card card-hi"
+                  style={{
+                    padding: 16,
+                    textDecoration: "none",
+                    color: "var(--ink)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                    <div>
+                      <div className="label" style={{ letterSpacing: "0.05em" }}>
+                        {p.mentorName ?? "—"} {p.mentorBase ? `· ${p.mentorBase}` : ""}
+                      </div>
+                      <div style={{ fontWeight: 500, marginTop: 4 }}>
+                        {p.teacherName ?? "—"}
+                        {p.teacherHindi ? (
+                          <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 8, fontSize: 13 }}>
+                            {p.teacherHindi}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                    <div style={{ fontWeight: 500, marginTop: 4 }}>
-                      {p.teacherName ?? "—"}
-                      {p.teacherHindi ? (
-                        <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 8, fontSize: 13 }}>
-                          {p.teacherHindi}
-                        </span>
-                      ) : null}
-                    </div>
+                    <span className={`chip ${chipKind}`.trim()}>{p.status}</span>
+                  </header>
+
+                  <div className="mono" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--ink-3)" }}>
+                    <span className="chip">Q{p.currentQuarter ?? 1}</span>
+                    <span>{p.meetingsCount ?? 0} meetings</span>
+                    {p.lastMeetingAt ? (
+                      <span>· last {new Date(p.lastMeetingAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
+                    ) : null}
                   </div>
-                  <span
-                    style={{
-                      padding: "2px 8px",
-                      background: status.bg,
-                      color: status.ink,
-                      borderRadius: 999,
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {p.status}
-                  </span>
-                </header>
-
-                <div style={{ display: "flex", gap: 8, fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>
-                  <span style={{ padding: "2px 6px", background: "var(--paper-2)", borderRadius: 4 }}>
-                    Q{p.currentQuarter ?? 1}
-                  </span>
-                  <span>{p.meetingsCount ?? 0} meetings</span>
-                  {p.lastMeetingAt ? (
-                    <span>· last {new Date(p.lastMeetingAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
-                  ) : null}
-                </div>
-              </Link>
-            );
-          })
-        )}
-      </section>
+                </Link>
+              );
+            })
+          )}
+        </section>
+      </div>
     </div>
   );
 }

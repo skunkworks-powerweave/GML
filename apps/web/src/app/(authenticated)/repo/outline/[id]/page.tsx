@@ -19,18 +19,18 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const STATUS_STYLE: Record<string, { bg: string; ink: string; label: string }> = {
-  planned: { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "Planned" },
-  in_progress: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "In progress" },
-  complete: { bg: "var(--lichen-soft)", ink: "var(--lichen)", label: "Complete" },
-  archived: { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "Archived" },
+const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
+  planned: { kind: "", label: "Planned" },
+  in_progress: { kind: "chip-saffron", label: "In progress" },
+  complete: { kind: "chip-lichen", label: "Complete" },
+  archived: { kind: "", label: "Archived" },
 };
 
-const SESSION_STATUS_STYLE: Record<string, { bg: string; ink: string }> = {
-  planned: { bg: "var(--paper-2)", ink: "var(--ink-3)" },
-  in_progress: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
-  complete: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  cancelled: { bg: "var(--rust-soft)", ink: "var(--rust)" },
+const SESSION_STATUS_CHIP: Record<string, string> = {
+  planned: "",
+  in_progress: "chip-saffron",
+  complete: "chip-lichen",
+  cancelled: "chip-rust",
 };
 
 export default async function RepoOutlineDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -89,30 +89,32 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
     .orderBy(asc(resources.name))
     .limit(5);
 
-  const status = STATUS_STYLE[outline.status] ?? STATUS_STYLE.planned;
+  const status = STATUS_CHIP[outline.status] ?? STATUS_CHIP.planned;
   const outcomes: string[] = Array.isArray(outline.learningOutcomes) ? outline.learningOutcomes : [];
 
   return (
     <div>
-      <header style={{ marginBottom: 20 }}>
+      <div className="page-header">
         <Link
           href="/repo/outlines"
-          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
           ← Course outlines
         </Link>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", marginTop: 10 }}>
-          Course outline{subject ? ` · ${subject.name}` : ""}
+        <div>
+          <div className="label">Course outline{subject ? ` · ${subject.name}` : ""}</div>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{outline.name}</h1>
+          <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
+            {outline.weeks ? `${outline.weeks}-week unit · ` : ""}
+            {outline.sessionsCount} session{outline.sessionsCount === 1 ? "" : "s"} ·{" "}
+            Grade {outline.grade}, Term {outline.term}.
+          </p>
         </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{outline.name}</h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          {outline.weeks ? `${outline.weeks}-week unit · ` : ""}
-          {outline.sessionsCount} session{outline.sessionsCount === 1 ? "" : "s"} ·{" "}
-          Grade {outline.grade}, Term {outline.term}
-        </p>
-      </header>
+      </div>
 
       <div
+        className="page-body"
         style={{
           display: "grid",
           gridTemplateColumns: "1.6fr 1fr",
@@ -144,7 +146,7 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                       lineHeight: 1.5,
                     }}
                   >
-                    <span style={{ fontFamily: "var(--mono)", color: "var(--ink-3)", fontSize: 11 }}>
+                    <span className="mono" style={{ color: "var(--ink-3)", fontSize: 11 }}>
                       {String(i + 1).padStart(2, "0")}
                     </span>
                     <span>{lo}</span>
@@ -161,26 +163,24 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                 No lessons yet.
               </div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <table className="t">
                 <thead>
-                  <tr style={{ background: "var(--paper-2)" }}>
-                    <Th align="left" style={{ width: 48 }}>#</Th>
-                    <Th>Lesson</Th>
-                    <Th align="right" style={{ width: 80 }}>Week</Th>
-                    <Th align="left" style={{ width: 220 }}>Lesson ID</Th>
+                  <tr>
+                    <th style={{ width: 48 }}>#</th>
+                    <th>Lesson</th>
+                    <th style={{ width: 80 }}>Week</th>
+                    <th style={{ width: 220 }}>Lesson ID</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {lessons.map((l, i) => (
-                    <tr key={l.id} style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
-                      <td style={{ padding: "10px 14px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-3)" }}>
+                  {lessons.map((l) => (
+                    <tr key={l.id}>
+                      <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
                         {String(l.sequence).padStart(2, "0")}
                       </td>
-                      <td style={{ padding: "10px 14px", fontWeight: 500 }}>{l.title}</td>
-                      <td style={{ padding: "10px 14px", textAlign: "right", fontFamily: "var(--mono)", fontSize: 12 }}>
-                        {l.week ?? "—"}
-                      </td>
-                      <td style={{ padding: "10px 14px", fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>
+                      <td style={{ fontWeight: 500 }}>{l.title}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>{l.week ?? "—"}</td>
+                      <td className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
                         {l.id}
                       </td>
                     </tr>
@@ -197,23 +197,23 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                 No sessions delivered yet.
               </div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <table className="t">
                 <thead>
-                  <tr style={{ background: "var(--paper-2)" }}>
-                    <Th>Date</Th>
-                    <Th>School</Th>
-                    <Th>Topic</Th>
-                    <Th>Teacher</Th>
-                    <Th align="right">Attendance</Th>
-                    <Th>Status</Th>
+                  <tr>
+                    <th>Date</th>
+                    <th>School</th>
+                    <th>Topic</th>
+                    <th>Teacher</th>
+                    <th>Attendance</th>
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sessionsRows.map((s, i) => {
-                    const sStyle = SESSION_STATUS_STYLE[s.status] ?? SESSION_STATUS_STYLE.planned;
+                  {sessionsRows.map((s) => {
+                    const chipKind = SESSION_STATUS_CHIP[s.status] ?? "";
                     return (
-                      <tr key={s.id} style={{ borderTop: i ? "1px solid var(--line)" : "none" }}>
-                        <td style={{ padding: "10px 14px", fontFamily: "var(--mono)", fontSize: 12 }}>
+                      <tr key={s.id}>
+                        <td className="mono" style={{ fontSize: 12 }}>
                           {s.scheduledDate
                             ? new Date(s.scheduledDate).toLocaleDateString("en-IN", {
                                 day: "numeric",
@@ -221,9 +221,9 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                               })
                             : "—"}
                         </td>
-                        <td style={{ padding: "10px 14px" }}>{s.schoolCode ?? s.schoolName ?? "—"}</td>
-                        <td style={{ padding: "10px 14px" }}>{s.topic ?? "—"}</td>
-                        <td style={{ padding: "10px 14px" }}>
+                        <td>{s.schoolCode ?? s.schoolName ?? "—"}</td>
+                        <td>{s.topic ?? "—"}</td>
+                        <td>
                           {s.teacherName ?? "—"}
                           {s.teacherHindi ? (
                             <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 6, fontSize: 12 }}>
@@ -231,22 +231,11 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                             </span>
                           ) : null}
                         </td>
-                        <td style={{ padding: "10px 14px", textAlign: "right", fontFamily: "var(--mono)", fontSize: 12 }}>
+                        <td className="mono" style={{ fontSize: 12 }}>
                           {s.totalCount ? `${s.attendedCount} / ${s.totalCount}` : "—"}
                         </td>
-                        <td style={{ padding: "10px 14px" }}>
-                          <span
-                            style={{
-                              padding: "2px 8px",
-                              background: sStyle.bg,
-                              color: sStyle.ink,
-                              borderRadius: 999,
-                              fontSize: 10,
-                              textTransform: "uppercase",
-                              letterSpacing: "0.06em",
-                              fontWeight: 600,
-                            }}
-                          >
+                        <td>
+                          <span className={`chip ${chipKind}`.trim()}>
                             {s.status.replace("_", " ")}
                           </span>
                         </td>
@@ -269,27 +258,14 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
               <KVRow label="Sessions">{outline.sessionsCount}</KVRow>
               <KVRow label="Weeks">{outline.weeks ?? "—"}</KVRow>
               <KVRow label="Status">
-                <span
-                  style={{
-                    padding: "2px 8px",
-                    background: status.bg,
-                    color: status.ink,
-                    borderRadius: 999,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    fontWeight: 600,
-                  }}
-                >
-                  {status.label}
-                </span>
+                <span className={`chip ${status.kind}`.trim()}>{status.label}</span>
               </KVRow>
               <KVRow label="Owner">
                 {owner ? (
                   <>
                     {owner.fullName}
                     {owner.hindiName ? (
-                      <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 6, fontSize: 12 }}>
+                      <span className="deva" style={{ color: "var(--ink-3)", marginLeft: 6, fontSize: 12 }}>
                         {owner.hindiName}
                       </span>
                     ) : null}
@@ -365,14 +341,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section
-      style={{
-        background: "var(--card-hi)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        overflow: "hidden",
-      }}
-    >
+    <section className="card card-hi" style={{ overflow: "hidden" }}>
       <header style={{ padding: "12px 16px 8px", borderBottom: "1px solid var(--line)" }}>
         <div style={{ fontFamily: "var(--serif)", fontSize: 16 }}>{title}</div>
         {sub ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div> : null}
@@ -413,27 +382,3 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Th({
-  children,
-  align = "left",
-  ...rest
-}: { children?: React.ReactNode; align?: "left" | "right" } & React.ThHTMLAttributes<HTMLTableCellElement>) {
-  return (
-    <th
-      {...rest}
-      style={{
-        ...(rest.style ?? {}),
-        textAlign: align,
-        padding: "10px 14px",
-        fontSize: 10,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        color: "var(--ink-3)",
-        fontWeight: 600,
-        borderBottom: "1px solid var(--line)",
-      }}
-    >
-      {children}
-    </th>
-  );
-}

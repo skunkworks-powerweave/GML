@@ -17,6 +17,24 @@ import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
+// Hex → chip class. Subjects.color stores the design-system hex; we map it
+// to the closest semantic chip variant so the table picks up the new utility
+// classes without bespoke inline styling.
+function chipClassForColor(hex: string | null): string {
+  switch ((hex ?? "").toUpperCase()) {
+    case "#D97757":
+      return "chip chip-rust";
+    case "#2A6FDB":
+      return "chip chip-indigo";
+    case "#1F8A5B":
+      return "chip chip-lichen";
+    case "#7A5AE0":
+      return "chip chip-indigo";
+    default:
+      return "chip";
+  }
+}
+
 export default async function RepoSubjectsIndexPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -51,119 +69,74 @@ export default async function RepoSubjectsIndexPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Subjects</h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4, maxWidth: 640 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
           Curricular subjects across Grades 1–10. Each subject links to its course outlines,
           sessions and reading material.
         </p>
-      </header>
-
-      <section
-        style={{
-          background: "var(--card)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          overflow: "hidden",
-        }}
-      >
-        {rows.length === 0 ? (
-          <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
-            No subjects seeded yet. Run the spec 086 seed script.
-          </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 13 }}>
-            <thead>
-              <tr>
-                {["Subject", "Grades", "Outlines", "Sessions", "Readings", ""].map((h, i) => (
-                  <th
-                    key={i}
-                    style={{
-                      padding: "9px 12px",
-                      textAlign: "left",
-                      fontSize: 11,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                      color: "var(--ink-3)",
-                      fontWeight: 600,
-                      background: "var(--paper-2)",
-                      borderBottom: "1px solid var(--line)",
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((s) => {
-                const gradesLabel =
-                  s.gradesMin != null && s.gradesMax != null
-                    ? `${s.gradesMin}–${s.gradesMax}`
-                    : "—";
-                return (
-                  <tr key={s.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                    <td style={cellTd}>
-                      <Link
-                        href={`/repo/subject/${s.id}`}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          color: "var(--ink)",
-                          textDecoration: "none",
-                          fontWeight: 500,
-                        }}
-                      >
-                        <span
-                          aria-hidden
+      </div>
+      <div className="page-body">
+        <div className="card">
+          {rows.length === 0 ? (
+            <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
+              No subjects seeded yet. Run the spec 086 seed script.
+            </div>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  {["Subject", "Grades", "Outlines", "Sessions", "Readings", ""].map((h, i) => (
+                    <th key={i}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => {
+                  const gradesLabel =
+                    s.gradesMin != null && s.gradesMax != null
+                      ? `${s.gradesMin}–${s.gradesMax}`
+                      : "—";
+                  return (
+                    <tr key={s.id} style={{ cursor: "pointer" }}>
+                      <td>
+                        <Link
+                          href={`/repo/subject/${s.id}`}
                           style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: "50%",
-                            background: s.color ?? "var(--ink-4)",
-                            border: "1px solid var(--line-2)",
-                            flexShrink: 0,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                            color: "var(--ink)",
+                            textDecoration: "none",
+                            fontWeight: 500,
                           }}
-                        />
-                        <span>{s.name}</span>
-                      </Link>
-                    </td>
-                    <td style={{ ...cellTd, fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-3)" }}>
-                      {gradesLabel}
-                    </td>
-                    <td style={cellTd}>{s.outlines}</td>
-                    <td style={cellTd}>{s.sessions}</td>
-                    <td style={cellTd}>{s.readings}</td>
-                    <td style={{ ...cellTd, color: "var(--ink-4)", textAlign: "right" }}>
-                      <Link href={`/repo/subject/${s.id}`} style={{ color: "var(--ink-4)" }}>
-                        ›
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+                        >
+                          <span aria-hidden className={chipClassForColor(s.color)}>
+                            {s.code}
+                          </span>
+                          <span>{s.name}</span>
+                        </Link>
+                      </td>
+                      <td className="mono" style={{ fontSize: 12, fontFamily: "var(--mono)" }}>
+                        {gradesLabel}
+                      </td>
+                      <td>{s.outlines}</td>
+                      <td>{s.sessions}</td>
+                      <td>{s.readings}</td>
+                      <td style={{ color: "var(--ink-4)", textAlign: "right" }}>
+                        <Link href={`/repo/subject/${s.id}`} style={{ color: "var(--ink-4)" }}>
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
-
-const cellTd: React.CSSProperties = {
-  padding: "9px 12px",
-  textAlign: "left",
-  borderBottom: "1px solid var(--line)",
-  verticalAlign: "middle",
-};

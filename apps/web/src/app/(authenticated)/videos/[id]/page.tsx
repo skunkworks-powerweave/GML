@@ -48,62 +48,176 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
 
   const watermark = `${session.user.name ?? session.user.email ?? "viewer"} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
+  const statusChipKind =
+    video.status === "ready"
+      ? "chip-lichen"
+      : video.status === "transcoding" || video.status === "queued"
+        ? "chip-saffron"
+        : video.status === "failed"
+          ? "chip-rust"
+          : "";
+  const uploadedLabel = video.createdAt
+    ? new Date(video.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+    : "—";
+  const durationLabel = video.durationSec
+    ? `${Math.floor(video.durationSec / 60)}m ${String(video.durationSec % 60).padStart(2, "0")}s`
+    : "—";
+
   return (
     <div>
-      <header style={{ marginBottom: 18 }}>
-        <Link href="/videos" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+      <div className="page-header">
+        <Link href="/videos" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
           ← Library
         </Link>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", marginTop: 8 }}>
-          Video · {video.contextType.replace("_", " ")} · via {video.source}
-        </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 24, marginTop: 4 }}>
-          {video.captionRaw ?? `Video ${id.slice(0, 8)}`}
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 24 }}>
+          Video review ·{" "}
+          <span className="mono" style={{ fontSize: 16, color: "var(--ink-3)" }}>
+            {id}
+          </span>
         </h1>
-        <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
-          Status: <code style={{ fontFamily: "var(--mono)" }}>{video.status}</code>
-          {video.durationSec ? ` · ${Math.round(video.durationSec / 60)} min` : ""}
-          {video.createdAt
-            ? ` · uploaded ${new Date(video.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
-            : ""}
+        <div className="label" style={{ marginTop: 6 }}>
+          {video.contextType.replace("_", " ")} · via {video.source}
         </div>
-      </header>
+      </div>
 
-      <section style={{ maxWidth: 920 }}>
-        {video.source === "external_link" && video.externalUrl ? (
-          <ExternalEmbed url={video.externalUrl} watermark={watermark} />
-        ) : playerSrc ? (
-          <HlsPlayer src={playerSrc} watermark={watermark} videoId={id} />
-        ) : (
-          <div
-            style={{
-              aspectRatio: "16/9",
-              background: "#000",
-              color: "var(--paper)",
-              borderRadius: "var(--r-3)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 14,
-              padding: 16,
-              textAlign: "center",
-            }}
-          >
-            {video.status === "transcoding" || video.status === "queued"
-              ? "Transcoding in progress. Refresh in a minute or two."
-              : video.status === "received"
-                ? "Received. Waiting for the worker to pick it up."
-                : video.status === "failed"
-                  ? "Transcode failed. Contact your programme admin."
-                  : "No playable rendition."}
+      <div
+        className="page-body"
+        style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18 }}
+      >
+        <SectionCard title="Player" sub="Watermarked · streamed · download disabled">
+          <div style={{ padding: 14, position: "relative" }}>
+            {video.source === "external_link" && video.externalUrl ? (
+              <ExternalEmbed url={video.externalUrl} watermark={watermark} />
+            ) : playerSrc ? (
+              <HlsPlayer src={playerSrc} watermark={watermark} videoId={id} />
+            ) : (
+              <div
+                style={{
+                  aspectRatio: "16/9",
+                  background: "#000",
+                  color: "var(--paper)",
+                  borderRadius: "var(--r-3)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 14,
+                  padding: 16,
+                  textAlign: "center",
+                }}
+              >
+                {video.status === "transcoding" || video.status === "queued"
+                  ? "Transcoding in progress. Refresh in a minute or two."
+                  : video.status === "received"
+                    ? "Received. Waiting for the worker to pick it up."
+                    : video.status === "failed"
+                      ? "Transcode failed. Contact your programme admin."
+                      : "No playable rendition."}
+              </div>
+            )}
+            <p
+              style={{
+                marginTop: 12,
+                fontSize: 12,
+                color: "var(--ink-3)",
+                lineHeight: 1.5,
+              }}
+            >
+              This video is watermarked with your name and the current timestamp.
+              Download is disabled; right-click is blocked. Sharing the URL with
+              others won&apos;t work — signed links are bound to your network connection.
+            </p>
           </div>
-        )}
-      </section>
+        </SectionCard>
 
-      <section style={{ marginTop: 18, maxWidth: 920, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
-        This video is watermarked with your name and the current timestamp. Download is disabled; right-click is blocked.
-        Sharing the URL with others won't work — signed links are bound to your network connection.
-      </section>
+        <SectionCard title="Metadata">
+          <div style={{ padding: "0 14px 10px", fontSize: 12 }}>
+            <KVRow label="Video ID">
+              <span className="mono" style={{ fontSize: 11 }}>{id}</span>
+            </KVRow>
+            <KVRow label="Caption">
+              {video.captionRaw ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
+            </KVRow>
+            <KVRow label="Source">
+              <span className="chip">{video.source}</span>
+            </KVRow>
+            <KVRow label="Context">
+              <span className="chip chip-indigo">{video.contextType.replace("_", " ")}</span>
+            </KVRow>
+            <KVRow label="Status">
+              <span className={`chip ${statusChipKind}`}>{video.status}</span>
+            </KVRow>
+            <KVRow label="Duration">
+              <span className="mono" style={{ fontSize: 11 }}>{durationLabel}</span>
+            </KVRow>
+            <KVRow label="Uploaded">
+              <span className="mono" style={{ fontSize: 11 }}>{uploadedLabel}</span>
+            </KVRow>
+            <KVRow label="Watermark">
+              <span className="mono" style={{ fontSize: 11 }}>
+                {session.user.name ?? session.user.email ?? "viewer"}
+              </span>
+            </KVRow>
+          </div>
+        </SectionCard>
+      </div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  sub,
+  children,
+}: {
+  title: string;
+  sub?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="card card-hi" style={{ overflow: "hidden" }}>
+      <header
+        style={{
+          padding: "10px 18px",
+          borderBottom: "1px solid var(--line)",
+          background: "var(--card)",
+        }}
+      >
+        <div style={{ fontFamily: "var(--serif)", fontSize: 15, fontWeight: 500 }}>
+          {title}
+        </div>
+        {sub ? (
+          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
+        ) : null}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function KVRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "100px 1fr",
+        gap: 10,
+        padding: "8px 0",
+        borderTop: "1px solid var(--line)",
+        alignItems: "flex-start",
+      }}
+    >
+      <span className="label" style={{ paddingTop: 2 }}>{label}</span>
+      <div
+        style={{
+          fontSize: 13,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 4,
+          alignItems: "center",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

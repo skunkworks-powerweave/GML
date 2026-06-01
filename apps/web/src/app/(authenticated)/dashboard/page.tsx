@@ -83,97 +83,84 @@ export default async function DashboardPage() {
 
   const firstName = name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").split(/\s+/)[0];
 
+  const roleLabel = role.replace("_", " ");
+
   return (
     <div>
-      <header style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          {role.replace("_", " ")} dashboard
-        </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>
+      <div className="page-header">
+        <div className="label">{roleLabel} dashboard</div>
+        <h1 className="serif" style={{ fontSize: 30, marginTop: 4 }}>
           {greeting}, {firstName}.
         </h1>
-        <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 6 }}>
           {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
           {" · Term 2 Week 7 of 12 · "}
-          {role === "teacher" ? "RTT Phase 2" : `${role.replace("_", " ")} view`}
+          {role === "teacher" ? "RTT Phase 2" : `${roleLabel} view`}
         </p>
-      </header>
+      </div>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        {stats.map((s) => (
-          <article
-            key={s.label}
-            style={{
-              padding: 14,
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-            }}
-          >
-            <div style={{ fontSize: 11, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              {s.label}
+      <div className="page-body" style={{ display: "grid", gap: 18 }}>
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 14,
+          }}
+        >
+          {stats.map((s) => (
+            <article key={s.label} className="card card-hi" style={{ padding: 14 }}>
+              <div className="label">{s.label}</div>
+              <div className="serif" style={{ fontSize: 32, marginTop: 6 }}>
+                {s.value}
+              </div>
+              {s.hint ? (
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{s.hint}</div>
+              ) : null}
+            </article>
+          ))}
+        </section>
+
+        <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
+          <article className="card card-hi">
+            <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
+              <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
+                {role === "teacher" ? "What's next" : "Today"}
+              </h2>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                {role === "teacher" ? "Your training queue + observation prep." : "Things waiting on you."}
+              </div>
+            </header>
+            <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+              <TodoRow text="Review pending video submissions" href="/videos" />
+              <TodoRow text="Confirm school visits this week" href="/observation" />
+              <TodoRow text="Check today's cohort attendance" href="/admin/data/rtt-attendance" />
             </div>
-            <div style={{ fontFamily: "var(--serif)", fontSize: 32, marginTop: 6 }}>{s.value}</div>
-            {s.hint ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{s.hint}</div> : null}
           </article>
-        ))}
-      </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
-        <article
-          style={{
-            background: "var(--card-hi)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-          }}
-        >
-          <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
-            <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 600 }}>
-              {role === "teacher" ? "What's next" : "Today"}
-            </h2>
-            <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-              {role === "teacher" ? "Your training queue + observation prep." : "Things waiting on you."}
+          <article className="card card-hi">
+            <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
+              <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
+                Confidentiality
+              </h2>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Reminder for every viewer.
+              </div>
+            </header>
+            <div style={{ padding: 14 }}>
+              <p style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
+                All resources here are confidential. Videos are watermarked with your name and timestamp; downloads are
+                disabled. Section passwords rotate periodically — ask your programme admin if a section appears locked.
+              </p>
+              <Link
+                href="/inbox"
+                style={{ fontSize: 12, color: "var(--indigo)", display: "inline-block", marginTop: 10 }}
+              >
+                Notifications →
+              </Link>
             </div>
-          </header>
-          <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-            <TodoRow text="Review pending video submissions" href="/videos" />
-            <TodoRow text="Confirm school visits this week" href="/observation" />
-            <TodoRow text="Check today's cohort attendance" href="/admin/data/rtt-attendance" />
-          </div>
-        </article>
-
-        <article
-          style={{
-            background: "var(--card-hi)",
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-          }}
-        >
-          <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
-            <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 600 }}>Confidentiality</h2>
-            <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>Reminder for every viewer.</div>
-          </header>
-          <div style={{ padding: 14 }}>
-            <p style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
-              All resources here are confidential. Videos are watermarked with your name and timestamp; downloads are
-              disabled. Section passwords rotate periodically — ask your programme admin if a section appears locked.
-            </p>
-            <Link
-              href="/inbox"
-              style={{ fontSize: 12, color: "var(--indigo)", display: "inline-block", marginTop: 10 }}
-            >
-              Notifications →
-            </Link>
-          </div>
-        </article>
-      </section>
+          </article>
+        </section>
+      </div>
     </div>
   );
 }

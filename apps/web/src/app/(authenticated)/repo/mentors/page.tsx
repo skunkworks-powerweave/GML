@@ -11,9 +11,11 @@ import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
-const BASE_COLOR: Record<string, { bg: string; ink: string }> = {
-  Leh: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
-  Kargil: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
+// Base-location chip palette. Leh maps to indigo-soft, Kargil maps to saffron-soft.
+// Renders as `.chip .chip-indigo` / `.chip .chip-saffron` via globals.css utilities.
+const BASE_CHIP: Record<string, string> = {
+  Leh: "chip-indigo", // indigo-soft background
+  Kargil: "chip-saffron", // saffron-soft background
 };
 
 export default async function RepoMentorsIndexPage() {
@@ -52,121 +54,69 @@ export default async function RepoMentorsIndexPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Repository
-        </div>
+      <div className="page-header">
+        <div className="label">Repository</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Mentors</h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
           Master mentors carrying 5 mentees each through quarterly progress checks.
         </p>
-      </header>
-
-      <section
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          overflow: "hidden",
-        }}
-      >
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: 13,
-          }}
-        >
-          <thead>
-            <tr style={{ background: "var(--paper-2)" }}>
-              <th style={th}>Name</th>
-              <th style={{ ...th, fontFamily: "var(--deva)" }}>नाम</th>
-              <th style={th}>Expertise</th>
-              <th style={th}>Based in</th>
-              <th style={th}>Mentees</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
+      </div>
+      <div className="page-body">
+        <div className="card card-hi">
+          <table className="t">
+            <thead>
               <tr>
-                <td colSpan={5} style={{ padding: 32, color: "var(--ink-3)", textAlign: "center" }}>
-                  No mentors yet.
-                </td>
+                <th>Name</th>
+                <th className="deva" style={{ fontFamily: "var(--deva)" }}>नाम</th>
+                <th>Expertise</th>
+                <th>Based in</th>
+                <th>Mentees</th>
               </tr>
-            ) : (
-              rows.map((m) => {
-                const base = m.baseLocation ?? "";
-                const chip = BASE_COLOR[base] ?? { bg: "var(--paper-2)", ink: "var(--ink-3)" };
-                const expertise = Array.isArray(m.expertiseAreas) ? m.expertiseAreas.join(", ") : "";
-                return (
-                  <tr
-                    key={m.id}
-                    style={{ borderTop: "1px solid var(--line)" }}
-                  >
-                    <td style={{ ...td, fontWeight: 500 }}>
-                      <Link
-                        href={`/repo/mentor/${m.id}`}
-                        style={{ color: "var(--ink)", textDecoration: "none" }}
-                      >
-                        {m.name}
-                      </Link>
-                    </td>
-                    <td style={{ ...td, fontFamily: "var(--deva)", fontSize: 12, color: "var(--ink-3)" }}>
-                      {m.hindiName ?? ""}
-                    </td>
-                    <td style={{ ...td, color: "var(--ink-2)" }}>{expertise || "—"}</td>
-                    <td style={td}>
-                      {base ? (
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            background: chip.bg,
-                            color: chip.ink,
-                            borderRadius: 999,
-                            fontSize: 10,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.06em",
-                            fontWeight: 600,
-                          }}
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ padding: 32, color: "var(--ink-3)", textAlign: "center" }}>
+                    No mentors yet.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((m) => {
+                  const base = m.baseLocation ?? "";
+                  const chipKind = BASE_CHIP[base];
+                  const expertise = Array.isArray(m.expertiseAreas) ? m.expertiseAreas.join(", ") : "";
+                  return (
+                    <tr key={m.id}>
+                      <td style={{ fontWeight: 500 }}>
+                        <Link
+                          href={`/repo/mentor/${m.id}`}
+                          style={{ color: "var(--ink)", textDecoration: "none" }}
                         >
-                          {base}
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--ink-3)" }}>—</span>
-                      )}
-                    </td>
-                    <td style={{ ...td, fontFamily: "var(--mono)", fontSize: 12 }}>
-                      {menteeCount.get(m.id) ?? 0}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </section>
+                          {m.name}
+                        </Link>
+                      </td>
+                      <td className="deva" style={{ fontFamily: "var(--deva)", fontSize: 12, color: "var(--ink-3)" }}>
+                        {m.hindiName ?? ""}
+                      </td>
+                      <td>{expertise || "—"}</td>
+                      <td>
+                        {base && chipKind ? (
+                          <span className={`chip ${chipKind}`}>{base}</span>
+                        ) : base ? (
+                          <span className="chip">{base}</span>
+                        ) : (
+                          <span style={{ color: "var(--ink-3)" }}>—</span>
+                        )}
+                      </td>
+                      <td>{menteeCount.get(m.id) ?? 0}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
-
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "10px 14px",
-  fontSize: 10,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  color: "var(--ink-3)",
-  fontWeight: 600,
-};
-
-const td: React.CSSProperties = {
-  padding: "12px 14px",
-  verticalAlign: "middle",
-};

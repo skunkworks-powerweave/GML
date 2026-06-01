@@ -1,6 +1,11 @@
 // /repo — Repository home. 1:1 port of `RepoHome` in `LMS GML Frontend/repository.jsx`
 // (lines 40-134). Swaps the prototype's window.WIKI / window.LMS globals for live
 // Drizzle counts + a this-week classroom-sessions query joined to schools/subjects.
+//
+// Visual chrome: uses the .page-header / .page-body / .label / .btn / .card /
+// table.t / .chip / .mono utility classes ported from the prototype's app.css —
+// see globals.css for the canonical tokens (var(--serif), var(--mono), var(--r-3),
+// var(--ink-3), var(--line)). No raw hex colours; everything routes through tokens.
 
 import Link from "next/link";
 import { and, asc, between, count, eq } from "drizzle-orm";
@@ -37,11 +42,12 @@ function currentWeekMonFri(today: Date = new Date()): { mon: string; fri: string
 }
 
 // ---------- session status pill (matches JSX SessionStatus) ----------
-const SESSION_STATUS: Record<string, { label: string; bg: string; ink: string }> = {
-  planned: { label: "Planned", bg: "var(--paper-2)", ink: "var(--ink-3)" },
-  in_progress: { label: "In progress", bg: "var(--saffron-soft)", ink: "var(--saffron)" },
-  complete: { label: "Complete", bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  cancelled: { label: "Cancelled", bg: "var(--paper-2)", ink: "var(--ink-3)" },
+// Maps to .chip + variant classes from globals.css (ported from app.css).
+const SESSION_STATUS: Record<string, { label: string; kind: string }> = {
+  planned: { label: "Planned", kind: "" },
+  in_progress: { label: "In progress", kind: "chip-saffron" },
+  complete: { label: "Complete", kind: "chip-lichen" },
+  cancelled: { label: "Cancelled", kind: "" },
 };
 
 // ---------- inline glyphs (replace window-bound `<Icon name=…/>`) ----------
@@ -159,42 +165,23 @@ export default async function RepoHomePage() {
 
   return (
     <div>
-      {/* page-header */}
-      <header style={{ marginBottom: 18 }}>
+      <div className="page-header">
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
           <div>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-              Repository
-            </div>
+            <div className="label">Repository</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Programme records</h1>
-            <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640, fontSize: 13 }}>
+            <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
               The complete organizational record: schools, classes, subjects taught, sessions held,
               course outlines, learners and reading material. Every record links to the others.
             </p>
           </div>
-          <button
-            type="button"
-            style={{
-              padding: "7px 12px",
-              background: "var(--card-hi)",
-              color: "var(--ink)",
-              border: "1px solid var(--line-2)",
-              borderRadius: "var(--r-2)",
-              fontSize: 12,
-              cursor: "pointer",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontFamily: "var(--sans)",
-            }}
-          >
+          <button type="button" className="btn">
             <Glyph name="search" /> Find a record
           </button>
         </div>
-      </header>
+      </div>
 
-      {/* page-body */}
-      <div style={{ display: "grid", gap: 16 }}>
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
         {/* 5-stat row */}
         <section style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14 }}>
           <StatCard label="Schools" value={stats.schools} hint={stats.schools ? "2 districts" : undefined} />
@@ -207,65 +194,31 @@ export default async function RepoHomePage() {
         {/* 2-column body grid */}
         <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
           {/* This week's sessions */}
-          <article
-            style={{
-              background: "var(--card)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              overflow: "hidden",
-            }}
-          >
-            <header
-              style={{
-                display: "flex",
-                alignItems: "flex-end",
-                justifyContent: "space-between",
-                padding: "14px 16px",
-                borderBottom: "1px solid var(--line)",
-                gap: 8,
-              }}
-            >
+          <article className="card">
+            <div style={{ display: "flex", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div>
-                <div style={{ fontFamily: "var(--serif)", fontSize: 18 }}>This week&apos;s sessions</div>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>This week&apos;s sessions</div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                   {monLabel} → {friLabel}
                 </div>
               </div>
-              <Link
-                href="/repo/sessions"
-                style={{
-                  padding: "5px 10px",
-                  background: "var(--card-hi)",
-                  color: "var(--ink-2)",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: "var(--r-2)",
-                  fontSize: 11,
-                  textDecoration: "none",
-                }}
-              >
-                All sessions →
-              </Link>
-            </header>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <div style={{ marginLeft: "auto" }}>
+                <Link href="/repo/sessions" className="btn btn-sm">
+                  All sessions →
+                </Link>
+              </div>
+            </div>
+            <div>
+              <table className="t">
                 <thead>
-                  <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--paper-2)" }}>
-                    {["Date", "Time", "School", "Grade", "Subject", "Topic", "Status"].map((h) => (
-                      <th
-                        key={h}
-                        style={{
-                          textAlign: "left",
-                          padding: "8px 12px",
-                          fontSize: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.07em",
-                          color: "var(--ink-3)",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
+                  <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>School</th>
+                    <th>Grade</th>
+                    <th>Subject</th>
+                    <th>Topic</th>
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -279,35 +232,19 @@ export default async function RepoHomePage() {
                     thisWeek.map((s) => {
                       const st = SESSION_STATUS[s.status] ?? SESSION_STATUS.planned;
                       return (
-                        <tr key={s.id} style={{ borderTop: "1px solid var(--line)" }}>
-                          <td style={{ padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12 }}>
+                        <tr key={s.id}>
+                          <td className="mono" style={{ fontSize: 12 }}>
                             <Link href={`/repo/sessions/${s.id}`} style={{ color: "var(--ink)", textDecoration: "none" }}>
                               {s.date}
                             </Link>
                           </td>
-                          <td style={{ padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-2)" }}>
-                            {s.time ?? "—"}
-                          </td>
-                          <td style={{ padding: "10px 12px" }}>{s.schoolCode ?? "—"}</td>
-                          <td style={{ padding: "10px 12px" }}>{s.grade ?? "—"}</td>
-                          <td style={{ padding: "10px 12px" }}>{s.subjectName ?? "—"}</td>
-                          <td style={{ padding: "10px 12px", color: "var(--ink-2)" }}>{s.topic ?? "—"}</td>
-                          <td style={{ padding: "10px 12px" }}>
-                            <span
-                              style={{
-                                display: "inline-block",
-                                padding: "2px 8px",
-                                background: st.bg,
-                                color: st.ink,
-                                borderRadius: 999,
-                                fontSize: 10,
-                                textTransform: "uppercase",
-                                letterSpacing: "0.06em",
-                                fontWeight: 600,
-                              }}
-                            >
-                              {st.label}
-                            </span>
+                          <td className="mono" style={{ fontSize: 12 }}>{s.time ?? "—"}</td>
+                          <td>{s.schoolCode ?? "—"}</td>
+                          <td>{s.grade ?? "—"}</td>
+                          <td>{s.subjectName ?? "—"}</td>
+                          <td>{s.topic ?? "—"}</td>
+                          <td>
+                            <span className={`chip ${st.kind}`.trim()}>{st.label}</span>
                           </td>
                         </tr>
                       );
@@ -319,17 +256,10 @@ export default async function RepoHomePage() {
           </article>
 
           {/* Browse */}
-          <article
-            style={{
-              background: "var(--card)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              overflow: "hidden",
-            }}
-          >
-            <header style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontFamily: "var(--serif)", fontSize: 18 }}>Browse</div>
-            </header>
+          <article className="card">
+            <div style={{ display: "flex", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Browse</div>
+            </div>
             <div style={{ padding: 4 }}>
               {browse.map((b, i) => (
                 <Link
@@ -347,7 +277,7 @@ export default async function RepoHomePage() {
                 >
                   <Glyph name={b.icon} size={14} />
                   <span style={{ flex: 1, fontWeight: 500, fontSize: 13 }}>{b.label}</span>
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>{b.n}</span>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>{b.n}</span>
                   <Glyph name="chev" size={11} />
                 </Link>
               ))}
@@ -359,29 +289,18 @@ export default async function RepoHomePage() {
   );
 }
 
-// ---------- StatCard component (matches prototype `<Stat …/>`) ----------
+// ---------- StatCard component (matches prototype `<Stat …/>` in ui.jsx) ----------
 function StatCard({ label, value, hint }: { label: string; value: number | string; hint?: string }) {
   return (
-    <div
-      style={{
-        background: "var(--card-hi)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        padding: 14,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
-        minHeight: 78,
-      }}
-    >
-      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", fontWeight: 500 }}>
-        {label}
-      </div>
-      <div style={{ fontFamily: "var(--serif)", fontSize: 28, lineHeight: 1, color: "var(--ink)" }}>
-        {value}
+    <div className="card" style={{ padding: 14 }}>
+      <div className="label">{label}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 }}>
+        <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: "var(--serif)" }}>
+          {value}
+        </div>
       </div>
       {hint ? (
-        <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{hint}</div>
+        <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>{hint}</div>
       ) : null}
     </div>
   );

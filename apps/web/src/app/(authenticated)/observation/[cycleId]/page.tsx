@@ -36,17 +36,34 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
 
   const currentStageIdx = CYCLE_STAGES.findIndex((s) => s.id === cycle.status);
 
+  const kindChipClass =
+    cycle.kind === "developmental"
+      ? "chip chip-saffron"
+      : cycle.kind === "evaluative"
+        ? "chip chip-indigo"
+        : "chip";
+  const statusChipClass =
+    cycle.status === "complete"
+      ? "chip chip-lichen"
+      : cycle.status === "post_submitted" || cycle.status === "pre_submitted"
+        ? "chip chip-saffron"
+        : cycle.status === "observed"
+          ? "chip chip-indigo"
+          : "chip";
+
   return (
     <div>
-      <header style={{ marginBottom: 20, display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+      <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
         <div>
-          <Link href="/observation" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-            ← Cycles
+          <Link href="/observation" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
+            ← All cycles
           </Link>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", marginTop: 8 }}>
-            Observation cycle · {cycle.kind}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+            <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>{cycle.code}</span>
+            <span className={kindChipClass}>{cycle.kind}</span>
+            <span className={statusChipClass}>{cycle.status.replace(/_/g, " ")}</span>
           </div>
-          <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
+          <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
             {teacher?.fullName ?? "—"}
             {teacher?.hindiName ? (
               <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 10, fontSize: 18 }}>
@@ -54,63 +71,44 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
               </span>
             ) : null}
           </h1>
-          <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 4 }}>
-            <code style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{cycle.code}</code>
-            {subject ? ` · ${subject.name}` : null}
-            {cycle.topic ? ` · ${cycle.topic}` : null}
+          <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
+            {subject ? `${subject.name}` : null}
+            {subject && cycle.topic ? " · " : null}
+            {cycle.topic ? `${cycle.topic}` : null}
+            {(subject || cycle.topic) && cycle.scheduledAt ? " · " : null}
             {cycle.scheduledAt
-              ? ` · ${new Date(cycle.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`
+              ? new Date(cycle.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
               : null}
-          </div>
+          </p>
         </div>
       </header>
 
       {/* Cycle Flow Diagram */}
       <section style={{ marginBottom: 24 }}>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${CYCLE_STAGES.length}, 1fr)`,
-            gap: 8,
-            background: "var(--card-hi)",
-            padding: 14,
-            border: "1px solid var(--line)",
-            borderRadius: "var(--r-3)",
-          }}
-        >
-          {CYCLE_STAGES.map((stage, i) => {
-            const isPast = i < currentStageIdx;
-            const isCurrent = i === currentStageIdx;
-            return (
-              <div
-                key={stage.id}
-                style={{
-                  textAlign: "center",
-                  padding: 10,
-                  borderRadius: "var(--r-2)",
-                  background: isCurrent
-                    ? "var(--ink)"
-                    : isPast
-                      ? "var(--lichen-soft)"
-                      : "var(--paper-2)",
-                  color: isCurrent ? "var(--paper)" : isPast ? "var(--ink)" : "var(--ink-3)",
-                  position: "relative",
-                }}
-              >
-                <div style={{ fontSize: 11, opacity: 0.8, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  {i + 1}
-                </div>
-                <div style={{ fontWeight: 600, fontSize: 12 }}>{stage.label}</div>
-                {isPast ? <span style={{ position: "absolute", right: 8, top: 8, fontSize: 10 }}>✓</span> : null}
-              </div>
-            );
-          })}
+        <div className="card card-hi" style={{ padding: 14 }}>
+          <div className="stepper">
+            {CYCLE_STAGES.map((stage, i) => {
+              const isPast = i < currentStageIdx;
+              const isCurrent = i === currentStageIdx;
+              const stepClass = `step${isPast ? " done" : ""}${isCurrent ? " active" : ""}`;
+              return (
+                <span key={stage.id} style={{ display: "contents" }}>
+                  <div className={stepClass}>
+                    <span className="num">{isPast ? "✓" : i + 1}</span>
+                    <span>{stage.label}</span>
+                  </div>
+                  {i < CYCLE_STAGES.length - 1 ? <span className="sep">·····</span> : null}
+                </span>
+              );
+            })}
+          </div>
         </div>
       </section>
 
       <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-        <article style={{ background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>Forms ({forms.length})</h2>
+        <article className="card card-hi" style={{ padding: 16 }}>
+          <div className="label" style={{ marginBottom: 6 }}>Forms · {forms.length}</div>
+          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Pre &amp; post-observation</h2>
           {forms.length === 0 ? (
             <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No forms submitted yet.</p>
           ) : (
@@ -118,18 +116,12 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
               {forms.map((f) => (
                 <li
                   key={f.id}
-                  style={{
-                    padding: 10,
-                    border: "1px solid var(--line)",
-                    borderRadius: "var(--r-2)",
-                    fontSize: 12,
-                  }}
+                  className="card"
+                  style={{ padding: 10, fontSize: 12, boxShadow: "none" }}
                 >
-                  <div style={{ fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 10 }}>
-                    {f.kind}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                    Submitted {new Date(f.submittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
+                  <span className="chip chip-ink" style={{ fontSize: 10 }}>{f.kind}</span>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>
+                    Submitted <span className="mono">{new Date(f.submittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</span>
                   </div>
                 </li>
               ))}
@@ -137,32 +129,32 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
           )}
         </article>
 
-        <article style={{ background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>Evidence ({evidence.length})</h2>
+        <article className="card card-hi" style={{ padding: 16 }}>
+          <div className="label" style={{ marginBottom: 6 }}>Evidence · {evidence.length}</div>
+          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Lesson video</h2>
           {evidence.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No video evidence linked yet. Teacher uploads via WhatsApp with caption <code>OBS-{cycle.code.replace(/^OBS-/, "")}</code>.</p>
+            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
+              No video evidence linked yet. Teacher uploads via WhatsApp with caption{" "}
+              <span className="kbd">OBS-{cycle.code.replace(/^OBS-/, "")}</span>.
+            </p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
               {evidence.map((e) => (
                 <li
                   key={e.id}
-                  style={{
-                    padding: 10,
-                    border: "1px solid var(--line)",
-                    borderRadius: "var(--r-2)",
-                    fontSize: 12,
-                  }}
+                  className="card"
+                  style={{ padding: 10, fontSize: 12, boxShadow: "none" }}
                 >
                   <div style={{ fontWeight: 500 }}>
                     {e.videoSubmissionId ? (
-                      <Link href={`/videos/${e.videoSubmissionId}`} style={{ color: "var(--indigo)" }}>
+                      <Link href={`/videos/${e.videoSubmissionId}`}>
                         Open video →
                       </Link>
                     ) : (
                       <span style={{ color: "var(--ink-3)" }}>(no video yet)</span>
                     )}
                   </div>
-                  {e.caption ? <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{e.caption}</div> : null}
+                  {e.caption ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>{e.caption}</div> : null}
                 </li>
               ))}
             </ul>
@@ -171,8 +163,9 @@ export default async function CycleDetailPage({ params }: { params: Promise<{ cy
       </section>
 
       {cycle.remark ? (
-        <section style={{ marginTop: 18, padding: 16, background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)" }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 8 }}>Remark</h2>
+        <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
+          <div className="label" style={{ marginBottom: 6 }}>Remark</div>
+          <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor note</h2>
           <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5 }}>{cycle.remark}</p>
         </section>
       ) : null}

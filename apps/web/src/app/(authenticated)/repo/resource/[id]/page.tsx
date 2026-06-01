@@ -53,10 +53,11 @@ export default async function RepoResourceDetailPage({
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
+      <div className="page-header" style={{ padding: 0, border: 0, marginBottom: 22 }}>
         <Link
           href="/repo/resources"
-          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
           ← Reading material
         </Link>
@@ -66,28 +67,25 @@ export default async function RepoResourceDetailPage({
             alignItems: "flex-end",
             justifyContent: "space-between",
             gap: 14,
-            marginTop: 8,
           }}
         >
           <div>
-            <div
-              style={{
-                fontSize: 10,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                color: "var(--ink-3)",
-              }}
-            >
+            <div className="label">
               {res.kind}{" "}
-              <span style={{ fontFamily: "var(--mono)", textTransform: "none", letterSpacing: 0 }}>
+              <span
+                className="mono"
+                style={{ textTransform: "none", letterSpacing: 0, color: "var(--ink-3)" }}
+              >
                 · {res.id.slice(0, 8)}
               </span>
             </div>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{res.name}</h1>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
+              {res.name}
+            </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
               {res.pages ? `${res.pages} pages · ` : ""}
               {res.owner ? `maintained by ${res.owner} · ` : ""}
-              last updated <span style={{ fontFamily: "var(--mono)" }}>{updatedLabel}</span>.
+              last updated <span className="mono">{updatedLabel}</span>.
             </p>
           </div>
 
@@ -95,15 +93,8 @@ export default async function RepoResourceDetailPage({
             {res.fileKey ? (
               <Link
                 href={`/repo/resource/${res.id}/view`}
-                style={{
-                  padding: "7px 12px",
-                  background: "var(--ink)",
-                  color: "var(--paper)",
-                  borderRadius: "var(--r-2)",
-                  fontSize: 12,
-                  textDecoration: "none",
-                  fontWeight: 500,
-                }}
+                className="btn btn-primary"
+                style={{ textDecoration: "none" }}
               >
                 View PDF
               </Link>
@@ -113,25 +104,20 @@ export default async function RepoResourceDetailPage({
                 href={res.externalUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{
-                  padding: "7px 12px",
-                  background: "var(--card-hi)",
-                  color: "var(--ink)",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: "var(--r-2)",
-                  fontSize: 12,
-                  textDecoration: "none",
-                }}
+                className="btn"
+                style={{ textDecoration: "none" }}
               >
                 Open external link
               </a>
             ) : null}
           </div>
         </div>
-      </header>
+      </div>
 
       <section
+        className="page-body"
         style={{
+          padding: 0,
           display: "grid",
           gridTemplateColumns: "1.6fr 1fr",
           gap: 18,
@@ -203,20 +189,13 @@ export default async function RepoResourceDetailPage({
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section
-      style={{
-        background: "var(--card-hi)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        overflow: "hidden",
-      }}
-    >
+    <section className="card card-hi" style={{ overflow: "hidden" }}>
       <header
+        className="serif"
         style={{
           padding: "10px 18px",
           borderBottom: "1px solid var(--line)",
           background: "var(--card)",
-          fontFamily: "var(--serif)",
           fontSize: 15,
           fontWeight: 500,
         }}
@@ -240,16 +219,7 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
         alignItems: "flex-start",
       }}
     >
-      <span
-        style={{
-          fontSize: 11,
-          color: "var(--ink-3)",
-          textTransform: "uppercase",
-          letterSpacing: "0.07em",
-          fontWeight: 500,
-          paddingTop: 2,
-        }}
-      >
+      <span className="label" style={{ paddingTop: 2 }}>
         {label}
       </span>
       <div
@@ -268,21 +238,7 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function Chip({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        padding: "2px 8px",
-        background: "var(--paper-2)",
-        color: "var(--ink-2)",
-        border: "1px solid var(--line)",
-        borderRadius: 999,
-        fontSize: 11,
-        fontWeight: 500,
-      }}
-    >
-      {children}
-    </span>
-  );
+  return <span className="chip">{children}</span>;
 }
 
 function RelLink({
@@ -297,18 +253,12 @@ function RelLink({
   return (
     <Link
       href={href}
+      className="chip"
       style={{
-        padding: "2px 8px",
         background: "var(--card)",
         color: "var(--ink)",
-        border: `1px solid ${color ?? "var(--line)"}`,
-        borderRadius: 999,
-        fontSize: 11,
-        fontWeight: 500,
+        borderColor: color ?? undefined,
         textDecoration: "none",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
       }}
     >
       {color ? (

@@ -27,8 +27,8 @@ type Props = {
   initial: SettingsFormValues;
   email: string;
   roleLabel: string;
-  roleBg: string;
-  roleInk: string;
+  /** chip variant class — e.g. "chip-saffron", "chip-indigo". Empty string falls back to neutral .chip. */
+  roleChipKind: string;
 };
 
 // Compute the subset of `current` whose values differ from `baseline`. Keeps
@@ -44,7 +44,7 @@ function computeDelta(baseline: SettingsFormValues, current: SettingsFormValues)
   return delta;
 }
 
-export function SettingsForm({ initial, email, roleLabel, roleBg, roleInk }: Props) {
+export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props) {
   const [values, setValues] = useState<SettingsFormValues>(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -116,33 +116,14 @@ export function SettingsForm({ initial, email, roleLabel, roleBg, roleInk }: Pro
     }
     if (saveState === "saved") {
       return (
-        <span
-          style={{
-            fontSize: 11,
-            background: "var(--lichen-soft)",
-            color: "var(--lichen)",
-            padding: "2px 8px",
-            borderRadius: 99,
-          }}
-          aria-live="polite"
-          role="status"
-        >
+        <span className="chip chip-lichen" aria-live="polite" role="status">
           Saved
         </span>
       );
     }
     if (saveState === "error") {
       return (
-        <span
-          style={{
-            fontSize: 11,
-            background: "var(--rust-soft)",
-            color: "var(--rust)",
-            padding: "2px 8px",
-            borderRadius: 99,
-          }}
-          role="alert"
-        >
+        <span className="chip chip-rust" role="alert">
           {errorMsg ?? "Save failed"}
         </span>
       );
@@ -229,20 +210,12 @@ export function SettingsForm({ initial, email, roleLabel, roleBg, roleInk }: Pro
 
       <SectionCard title="Account">
         <KvRow label="Email">
-          <span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{email}</span>
+          <span className="mono" style={{ fontSize: 12 }}>{email}</span>
         </KvRow>
         <KvRow label="Role">
           <span
-            style={{
-              display: "inline-block",
-              padding: "2px 10px",
-              background: roleBg,
-              color: roleInk,
-              borderRadius: 99,
-              fontSize: 11,
-              textTransform: "capitalize",
-              letterSpacing: "0.02em",
-            }}
+            className={`chip${roleChipKind ? ` ${roleChipKind}` : ""}`}
+            style={{ textTransform: "capitalize" }}
           >
             {roleLabel}
           </span>
@@ -274,14 +247,7 @@ function SectionCard({
   badge?: React.ReactNode;
 }) {
   return (
-    <article
-      style={{
-        background: "var(--card-hi)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        overflow: "hidden",
-      }}
-    >
+    <article className="card card-hi" style={{ overflow: "hidden" }}>
       <header
         style={{
           padding: "12px 16px",
@@ -291,7 +257,7 @@ function SectionCard({
           gap: 8,
         }}
       >
-        <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, fontWeight: 600, margin: 0 }}>{title}</h2>
+        <h2 className="serif" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>{title}</h2>
         {badge ? <span style={{ marginLeft: "auto" }}>{badge}</span> : null}
       </header>
       <div style={{ padding: 16 }}>{children}</div>

@@ -41,121 +41,235 @@ export default async function PairingDetailPage({ params }: { params: Promise<{ 
     }),
   );
 
+  const currentQuarter = pairing.currentQuarter ?? 1;
+  const feedbackPct = Math.min(100, Math.round((feedbackByKind.size / 8) * 100));
+
   return (
     <div>
-      <header style={{ marginBottom: 20 }}>
-        <Link href="/mentorship" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-          ← Pairings
+      <div className="page-header">
+        <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
+          ← All pairings
         </Link>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)", marginTop: 8 }}>
-          Pairing
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+          <div>
+            <div className="label">Pairing</div>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4, lineHeight: 1.15 }}>
+              {mentor?.name ?? "—"}{" "}
+              <span style={{ color: "var(--ink-3)", fontWeight: 400 }}>↔</span>{" "}
+              {teacher?.fullName ?? "—"}
+              {teacher?.hindiName ? (
+                <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 10, fontSize: 18 }}>
+                  {teacher.hindiName}
+                </span>
+              ) : null}
+            </h1>
+            <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13 }}>
+              <span className="chip chip-ink" style={{ marginRight: 8 }}>{pairing.status}</span>
+              Q{currentQuarter} · Started{" "}
+              {new Date(pairing.startedAt).toLocaleDateString("en-IN", {
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              })}
+              {pairing.meetingsCount != null ? ` · ${pairing.meetingsCount} meetings` : ""}
+            </p>
+          </div>
         </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
-          {mentor?.name ?? "—"} <span style={{ color: "var(--ink-3)" }}>↔</span> {teacher?.fullName ?? "—"}
-          {teacher?.hindiName ? (
-            <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)", marginLeft: 10, fontSize: 18 }}>
-              {teacher.hindiName}
-            </span>
-          ) : null}
-        </h1>
-        <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
-          {pairing.status} · Q{pairing.currentQuarter ?? 1} ·{" "}
-          Started {new Date(pairing.startedAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
-          {pairing.meetingsCount != null ? ` · ${pairing.meetingsCount} meetings` : ""}
-        </div>
-      </header>
 
-      {/* Quarter strip */}
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: 8,
-          marginBottom: 22,
-          background: "var(--card-hi)",
-          padding: 12,
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-        }}
-      >
-        {QUARTERS.map((q, i) => {
-          const isCurrent = (pairing.currentQuarter ?? 1) === i + 1;
-          const isPast = (pairing.currentQuarter ?? 1) > i + 1;
-          return (
+        {/* Quarterly progress strip */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 18 }}>
+          {QUARTERS.map((q, i) => {
+            const qNum = i + 1;
+            const state = currentQuarter >= qNum ? (qNum < currentQuarter ? "done" : "current") : "future";
+            const subtitle =
+              qNum === 1
+                ? "Baseline + onboarding"
+                : qNum === 2
+                  ? "First developmental cycle"
+                  : qNum === 3
+                    ? "Mid-year evaluation"
+                    : "Endline + certification";
+            return (
+              <div
+                key={q}
+                className="card"
+                style={{
+                  padding: 12,
+                  background: state === "current" ? "var(--paper-2)" : "var(--card)",
+                  borderColor: state === "current" ? "var(--ink)" : "var(--line)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: "50%",
+                      background:
+                        state === "done"
+                          ? "var(--lichen)"
+                          : state === "current"
+                            ? "var(--ink)"
+                            : "var(--paper-3)",
+                      color: state === "future" ? "var(--ink-3)" : "white",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {state === "done" ? "✓" : qNum}
+                  </div>
+                  <span style={{ fontWeight: 500, fontSize: 12 }}>{QUARTER_LABEL[q].split(" · ")[0]}</span>
+                  <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-3)" }}>
+                    {state === "done" ? "Closed" : state === "current" ? "In progress" : "Upcoming"}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
+        <div style={{ display: "grid", gap: 14 }}>
+          <div className="card card-hi">
             <div
-              key={q}
               style={{
-                textAlign: "center",
-                padding: 10,
-                borderRadius: "var(--r-2)",
-                background: isCurrent ? "var(--ink)" : isPast ? "var(--lichen-soft)" : "var(--paper-2)",
-                color: isCurrent ? "var(--paper)" : isPast ? "var(--ink)" : "var(--ink-3)",
-                fontSize: 12,
-                fontWeight: isCurrent ? 600 : 500,
+                padding: "14px 16px",
+                borderBottom: "1px solid var(--line)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
               }}
             >
-              {QUARTER_LABEL[q]}
-              {isPast ? <span style={{ marginLeft: 6, fontSize: 10 }}>✓</span> : null}
-            </div>
-          );
-        })}
-      </section>
-
-      <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
-        <article style={{ background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>
-            Meetings ({meetings.length})
-          </h2>
-          {meetings.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No meetings logged yet.</p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              {meetings.map((m) => (
-                <li
-                  key={m.id}
-                  style={{
-                    padding: 10,
-                    border: "1px solid var(--line)",
-                    borderRadius: "var(--r-2)",
-                    fontSize: 12,
-                  }}
-                >
-                  <div style={{ fontWeight: 500 }}>
-                    {new Date(m.scheduledAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
-                    {m.durationMin ? ` · ${m.durationMin}` : ""}
-                  </div>
-                  {m.notes ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>{m.notes}</div> : null}
-                  {m.recordingVideoId ? (
-                    <Link
-                      href={`/videos/${m.recordingVideoId}`}
-                      style={{ fontSize: 11, color: "var(--indigo)", marginTop: 4, display: "inline-block" }}
-                    >
-                      Open recording →
-                    </Link>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-
-        <article style={{ background: "var(--card-hi)", border: "1px solid var(--line)", borderRadius: "var(--r-3)", padding: 16 }}>
-          <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, marginBottom: 12 }}>
-            Feedback ({feedbackByKind.size}/8)
-          </h2>
-          <p style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 12 }}>
-            4 mentor forms + 4 mentee forms across baseline + progress 1 + progress 2 + final. Lifecycle wired in spec 056.
-          </p>
-          {pairing.conceptNote ? (
-            <div style={{ padding: 10, background: "var(--paper-2)", borderRadius: "var(--r-2)", fontSize: 12 }}>
-              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-3)" }}>
-                Concept note
+              <div>
+                <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
+                  Meetings & touchpoints
+                </h2>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  Mentor logs every contact — phone, video, in-person, WhatsApp
+                </div>
               </div>
-              <p style={{ marginTop: 6, color: "var(--ink-2)", lineHeight: 1.5 }}>{pairing.conceptNote}</p>
+              <span className="chip">{meetings.length}</span>
+            </div>
+            {meetings.length === 0 ? (
+              <p style={{ padding: 16, fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+                No meetings logged yet.
+              </p>
+            ) : (
+              <div>
+                {meetings.map((m, i) => {
+                  const d = new Date(m.scheduledAt);
+                  const day = String(d.getDate()).padStart(2, "0");
+                  const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getMonth()];
+                  return (
+                    <div
+                      key={m.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "60px 1fr",
+                        gap: 14,
+                        padding: 16,
+                        borderTop: i ? "1px solid var(--line)" : "none",
+                      }}
+                    >
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>{day}</div>
+                        <div style={{ fontSize: 10, color: "var(--ink-4)", textTransform: "uppercase" }}>{mon}</div>
+                      </div>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontWeight: 500 }}>
+                            {d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}
+                          </span>
+                          {m.durationMin ? (
+                            <span className="chip" style={{ marginLeft: "auto" }}>{m.durationMin}m</span>
+                          ) : null}
+                        </div>
+                        {m.notes ? (
+                          <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 6, lineHeight: 1.5 }}>
+                            {m.notes}
+                          </p>
+                        ) : null}
+                        {m.recordingVideoId ? (
+                          <Link
+                            href={`/videos/${m.recordingVideoId}`}
+                            style={{ fontSize: 11, color: "var(--indigo)", marginTop: 4, display: "inline-block" }}
+                          >
+                            Open recording →
+                          </Link>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+          <div className="card card-hi">
+            <div
+              style={{
+                padding: "14px 16px",
+                borderBottom: "1px solid var(--line)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div>
+                <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
+                  Q{currentQuarter} progress feedback
+                </h2>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  4 mentor + 4 mentee forms across the year
+                </div>
+              </div>
+              <span className="chip chip-saffron">{feedbackByKind.size}/8</span>
+            </div>
+            <div style={{ padding: 14, fontSize: 12 }}>
+              <p style={{ color: "var(--ink-2)", lineHeight: 1.5, margin: 0 }}>
+                Mentor must complete an 8-question feedback form at the end of each quarter.
+                Auto-saves draft. Closes the quarter on submit.
+              </p>
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  color: "var(--ink-3)",
+                }}
+              >
+                <span>Forms completed</span>
+                <span style={{ fontFamily: "var(--mono)" }}>{feedbackByKind.size} / 8 done</span>
+              </div>
+              <div className="bar" style={{ marginTop: 6 }}>
+                <div style={{ width: `${feedbackPct}%` }} />
+              </div>
+            </div>
+          </div>
+
+          {pairing.conceptNote ? (
+            <div className="card card-hi">
+              <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
+                <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>Concept note</h2>
+              </div>
+              <div style={{ padding: 14 }}>
+                <div className="label" style={{ marginBottom: 6 }}>Pairing goal</div>
+                <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, margin: 0 }}>
+                  {pairing.conceptNote}
+                </p>
+              </div>
             </div>
           ) : null}
-        </article>
-      </section>
+        </div>
+      </div>
     </div>
   );
 }

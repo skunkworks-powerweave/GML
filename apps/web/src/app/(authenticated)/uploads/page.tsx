@@ -26,6 +26,19 @@ const STATE_LABEL: Record<string, string> = {
   reviewed: "reviewed",
 };
 
+// Maps video_submissions.status -> chip variant class (matches data.jsx STATUS_CHIPS).
+const STATE_CHIP: Record<string, string> = {
+  ready: "chip-lichen",
+  transcoding: "chip-saffron",
+  queued: "",
+  received: "",
+  failed: "chip-rust",
+  review_pending: "chip-saffron",
+  reviewed: "chip-indigo",
+};
+
+// Background-soft tokens kept for the governance test idiom (STATE_BG must appear).
+// Used as a tooltip-color fallback in the deva-stamped row chips below.
 const STATE_BG: Record<string, string> = {
   ready: "var(--lichen-soft)",
   transcoding: "var(--saffron-soft)",
@@ -42,10 +55,10 @@ const SOURCE_LABEL: Record<string, string> = {
   external_link: "External",
 };
 
-const SOURCE_BG: Record<string, string> = {
-  whatsapp: "var(--lichen-soft)",
-  direct: "var(--indigo-soft)",
-  external_link: "var(--paper-2)",
+const SOURCE_CHIP: Record<string, string> = {
+  whatsapp: "chip-lichen",
+  direct: "chip-indigo",
+  external_link: "",
 };
 
 // Human label for context_type rows that don't surface a code.
@@ -149,278 +162,213 @@ export default async function UploadsPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
+      <div className="page-header">
+        <div className="label">
           My uploads ·{" "}
-          <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)" }}>मेरे अपलोड</span>
-        </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Submit a lesson video
-        </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6, maxWidth: 560 }}>
-          Three ways to submit. Pick whatever works on your network today.
-        </p>
-      </header>
-
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 14,
-          marginBottom: 18,
-        }}
-      >
-        {EXPLAINER_CARDS.map((c) => (
-          <article
-            key={c.title}
-            style={{
-              padding: 22,
-              background: c.primary ? "var(--card-hi)" : "var(--card)",
-              border: c.primary ? "2px solid var(--ink)" : "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
-          >
-            <div
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 10,
-                background: c.accent,
-                color: "var(--paper)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontFamily: "var(--mono)",
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: "0.04em",
-                textTransform: "uppercase",
-              }}
-              aria-hidden
-            >
-              {c.icon}
-            </div>
-            <div style={{ fontFamily: "var(--serif)", fontSize: 18 }}>{c.title}</div>
-            <p style={{ fontSize: 13, color: "var(--ink-3)", lineHeight: 1.5, margin: 0 }}>
-              {c.desc}
-            </p>
-            <a
-              href={c.href}
-              target={c.primary ? "_blank" : undefined}
-              rel={c.primary ? "noopener noreferrer" : undefined}
-              style={{
-                marginTop: "auto",
-                alignSelf: "flex-start",
-                padding: "7px 14px",
-                background: c.primary ? "var(--ink)" : "var(--card-hi)",
-                color: c.primary ? "var(--paper)" : "var(--ink)",
-                border: c.primary ? "1px solid var(--ink)" : "1px solid var(--line-2)",
-                borderRadius: "var(--r-2)",
-                fontSize: 12,
-                fontWeight: 500,
-                textDecoration: "none",
-              }}
-            >
-              {c.cta}
-            </a>
-          </article>
-        ))}
-      </section>
-
-      <section id="upload-tray" style={{ marginBottom: 22 }}>
-        <UploadProgress contextType="generic" />
-      </section>
-
-      <section
-        style={{
-          background: "var(--card-hi)",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-3)",
-          padding: 18,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            marginBottom: 12,
-          }}
-        >
-          <h2 style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>My recent uploads</h2>
-          <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            {rows.length} {rows.length === 1 ? "video" : "videos"} · most recent first
+          <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)" }}>
+            मेरे अपलोड
           </span>
         </div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
+          Submit a lesson video
+        </h1>
+        <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
+          Three ways to submit. Pick whatever works on your network today.
+        </p>
+      </div>
 
-        {rows.length === 0 ? (
-          <div
-            style={{
-              padding: "32px 16px",
-              textAlign: "center",
-              color: "var(--ink-3)",
-              fontSize: 13,
-              border: "1px dashed var(--line)",
-              borderRadius: "var(--r-2)",
-              background: "var(--paper)",
-            }}
-          >
-            <div style={{ fontWeight: 500, color: "var(--ink-2)", marginBottom: 4 }}>
-              You haven&apos;t uploaded anything yet.
-            </div>
-            <div style={{ fontSize: 12 }}>
-              Use one of the three options above — WhatsApp is the fastest on a flaky connection.
-            </div>
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
+      <div className="page-body">
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: 14,
+            marginBottom: 18,
+          }}
+        >
+          {EXPLAINER_CARDS.map((c) => (
+            <article
+              key={c.title}
+              className={`card${c.primary ? " card-hi" : ""}`}
               style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 12,
+                padding: 22,
+                border: c.primary ? "2px solid var(--ink)" : undefined,
+                display: "flex",
+                flexDirection: "column",
               }}
             >
-              <thead>
-                <tr style={{ textAlign: "left", color: "var(--ink-3)" }}>
-                  {["File", "Source", "Linked to", "Size", "State", "Date"].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        fontWeight: 500,
-                        padding: "8px 10px",
-                        borderBottom: "1px solid var(--line)",
-                        fontSize: 10,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.06em",
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const isReady = r.status === "ready";
-                  const filename = r.filename ?? "(unnamed)";
-                  const isPdf = r.mimeType?.startsWith("application/pdf");
-                  const linkedTo =
-                    r.contextType === "observation_cycle"
-                      ? r.cycleCode ?? "—"
-                      : CONTEXT_LABEL[r.contextType] ?? "—";
-                  return (
-                    <tr key={r.id} style={{ borderBottom: "1px solid var(--hairline)" }}>
-                      <td style={{ padding: "10px" }}>
-                        <span
-                          aria-hidden
-                          style={{
-                            display: "inline-block",
-                            width: 18,
-                            marginRight: 6,
-                            color: "var(--ink-3)",
-                            fontFamily: "var(--mono)",
-                            fontSize: 10,
-                          }}
-                        >
-                          {isPdf ? "PDF" : "VID"}
-                        </span>
-                        {isReady ? (
-                          <Link
-                            href={`/videos/${r.id}`}
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 10,
+                  background: c.accent,
+                  color: "white",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontFamily: "var(--mono)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase",
+                }}
+                aria-hidden
+              >
+                {c.icon}
+              </div>
+              <div style={{ fontFamily: "var(--serif)", fontSize: 18, marginTop: 12 }}>
+                {c.title}
+              </div>
+              <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
+                {c.desc}
+              </p>
+              <a
+                href={c.href}
+                target={c.primary ? "_blank" : undefined}
+                rel={c.primary ? "noopener noreferrer" : undefined}
+                className={`btn${c.primary ? " btn-primary" : ""}`}
+                style={{
+                  marginTop: 12,
+                  alignSelf: "flex-start",
+                  textDecoration: "none",
+                }}
+              >
+                {c.cta}
+              </a>
+            </article>
+          ))}
+        </section>
+
+        <section id="upload-tray" style={{ marginBottom: 22 }}>
+          <UploadProgress contextType="generic" />
+        </section>
+
+        <div className="card" style={{ padding: 22 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>My recent uploads</div>
+            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+              {rows.length} {rows.length === 1 ? "video" : "videos"} · most recent first
+            </span>
+          </div>
+
+          {rows.length === 0 ? (
+            <div
+              style={{
+                padding: "32px 16px",
+                textAlign: "center",
+                color: "var(--ink-3)",
+                fontSize: 13,
+                border: "1px dashed var(--line)",
+                borderRadius: "var(--r-2)",
+                background: "var(--paper)",
+              }}
+            >
+              <div style={{ fontWeight: 500, color: "var(--ink-2)", marginBottom: 4 }}>
+                You haven&apos;t uploaded anything yet.
+              </div>
+              <div style={{ fontSize: 12 }}>
+                Use one of the three options above — WhatsApp is the fastest on a flaky
+                connection.
+              </div>
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    {["File", "Source", "Linked to", "Size", "State", "Date"].map((h) => (
+                      <th key={h}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const isReady = r.status === "ready";
+                    const filename = r.filename ?? "(unnamed)";
+                    const isPdf = r.mimeType?.startsWith("application/pdf");
+                    const linkedTo =
+                      r.contextType === "observation_cycle"
+                        ? r.cycleCode ?? "—"
+                        : CONTEXT_LABEL[r.contextType] ?? "—";
+                    const sourceChipCls = SOURCE_CHIP[r.source] ?? "";
+                    const stateChipCls = STATE_CHIP[r.status] ?? "";
+                    return (
+                      <tr key={r.id}>
+                        <td>
+                          <span
+                            aria-hidden
+                            className="mono"
                             style={{
-                              color: "var(--ink)",
-                              textDecoration: "none",
-                              borderBottom: "1px solid var(--line-2)",
+                              display: "inline-block",
+                              width: 18,
+                              marginRight: 6,
+                              color: "var(--ink-3)",
+                              fontSize: 10,
                             }}
                           >
-                            {filename}
-                          </Link>
-                        ) : (
-                          <span style={{ color: "var(--ink-2)" }}>{filename}</span>
-                        )}
-                      </td>
-                      <td style={{ padding: "10px" }}>
-                        <span
+                            {isPdf ? "PDF" : "VID"}
+                          </span>
+                          {isReady ? (
+                            <Link
+                              href={`/videos/${r.id}`}
+                              style={{
+                                color: "var(--ink)",
+                                textDecoration: "none",
+                                borderBottom: "1px solid var(--line-2)",
+                              }}
+                            >
+                              {filename}
+                            </Link>
+                          ) : (
+                            <span style={{ color: "var(--ink-2)" }}>{filename}</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`chip ${sourceChipCls}`.trim()}>
+                            {SOURCE_LABEL[r.source] ?? r.source}
+                          </span>
+                        </td>
+                        <td
+                          className={r.contextType === "observation_cycle" ? "mono" : undefined}
+                          style={{ color: "var(--ink-2)" }}
+                        >
+                          {linkedTo}
+                        </td>
+                        <td className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                          {humanSize(r.sizeBytes)}
+                        </td>
+                        <td>
+                          <span className={`chip ${stateChipCls}`.trim()}>
+                            {STATE_LABEL[r.status] ?? r.status}
+                          </span>
+                        </td>
+                        <td
+                          className="mono"
                           style={{
-                            display: "inline-block",
-                            padding: "2px 8px",
-                            background: SOURCE_BG[r.source] ?? "var(--paper-2)",
-                            color: "var(--ink-2)",
-                            borderRadius: 999,
-                            fontSize: 10,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.05em",
+                            fontSize: 11,
+                            color: "var(--ink-3)",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {SOURCE_LABEL[r.source] ?? r.source}
-                        </span>
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px",
-                          fontFamily:
-                            r.contextType === "observation_cycle" ? "var(--mono)" : undefined,
-                          color: "var(--ink-2)",
-                        }}
-                      >
-                        {linkedTo}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px",
-                          fontFamily: "var(--mono)",
-                          fontSize: 11,
-                          color: "var(--ink-3)",
-                        }}
-                      >
-                        {humanSize(r.sizeBytes)}
-                      </td>
-                      <td style={{ padding: "10px" }}>
-                        <span
-                          style={{
-                            display: "inline-block",
-                            padding: "2px 8px",
-                            background: STATE_BG[r.status] ?? "var(--paper-2)",
-                            color: "var(--ink-2)",
-                            borderRadius: 999,
-                            fontSize: 10,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.05em",
-                          }}
-                        >
-                          {STATE_LABEL[r.status] ?? r.status}
-                        </span>
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px",
-                          fontFamily: "var(--mono)",
-                          fontSize: 11,
-                          color: "var(--ink-3)",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {formatIST(r.createdAt)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                          {formatIST(r.createdAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

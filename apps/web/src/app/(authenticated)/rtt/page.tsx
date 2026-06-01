@@ -6,6 +6,15 @@ import { phases, terms, rttSubjects } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
 
+const SUBJECT_PALETTE = [
+  { chip: "chip-indigo", stripe: "var(--indigo)" },
+  { chip: "chip-saffron", stripe: "var(--saffron)" },
+  { chip: "chip-lichen", stripe: "var(--lichen)" },
+  { chip: "chip-rust", stripe: "var(--rust)" },
+  { chip: "chip-ink", stripe: "var(--ink-2)" },
+  { chip: "chip-indigo", stripe: "oklch(0.40 0.10 320)" },
+] as const;
+
 export default async function RttIndexPage() {
   const phaseRows = await db.select().from(phases).orderBy(phases.sequence);
   const termRows = await db.select().from(terms);
@@ -13,77 +22,103 @@ export default async function RttIndexPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          Refresher Teacher Training
-        </div>
+      <div className="page-header">
+        <div className="label">RTT — Recruit, Train, Transform</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>RTT phases &amp; subjects</h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
           {phaseRows.length} phases · {termRows.length} terms · {subjectRows.length} subjects across Leh + Kargil.
         </p>
-      </header>
+      </div>
 
-      {phaseRows.length === 0 ? (
-        <p style={{ color: "var(--ink-3)" }}>No phases seeded yet. Run the spec 086 seed script.</p>
-      ) : (
-        <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-          {phaseRows.map((p) => {
-            const phaseTerms = termRows.filter((t) => t.phaseId === p.id).sort((a, b) => a.sequence - b.sequence);
-            return (
-              <article
-                key={p.id}
-                style={{
-                  background: "var(--card-hi)",
-                  border: "1px solid var(--line)",
-                  borderRadius: "var(--r-3)",
-                  padding: 16,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
-              >
-                <header>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-                    Phase
-                  </div>
-                  <h2 style={{ fontFamily: "var(--serif)", fontSize: 22, marginTop: 2 }}>{p.label}</h2>
-                  {p.startDate ? (
-                    <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
-                      {new Date(p.startDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                      {p.endDate ? ` → ${new Date(p.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        {phaseRows.length === 0 ? (
+          <p style={{ color: "var(--ink-3)" }}>No phases seeded yet. Run the spec 086 seed script.</p>
+        ) : (
+          <>
+            {/* Phase strip */}
+            <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
+              {phaseRows.map((p) => {
+                const phaseTerms = termRows.filter((t) => t.phaseId === p.id).sort((a, b) => a.sequence - b.sequence);
+                const phaseSubjectCount = subjectRows.filter((s) =>
+                  phaseTerms.some((t) => t.id === s.termId),
+                ).length;
+                return (
+                  <article key={p.id} className="card" style={{ padding: 18 }}>
+                    <div className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      PHASE {p.sequence} / {phaseRows.length}
                     </div>
-                  ) : null}
-                </header>
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ fontFamily: "var(--serif)", fontSize: 22, marginTop: 6, letterSpacing: "-0.01em" }}>
+                      {p.label}
+                    </div>
+                    {p.startDate ? (
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>
+                        {new Date(p.startDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                        {p.endDate ? ` → ${new Date(p.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}
+                      </div>
+                    ) : null}
+                    <div className="mono" style={{ marginTop: 14, display: "flex", gap: 18, fontSize: 11, color: "var(--ink-3)" }}>
+                      <span>{phaseSubjectCount} subjects</span>
+                      <span>{phaseTerms.length} terms</span>
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
+
+            {/* Subjects grid (grouped by phase + term) */}
+            {phaseRows.map((p) => {
+              const phaseTerms = termRows.filter((t) => t.phaseId === p.id).sort((a, b) => a.sequence - b.sequence);
+              if (phaseTerms.length === 0) return null;
+              return (
+                <section key={`phase-${p.id}`} style={{ display: "grid", gap: 12 }}>
+                  <div className="label">{p.label}</div>
                   {phaseTerms.map((t) => {
                     const termSubjects = subjectRows.filter((s) => s.termId === t.id);
                     return (
-                      <li key={t.id} style={{ fontSize: 12 }}>
-                        <div style={{ fontWeight: 500 }}>{t.name}</div>
-                        <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      <div key={t.id} style={{ display: "grid", gap: 10 }}>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                          <span className="chip chip-indigo">{t.name}</span>
                           {termSubjects.length === 0 ? (
-                            "no subjects yet"
-                          ) : (
-                            termSubjects.map((s) => (
-                              <Link
-                                key={s.id}
-                                href={`/rtt/subject/${s.id}`}
-                                style={{ color: "var(--indigo)", marginRight: 8 }}
-                              >
-                                {s.name}
-                              </Link>
-                            ))
-                          )}
+                            <span style={{ fontSize: 12, color: "var(--ink-3)" }}>no subjects yet</span>
+                          ) : null}
                         </div>
-                      </li>
+                        {termSubjects.length > 0 ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
+                            {termSubjects.map((s, idx) => {
+                              const palette = SUBJECT_PALETTE[idx % SUBJECT_PALETTE.length];
+                              return (
+                                <Link
+                                  key={s.id}
+                                  href={`/rtt/subject/${s.id}`}
+                                  className="card card-hi"
+                                  style={{ padding: 0, overflow: "hidden", textDecoration: "none", color: "inherit", display: "block" }}
+                                >
+                                  <div style={{ height: 8, background: palette.stripe }} />
+                                  <div style={{ padding: 16 }}>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                      <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                                        {s.code ?? `${p.label}/${t.name}`}
+                                      </span>
+                                      <span className={`chip ${palette.chip}`}>EN</span>
+                                    </div>
+                                    <div style={{ fontFamily: "var(--serif)", fontSize: 20, marginTop: 8, letterSpacing: "-0.01em", lineHeight: 1.2 }}>
+                                      {s.name}
+                                    </div>
+                                  </div>
+                                </Link>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
                     );
                   })}
-                </ul>
-              </article>
-            );
-          })}
-        </section>
-      )}
+                </section>
+              );
+            })}
+          </>
+        )}
+      </div>
     </div>
   );
 }

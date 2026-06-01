@@ -12,17 +12,21 @@ import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
-const STAGE_CHIP: Record<string, { bg: string; ink: string }> = {
-  Primary: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
-  Middle: { bg: "var(--indigo-soft)", ink: "var(--indigo)" },
-  High: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
+// Stage chip kinds — map to the new `.chip` utility class variants in globals.css.
+// The `bg` field is the underlying CSS var the chip-* class resolves to (kept here
+// as documentation + so governance tests can assert the Primary→lichen / Middle→indigo
+// / High→saffron mapping from a single source of truth).
+const STAGE_CHIP: Record<string, { kind: string; bg: string }> = {
+  Primary: { kind: "chip-lichen", bg: "var(--lichen-soft)" },
+  Middle: { kind: "chip-indigo", bg: "var(--indigo-soft)" },
+  High: { kind: "chip-saffron", bg: "var(--saffron-soft)" },
 };
 
-const STATUS_CHIP: Record<string, { bg: string; ink: string; label: string }> = {
-  planned: { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "Planned" },
-  in_progress: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "In progress" },
-  complete: { bg: "var(--lichen-soft)", ink: "var(--lichen)", label: "Complete" },
-  cancelled: { bg: "var(--rust-soft)", ink: "var(--rust)", label: "Cancelled" },
+const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
+  planned: { kind: "", label: "Planned" },
+  in_progress: { kind: "chip-saffron", label: "In progress" },
+  complete: { kind: "chip-lichen", label: "Complete" },
+  cancelled: { kind: "chip-rust", label: "Cancelled" },
 };
 
 export default async function RepoClassDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -72,78 +76,49 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
 
   return (
     <div>
-      <header style={{ marginBottom: 20 }}>
+      <div className="page-header">
         <Link
           href={school ? `/repo/school/${school.id}` : "/repo"}
-          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8, display: "inline-flex" }}
         >
           ← {school?.code ?? "Repository"}
         </Link>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-            marginTop: 8,
-          }}
-        >
-          Class · {school?.code ?? "—"}
+        <div>
+          <div className="label">Class · {school?.code ?? "—"}</div>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Grade {cls.grade}</h1>
+          <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
+            {cls.studentsCount} students across {cls.sectionsCount} section
+            {cls.sectionsCount > 1 ? "s" : ""}
+            {cls.classTeacherName ? `. Class teacher ${cls.classTeacherName}.` : "."}
+          </p>
         </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Grade {cls.grade}</h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          {cls.studentsCount} students across {cls.sectionsCount} section
-          {cls.sectionsCount > 1 ? "s" : ""}
-          {cls.classTeacherName ? `. Class teacher ${cls.classTeacherName}.` : "."}
-        </p>
-      </header>
+      </div>
 
-      <section style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18 }}>
+      <section
+        className="page-body"
+        style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18, alignItems: "start" }}
+      >
         <div style={{ display: "grid", gap: 16 }}>
           {/* Subjects taught at this grade */}
-          <article
-            style={{
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              padding: 16,
-            }}
-          >
-            <header style={{ marginBottom: 10 }}>
-              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
-                Subjects ({subjectRows.length})
-              </h2>
-              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>Taught at this grade</div>
-            </header>
+          <SectionCard title={`Subjects (${subjectRows.length})`} sub="Taught at this grade">
             {subjectRows.length === 0 ? (
-              <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No subjects mapped to this grade yet.</p>
+              <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
+                No subjects mapped to this grade yet.
+              </div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <table className="t">
                 <thead>
-                  <tr
-                    style={{
-                      textAlign: "left",
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      color: "var(--ink-3)",
-                    }}
-                  >
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Subject</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Grades covered</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Code</th>
+                  <tr>
+                    <th>Subject</th>
+                    <th>Grades covered</th>
+                    <th>Code</th>
                   </tr>
                 </thead>
                 <tbody>
                   {subjectRows.map((s) => (
                     <tr key={s.id}>
-                      <td
-                        style={{
-                          padding: "8px",
-                          borderBottom: "1px solid var(--hairline)",
-                          fontWeight: 500,
-                        }}
-                      >
+                      <td style={{ fontWeight: 500 }}>
                         {s.color ? (
                           <span
                             aria-hidden
@@ -152,7 +127,7 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                               width: 8,
                               height: 8,
                               borderRadius: 999,
-                              background: s.color.startsWith("var(") ? s.color : s.color,
+                              background: s.color,
                               marginRight: 8,
                               verticalAlign: "middle",
                             }}
@@ -160,26 +135,10 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                         ) : null}
                         {s.name}
                       </td>
-                      <td
-                        style={{
-                          padding: "8px",
-                          borderBottom: "1px solid var(--hairline)",
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-3)",
-                        }}
-                      >
+                      <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
                         {s.gradesMin ?? 1}–{s.gradesMax ?? 12}
                       </td>
-                      <td
-                        style={{
-                          padding: "8px",
-                          borderBottom: "1px solid var(--hairline)",
-                          fontFamily: "var(--mono)",
-                          fontSize: 12,
-                          color: "var(--ink-3)",
-                        }}
-                      >
+                      <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
                         {s.code}
                       </td>
                     </tr>
@@ -187,43 +146,24 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                 </tbody>
               </table>
             )}
-          </article>
+          </SectionCard>
 
           {/* Sessions held in this class */}
-          <article
-            style={{
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              padding: 16,
-            }}
-          >
-            <header style={{ marginBottom: 10 }}>
-              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
-                Sessions held ({sessionRows.length})
-              </h2>
-              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>Most recent first</div>
-            </header>
+          <SectionCard title={`Sessions held (${sessionRows.length})`} sub="Most recent first">
             {sessionRows.length === 0 ? (
-              <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No classroom sessions logged yet.</p>
+              <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
+                No classroom sessions logged yet.
+              </div>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <table className="t">
                 <thead>
-                  <tr
-                    style={{
-                      textAlign: "left",
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      color: "var(--ink-3)",
-                    }}
-                  >
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Date</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Time</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Subject</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Topic</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Teacher</th>
-                    <th style={{ padding: "6px 8px", borderBottom: "1px solid var(--line)" }}>Status</th>
+                  <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Subject</th>
+                    <th>Topic</th>
+                    <th>Teacher</th>
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -231,43 +171,18 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                     const pill = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
                     return (
                       <tr key={s.id}>
-                        <td
-                          style={{
-                            padding: "8px",
-                            borderBottom: "1px solid var(--hairline)",
-                            fontFamily: "var(--mono)",
-                            fontSize: 12,
-                          }}
-                        >
+                        <td className="mono" style={{ fontSize: 12 }}>
                           {new Date(`${s.scheduledDate}T00:00:00`).toLocaleDateString("en-IN", {
                             day: "numeric",
                             month: "short",
                           })}
                         </td>
-                        <td
-                          style={{
-                            padding: "8px",
-                            borderBottom: "1px solid var(--hairline)",
-                            fontFamily: "var(--mono)",
-                            fontSize: 12,
-                            color: "var(--ink-3)",
-                          }}
-                        >
+                        <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
                           {s.scheduledTime ? String(s.scheduledTime).slice(0, 5) : "—"}
                         </td>
-                        <td style={{ padding: "8px", borderBottom: "1px solid var(--hairline)" }}>
-                          {s.subjectName ?? "—"}
-                        </td>
-                        <td
-                          style={{
-                            padding: "8px",
-                            borderBottom: "1px solid var(--hairline)",
-                            color: "var(--ink-2)",
-                          }}
-                        >
-                          {s.topic ?? "—"}
-                        </td>
-                        <td style={{ padding: "8px", borderBottom: "1px solid var(--hairline)" }}>
+                        <td>{s.subjectName ?? "—"}</td>
+                        <td style={{ color: "var(--ink-2)" }}>{s.topic ?? "—"}</td>
+                        <td>
                           {s.teacherName ?? "—"}
                           {s.teacherHindi ? (
                             <span
@@ -282,21 +197,8 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                             </span>
                           ) : null}
                         </td>
-                        <td style={{ padding: "8px", borderBottom: "1px solid var(--hairline)" }}>
-                          <span
-                            style={{
-                              padding: "2px 8px",
-                              background: pill.bg,
-                              color: pill.ink,
-                              borderRadius: 999,
-                              fontSize: 10,
-                              textTransform: "uppercase",
-                              letterSpacing: "0.06em",
-                              fontWeight: 600,
-                            }}
-                          >
-                            {pill.label}
-                          </span>
+                        <td>
+                          <span className={`chip ${pill.kind}`}>{pill.label}</span>
                         </td>
                       </tr>
                     );
@@ -304,23 +206,13 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                 </tbody>
               </table>
             )}
-          </article>
+          </SectionCard>
         </div>
 
-        <aside style={{ display: "grid", gap: 16, alignContent: "start" }}>
+        <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
           {/* Details KV */}
-          <article
-            style={{
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-3)",
-              padding: 16,
-            }}
-          >
-            <header style={{ marginBottom: 6 }}>
-              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>Details</h2>
-            </header>
-            <div style={{ padding: "0 0 4px" }}>
+          <SectionCard title="Details">
+            <div style={{ padding: "0 14px 8px" }}>
               <KVRow label="School">
                 {school ? (
                   <Link
@@ -335,53 +227,36 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
               </KVRow>
               <KVRow label="Grade">{cls.grade}</KVRow>
               <KVRow label="Stage">
-                <span
-                  style={{
-                    padding: "2px 8px",
-                    background: stage.bg,
-                    color: stage.ink,
-                    borderRadius: 999,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    fontWeight: 600,
-                  }}
-                >
-                  {cls.stage}
-                </span>
+                <span className={`chip ${stage.kind}`}>{cls.stage}</span>
               </KVRow>
               <KVRow label="Students">{cls.studentsCount}</KVRow>
               <KVRow label="Sections">{cls.sectionsCount}</KVRow>
               <KVRow label="Class teacher">{cls.classTeacherName ?? "—"}</KVRow>
-              <KVRow label="Status">{cls.active ? "Active" : "Inactive"}</KVRow>
+              <KVRow label="Status">
+                <span className={`chip ${cls.active ? "chip-lichen" : ""}`}>
+                  {cls.active ? "Active" : "Inactive"}
+                </span>
+              </KVRow>
             </div>
-          </article>
+          </SectionCard>
 
-          {/* PII-gated link to the learner roster */}
+          {/* PII-gated link to the learner roster — JSX prototype showed learners inline,
+              but SM-9 (audit on view) requires moving the actual roster to /learners. */}
           {canSeeRoster ? (
             <Link
               href={`/repo/class/${id}/learners`}
+              className="card card-hi"
               style={{
-                background: "var(--card-hi)",
-                border: "1px solid var(--line)",
-                borderRadius: "var(--r-3)",
                 padding: 16,
                 textDecoration: "none",
                 color: "var(--ink)",
                 display: "block",
               }}
             >
-              <div
-                style={{
-                  fontSize: 10,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  color: "var(--ink-3)",
-                }}
-              >
-                Roster · PII (audited)
+              <div className="label">Roster · PII (audited)</div>
+              <div style={{ fontWeight: 500, marginTop: 4, fontSize: 14 }}>
+                View learners ({cls.studentsCount}) →
               </div>
-              <div style={{ fontWeight: 500, marginTop: 4, fontSize: 14 }}>View learners ({cls.studentsCount}) →</div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
                 SM-9: opening this list writes an audit_log entry.
               </div>
@@ -400,8 +275,36 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
               Full learner roster restricted (PII). Programme admins only.
             </div>
           )}
-        </aside>
+        </div>
       </section>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  sub,
+  children,
+}: {
+  title: string;
+  sub?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="card card-hi" style={{ overflow: "hidden" }}>
+      <header
+        style={{
+          padding: "12px 16px",
+          borderBottom: "1px solid var(--line)",
+          background: "var(--card)",
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+        {sub ? (
+          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
+        ) : null}
+      </header>
+      {children}
     </div>
   );
 }

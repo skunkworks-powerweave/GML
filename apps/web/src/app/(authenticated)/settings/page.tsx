@@ -28,12 +28,12 @@ const DEFAULT_PREFS: SettingsFormValues = {
 
 // Role chip color tokens mirror the topbar palette (spec 027). Keeps the
 // account row visually consistent with the rest of the chrome.
-const ROLE_COLORS: Record<string, { bg: string; ink: string; label: string }> = {
-  super_admin: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "Super admin" },
-  programme_admin: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "Programme admin" },
-  mentor: { bg: "var(--indigo-soft)", ink: "var(--indigo)", label: "Mentor" },
-  teacher: { bg: "var(--lichen-soft)", ink: "var(--lichen)", label: "Teacher" },
-  observer: { bg: "var(--rust-soft)", ink: "var(--rust)", label: "Observer" },
+const ROLE_COLORS: Record<string, { chipKind: string; label: string }> = {
+  super_admin: { chipKind: "chip-saffron", label: "Super admin" },
+  programme_admin: { chipKind: "chip-saffron", label: "Programme admin" },
+  mentor: { chipKind: "chip-indigo", label: "Mentor" },
+  teacher: { chipKind: "chip-lichen", label: "Teacher" },
+  observer: { chipKind: "chip-rust", label: "Observer" },
 };
 
 export default async function SettingsPage() {
@@ -43,7 +43,7 @@ export default async function SettingsPage() {
   const userId = session.user.id;
   const email = session.user.email ?? "—";
   const role = session.user.role ?? "teacher";
-  const roleStyle = ROLE_COLORS[role] ?? { bg: "var(--paper-2)", ink: "var(--ink-3)", label: role.replace(/_/g, " ") };
+  const roleStyle = ROLE_COLORS[role] ?? { chipKind: "", label: role.replace(/_/g, " ") };
 
   const [row] = await db
     .select()
@@ -64,17 +64,8 @@ export default async function SettingsPage() {
 
   return (
     <div>
-      <header style={{ marginBottom: 24 }}>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-          }}
-        >
-          Settings
-        </div>
+      <div className="page-header">
+        <div className="label">Settings</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
           Your preferences
         </h1>
@@ -82,34 +73,36 @@ export default async function SettingsPage() {
           Persisted to your account. Display + accessibility tweaks apply on the next page load;
           watermark + language take effect immediately on new requests.
         </p>
-      </header>
+      </div>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 18,
-          marginBottom: 24,
-        }}
-      >
-        <SettingsForm initial={initial} email={email} roleLabel={roleStyle.label} roleBg={roleStyle.bg} roleInk={roleStyle.ink} />
-      </section>
+      <div className="page-body">
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 18,
+            marginBottom: 24,
+          }}
+        >
+          <SettingsForm initial={initial} email={email} roleLabel={roleStyle.label} roleChipKind={roleStyle.chipKind} />
+        </section>
 
-      <footer
-        style={{
-          fontSize: 11,
-          color: "var(--ink-3)",
-          borderTop: "1px solid var(--line)",
-          paddingTop: 12,
-          marginTop: 8,
-        }}
-      >
-        Programme-wide settings (video pipeline, notifications, backups) live under{" "}
-        <a href="/admin" style={{ color: "var(--indigo)", textDecoration: "none" }}>
-          Admin
-        </a>{" "}
-        and require a programme admin role.
-      </footer>
+        <footer
+          style={{
+            fontSize: 11,
+            color: "var(--ink-3)",
+            borderTop: "1px solid var(--line)",
+            paddingTop: 12,
+            marginTop: 8,
+          }}
+        >
+          Programme-wide settings (video pipeline, notifications, backups) live under{" "}
+          <a href="/admin" style={{ color: "var(--indigo)", textDecoration: "none" }}>
+            Admin
+          </a>{" "}
+          and require a programme admin role.
+        </footer>
+      </div>
     </div>
   );
 }

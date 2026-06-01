@@ -22,64 +22,20 @@ import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
 
-const OUTLINE_STATUS_CHIP: Record<
-  string,
-  { bg: string; ink: string; border: string; label: string }
-> = {
-  planned: {
-    bg: "var(--paper-2)",
-    ink: "var(--ink-3)",
-    border: "var(--line)",
-    label: "Planned",
-  },
-  in_progress: {
-    bg: "var(--saffron-soft)",
-    ink: "oklch(0.42 0.13 60)",
-    border: "oklch(0.82 0.08 60)",
-    label: "In progress",
-  },
-  complete: {
-    bg: "var(--lichen-soft)",
-    ink: "oklch(0.32 0.08 145)",
-    border: "oklch(0.82 0.06 145)",
-    label: "Complete",
-  },
-  archived: {
-    bg: "var(--paper-2)",
-    ink: "var(--ink-4)",
-    border: "var(--line)",
-    label: "Archived",
-  },
+// Status → chip-* utility class + label. Matches JSX `Chip kind={...}` pattern
+// using the global utilities now in globals.css.
+const OUTLINE_STATUS_CHIP: Record<string, { cls: string; label: string }> = {
+  planned: { cls: "", label: "Planned" },
+  in_progress: { cls: "chip-saffron", label: "In progress" },
+  complete: { cls: "chip-lichen", label: "Complete" },
+  archived: { cls: "", label: "Archived" },
 };
 
-const SESSION_STATUS_CHIP: Record<
-  string,
-  { bg: string; ink: string; border: string; label: string }
-> = {
-  planned: {
-    bg: "var(--paper-2)",
-    ink: "var(--ink-3)",
-    border: "var(--line)",
-    label: "Planned",
-  },
-  in_progress: {
-    bg: "var(--saffron-soft)",
-    ink: "oklch(0.42 0.13 60)",
-    border: "oklch(0.82 0.08 60)",
-    label: "In progress",
-  },
-  complete: {
-    bg: "var(--lichen-soft)",
-    ink: "oklch(0.32 0.08 145)",
-    border: "oklch(0.82 0.06 145)",
-    label: "Complete",
-  },
-  cancelled: {
-    bg: "var(--rust-soft)",
-    ink: "oklch(0.40 0.13 30)",
-    border: "oklch(0.82 0.08 30)",
-    label: "Cancelled",
-  },
+const SESSION_STATUS_CHIP: Record<string, { cls: string; label: string }> = {
+  planned: { cls: "", label: "Planned" },
+  in_progress: { cls: "chip-saffron", label: "In progress" },
+  complete: { cls: "chip-lichen", label: "Complete" },
+  cancelled: { cls: "chip-rust", label: "Cancelled" },
 };
 
 export default async function RepoSubjectDetailPage({
@@ -187,183 +143,289 @@ export default async function RepoSubjectDetailPage({
 
   return (
     <div>
-      <header style={{ marginBottom: 22 }}>
+      <div className="page-header">
         <Link
           href="/repo/subjects"
-          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8 }}
         >
           ← Subjects
         </Link>
-        <div
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: "var(--ink-3)",
-            marginTop: 8,
-          }}
-        >
-          Repository · Subject
-        </div>
-        <h1
-          style={{
-            fontFamily: "var(--serif)",
-            fontSize: 28,
-            marginTop: 4,
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <span
-            aria-hidden
+        <div>
+          <div className="label">Repository · Subject</div>
+          <h1
             style={{
-              width: 14,
-              height: 14,
-              borderRadius: "50%",
-              background: subject.color ?? "var(--ink-4)",
-              border: "1px solid var(--line-2)",
-              display: "inline-block",
+              fontFamily: "var(--serif)",
+              fontSize: 28,
+              marginTop: 4,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
             }}
-          />
-          {subject.name}
-          {subject.code ? (
-            <code
+          >
+            <span
+              aria-hidden
               style={{
-                fontFamily: "var(--mono)",
-                fontSize: 14,
-                color: "var(--ink-3)",
-                marginLeft: 6,
-                fontWeight: 400,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: subject.color ?? "var(--ink-4)",
+                border: "1px solid var(--line-2)",
+                display: "inline-block",
               }}
-            >
-              {subject.code}
-            </code>
-          ) : null}
-        </h1>
-        <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          Grades {gradesLabel}
-          {gradesCount > 0 ? ` (${gradesCount} grades)` : ""}. FLN-aligned for foundational
-          grades; SCERT framework for higher classes.
-        </p>
-      </header>
+            />
+            {subject.name}
+            {subject.code ? (
+              <code
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 14,
+                  color: "var(--ink-3)",
+                  marginLeft: 6,
+                  fontWeight: 400,
+                }}
+              >
+                {subject.code}
+              </code>
+            ) : null}
+          </h1>
+          <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
+            Grades {gradesLabel}
+            {gradesCount > 0 ? ` (${gradesCount} grades)` : ""}. FLN-aligned for foundational
+            grades; SCERT framework for higher classes.
+          </p>
+        </div>
+      </div>
 
-      {/* 4-stat strip */}
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: 14,
-          marginBottom: 16,
-        }}
-      >
-        <StatTile label="Grades covered" value={gradesLabel} />
-        <StatTile label="Course outlines" value={String(outlinesTotal)} />
-        <StatTile label="Sessions" value={String(sessionsTotal)} />
-        <StatTile label="Readings" value={String(readingsTotal)} />
-      </section>
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        {/* 4-stat strip */}
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, 1fr)",
+            gap: 14,
+          }}
+        >
+          <StatTile label="Grades covered" value={gradesLabel} />
+          <StatTile label="Course outlines" value={String(outlinesTotal)} />
+          <StatTile label="Sessions" value={String(sessionsTotal)} />
+          <StatTile label="Readings" value={String(readingsTotal)} />
+        </section>
 
-      {/* Course outlines */}
-      <SectionCard
-        title={`Course outlines (${outlinesTotal})`}
-        sub="By grade and term"
-      >
-        {outlines.length === 0 ? (
-          <EmptyRow>No outlines yet.</EmptyRow>
-        ) : (
-          <table style={tableStyle}>
+        {/* Course outlines */}
+        <SectionCard
+          title={`Course outlines (${outlinesTotal})`}
+          sub="By grade and term"
+        >
+          <table className="t">
             <thead>
               <tr>
-                {["Outline", "Grade", "Term", "Sessions", "Weeks", "Status", ""].map((h, i) => (
-                  <th key={i} style={thStyle}>
-                    {h}
-                  </th>
-                ))}
+                <th>Outline</th>
+                <th>Grade</th>
+                <th>Term</th>
+                <th>Sessions</th>
+                <th>Weeks</th>
+                <th>Status</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              {outlines.map((o) => {
-                const chip = OUTLINE_STATUS_CHIP[o.status] ?? OUTLINE_STATUS_CHIP.planned;
-                return (
-                  <tr key={o.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                    <td style={tdStyle}>
-                      <Link
-                        href={`/repo/outline/${o.id}`}
-                        style={{ color: "var(--ink)", fontWeight: 500, textDecoration: "none" }}
-                      >
-                        {o.name}
-                      </Link>
-                    </td>
-                    <td style={tdStyle}>{o.grade}</td>
-                    <td style={tdStyle}>{o.term}</td>
-                    <td style={tdStyle}>{o.sessionsCount}</td>
-                    <td style={tdStyle}>{o.weeks ?? "—"}</td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          padding: "2px 8px",
-                          fontSize: 11,
-                          fontWeight: 500,
-                          borderRadius: 999,
-                          background: chip.bg,
-                          color: chip.ink,
-                          border: `1px solid ${chip.border}`,
-                        }}
-                      >
-                        {chip.label}
-                      </span>
-                    </td>
-                    <td style={{ ...tdStyle, color: "var(--ink-4)", textAlign: "right" }}>
-                      <Link href={`/repo/outline/${o.id}`} style={{ color: "var(--ink-4)" }}>
-                        ›
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
+              {outlines.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}>
+                    No outlines yet.
+                  </td>
+                </tr>
+              ) : (
+                outlines.map((o) => {
+                  const chip = OUTLINE_STATUS_CHIP[o.status] ?? OUTLINE_STATUS_CHIP.planned;
+                  return (
+                    <tr key={o.id}>
+                      <td style={{ fontWeight: 500 }}>
+                        <Link
+                          href={`/repo/outline/${o.id}`}
+                          style={{ color: "var(--ink)", textDecoration: "none" }}
+                        >
+                          {o.name}
+                        </Link>
+                      </td>
+                      <td>{o.grade}</td>
+                      <td>{o.term}</td>
+                      <td>{o.sessionsCount}</td>
+                      <td>{o.weeks ?? "—"}</td>
+                      <td>
+                        <span className={`chip ${chip.cls}`.trim()}>{chip.label}</span>
+                      </td>
+                      <td style={{ color: "var(--ink-4)", textAlign: "right" }}>
+                        <Link href={`/repo/outline/${o.id}`} style={{ color: "var(--ink-4)" }}>
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
-        )}
-      </SectionCard>
+        </SectionCard>
 
-      {/* Recent sessions */}
-      <SectionCard title={`Recent sessions (${sessionsTotal})`}>
-        {recentSessions.length === 0 ? (
-          <EmptyRow>No sessions recorded yet.</EmptyRow>
-        ) : (
-          <table style={tableStyle}>
+        {/* Recent sessions */}
+        <SectionCard title={`Recent sessions (${sessionsTotal})`}>
+          <table className="t">
             <thead>
               <tr>
-                {["Date", "School", "Grade", "Topic", "Teacher", "Status"].map((h, i) => (
-                  <th key={i} style={thStyle}>
-                    {h}
-                  </th>
-                ))}
+                <th>Date</th>
+                <th>School</th>
+                <th>Grade</th>
+                <th>Topic</th>
+                <th>Teacher</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              {recentSessions.map((s) => {
-                const chip = SESSION_STATUS_CHIP[s.status] ?? SESSION_STATUS_CHIP.planned;
-                return (
-                  <tr key={s.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                    <td style={{ ...tdStyle, fontFamily: "var(--mono)", fontSize: 12 }}>
-                      {s.scheduledDate
-                        ? new Date(s.scheduledDate).toLocaleDateString("en-IN", {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric",
-                          })
-                        : "—"}
+              {recentSessions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}>
+                    No sessions recorded yet.
+                  </td>
+                </tr>
+              ) : (
+                recentSessions.map((s) => {
+                  const chip = SESSION_STATUS_CHIP[s.status] ?? SESSION_STATUS_CHIP.planned;
+                  return (
+                    <tr key={s.id}>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {s.scheduledDate
+                          ? new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            })
+                          : "—"}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {s.schoolCode ?? "—"}
+                      </td>
+                      <td>{s.grade ?? "—"}</td>
+                      <td>{s.topic ?? "—"}</td>
+                      <td>
+                        {s.teacherName ?? "—"}
+                        {s.teacherHindi ? (
+                          <span
+                            style={{
+                              fontFamily: "var(--deva)",
+                              color: "var(--ink-3)",
+                              marginLeft: 8,
+                              fontSize: 12,
+                            }}
+                          >
+                            {s.teacherHindi}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className={`chip ${chip.cls}`.trim()}>{chip.label}</span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </SectionCard>
+
+        {/* Two-column: Readings + Teachers */}
+        <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+          <SectionCard title={`Reading material (${readingsTotal})`}>
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Kind</th>
+                  <th>Owner</th>
+                  <th>Pages</th>
+                  <th>Updated</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {readingRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}>
+                      No readings linked.
                     </td>
-                    <td style={{ ...tdStyle, fontFamily: "var(--mono)", fontSize: 12 }}>
-                      {s.schoolCode ?? "—"}
-                    </td>
-                    <td style={tdStyle}>{s.grade ?? "—"}</td>
-                    <td style={tdStyle}>{s.topic ?? "—"}</td>
-                    <td style={tdStyle}>
-                      {s.teacherName ?? "—"}
-                      {s.teacherHindi ? (
+                  </tr>
+                ) : (
+                  readingRows.map((r) => (
+                    <tr key={r.id}>
+                      <td style={{ fontWeight: 500 }}>
+                        <Link
+                          href={`/repo/resource/${r.id}`}
+                          style={{ color: "var(--ink)", textDecoration: "none" }}
+                        >
+                          {r.name}
+                        </Link>
+                      </td>
+                      <td>
+                        <span className="chip">{r.kind}</span>
+                      </td>
+                      <td style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                        {r.owner ?? "—"}
+                      </td>
+                      <td>{r.pages ?? "—"}</td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {new Date(r.updatedAt).toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                        })}
+                      </td>
+                      <td style={{ color: "var(--ink-4)", textAlign: "right" }}>
+                        <Link href={`/repo/resource/${r.id}`} style={{ color: "var(--ink-4)" }}>
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </SectionCard>
+
+          <SectionCard
+            title={`Teachers (${teacherRows.length})`}
+            sub="Distinct teachers with sessions on this subject"
+          >
+            {teacherRows.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No teachers yet.
+              </div>
+            ) : (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 0,
+                }}
+              >
+                {teacherRows.map((t) => (
+                  <li
+                    key={t.id}
+                    style={{
+                      padding: "9px 14px",
+                      borderBottom: "1px solid var(--line)",
+                      fontSize: 13,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      alignItems: "baseline",
+                    }}
+                  >
+                    <span>
+                      <span style={{ fontWeight: 500 }}>{t.fullName}</span>
+                      {t.hindiName ? (
                         <span
                           style={{
                             fontFamily: "var(--deva)",
@@ -372,193 +434,64 @@ export default async function RepoSubjectDetailPage({
                             fontSize: 12,
                           }}
                         >
-                          {s.teacherHindi}
+                          {t.hindiName}
                         </span>
                       ) : null}
-                    </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          padding: "2px 8px",
-                          fontSize: 11,
-                          fontWeight: 500,
-                          borderRadius: 999,
-                          background: chip.bg,
-                          color: chip.ink,
-                          border: `1px solid ${chip.border}`,
-                        }}
-                      >
-                        {chip.label}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </SectionCard>
-
-      {/* Two-column: Readings + Teachers */}
-      <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16, marginTop: 16 }}>
-        <SectionCard title={`Reading material (${readingsTotal})`}>
-          {readingRows.length === 0 ? (
-            <EmptyRow>No readings linked.</EmptyRow>
-          ) : (
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  {["Title", "Kind", "Owner", "Pages", "Updated", ""].map((h, i) => (
-                    <th key={i} style={thStyle}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {readingRows.map((r) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                    <td style={tdStyle}>
-                      <Link
-                        href={`/repo/resource/${r.id}`}
-                        style={{ color: "var(--ink)", fontWeight: 500, textDecoration: "none" }}
-                      >
-                        {r.name}
-                      </Link>
-                    </td>
-                    <td style={tdStyle}>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          padding: "2px 8px",
-                          fontSize: 11,
-                          fontWeight: 500,
-                          borderRadius: 999,
-                          background: "var(--paper-2)",
-                          color: "var(--ink-2)",
-                          border: "1px solid var(--line)",
-                        }}
-                      >
-                        {r.kind}
-                      </span>
-                    </td>
-                    <td style={{ ...tdStyle, fontSize: 12, color: "var(--ink-3)" }}>
-                      {r.owner ?? "—"}
-                    </td>
-                    <td style={tdStyle}>{r.pages ?? "—"}</td>
-                    <td style={{ ...tdStyle, fontFamily: "var(--mono)", fontSize: 12 }}>
-                      {new Date(r.updatedAt).toLocaleDateString("en-IN", {
-                        day: "numeric",
-                        month: "short",
-                      })}
-                    </td>
-                    <td style={{ ...tdStyle, color: "var(--ink-4)", textAlign: "right" }}>
-                      <Link href={`/repo/resource/${r.id}`} style={{ color: "var(--ink-4)" }}>
-                        ›
-                      </Link>
-                    </td>
-                  </tr>
+                      {t.schoolCode ? (
+                        <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: 8 }}>
+                          · {t.schoolCode}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span
+                      className="mono"
+                      style={{
+                        fontSize: 11,
+                        color: "var(--ink-3)",
+                      }}
+                    >
+                      {t.sessionsCount} session{t.sessionsCount === 1 ? "" : "s"}
+                    </span>
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          )}
-        </SectionCard>
-
-        <SectionCard title={`Teachers (${teacherRows.length})`} sub="Distinct teachers with sessions on this subject">
-          {teacherRows.length === 0 ? (
-            <EmptyRow>No teachers yet.</EmptyRow>
-          ) : (
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 0,
-              }}
-            >
-              {teacherRows.map((t) => (
-                <li
-                  key={t.id}
-                  style={{
-                    padding: "9px 14px",
-                    borderBottom: "1px solid var(--line)",
-                    fontSize: 13,
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    alignItems: "baseline",
-                  }}
-                >
-                  <span>
-                    <span style={{ fontWeight: 500 }}>{t.fullName}</span>
-                    {t.hindiName ? (
-                      <span
-                        style={{
-                          fontFamily: "var(--deva)",
-                          color: "var(--ink-3)",
-                          marginLeft: 8,
-                          fontSize: 12,
-                        }}
-                      >
-                        {t.hindiName}
-                      </span>
-                    ) : null}
-                    {t.schoolCode ? (
-                      <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: 8 }}>
-                        · {t.schoolCode}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: "var(--mono)",
-                      fontSize: 11,
-                      color: "var(--ink-3)",
-                    }}
-                  >
-                    {t.sessionsCount} session{t.sessionsCount === 1 ? "" : "s"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </SectionCard>
-      </section>
+              </ul>
+            )}
+          </SectionCard>
+        </section>
+      </div>
     </div>
   );
 }
 
+// Stat tile — matches JSX `Stat` (ui.jsx:147) using `.card` + `.label` + serif numeric.
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        background: "var(--card-hi)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        padding: 14,
-      }}
-    >
+    <div className="card" style={{ padding: 14 }}>
+      <div className="label">{label}</div>
       <div
         style={{
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          color: "var(--ink-3)",
-          fontWeight: 500,
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          marginTop: 6,
         }}
       >
-        {label}
-      </div>
-      <div style={{ fontFamily: "var(--serif)", fontSize: 24, marginTop: 4, color: "var(--ink)" }}>
-        {value}
+        <div
+          className="serif"
+          style={{
+            fontSize: 26,
+            fontWeight: 600,
+            letterSpacing: "-0.02em",
+          }}
+        >
+          {value}
+        </div>
       </div>
     </div>
   );
 }
 
+// Section card — matches JSX `SectionCard` (ui.jsx:161) using `.card`.
 function SectionCard({
   title,
   sub,
@@ -569,61 +502,23 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <article
-      style={{
-        background: "var(--card)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        marginBottom: 16,
-        overflow: "hidden",
-      }}
-    >
-      <header
+    <div className="card">
+      <div
         style={{
+          display: "flex",
+          alignItems: "center",
           padding: "12px 14px",
           borderBottom: "1px solid var(--line)",
-          background: "var(--card-hi)",
         }}
       >
-        <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>{title}</h2>
-        {sub ? (
-          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
-        ) : null}
-      </header>
-      {children}
-    </article>
-  );
-}
-
-function EmptyRow({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>{title}</div>
+          {sub ? (
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
+          ) : null}
+        </div>
+      </div>
       {children}
     </div>
   );
 }
-
-const tableStyle: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "separate",
-  borderSpacing: 0,
-  fontSize: 13,
-};
-
-const thStyle: React.CSSProperties = {
-  padding: "9px 12px",
-  textAlign: "left",
-  fontSize: 11,
-  textTransform: "uppercase",
-  letterSpacing: "0.07em",
-  color: "var(--ink-3)",
-  fontWeight: 600,
-  background: "var(--paper-2)",
-  borderBottom: "1px solid var(--line)",
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "9px 12px",
-  textAlign: "left",
-  verticalAlign: "middle",
-};

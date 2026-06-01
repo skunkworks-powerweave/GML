@@ -28,11 +28,11 @@ const ALLOWED_ROLES = new Set([
   "teacher",
 ]);
 
-const STATUS_COLOR: Record<string, { bg: string; ink: string; label: string }> = {
-  planned: { bg: "var(--paper-2)", ink: "var(--ink-2)", label: "Planned" },
-  in_progress: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "In progress" },
-  complete: { bg: "var(--lichen-soft)", ink: "var(--lichen)", label: "Complete" },
-  cancelled: { bg: "var(--paper-2)", ink: "var(--ink-3)", label: "Cancelled" },
+const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
+  planned: { kind: "", label: "Planned" },
+  in_progress: { kind: "chip-saffron", label: "In progress" },
+  complete: { kind: "chip-lichen", label: "Complete" },
+  cancelled: { kind: "", label: "Cancelled" },
 };
 
 function fmtAttendance(attended: number, total: number): string {
@@ -88,21 +88,16 @@ export default async function RepoSessionPage({
     cycle = c;
   }
 
-  const statusInfo = STATUS_COLOR[s.status] ?? STATUS_COLOR.planned;
+  const statusChip = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
 
   return (
     <div>
       {/* Header */}
-      <header style={{ marginBottom: 22 }}>
+      <div className="page-header">
         <Link
           href="/repo/sessions"
-          style={{
-            fontSize: 12,
-            color: "var(--ink-3)",
-            textDecoration: "none",
-            display: "inline-block",
-            marginBottom: 8,
-          }}
+          className="btn btn-sm btn-ghost"
+          style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
           ← Sessions
         </Link>
@@ -116,25 +111,15 @@ export default async function RepoSessionPage({
           }}
         >
           <div>
-            <div
-              style={{
-                fontSize: 10,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                color: "var(--ink-3)",
-              }}
-            >
-              Session ·{" "}
-              <span style={{ fontFamily: "var(--mono)", textTransform: "none" }}>
-                {s.id.slice(0, 8)}
-              </span>
+            <div className="label">
+              Session · <span className="mono" style={{ textTransform: "none" }}>{s.id.slice(0, 8)}</span>
             </div>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
+            <h1 className="serif" style={{ fontSize: 26, marginTop: 4 }}>
               {s.topic ?? lesson?.title ?? "Untitled session"}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
               {school?.code ?? "—"} · Grade {cls?.grade ?? "—"} · {subject?.name ?? "—"} ·{" "}
-              <span style={{ fontFamily: "var(--mono)" }}>
+              <span className="mono">
                 {s.scheduledDate}
                 {s.scheduledTime ? ` ${s.scheduledTime}` : ""}
               </span>
@@ -142,42 +127,19 @@ export default async function RepoSessionPage({
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span
-              style={{
-                padding: "2px 10px",
-                background: statusInfo.bg,
-                color: statusInfo.ink,
-                borderRadius: 999,
-                fontSize: 11,
-                textTransform: "uppercase",
-                letterSpacing: "0.06em",
-                fontWeight: 600,
-              }}
-            >
-              {statusInfo.label}
-            </span>
+            <span className={`chip ${statusChip.kind}`.trim()}>{statusChip.label}</span>
             {s.observed ? (
-              <span
-                style={{
-                  padding: "2px 10px",
-                  background: "var(--saffron-soft)",
-                  color: "var(--saffron)",
-                  borderRadius: 999,
-                  fontSize: 11,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  fontWeight: 600,
-                }}
-              >
+              <span className="chip chip-saffron">
                 Observed{cycle?.code ? ` · ${cycle.code}` : ""}
               </span>
             ) : null}
           </div>
         </div>
-      </header>
+      </div>
 
       {/* Body: two-column */}
-      <section
+      <div
+        className="page-body"
         style={{
           display: "grid",
           gridTemplateColumns: "1.6fr 1fr",
@@ -228,18 +190,12 @@ export default async function RepoSessionPage({
               <div style={{ padding: 14, fontSize: 13, color: "var(--ink-2)" }}>
                 This session was observed by the mentor. The full pre-form, video review, and
                 post-form are recorded against cycle{" "}
-                <span style={{ fontFamily: "var(--mono)" }}>{cycle.code}</span>.
+                <span className="mono">{cycle.code}</span>.
                 <div style={{ marginTop: 10 }}>
                   <Link
                     href={`/observation/${cycle.id}`}
-                    style={{
-                      fontSize: 12,
-                      padding: "5px 10px",
-                      background: "var(--ink)",
-                      color: "var(--paper)",
-                      borderRadius: "var(--r-2)",
-                      textDecoration: "none",
-                    }}
+                    className="btn btn-sm"
+                    style={{ textDecoration: "none" }}
                   >
                     Open cycle {cycle.code} →
                   </Link>
@@ -254,7 +210,7 @@ export default async function RepoSessionPage({
           <SectionCard title="Details">
             <div style={{ padding: "0 14px 8px" }}>
               <KVRow label="Session ID">
-                <span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{s.id}</span>
+                <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
               </KVRow>
               <KVRow label="School">
                 <RelLink href={`/repo/school/${s.schoolId}`}>
@@ -287,27 +243,14 @@ export default async function RepoSessionPage({
                 </RelLink>
               </KVRow>
               <KVRow label="Date">
-                <span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>
+                <span className="mono" style={{ fontSize: 12 }}>
                   {s.scheduledDate}
                   {s.scheduledTime ? ` · ${s.scheduledTime}` : ""}
                 </span>
               </KVRow>
               <KVRow label="Duration">{s.durationMin ? `${s.durationMin} min` : "—"}</KVRow>
               <KVRow label="Status">
-                <span
-                  style={{
-                    padding: "2px 8px",
-                    background: statusInfo.bg,
-                    color: statusInfo.ink,
-                    borderRadius: 999,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    fontWeight: 600,
-                  }}
-                >
-                  {statusInfo.label}
-                </span>
+                <span className={`chip ${statusChip.kind}`.trim()}>{statusChip.label}</span>
               </KVRow>
               <KVRow label="Attendance">{fmtAttendance(s.attendedCount, s.totalCount)}</KVRow>
               {outline ? (
@@ -317,41 +260,15 @@ export default async function RepoSessionPage({
               ) : null}
               <KVRow label="Observed">
                 {s.observed ? (
-                  <span
-                    style={{
-                      padding: "2px 8px",
-                      background: "var(--saffron-soft)",
-                      color: "var(--saffron)",
-                      borderRadius: 999,
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      fontWeight: 600,
-                    }}
-                  >
-                    Yes
-                  </span>
+                  <span className="chip chip-saffron">Yes</span>
                 ) : (
-                  <span
-                    style={{
-                      padding: "2px 8px",
-                      background: "var(--paper-2)",
-                      color: "var(--ink-3)",
-                      borderRadius: 999,
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      fontWeight: 600,
-                    }}
-                  >
-                    No
-                  </span>
+                  <span className="chip">No</span>
                 )}
               </KVRow>
             </div>
           </SectionCard>
         </div>
-      </section>
+      </div>
     </div>
   );
 }
@@ -366,14 +283,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      style={{
-        background: "var(--card-hi)",
-        border: "1px solid var(--line)",
-        borderRadius: "var(--r-3)",
-        overflow: "hidden",
-      }}
-    >
+    <div className="card card-hi" style={{ overflow: "hidden" }}>
       <header
         style={{
           padding: "12px 16px",
@@ -381,7 +291,7 @@ function SectionCard({
           background: "var(--paper)",
         }}
       >
-        <div style={{ fontFamily: "var(--serif)", fontSize: 15, color: "var(--ink)" }}>{title}</div>
+        <div className="serif" style={{ fontSize: 15, color: "var(--ink)" }}>{title}</div>
         {sub ? (
           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
         ) : null}
@@ -403,16 +313,7 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
         alignItems: "flex-start",
       }}
     >
-      <span
-        style={{
-          fontSize: 11,
-          color: "var(--ink-3)",
-          textTransform: "uppercase",
-          letterSpacing: "0.07em",
-          fontWeight: 500,
-          paddingTop: 2,
-        }}
-      >
+      <span className="label" style={{ paddingTop: 2 }}>
         {label}
       </span>
       <div
@@ -432,20 +333,7 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
 
 function RelLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <Link
-      href={href}
-      style={{
-        padding: "2px 8px",
-        background: "var(--paper-2)",
-        color: "var(--ink-2)",
-        borderRadius: 999,
-        fontSize: 12,
-        textDecoration: "none",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-      }}
-    >
+    <Link href={href} className="chip" style={{ textDecoration: "none", fontSize: 12 }}>
       {children}
     </Link>
   );
