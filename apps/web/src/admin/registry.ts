@@ -18,6 +18,8 @@ import { rttAttendanceEntity } from "./entities/rtt-attendance";
 import { rttSubjectsEntity } from "./entities/rtt-subjects";
 import { subjectsEntity } from "./entities/subjects";
 import { classesEntity } from "./entities/classes";
+import { courseOutlinesEntity } from "./entities/course-outlines";
+import { outlineLessonsEntity } from "./entities/outline-lessons";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   schools: schoolsEntity,
@@ -29,6 +31,8 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   "rtt-subjects": rttSubjectsEntity,
   subjects: subjectsEntity,
   classes: classesEntity,
+  "course-outlines": courseOutlinesEntity,
+  "outline-lessons": outlineLessonsEntity,
 };
 
 export type AdminEntitySlug = keyof typeof ADMIN_ENTITIES;

@@ -29,6 +29,13 @@
       "when": 1780315867308,
       "tag": "0003_classes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780316049211,
+      "tag": "0004_outlines_and_lessons",
+      "breakpoints": true
     }
   ]
 }
