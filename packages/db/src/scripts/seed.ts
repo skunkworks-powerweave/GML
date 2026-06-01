@@ -28,8 +28,12 @@ export async function main() {
   await bootstrapSuperAdmin(db);
 
   console.log("[seed] checking existing rows…");
-  const [districtsCount] = await db.execute(sql`SELECT COUNT(*)::int AS c FROM districts`);
-  if ((districtsCount as { c: number }).c > 0) {
+  // db.execute() with node-postgres returns a pg QueryResult { rows, rowCount }, not an array.
+  // Destructuring directly off the QueryResult fails TS2488 (no Symbol.iterator), so we
+  // pull the first row out of .rows explicitly.
+  const districtsCountResult = await db.execute(sql`SELECT COUNT(*)::int AS c FROM districts`);
+  const districtsCount = districtsCountResult.rows[0] as { c: number } | undefined;
+  if ((districtsCount?.c ?? 0) > 0) {
     console.log("[seed] districts already exist — skipping seed (idempotent)");
     await pool.end();
     return;

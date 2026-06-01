@@ -1,0 +1,3 @@
+# Quickstart 112
+
+`pnpm --filter @gml/db typecheck` → expect exit code 0 with zero `error TS` lines. Then `pnpm -r typecheck` (workspace-wide) → still green. To prove the seed.ts fix matches runtime, set `DATABASE_URL` to a populated Postgres and run `pnpm --filter @gml/db seed:all` — the script should print `[seed] districts already exist — skipping seed (idempotent)` and exit 0. Before the fix, this command would have thrown `TypeError: Cannot read properties of undefined (reading 'c')`. To prove the retention.ts guardrail, `grep -n "from \"\\.\\./src/schema" packages/db/src/scripts/retention.ts` must return nothing.
