@@ -18,15 +18,18 @@
     "next": "16.2.6",
     "next-auth": "5.0.0-beta.25",
     "nodemailer": "^6.9.16",
+    "papaparse": "^5.4.1",
     "pg": "^8.13.1",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/nodemailer": "^6.4.17",
+    "@types/papaparse": "^5.3.15",
     "@types/pg": "^8.11.10",
     "@types/react": "^19",
     "@types/react-dom": "^19",

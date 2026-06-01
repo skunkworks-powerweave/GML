@@ -37,6 +37,9 @@ importers:
       nodemailer:
         specifier: ^6.9.16
         version: 6.10.1
+      papaparse:
+        specifier: ^5.4.1
+        version: 5.5.3
       pg:
         specifier: ^8.13.1
         version: 8.21.0
@@ -46,6 +49,9 @@ importers:
       react-dom:
         specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
     devDependencies:
       '@tailwindcss/postcss':
         specifier: ^4
@@ -59,6 +65,9 @@ importers:
       '@types/nodemailer':
         specifier: ^6.4.17
         version: 6.4.23
+      '@types/papaparse':
+        specifier: ^5.3.15
+        version: 5.5.2
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.0
@@ -1109,6 +1118,9 @@ packages:
 
   '@types/nodemailer@6.4.23':
     resolution: {integrity: sha512-aFV3/NsYFLSx9mbb5gtirBSXJnAlrusoKNuPbxsASWc7vrKLmIrTQRpdcxNcSFL3VW2A2XpeLEavwb2qMi6nlQ==}
+
+  '@types/papaparse@5.5.2':
+    resolution: {integrity: sha512-gFnFp/JMzLHCwRf7tQHrNnfhN4eYBVYYI897CGX4MY1tzY9l2aLkVyx2IlKZ/SAqDbB3I1AOZW5gTMGGsqWliA==}
 
   '@types/pg@8.20.0':
     resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
@@ -2394,6 +2406,9 @@ packages:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
 
+  papaparse@5.5.3:
+    resolution: {integrity: sha512-5QvjGxYVjxO59MGU2lHVYpRWBBtKHnlIAcSe1uNFCkkptUh63NFRj0FJQm7nR67puEruUci/ZkjmEFrjCAyP4A==}
+
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
@@ -3549,6 +3564,10 @@ snapshots:
       undici-types: 6.21.0
 
   '@types/nodemailer@6.4.23':
+    dependencies:
+      '@types/node': 22.19.19
+
+  '@types/papaparse@5.5.2':
     dependencies:
       '@types/node': 22.19.19
 
@@ -4956,6 +4975,8 @@ snapshots:
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
+
+  papaparse@5.5.3: {}
 
   parent-module@1.0.1:
     dependencies:

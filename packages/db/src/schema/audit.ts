@@ -1,10 +1,14 @@
 // audit_log — append-only record of who did what.
 // SM-1 enforcement layers:
-//   1. DB GRANT REVOKE on UPDATE/DELETE (lands as raw SQL migration in spec 011)
+//   1. DB GRANT REVOKE on UPDATE/DELETE (raw SQL migration ships in spec 011)
 //   2. App-level: no `db.update(auditLog)` or `db.delete(auditLog)` anywhere
-//   3. CI gate: grep guard in tests/governance (lands in spec 011)
+//   3. CI gate: grep guard in tests/governance (spec 011)
 //
-// Partitioning by month is DEFERRED — see PROGRESS.md "Deferred items".
+// v2 (spec 021): `action` is now varchar(64) supporting dotted notation
+// (`gate.attempt.fail`, `whatsapp.media.fetched`, `transcode.success`, etc).
+// Convention: `/^[a-z_]+(\.[a-z_]+)*$/`. Documented in docs/audit-actions.md.
+//
+// Partitioning by month is DEFERRED — see PROGRESS.md.
 
 import {
   index,
@@ -15,7 +19,6 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
-import { auditActionEnum } from "./enums";
 import { users } from "./identity";
 
 export const auditLog = pgTable(
@@ -23,7 +26,7 @@ export const auditLog = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
-    action: auditActionEnum("action").notNull(),
+    action: varchar("action", { length: 64 }).notNull(),
     entityType: varchar("entity_type", { length: 64 }),
     entityId: text("entity_id"),
     ip: varchar("ip", { length: 64 }),
@@ -40,15 +43,10 @@ export const auditLog = pgTable(
   ],
 );
 
-export type AuditAction =
-  | "view"
-  | "download"
-  | "upload"
-  | "edit"
-  | "delete"
-  | "gate_pass"
-  | "gate_fail"
-  | "login"
-  | "logout";
+// v2 (spec 021): action is free-form varchar(64), not a fixed enum.
+// Recommended convention: lower-snake-case + optional dotted prefix
+// (`gate.attempt.fail`, `whatsapp.media.fetched`, `transcode.success`, plain
+// verbs like `view`/`edit`/`delete` still valid). Documented in docs/audit-actions.md.
+export type AuditAction = string;
 
 export type NewAuditEntry = typeof auditLog.$inferInsert;

@@ -71,6 +71,20 @@
       "when": 1780318110794,
       "tag": "0009_schema_additions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1780319235860,
+      "tag": "0010_enum_migrations_and_audit_varchar",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780320002148,
+      "tag": "0011_user_prefs_and_notifications",
+      "breakpoints": true
     }
   ]
 }

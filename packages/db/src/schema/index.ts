@@ -13,3 +13,5 @@ export * from "./outlines";
 export * from "./sessions";
 export * from "./resources";
 export * from "./learners";
+export * from "./prefs";
+export * from "./notifications";
