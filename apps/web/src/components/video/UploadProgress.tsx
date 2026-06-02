@@ -21,6 +21,12 @@ type UploadState = {
   bytesTotal: number;
   status: "uploading" | "transcoding" | "ready" | "failed";
   videoSubmissionId?: string;
+  // Spec 156 (Run 14 audit-closure MEDIUM): when tus-js-client fails to
+  // load (rare, but possible if the bundle is corrupted or the user is on
+  // an offline-cached page), surface an explicit message that points the
+  // user at the WhatsApp PRIMARY path. Pre-fix the upload was just marked
+  // failed with no reason, and the user had no idea what to try next.
+  errorMessage?: string;
 };
 
 export function UploadProgress({ contextType, contextId, onComplete }: UploadProgressProps) {
@@ -67,11 +73,18 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
         });
         upload.start();
       } else {
-        // Fallback path — direct POST
-        updateUpload(id, { status: "failed" });
+        // Fallback path — tus-js-client failed to import. Spec 156: surface
+        // an explicit, actionable message instead of a silent failed row.
+        updateUpload(id, {
+          status: "failed",
+          errorMessage: "Upload library unavailable. Please try the WhatsApp PRIMARY path instead.",
+        });
       }
     } catch {
-      updateUpload(id, { status: "failed" });
+      updateUpload(id, {
+        status: "failed",
+        errorMessage: "Upload library unavailable. Please try the WhatsApp PRIMARY path instead.",
+      });
     }
 
     e.target.value = "";
@@ -150,6 +163,24 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
                       }}
                     />
                   </div>
+                  {/* Spec 156: render the actionable error message inline so
+                      the user sees WHY the upload failed and what to do next
+                      (the WhatsApp PRIMARY path is the load-bearing fallback
+                      for low-bandwidth Ladakh field mentors). */}
+                  {u.status === "failed" && u.errorMessage ? (
+                    <div
+                      role="alert"
+                      data-testid="upload-error-message"
+                      style={{
+                        marginTop: 6,
+                        fontSize: 11,
+                        color: "var(--rust)",
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      {u.errorMessage}
+                    </div>
+                  ) : null}
                 </div>
                 <div
                   style={{

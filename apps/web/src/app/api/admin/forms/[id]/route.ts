@@ -2,6 +2,22 @@
 // Role-gated to programme_admin + super_admin. Validates that the body parses
 // as JSON, updates the feedback_forms row, bumps the version, and records an
 // audit entry of action `form.schema.update`.
+//
+// Spec 152 (admin-grid-improvements, Workflow Run 14 MEDIUM audit closure) —
+// the previous shipped code SELECTed the existing row, computed `nextVersion`
+// in JS, then UPDATEd. Under concurrent PUTs both requests could read
+// version "2" and both write "3", trampling each other and leaving
+// `feedback_forms_kind_audience_version_uq` (the unique index in
+// packages/db/src/schema/mentorship.ts) to throw a 500 on the loser — or,
+// worse, allow both to succeed when audience/kind differ enough that the
+// uniqueness constraint doesn't fire. The fix wraps the SELECT + UPDATE
+// pair in `db.transaction(async (tx) => { ... })` and re-reads the existing
+// row with a row-level lock via `.for("update")`. Postgres SELECT … FOR
+// UPDATE blocks every other transaction trying to acquire the same lock
+// until commit, serialising the read-then-write so the second writer sees
+// the freshly-bumped version and computes "3" → "4" instead of trampling.
+// The recordAudit() fires AFTER the transaction commits so the audit log
+// only records successful version bumps.
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -70,36 +86,67 @@ export async function PUT(
     );
   }
 
-  // Load existing row to compute the next version + record prev in audit metadata.
-  const [existing] = await db
-    .select({ id: feedbackForms.id, version: feedbackForms.version })
-    .from(feedbackForms)
-    .where(eq(feedbackForms.id, id))
-    .limit(1);
+  // Spec 152 — race-safe version bump. We wrap the SELECT + UPDATE pair in
+  // `db.transaction(async (tx) => { ... })` and acquire a row-level lock on
+  // the existing row via `.for("update")`. Postgres serialises every other
+  // transaction trying to lock the same row, so two concurrent PUTs can no
+  // longer both read "1" and both write "2" — the second writer blocks on
+  // the first's lock, then re-reads the freshly-bumped "2" and writes "3".
+  // The transaction returns the resolved (prevVersion, nextVersion) pair so
+  // the post-commit audit hook records the actual transition that landed.
+  let txResult: { prevVersion: string; nextVersion: string } | null = null;
+  let notFound = false;
+  try {
+    txResult = await db.transaction(async (tx) => {
+      // SELECT … FOR UPDATE — re-reads the row inside the transaction and
+      // holds a row-level lock until commit. Drizzle's pg query builder
+      // exposes this via `.for("update")` on the select chain.
+      const locked = await tx
+        .select({ id: feedbackForms.id, version: feedbackForms.version })
+        .from(feedbackForms)
+        .where(eq(feedbackForms.id, id))
+        .limit(1)
+        .for("update");
+      const existing = locked[0];
+      if (!existing) {
+        notFound = true;
+        return null;
+      }
+      const nextVersion = bumpVersion(existing.version);
+      await tx
+        .update(feedbackForms)
+        .set({ schema: parsed, version: nextVersion })
+        .where(eq(feedbackForms.id, id));
+      return { prevVersion: existing.version, nextVersion };
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: "transaction_failed", message: (e as Error).message },
+      { status: 500 },
+    );
+  }
 
-  if (!existing) {
+  if (notFound || !txResult) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  const nextVersion = bumpVersion(existing.version);
-
-  // Single-row update — schema column accepts arbitrary JSON, version is text.
-  await db
-    .update(feedbackForms)
-    .set({ schema: parsed, version: nextVersion })
-    .where(eq(feedbackForms.id, id));
-
   // SM-1 — audit every mutation; metadata captures the version transition so an
   // admin reviewing /admin/audit can chase regressions back to the schema.
+  // Spec 152 — the audit fires AFTER the transaction commits so the log only
+  // records successful version bumps. Best-effort `void` — audit failure
+  // never rolls back a committed rotation (same pattern as spec 148).
   void recordAudit({
     action: "form.schema.update",
     entityType: "feedback_forms",
     entityId: id,
     metadata: {
-      prevVersion: existing.version,
-      nextVersion,
+      prevVersion: txResult.prevVersion,
+      nextVersion: txResult.nextVersion,
     },
   });
 
-  return NextResponse.json({ ok: true, version: nextVersion }, { status: 200 });
+  return NextResponse.json(
+    { ok: true, version: txResult.nextVersion },
+    { status: 200 },
+  );
 }

@@ -9,6 +9,16 @@
 // top-level `"use server"` action this file owns; it inserts into
 // `feedback_responses`, deletes the matching draft, and fires `form.submit`
 // audit, then redirects to /forms/[slug]/thanks.
+//
+// Spec 155 — the runner now enforces an audience-vs-role gate BEFORE
+// rendering. Any logged-in user used to be able to GET /forms/<slug> regardless
+// of whether the form targeted their role; in particular a `teacher` could
+// open a mentor-only baseline form and start typing into it (the autosave
+// would land but the draft would never reach the right pairing). The runner
+// now maps `feedback_forms.audience` → required RoleName and redirects to
+// /forbidden + audits `form.access.denied` on mismatch. The audience enum is
+// `mentor | mentee`; `mentee` maps to the `teacher` role because in this
+// codebase a mentee IS the classroom teacher being mentored.
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -23,6 +33,7 @@ import {
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
+import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
 // Spec 133 — Mobile runner is a drop-in replacement for FormRenderer when
 // the device cookie reports a touch device. Same prop contract, same server
@@ -100,6 +111,42 @@ function readSchema(form: FeedbackForm): FormSchemaShape {
   const raw = form.schema as unknown;
   if (raw && typeof raw === "object") return raw as FormSchemaShape;
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Spec 155 — audience-vs-role gate.
+//
+// `feedback_forms.audience` is the closed enum {mentor, mentee} (see
+// packages/db/src/schema/enums.ts::feedbackAudienceEnum). The runner used to
+// accept any logged-in user — a `teacher` could open a mentor-only baseline
+// form and start typing, an `observer` could autosave drafts against forms
+// they are never supposed to fill, etc. We now map each audience to the
+// closed set of RoleNames that may render the runner and redirect to
+// /forbidden + audit `form.access.denied` on mismatch.
+//
+// `mentee` maps to `teacher` because in this codebase the mentee IS the
+// classroom teacher being mentored (the schema names the relationship
+// `mentor_pairings.mentee_user_id` even though the user record's role is
+// "teacher"). The audience enum does not include a "programme" slot in the
+// shipped schema; the gate carries an explicit branch for it so the runner
+// stays open if a future migration adds it (or if a partially-typed form
+// somehow lands with `audience: undefined`).
+const AUDIENCE_ALLOWED_ROLES: Record<string, RoleName[] | "any"> = {
+  mentor: ["mentor"],
+  mentee: ["teacher"],
+  programme: "any",
+};
+
+function isAudienceAccessAllowed(
+  audience: string | null | undefined,
+  role: RoleName | string | undefined,
+): boolean {
+  // Unknown / null / undefined audience → treat as "any authenticated user".
+  if (!audience) return true;
+  const allowed = AUDIENCE_ALLOWED_ROLES[audience];
+  if (allowed === undefined) return true; // future audience enum we don't gate yet
+  if (allowed === "any") return true;
+  return !!role && (allowed as RoleName[]).includes(role as RoleName);
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +343,28 @@ export default async function FormRunnerPage({
     )
     .limit(1);
   if (!form) return <NotFoundShell slug={slug} />;
+
+  // Spec 155 — audience-vs-role gate. A `teacher` opening a mentor-only form
+  // (or vice versa) is bounced to /forbidden and the denial is audited so a
+  // pattern of attempts surfaces in the audit log. We log BEFORE redirecting
+  // because `redirect()` throws; `void recordAudit(...)` is fire-and-forget by
+  // contract so the throw cannot swallow the audit.
+  const sessionRole: RoleName | undefined = (session.user.role ?? undefined) as
+    | RoleName
+    | undefined;
+  if (!isAudienceAccessAllowed(form.audience, sessionRole)) {
+    void recordAudit({
+      action: "form.access.denied",
+      entityType: "feedback_form",
+      entityId: form.id,
+      metadata: {
+        slug,
+        requiredAudience: form.audience,
+        role: sessionRole ?? null,
+      },
+    });
+    redirect("/forbidden");
+  }
 
   const [draft] = await db
     .select({ responses: formDrafts.responses, updatedAt: formDrafts.updatedAt })

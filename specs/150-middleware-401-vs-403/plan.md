@@ -1,0 +1,5 @@
+# Plan 150
+
+CREATED: `specs/150-middleware-401-vs-403/{spec,plan,research,quickstart,tasks}.md`, `tests/governance/test_150_middleware_401_vs_403.test.mjs`
+EDITED: `apps/web/src/middleware.ts` (file header gains a Spec-150 paragraph documenting the 401-vs-403 split; the no-session branch now sets BOTH `from` and `next` query params on the `/login` redirect URL and includes the original search string in the encoded path; the insufficient-role branch now calls `NextResponse.rewrite(url, { status: 403 })` with an explicit status object so non-browser callers see the correct HTTP code rather than the rewrite-default 200; the ordering invariant — session check before role check — is reaffirmed in the inline comments so a future refactor can't silently swap the branches)
+MIGRATED: none — pure middleware response-shape fix; no schema delta, no new dependency (NextResponse.rewrite already accepts a ResponseInit second argument in Next 15), no env contract change. The next migration idx (0018) stays reserved for spec 153

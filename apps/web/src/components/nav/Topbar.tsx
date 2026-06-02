@@ -14,13 +14,21 @@
 //      ("N processing · K waiting · M failed") and hides when all zero.
 //   3. Counts arrive as props from `(authenticated)/layout.tsx`, which calls
 //      the React.cache'd loaders in `@/lib/chrome-counts`.
+//
+// Spec 155 — the language picker is now a real switcher. The summary chip
+// reflects the user's CURRENT locale (EN / हि / བོ) and clicking a row PUTs
+// to /api/user-prefs with `{ uiLanguage }` then reloads the document so the
+// NextIntlClientProvider in (authenticated)/layout.tsx re-mounts with the
+// new messages bundle. See `./LanguagePicker.tsx` for the client island.
 
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { signOut } from "@/auth";
 import { formatBellBadge, formatQueueLabel, type QueueDepth } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
+import type { Locale } from "@/i18n/config";
 import { Icon } from "./Icon";
+import LanguagePicker from "./LanguagePicker";
 
 type TopbarProps = {
   user: { name?: string | null; email?: string | null; role: RoleName; image?: string | null };
@@ -29,6 +37,12 @@ type TopbarProps = {
   unreadCount?: number;
   /** Spec 128 — transcode queue depth. Defaults to empty → chip hidden. */
   queueDepth?: QueueDepth;
+  /**
+   * Spec 155 — current UI locale (from `user_prefs.uiLanguage`, normalised in
+   * the authenticated layout). The LanguagePicker island reads this to render
+   * the active chip and mark the currently-selected option.
+   */
+  locale?: Locale;
 };
 
 const ROLE_LABEL: Record<RoleName, string> = {
@@ -50,6 +64,7 @@ export async function Topbar({
   breadcrumbs = [],
   unreadCount = 0,
   queueDepth,
+  locale = "en",
 }: TopbarProps) {
   const tAction = await getTranslations("action");
   const tLanguage = await getTranslations("language");
@@ -159,43 +174,12 @@ export async function Topbar({
           ) : null}
         </Link>
 
-        {/* Language picker — wired to /api/user-prefs in spec 071. Static for now. */}
-        <details style={{ position: "relative" }}>
-          <summary
-            style={{
-              listStyle: "none",
-              cursor: "pointer",
-              padding: "6px 8px",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-2)",
-              fontSize: 12,
-              color: "var(--ink-2)",
-              background: "var(--card-hi)",
-            }}
-          >
-            EN
-          </summary>
-          <ul
-            style={{
-              position: "absolute",
-              right: 0,
-              top: "calc(100% + 4px)",
-              listStyle: "none",
-              margin: 0,
-              padding: 4,
-              background: "var(--card-hi)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--r-2)",
-              boxShadow: "var(--shadow-2)",
-              minWidth: 140,
-              zIndex: 20,
-            }}
-          >
-            <li style={{ padding: "6px 10px", fontSize: 12 }}>{tLanguage("english")}</li>
-            <li style={{ padding: "6px 10px", fontSize: 12, fontFamily: "var(--deva)" }}>{tLanguage("hindi")}</li>
-            <li style={{ padding: "6px 10px", fontSize: 12 }}>{tLanguage("bhoti")}</li>
-          </ul>
-        </details>
+        {/* Spec 155 — real language picker (client island). The button label
+            reflects the user's CURRENT locale and selecting an option PUTs
+            to /api/user-prefs then reloads the document so the
+            NextIntlClientProvider re-mounts with the new messages bundle.
+            See `./LanguagePicker.tsx` for the implementation. */}
+        <LanguagePicker current={locale} ariaLabel={tLanguage("pickerLabel")} />
 
         {/* User pill */}
         <form

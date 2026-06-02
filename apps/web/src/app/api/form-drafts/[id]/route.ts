@@ -72,7 +72,25 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
   const { id } = await ctx.params;
 
-  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  // Spec 154 (audit-closure MEDIUM) — the pre-fix shape was
+  // `await req.json().catch(() => ({}))` which silently collapsed malformed
+  // payloads into an empty body and then routed them through the Zod schema.
+  // For the existing draft writers (a fetch from the client always sends a
+  // well-formed payload) the empty-object path triggered the validation
+  // branch below and the user saw a generic 400. But the swallow also hid
+  // genuine client bugs (truncated requests, content-encoding mismatches)
+  // behind that same 400. We now surface the parse failure as its own
+  // explicit `invalid_json` token so the client / observability tooling
+  // can distinguish a wire-level failure from a schema-level one.
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch (err) {
+    return NextResponse.json(
+      { error: "invalid_json", message: String(err) },
+      { status: 400 },
+    );
+  }
   const parsed = PutBodySchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(

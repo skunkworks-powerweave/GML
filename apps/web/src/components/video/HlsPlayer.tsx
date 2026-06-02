@@ -65,36 +65,44 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     } else {
       // Lazy-load hls.js so it doesn't bloat first paint.
       let cancelled = false;
-      import("hls.js").then(({ default: Hls }) => {
-        if (cancelled || !Hls.isSupported()) {
-          if (!cancelled) setError("HLS playback not supported in this browser.");
-          return;
-        }
-        const hls = new Hls({
-          // Low-bandwidth-friendly defaults
-          maxBufferLength: 30,
-          backBufferLength: 30,
-          lowLatencyMode: false,
-        });
-        hls.loadSource(currentSrc);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.ERROR, async (_e, data) => {
-          if (!data.fatal) return;
-          // Signed URL likely expired — try refresh once
-          if (onRefresh) {
-            try {
-              const next = await onRefresh();
-              setCurrentSrc(next);
-            } catch {
-              setError("Playback failed. Refresh the page.");
-            }
-          } else {
-            setError(`Playback error: ${data.type}`);
+      // Spec 156 (Run 14 audit-closure MEDIUM): chain a .catch so a
+      // bundle-load failure surfaces as a user-visible error instead of a
+      // silent black <video> element. Otherwise the dynamic import rejects,
+      // nothing renders, and the user has no idea why the player is dead.
+      import("hls.js")
+        .then(({ default: Hls }) => {
+          if (cancelled || !Hls.isSupported()) {
+            if (!cancelled) setError("HLS playback not supported in this browser.");
+            return;
           }
+          const hls = new Hls({
+            // Low-bandwidth-friendly defaults
+            maxBufferLength: 30,
+            backBufferLength: 30,
+            lowLatencyMode: false,
+          });
+          hls.loadSource(currentSrc);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.ERROR, async (_e, data) => {
+            if (!data.fatal) return;
+            // Signed URL likely expired — try refresh once
+            if (onRefresh) {
+              try {
+                const next = await onRefresh();
+                setCurrentSrc(next);
+              } catch {
+                setError("Playback failed. Refresh the page.");
+              }
+            } else {
+              setError(`Playback error: ${data.type}`);
+            }
+          });
+          hlsInstance = hls;
+          hlsRef.current = hls;
+        })
+        .catch((err) => {
+          if (!cancelled) setError("Failed to load HLS player: " + String(err));
         });
-        hlsInstance = hls;
-        hlsRef.current = hls;
-      });
 
       return () => {
         cancelled = true;

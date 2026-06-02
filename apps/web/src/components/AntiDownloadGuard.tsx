@@ -77,37 +77,70 @@ export default function AntiDownloadGuard(): React.ReactElement | null {
     // DevTools-open heuristic — PC-friendly, weak signal, throttled to one
     // audit per session via sessionStorage. False-positives on browsers with
     // permanent toolbars; operators treat the audit row as a hint, not proof.
+    //
+    // Spec 156 (Run 14 audit-closure MEDIUM): a window maximize / restore
+    // briefly puts outerHeight - innerHeight > 200 px while the OS animates
+    // the resize. Pre-fix this fired an audit row every time, polluting the
+    // log with false positives. The 1-second debounce below requires the
+    // size delta to PERSIST for >1s before we emit; transient resize
+    // animations clear the timer without ever firing.
     const DEVTOOLS_KEY = "antiDownloadGuard.devtoolsLogged";
+    let pendingDevtoolsTimer: ReturnType<typeof setTimeout> | null = null;
     const interval = window.setInterval(() => {
       const dh = window.outerHeight - window.innerHeight;
       const dw = window.outerWidth - window.innerWidth;
-      if (dh > 200 || dw > 200) {
-        let already = false;
-        try {
-          already = window.sessionStorage.getItem(DEVTOOLS_KEY) === "1";
-        } catch {
-          // sessionStorage can throw in some privacy modes — proceed without throttle.
+      const triggered = dh > 200 || dw > 200;
+      if (triggered) {
+        // Only ARM the timer if it isn't already armed. A second poll while
+        // the timer is pending must not reset it — that would let a slow
+        // resize animation keep cancelling the debounce indefinitely.
+        if (pendingDevtoolsTimer == null) {
+          pendingDevtoolsTimer = setTimeout(() => {
+            pendingDevtoolsTimer = null;
+            // Re-check the size delta INSIDE the timer — by the time the
+            // 1s has elapsed the user may have closed devtools / finished
+            // the resize. Without this re-check we'd fire an audit for a
+            // delta that has already gone away.
+            const dh2 = window.outerHeight - window.innerHeight;
+            const dw2 = window.outerWidth - window.innerWidth;
+            if (!(dh2 > 200 || dw2 > 200)) return;
+            let already = false;
+            try {
+              already = window.sessionStorage.getItem(DEVTOOLS_KEY) === "1";
+            } catch {
+              // sessionStorage can throw in some privacy modes — proceed without throttle.
+            }
+            if (!already) {
+              try {
+                window.sessionStorage.setItem(DEVTOOLS_KEY, "1");
+              } catch {
+                // Storage blocked — log once anyway, but expect repeats.
+              }
+              emitAudit("anti_download.devtools.detected", {
+                outerHeight: window.outerHeight,
+                innerHeight: window.innerHeight,
+                outerWidth: window.outerWidth,
+                innerWidth: window.innerWidth,
+                weak_signal: true,
+              });
+            }
+          }, 1000);
         }
-        if (!already) {
-          try {
-            window.sessionStorage.setItem(DEVTOOLS_KEY, "1");
-          } catch {
-            // Storage blocked — log once anyway, but expect repeats.
-          }
-          emitAudit("anti_download.devtools.detected", {
-            outerHeight: window.outerHeight,
-            innerHeight: window.innerHeight,
-            outerWidth: window.outerWidth,
-            innerWidth: window.innerWidth,
-            weak_signal: true,
-          });
-        }
+      } else if (pendingDevtoolsTimer != null) {
+        // The delta cleared before the 1s debounce fired — this was a
+        // transient resize animation, not a devtools open. Cancel.
+        clearTimeout(pendingDevtoolsTimer);
+        pendingDevtoolsTimer = null;
       }
     }, 1500);
 
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true } as EventListenerOptions);
       window.clearInterval(interval);
+      if (pendingDevtoolsTimer != null) {
+        clearTimeout(pendingDevtoolsTimer);
+        pendingDevtoolsTimer = null;
+      }
     };
   }, []);
 

@@ -13,6 +13,7 @@ import { Sidebar } from "@/components/nav/Sidebar";
 import { Topbar } from "@/components/nav/Topbar";
 import { ConfidentialityFooter } from "@/components/ConfidentialityFooter";
 import type { NavCounts, QueueDepth } from "@/lib/chrome-counts";
+import type { Locale } from "@/i18n/config";
 
 type DesktopShellProps = {
   user: { id: string; name?: string | null; email?: string | null; role: RoleName; image?: string | null };
@@ -21,6 +22,8 @@ type DesktopShellProps = {
   navCounts?: NavCounts;
   unreadCount?: number;
   queueDepth?: QueueDepth;
+  /** Spec 155 — current UI locale, forwarded to the topbar language picker. */
+  locale?: Locale;
   children: ReactNode;
 };
 
@@ -31,6 +34,7 @@ export function DesktopShell({
   navCounts,
   unreadCount,
   queueDepth,
+  locale,
   children,
 }: DesktopShellProps) {
   // Spec 125 — Topbar and Sidebar are now async server components (they call
@@ -46,6 +50,7 @@ export function DesktopShell({
           breadcrumbs={breadcrumbs}
           unreadCount={unreadCount}
           queueDepth={queueDepth}
+          locale={locale}
         />
         <main style={{ flex: 1, padding: "20px 28px 80px" }}>{children}</main>
         <ConfidentialityFooter user={{ name: user.name, email: user.email }} />

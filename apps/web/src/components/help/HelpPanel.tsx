@@ -73,11 +73,18 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
   }, []);
 
   // ? / Shift+/ / ⌘? toggles. Skip while user is typing in inputs.
+  //
+  // Spec 156 (Run 14 audit-closure MEDIUM): pre-fix this only checked the
+  // direct target's tagName + isContentEditable, which missed nested
+  // contenteditable widgets (e.g. a rich-text comment box where the editing
+  // happens in a deeper <p>/<span> inside a contenteditable container).
+  // Using closest() walks the DOM tree so any ancestor input / textarea /
+  // [contenteditable="true"] suppresses the shortcut. Mirrors the
+  // browser's own behaviour for built-in shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
       const isQuestion = e.key === "?" || (e.shiftKey && e.key === "/") || (e.metaKey && e.key === "?");
       if (!isQuestion) return;
       e.preventDefault();

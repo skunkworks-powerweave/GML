@@ -2,10 +2,19 @@
 // Synthesized to mirror the teacher-detail pattern: KV header (name + Hindi + base_location),
 // pairings grouped by status (active / review / paused / ended / complete), current quarter chip,
 // meetings_count cached per pairing. SM-7 keeps Hindi rendering conditional.
+//
+// Spec 153 (Workflow Run 14 audit-closure MEDIUM) — the detail SELECT now filters
+// on `mentors.active = true`. The mentors index page already filters on active
+// (see /repo/mentors page.tsx, eq(mentors.active, true)); without the same
+// guard here a soft-retired mentor remained reachable by /repo/mentor/<id>
+// even though they were hidden from the list view. The mentors schema uses
+// `active boolean` rather than a `deletedAt` timestamp (packages/db/src/schema/
+// mentorship.ts) so the WHERE clause uses `and(eq(mentors.id, id), eq(mentors.
+// active, true))`. A soft-retired mentor now 404s consistently with the index.
 
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -38,7 +47,15 @@ export default async function RepoMentorDetailPage({
 
   const { id } = await params;
 
-  const [mentor] = await db.select().from(mentors).where(eq(mentors.id, id)).limit(1);
+  // Spec 153 — only return active mentors. A soft-retired mentor (active=false)
+  // must not render here; the row exists in the DB so without this guard the
+  // page would render full detail. notFound() keeps the response symmetric with
+  // the index page hiding the same mentor.
+  const [mentor] = await db
+    .select()
+    .from(mentors)
+    .where(and(eq(mentors.id, id), eq(mentors.active, true)))
+    .limit(1);
   if (!mentor) notFound();
 
   const pairings = await db

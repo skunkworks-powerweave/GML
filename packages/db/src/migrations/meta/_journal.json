@@ -127,6 +127,13 @@
       "when": 1780500144000,
       "tag": "0017_whatsapp_dedup",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1780586400000,
+      "tag": "0018_index_mentor_pairings_teacher",
+      "breakpoints": true
     }
   ]
 }

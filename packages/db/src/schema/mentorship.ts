@@ -54,6 +54,16 @@ export const mentorPairings = pgTable(
   (t) => [
     uniqueIndex("mentor_pairings_mentor_teacher_started_uq").on(t.mentorId, t.teacherId, t.startedAt),
     index("mentor_pairings_status_idx").on(t.status),
+    // Spec 153 (Workflow Run 14 audit-closure MEDIUM) — index on teacherId so
+    // "all pairings for teacher X" queries are an index seek, not a seqscan.
+    // The teacher-detail page (/repo/teacher/[id]) and the mentee-history join
+    // both look up mentor_pairings WHERE teacher_id = $1; without this index
+    // the plan degrades to a seqscan once the table grows past a few hundred
+    // rows. The mentorId column already gets an index via the compound unique
+    // (mentor_id, teacher_id, started_at) — the leading column is mentorId
+    // so a "by-teacher" lookup couldn't use that index. Migration 0018 backs
+    // this declaration with a CREATE INDEX statement.
+    index("mentor_pairings_teacher_idx").on(t.teacherId),
     check("mentor_pairings_quarter_check", sql`${t.currentQuarter} IS NULL OR (${t.currentQuarter} BETWEEN 1 AND 4)`),
     check("mentor_pairings_meetings_count_check", sql`${t.meetingsCount} >= 0`),
   ],

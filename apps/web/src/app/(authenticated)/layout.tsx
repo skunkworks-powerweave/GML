@@ -119,6 +119,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       navCounts={navCounts}
       unreadCount={unreadCount}
       queueDepth={queueDepth}
+      locale={locale}
     >
       {children}
     </DesktopShell>

@@ -13,10 +13,23 @@
 //     grid via ?filter[<column>]=<value>. URL-driven so filters are
 //     shareable / bookmarkable, ilike for text columns, equality for the
 //     rest. The toolbar mirrors admin.jsx::AdminTable lines 111-114.
+//
+// Spec 152 (admin-grid-improvements, Workflow Run 14 MEDIUM audit closure) —
+// the previous shipped filter pushed every column through ilike() including
+// enums, booleans and numbers. Drizzle's pg driver may throw or coerce
+// unsafely when ilike is applied to a non-text column. The fix is a
+// column-type aware filter dispatcher that reads the column's Zod schema
+// from `entity.formSchema._def.shape()`: ZodString → ilike (case-insensitive
+// contains); ZodEnum → eq() after validating the value is in the enum;
+// ZodBoolean → eq() with a true/"true" coercion; ZodNumber → eq() with a
+// finite-number guard; unknown / unsupported → skip silently. The skipped
+// filters are logged in `appliedFilters._skipped` so the audit-trail of a
+// PII-audited entity (SM-9) still records the user's intent.
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq, ilike, type SQL } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
@@ -55,6 +68,90 @@ function extractFilters(
   return out;
 }
 
+/**
+ * Spec 152 — peel optional/nullable/default wrappers off a Zod node so we can
+ * read the inner type name. Mirrors `row-form.tsx::inferInputType` (spec 114).
+ */
+function unwrapZod(zodType: z.ZodTypeAny): z.ZodTypeAny {
+  let inner: z.ZodTypeAny = zodType;
+  const peek = (z: z.ZodTypeAny) =>
+    z as unknown as { _def?: { innerType?: z.ZodTypeAny } };
+  while (peek(inner)._def?.innerType) inner = peek(inner)._def!.innerType!;
+  return inner;
+}
+
+/**
+ * Spec 152 — column-type-aware filter dispatcher.
+ *
+ * The previous shipped code pushed every column's value through
+ * `ilike(col, "%v%")`. Drizzle's pg driver applies LOWER() to the column
+ * for ilike() — on an enum, boolean or numeric column the cast fails and
+ * the whole page renders an Error Boundary. The fix below reads the
+ * column's Zod type from `entity.formSchema._def.shape()` and dispatches:
+ *
+ *   - ZodString  → ilike(col, "%v%") (case-insensitive contains)
+ *   - ZodEnum    → eq(col, v) only when v ∈ enum.options
+ *   - ZodBoolean → eq(col, v === "true")
+ *   - ZodNumber  → eq(col, Number(v)) only when the result is finite
+ *   - anything else (Zod object, array, date, …) → skip (warn in dev)
+ *
+ * Returns `null` for "skip this column" — the caller appends to whereClauses
+ * only when the dispatcher returns an SQL fragment. The skipped-key list is
+ * surfaced in `appliedFilters._skipped` so the SM-9 audit row records the
+ * user's intent even when the filter didn't reach the DB.
+ */
+function buildColumnFilter(
+  zodType: z.ZodTypeAny | undefined,
+  col: unknown,
+  value: string,
+): SQL | null {
+  if (!zodType) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[admin-grid] filter skipped — no Zod schema for column`);
+    }
+    return null;
+  }
+  const inner = unwrapZod(zodType);
+  const typeName = ((inner as unknown as { _def?: { typeName?: string } })._def
+    ?.typeName) as string | undefined;
+
+  if (typeName === "ZodString") {
+    return ilike(col as never, `%${value}%`);
+  }
+  if (typeName === "ZodEnum") {
+    const options = ((inner as unknown as { options?: readonly string[] })
+      .options) ?? [];
+    if (!options.includes(value)) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          `[admin-grid] filter skipped — enum value "${value}" not in ${JSON.stringify(options)}`,
+        );
+      }
+      return null;
+    }
+    return eq(col as never, value as never);
+  }
+  if (typeName === "ZodBoolean") {
+    return eq(col as never, (value === "true") as never);
+  }
+  if (typeName === "ZodNumber") {
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`[admin-grid] filter skipped — "${value}" is not numeric`);
+      }
+      return null;
+    }
+    return eq(col as never, n as never);
+  }
+  if (process.env.NODE_ENV !== "production") {
+    console.warn(
+      `[admin-grid] filter skipped — unsupported Zod type "${typeName}"`,
+    );
+  }
+  return null;
+}
+
 export default async function AdminGridPage({ params, searchParams }: PageProps) {
   const { entity: slug } = await params;
   const sp = await searchParams;
@@ -73,20 +170,36 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // layout from the first request after the cookie is established.
   const device = await getDeviceType();
 
-  // Spec 114: filter UI. `filter[<column>]=<value>` narrows the underlying
-  // query. ilike for free-text columns, eq for everything else.
+  // Spec 114 + Spec 152: filter UI. `filter[<column>]=<value>` narrows the
+  // underlying query. Spec 152 swaps the blanket-ilike for a column-type-aware
+  // dispatcher (see `buildColumnFilter` above) — ilike for ZodString,
+  // equality for ZodEnum / ZodBoolean / ZodNumber, skip-with-warn for
+  // anything else. The skipped keys are still surfaced in `appliedFilters`
+  // (under the `_skipped` map) so the SM-9 audit row captures user intent.
   const filters = extractFilters(sp);
   const columnsByKey = new Map(entity.displayColumns.map((c) => [c.key, c]));
-  const tableColumns = (entity.table as unknown as Record<string, unknown>);
+  const tableColumns = entity.table as unknown as Record<string, unknown>;
+  const formShape = (() => {
+    const defShape = (entity.formSchema._def as unknown as {
+      shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny>;
+    }).shape;
+    const raw = typeof defShape === "function" ? defShape() : defShape;
+    return (raw ?? {}) as Record<string, z.ZodTypeAny>;
+  })();
   const whereClauses: SQL[] = [];
   const appliedFilters: Record<string, string> = {};
+  const skippedFilters: Record<string, string> = {};
   for (const [key, value] of Object.entries(filters)) {
     if (!columnsByKey.has(key)) continue; // ignore unknown columns
     const col = tableColumns[key];
     if (!col) continue;
+    const clause = buildColumnFilter(formShape[key], col, value);
+    if (clause === null) {
+      skippedFilters[key] = value;
+      continue;
+    }
     appliedFilters[key] = value;
-    // Free-text contains-match; falls back to eq if ilike rejects the type.
-    whereClauses.push(ilike(col as never, `%${value}%`));
+    whereClauses.push(clause);
   }
 
   // Spec 114: edit mode — `?edit=<rowId>` opens the inline edit form.
@@ -114,11 +227,21 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // SM-9 enforcement: PII-bearing entities (e.g. learners) must record every
   // server-side read in the audit log. recordAudit is fire-and-forget so a
   // failure here never breaks the page render.
+  //
+  // Spec 152 — `skippedFilters` captures user intent even when the column-type
+  // dispatcher rejected the value (unknown enum option, NaN on a numeric
+  // column, etc.) so the audit log still tells the full story of what the
+  // user tried to narrow by.
   if (entity.piiAudited) {
     void recordAudit({
       action: `${entity.slug}.view`,
       entityType: entity.slug,
-      metadata: { rowCount: rows.length, page: pageNum, filters: appliedFilters },
+      metadata: {
+        rowCount: rows.length,
+        page: pageNum,
+        filters: appliedFilters,
+        skippedFilters,
+      },
     });
   }
 

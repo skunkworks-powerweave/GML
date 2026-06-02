@@ -244,6 +244,12 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
 
   if (!mounted || !open) return null;
 
+  // Spec 156 (Run 14 audit-closure MEDIUM): createPortal can throw on SSR
+  // hydration mismatch or if document.body has been transiently removed
+  // (rare, but possible during print-preview / extension shenanigans). We
+  // wrap the call in a try/catch so a single render miss never crashes the
+  // whole authenticated route tree — the overlay just won't render that
+  // tick, and the next state update will retry the portal cleanly.
   const overlay = (
     <div
       role="dialog"
@@ -347,7 +353,11 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
     </div>
   );
 
-  return createPortal(overlay, document.body);
+  try {
+    return createPortal(overlay, document.body);
+  } catch {
+    return null;
+  }
 }
 
 function EmptyHint({ primary, secondary }: { primary: string; secondary: string }) {

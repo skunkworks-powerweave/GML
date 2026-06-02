@@ -1,0 +1,36 @@
+-- Spec 153 — index mentor_pairings.teacher_id (Workflow Run 14 audit-closure MEDIUM).
+--
+-- The 7-agent codebase audit flagged a missing index on
+-- mentor_pairings.teacher_id. mentor_pairings is a junction table between
+-- mentors (1) and teachers (N) — every teacher has at most one active mentor
+-- pairing PLUS a history of paused / ended pairings. The teacher-detail page
+-- (/repo/teacher/[id], spec 050) reads "current mentor + pairing history for
+-- teacher X" via:
+--
+--   SELECT … FROM mentor_pairings WHERE teacher_id = $1 ORDER BY started_at DESC
+--
+-- The table already carries:
+--
+--   * mentor_pairings_mentor_teacher_started_uq (mentor_id, teacher_id, started_at) — unique
+--   * mentor_pairings_status_idx (status) — non-unique
+--
+-- but the compound unique's LEADING column is mentor_id, so a query that
+-- filters on teacher_id alone can't use it (Postgres index-scan needs a
+-- leading-column predicate). The planner falls back to a seqscan, which is
+-- fine at the current ~120-row scale but degrades linearly. Once teachers
+-- × pairing-history rows climb past a few thousand the per-request cost
+-- becomes visible on the teacher-detail and mentee-history endpoints — both
+-- are server-rendered pages that block the user's perceived load time.
+--
+-- Fix: add a single-column btree index on teacher_id. Cheap to maintain
+-- (one extra write per mentor_pairings INSERT/UPDATE — these happen at
+-- mentor-assignment cadence, ~tens per quarter, not per-request), large
+-- planner benefit for the read path that dominates.
+--
+-- No data migration needed — CREATE INDEX is non-blocking-by-default on
+-- empty tables and on the 120-row production scale this completes in
+-- single-digit milliseconds. We do NOT use CREATE INDEX CONCURRENTLY here
+-- because drizzle-kit's migrate runner wraps the statement in a transaction,
+-- and CONCURRENTLY is incompatible with that wrapping. At our scale the
+-- brief lock is invisible.
+CREATE INDEX "mentor_pairings_teacher_idx" ON "mentor_pairings" USING btree ("teacher_id");

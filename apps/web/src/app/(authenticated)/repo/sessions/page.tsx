@@ -6,6 +6,18 @@
 // query. They now apply directly in the SQL WHERE clause via URL search
 // params. Adds an optional `from` / `to` date range so operators can scope
 // to a specific window (the prototype's "More filters" affordance).
+//
+// Spec 153 (Workflow Run 14 audit-closure MEDIUM): the from / to validators
+// used to short-circuit on the shape regex `^\d{4}-\d{2}-\d{2}$` ONLY. A
+// caller-crafted URL like ?from=2026-13-45 satisfies the regex but is not
+// a real calendar date — Postgres then throws "date/time field value out of
+// range" on the cast, surfacing as a 500 instead of a graceful filter-skip.
+// The fix layers a `new Date(value)` parse + `!isNaN()` check after the
+// regex so malformed dates are silently dropped (filter behaves as if the
+// param were absent) and the user gets the unfiltered list with no error
+// banner. We do NOT 400; the goal is to harden against the bad URL, not
+// surface it to the user — the URL is normally produced by the form's
+// `<input type="date">` which only ever yields valid ISO dates.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -38,6 +50,23 @@ const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "cancelled"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Spec 153 — accept only well-formed ISO yyyy-mm-dd strings AND validate the
+// calendar values (month 1-12, day in range for the month). Postgres would
+// otherwise throw on the date-column cast with a malformed value, surfacing
+// as a 500. Returns the input on success, undefined on failure so the caller
+// can drop the filter.
+function parseIsoDateFilter(value: string | undefined): string | undefined {
+  if (!value || !ISO_DATE_RE.test(value)) return undefined;
+  const parsed = new Date(value + "T00:00:00Z");
+  if (isNaN(parsed.getTime())) return undefined;
+  // Round-trip check: Date constructor silently normalises (Feb 30 → Mar 2)
+  // so we also require the input string to match the parsed Y-M-D. This
+  // catches "2026-13-45", "2026-02-30", etc. that pass the regex AND the
+  // !isNaN check but represent a different calendar day than the input.
+  const iso = parsed.toISOString().slice(0, 10);
+  return iso === value ? value : undefined;
+}
+
 type SearchParams = Promise<{
   status?: string;
   subject?: string;
@@ -58,9 +87,11 @@ export default async function RepoSessionsIndex({
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
   const subjectFilter =
     sp.subject && UUID_RE.test(sp.subject) ? sp.subject : "all";
-  const fromFilter =
-    sp.from && ISO_DATE_RE.test(sp.from) ? sp.from : undefined;
-  const toFilter = sp.to && ISO_DATE_RE.test(sp.to) ? sp.to : undefined;
+  // Spec 153 — regex + calendar validation. parseIsoDateFilter returns the
+  // input on success, undefined on failure (malformed format, impossible
+  // calendar day, or after the Date round-trip normalisation diverges).
+  const fromFilter = parseIsoDateFilter(sp.from);
+  const toFilter = parseIsoDateFilter(sp.to);
 
   // Build the WHERE clause server-side. We compare scheduled_date (date
   // column) against ISO yyyy-mm-dd strings — Postgres handles the cast.

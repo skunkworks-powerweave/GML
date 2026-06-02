@@ -32,6 +32,7 @@ import { db } from "@gml/db";
 import { notifications, users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,14 @@ const BodySchema = z.object({
   message: z.string().max(500).optional(),
 });
 
+// Spec 154 (audit-closure MEDIUM) — bucket / window for ticket throttling.
+// 5 tickets per user per hour matches the WhatsApp + email backstop: a real
+// stuck user opens 1-2 tickets before they reach a human; an automated
+// abuser would burn through hundreds in a minute. The window slides on a
+// per-user key (session.user.id) so a shared device / VPN doesn't collide.
+const HELPDESK_LIMIT = 5;
+const HELPDESK_WINDOW_MS = 60 * 60 * 1000;
+
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -48,6 +57,44 @@ export async function POST(req: Request) {
   }
   const userId = session.user.id;
   const userName = session.user.name ?? session.user.email ?? "a user";
+
+  // Spec 154 — throttle helpdesk ticket creation. The previous shape had no
+  // rate limit at all, which meant a logged-in user could spam unlimited
+  // notifications into every programme_admin's inbox. We fail OPEN on Redis
+  // outage so a transient infra incident doesn't lock real stuck users out
+  // of asking for help — the threat we're closing is the spam vector, not
+  // the help-arrival path.
+  try {
+    const rl = await rateLimit({
+      bucket: "helpdesk",
+      id: userId,
+      limit: HELPDESK_LIMIT,
+      windowMs: HELPDESK_WINDOW_MS,
+    });
+    if (!rl.ok) {
+      const retryAfterSec = Math.ceil(rl.retryAfterMs / 1000);
+      void recordAudit({
+        action: "helpdesk.ticket_rate_limited",
+        entityType: "helpdesk",
+        entityId: userId,
+        metadata: { retryAfterMs: rl.retryAfterMs },
+      });
+      return NextResponse.json(
+        { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(retryAfterSec),
+          },
+        },
+      );
+    }
+  } catch (err) {
+    // Redis down — log for ops, fall through so the user can still file a
+    // ticket. The audit trail still records the ticket below, so abuse is
+    // visible after-the-fact even when the throttle is degraded.
+    console.warn("[helpdesk] rate-limit redis error — failing open", String(err));
+  }
 
   const raw = await req.text();
   let body: unknown = {};
