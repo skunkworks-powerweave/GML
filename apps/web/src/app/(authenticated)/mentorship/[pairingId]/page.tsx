@@ -17,6 +17,8 @@ import { db } from "@gml/db";
 import { mentorPairings, mentors, teachers, mentorMeetings, feedbackResponses } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
+import { getDeviceType } from "@/lib/device";
+import { MobileDetailFrame } from "@/components/shells";
 import {
   logMeetingAction,
   completePairingAction,
@@ -98,7 +100,14 @@ export default async function PairingDetailPage({
   const currentQuarter = pairing.currentQuarter ?? 1;
   const feedbackPct = Math.min(100, Math.round((feedbackByKind.size / 8) * 100));
 
-  return (
+  // Spec 137 — device-aware adoption of MobileDetailFrame. On mobile the
+  // existing two-column desktop JSX is wrapped in the thin-header + back-arrow
+  // chrome the JSX prototype defines; on desktop the page renders unchanged.
+  // Data-fetching, audit, and role-gate logic above stay untouched.
+  const device = await getDeviceType();
+  const mobileTitle = `${mentor?.name ?? "—"} ↔ ${teacher?.fullName ?? "—"}`;
+
+  const body = (
     <div>
       <div className="page-header">
         <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
@@ -525,5 +534,13 @@ export default async function PairingDetailPage({
         </div>
       </div>
     </div>
+  );
+
+  return device === "mobile" ? (
+    <MobileDetailFrame title={mobileTitle} backHref="/mentorship">
+      {body}
+    </MobileDetailFrame>
+  ) : (
+    body
   );
 }

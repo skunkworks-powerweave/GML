@@ -18,6 +18,9 @@ import {
   resourceSubjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+// Spec 138 — mobile card-list fallback (desktop keeps the table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -96,6 +99,9 @@ export default async function RepoSubjectsIndexPage({
     .where(and(...conds))
     .orderBy(asc(subjects.displayOrder), asc(subjects.name));
 
+  // Spec 138 — device-aware card/table fork.
+  const device = await getDeviceType();
+
   return (
     <div>
       <div className="page-header">
@@ -145,7 +151,33 @@ export default async function RepoSubjectsIndexPage({
             <span className="chip">{rows.length} shown</span>
           </div>
         </form>
-        <div className="card">
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="subjects"
+            emptyMessage="No subjects match this filter."
+            items={rows.map((s) => {
+              const gradesLabel =
+                s.gradesMin != null && s.gradesMax != null
+                  ? `Grades ${s.gradesMin}–${s.gradesMax}`
+                  : "All grades";
+              const chipClass = chipClassForColor(s.color).replace(/^chip\s*/, "");
+              return {
+                id: s.id,
+                primary: s.name,
+                href: `/repo/subject/${s.id}`,
+                chip: s.code ? { label: s.code, kind: chipClass } : null,
+                secondary: [
+                  { value: gradesLabel },
+                  {
+                    value: `${s.outlines} outlines · ${s.sessions} sessions · ${s.readings} readings`,
+                  },
+                ],
+              };
+            })}
+          />
+        ) : null}
+        <div className="card" style={device === "mobile" ? { display: "none" } : undefined} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
               No subjects match this filter.

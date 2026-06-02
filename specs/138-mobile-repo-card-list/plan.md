@@ -1,0 +1,5 @@
+# Plan 138
+
+CREATED: `specs/138-mobile-repo-card-list/{spec,plan,research,quickstart,tasks}.md`, `apps/web/src/components/repo/MobileRepoCardList.tsx`, `tests/governance/test_138_mobile_repo_card_list.test.mjs`
+EDITED: `apps/web/src/app/(authenticated)/repo/schools/page.tsx` (import getDeviceType + MobileRepoCardList, await device, render mobile card branch conditionally, hide desktop table when mobile), `apps/web/src/app/(authenticated)/repo/teachers/page.tsx` (same conditional fork around the desktop table), `apps/web/src/app/(authenticated)/repo/mentors/page.tsx` (same fork), `apps/web/src/app/(authenticated)/repo/subjects/page.tsx` (same fork), `apps/web/src/app/(authenticated)/repo/sessions/page.tsx` (same fork), `apps/web/src/app/(authenticated)/repo/resources/page.tsx` (same fork), `apps/web/src/app/(authenticated)/repo/outlines/page.tsx` (same fork)
+MIGRATED: none — pure UI layer. SQL queries unchanged on all seven adopted pages; filters (spec 129) continue to drive URL search params and the card list shows whatever the server returns. The `gml-device` cookie contract from spec 023 / lib/device.ts is the only existing piece reused.

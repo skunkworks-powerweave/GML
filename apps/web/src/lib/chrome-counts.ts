@@ -266,23 +266,21 @@ export function formatBellBadge(count: number): string | null {
  * configuration. The id → count key mapping below is the contract the chrome
  * relies on; adding a new badge means adding a row here AND in nav.ts.
  */
-export function applyNavCounts<
-  TItem extends { id: string; count?: number },
-  TSection extends { section: string; items: ReadonlyArray<TItem> },
->(
+export function applyNavCounts<TSection extends { section: string; items: readonly unknown[] }>(
   sections: ReadonlyArray<TSection>,
   counts: NavCounts,
-): Array<{ section: TSection["section"]; items: TItem[] }> {
+): TSection[] {
   return sections.map((section) => ({
-    section: section.section,
-    items: section.items.map((item) => {
+    ...section,
+    items: section.items.map((rawItem) => {
+      const item = rawItem as { id: string; count?: number };
       const next = NAV_BADGE_MAP[item.id];
-      if (!next) return { ...item };
+      if (!next) return rawItem;
       const value = next(counts);
-      if (value == null) return { ...item };
+      if (value == null) return rawItem;
       return { ...item, count: value };
     }),
-  }));
+  })) as TSection[];
 }
 
 /**

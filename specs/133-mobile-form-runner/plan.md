@@ -1,0 +1,5 @@
+# Plan 133
+
+CREATED: `specs/133-mobile-form-runner/{spec,plan,research,quickstart,tasks}.md`, `apps/web/src/components/forms/MobileFormRunner.tsx`, `tests/governance/test_133_mobile_form_runner.test.mjs`
+EDITED: `apps/web/src/components/forms/FormRenderer.tsx` (export `normalizeOptions` / `isHindiNameField` / `validateField` / `validateAll` so MobileFormRunner reuses the same validation contract — no logic duplication), `apps/web/src/app/(authenticated)/forms/[slug]/page.tsx` (import `getDeviceType` + `MobileFormRunner`, branch on `device === "mobile"`; same props passed to either renderer so initialResponses / draftKey / pairingId / context / submitFormAction stay identical)
+MIGRATED: none — same `FormSchema` shape, same `DraftKey` shape, same `submitFormAction` server action contract; the draft pipeline (`PUT /api/form-drafts/[id]`) and the response insert path are unchanged, so a draft saved on mobile is byte-identical to one saved on desktop and a response submitted from either renderer hits the same `feedback_responses` insert

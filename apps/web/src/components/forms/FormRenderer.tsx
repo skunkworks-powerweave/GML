@@ -86,18 +86,21 @@ const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 // ---------- Helpers ----------
 
-function normalizeOptions(opts: FormField["options"]): FieldOption[] {
+// Spec 133 — MobileFormRunner reuses these helpers verbatim. They're exported
+// so the mobile renderer doesn't duplicate the validation contract (a drift
+// between the two would make a draft saved on mobile fail on desktop submit).
+export function normalizeOptions(opts: FormField["options"]): FieldOption[] {
   if (!opts) return [];
   return opts.map((o) =>
     typeof o === "string" ? { value: o, label: o } : o
   );
 }
 
-function isHindiNameField(name: string): boolean {
+export function isHindiNameField(name: string): boolean {
   return /_(hi|hindi)$/i.test(name);
 }
 
-function validateField(field: FormField, raw: unknown): string | null {
+export function validateField(field: FormField, raw: unknown): string | null {
   const empty =
     raw === undefined ||
     raw === null ||
@@ -114,7 +117,7 @@ function validateField(field: FormField, raw: unknown): string | null {
   return null;
 }
 
-function validateAll(
+export function validateAll(
   fields: FormField[],
   values: Record<string, unknown>,
 ): Record<string, string> {

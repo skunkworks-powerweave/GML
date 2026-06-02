@@ -13,6 +13,9 @@ import { and, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@gml/db";
 import { sessions, schools, classes, subjects, teachers } from "@gml/db/schema";
+// Spec 138 — mobile card-list fallback (desktop keeps the 9-col table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -126,6 +129,9 @@ export default async function RepoSessionsIndex({
     { v: "complete", l: "Complete", n: counts.complete },
   ];
 
+  // Spec 138 — device-aware card/table fork.
+  const device = await getDeviceType();
+
   return (
     <div>
       <div className="page-header">
@@ -216,8 +222,36 @@ export default async function RepoSessionsIndex({
           </div>
         </div>
 
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="sessions"
+            emptyMessage="No sessions recorded yet."
+            items={visible.map((s) => {
+              const statusInfo = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
+              return {
+                id: s.id,
+                primary: s.topic ?? "(untitled session)",
+                hindi: s.teacherHindi ?? null,
+                href: `/repo/session/${s.id}`,
+                chip: { label: statusInfo.label, kind: statusInfo.kind },
+                secondary: [
+                  {
+                    value: `${s.scheduledDate}${s.scheduledTime ? ` · ${s.scheduledTime}` : ""}`,
+                    mono: true,
+                  },
+                  {
+                    value: `${s.subjectName ?? "—"} · Grade ${s.grade ?? "—"} · ${s.schoolCode ?? "—"}`,
+                  },
+                  { label: "Teacher", value: s.teacherName ?? "—" },
+                ],
+              };
+            })}
+          />
+        ) : null}
+
         {/* Table card */}
-        <div className="card card-hi">
+        <div className="card card-hi" style={device === "mobile" ? { display: "none" } : undefined} aria-hidden={device === "mobile"}>
           <table className="t">
             <thead>
               <tr>

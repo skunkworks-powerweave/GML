@@ -4,6 +4,13 @@
 // - Inline <UploadProgress /> tray (spec 045) for browser uploads
 // - Table of viewer's own video_submissions (most recent 50), joined with files
 //   for the original filename and with observation_cycles for the linked cycle code.
+//
+// Spec 135 (Workflow Run 12 final frontend-parity): on mobile we swap the
+// explainer cards + UploadProgress tray for the dedicated MobileUploadRunner
+// flow (full-screen Record / Pick → Preview → Upload progress). Desktop keeps
+// the original three-card layout untouched. The recent-uploads table is
+// rendered on both shells because viewing past submissions is identical work
+// regardless of device.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -12,6 +19,8 @@ import { auth } from "@/auth";
 import { db } from "@gml/db";
 import { videoSubmissions, files, observationCycles } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
+import { MobileUploadRunner } from "@/components/video/MobileUploadRunner";
+import { getDeviceType } from "@/lib/device";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +141,13 @@ export default async function UploadsPage() {
     redirect("/forbidden");
   }
   const viewerId = session.user.id;
+  // Spec 135 — device-aware shell. The same env-var contract as
+  // /videos UploadModal (spec 132) is reused for the WhatsApp fallback.
+  const device = await getDeviceType();
+  const whatsappPhone =
+    process.env.GML_WHATSAPP_NUMBER ??
+    process.env.WHATSAPP_PHONE_NUMBER_ID ??
+    null;
 
   const rows = await db
     .select({
@@ -178,6 +194,14 @@ export default async function UploadsPage() {
       </div>
 
       <div className="page-body">
+        {device === "mobile" ? (
+          <section style={{ marginBottom: 22 }}>
+            <MobileUploadRunner whatsappPhone={whatsappPhone} />
+          </section>
+        ) : null}
+
+        {device === "desktop" ? (
+        <>
         <section
           style={{
             display: "grid",
@@ -243,6 +267,8 @@ export default async function UploadsPage() {
         <section id="upload-tray" style={{ marginBottom: 22 }}>
           <UploadProgress contextType="generic" />
         </section>
+        </>
+        ) : null}
 
         <div className="card" style={{ padding: 22 }}>
           <div

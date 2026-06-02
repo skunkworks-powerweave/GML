@@ -9,6 +9,8 @@ import { and, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, schools, subjects, sessions, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { getDeviceType } from "@/lib/device";
+import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
 
@@ -74,7 +76,15 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
 
   const stage = STAGE_CHIP[cls.stage] ?? STAGE_CHIP.Primary;
 
-  return (
+  // Spec 137 — device-aware MobileDetailFrame adoption. Existing two-column
+  // body becomes the mobile vertical stack inside the thin-header chrome.
+  // The back arrow targets the parent school (matching the existing inline
+  // ← link) so users keep their place in the repo tree.
+  const device = await getDeviceType();
+  const mobileBackHref = school ? `/repo/school/${school.id}` : "/repo";
+  const mobileTitle = `Grade ${cls.grade}${school?.code ? ` · ${school.code}` : ""}`;
+
+  const body = (
     <div>
       <div className="page-header">
         <Link
@@ -278,6 +288,14 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
         </div>
       </section>
     </div>
+  );
+
+  return device === "mobile" ? (
+    <MobileDetailFrame title={mobileTitle} backHref={mobileBackHref}>
+      {body}
+    </MobileDetailFrame>
+  ) : (
+    body
   );
 }
 

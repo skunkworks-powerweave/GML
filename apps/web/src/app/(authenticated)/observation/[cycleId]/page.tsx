@@ -13,6 +13,8 @@ import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, teachers, subjects, observationForms, observationEvidence } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
+import { getDeviceType } from "@/lib/device";
+import { MobileDetailFrame } from "@/components/shells";
 import {
   submitPreFormAction,
   submitObserverFormAction,
@@ -80,7 +82,24 @@ export default async function CycleDetailPage({
   const canSubmitPost = cycle.status === "observed";
   const canSignOff = cycle.status === "post_submitted";
 
-  return (
+  // Spec 137 — device-aware adoption of MobileDetailFrame. On mobile the
+  // existing single-column flow is wrapped in the thin-header + back-arrow
+  // chrome the JSX prototype defines. The sign-off CTA migrates to the
+  // sticky-bottom slot when active (so it stays reachable on long scrolls);
+  // desktop continues to render the inline header CTA unchanged.
+  const device = await getDeviceType();
+  const mobileTitle = teacher?.fullName ?? cycle.code ?? "Cycle";
+  const stickyAction =
+    canSignOff ? (
+      <form action={signOffCycleAction}>
+        <input type="hidden" name="cycleId" value={cycleId} />
+        <button type="submit" className="btn btn-primary btn-sm">
+          Sign off cycle
+        </button>
+      </form>
+    ) : undefined;
+
+  const body = (
     <div>
       <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
         <div>
@@ -321,5 +340,17 @@ export default async function CycleDetailPage({
         </form>
       </section>
     </div>
+  );
+
+  return device === "mobile" ? (
+    <MobileDetailFrame
+      title={mobileTitle}
+      backHref="/observation"
+      stickyAction={stickyAction}
+    >
+      {body}
+    </MobileDetailFrame>
+  ) : (
+    body
   );
 }

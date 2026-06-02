@@ -26,6 +26,9 @@ import {
   observationCycles,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+// Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -127,6 +130,9 @@ export default async function RepoTeachersIndexPage({
     .from(phases)
     .orderBy(asc(phases.sequence));
 
+  // Spec 138 — device-aware card/table fork.
+  const device = await getDeviceType();
+
   return (
     <div>
       <div className="page-header">
@@ -194,7 +200,34 @@ export default async function RepoTeachersIndexPage({
             <span className="chip">{rows.length} shown</span>
           </div>
         </form>
-        <div className="card">
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="teachers"
+            emptyMessage="No teachers match this filter."
+            items={rows.map((t) => {
+              const chipKind =
+                (t.subjectSpecialism && SUBJECT_CHIP[t.subjectSpecialism]) || "";
+              return {
+                id: t.id,
+                primary: t.fullName,
+                hindi: t.hindiName ?? null,
+                href: `/repo/teacher/${t.id}`,
+                chip: t.subjectSpecialism
+                  ? { label: t.subjectSpecialism, kind: chipKind }
+                  : null,
+                secondary: [
+                  { label: "School", value: t.schoolCode ?? "—", mono: true },
+                  { label: "Phase", value: t.phaseLabel ?? "—" },
+                  {
+                    value: `${t.sessionsTotal ?? 0} sessions · ${t.cyclesTotal ?? 0} obs. cycles`,
+                  },
+                ],
+              };
+            })}
+          />
+        ) : null}
+        <div className="card" style={device === "mobile" ? { display: "none" } : undefined} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div
               style={{

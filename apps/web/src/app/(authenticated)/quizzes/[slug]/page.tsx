@@ -18,7 +18,9 @@ import {
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { getDeviceType } from "@/lib/device";
 import { QuizRunner } from "@/components/quiz/QuizRunner";
+import { MobileQuizRunner } from "@/components/quiz/MobileQuizRunner";
 
 export const dynamic = "force-dynamic";
 
@@ -126,6 +128,30 @@ export default async function QuizRunnerPage({
     .where(eq(quizQuestions.quizId, quiz.id))
     .orderBy(asc(quizQuestions.sequence));
 
+  // Spec 134 — device-aware runner. Mobile gets the full-screen
+  // one-question-per-screen layout from mobile-runners.jsx::MobQuiz.
+  // Same grading contract (submitQuizAttempt) — drop-in replacement.
+  const device = await getDeviceType();
+
+  const mappedQuestions = questions.map((q) => ({
+    id: q.id,
+    prompt: q.prompt,
+    options: Array.isArray(q.options) ? q.options : [],
+  }));
+
+  if (device === "mobile") {
+    return (
+      <main>
+        <MobileQuizRunner
+          slug={slug}
+          title={quiz.title}
+          questions={mappedQuestions}
+          submitAction={submitQuizAttempt}
+        />
+      </main>
+    );
+  }
+
   return (
     <main>
       <div className="page-header" style={{ paddingBottom: 0 }}>
@@ -140,11 +166,7 @@ export default async function QuizRunnerPage({
       <QuizRunner
         slug={slug}
         title={quiz.title}
-        questions={questions.map((q) => ({
-          id: q.id,
-          prompt: q.prompt,
-          options: Array.isArray(q.options) ? q.options : [],
-        }))}
+        questions={mappedQuestions}
         submitAction={submitQuizAttempt}
       />
     </main>

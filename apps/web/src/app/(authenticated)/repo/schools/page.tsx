@@ -21,6 +21,9 @@ import {
   sessions as classroomSessions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+// Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -168,6 +171,10 @@ export default async function RepoSchoolsIndexPage({
     { v: "kgl", l: "Kargil", n: counts.kgl },
   ];
 
+  // Spec 138 — pick the right layout per device. The same `visible` rows
+  // feed both branches so filters stay 1:1.
+  const device = await getDeviceType();
+
   return (
     <div>
       <div className="page-header">
@@ -223,8 +230,32 @@ export default async function RepoSchoolsIndexPage({
           </div>
         </div>
 
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="schools"
+            emptyMessage="No schools match this filter."
+            items={visible.map((s) => {
+              const chip = chipFor(s.districtCode ?? s.districtName);
+              return {
+                id: s.id,
+                primary: s.name,
+                href: `/repo/school/${s.id}`,
+                chip: chip.label !== "—" ? { label: chip.label, kind: chip.kind } : null,
+                secondary: [
+                  { label: "Code", value: s.code, mono: true },
+                  { label: "Zone", value: s.zoneName ?? "—" },
+                  {
+                    value: `${s.teachersTotal ?? 0} teachers · ${s.classesTotal ?? 0} classes · ${s.sessionsTotal ?? 0} sessions`,
+                  },
+                ],
+              };
+            })}
+          />
+        ) : null}
+
         {/* Table card */}
-        <div className="card">
+        <div className="card" style={device === "mobile" ? { display: "none" } : undefined} aria-hidden={device === "mobile"}>
           {visible.length === 0 ? (
             <div
               style={{

@@ -22,7 +22,13 @@ import {
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { getDeviceType } from "@/lib/device";
 import { FormRenderer } from "@/components/forms/FormRenderer";
+// Spec 133 — Mobile runner is a drop-in replacement for FormRenderer when
+// the device cookie reports a touch device. Same prop contract, same server
+// action, same autosave pipeline; only the layout changes (one field per
+// screen, big touch targets, sticky Prev/Next, review screen at the end).
+import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
 
 export const dynamic = "force-dynamic";
 
@@ -258,6 +264,9 @@ export default async function FormRunnerPage({
 
   const { slug } = await params;
   const sp = await searchParams;
+  // Spec 133 — pick renderer by device cookie. Mobile gets one-field-per-screen
+  // with sticky Prev/Next + review; desktop keeps the stacked FormRenderer.
+  const device = await getDeviceType();
 
   // Helper — coerce string-or-string-array searchParams to a single trimmed
   // string. URL `?pairingId=a&pairingId=b` collapses to "a" (first wins) to
@@ -465,19 +474,36 @@ export default async function FormRunnerPage({
           style={{
             background: "var(--card-hi)",
             border: "1px solid var(--line)",
-            padding: 20,
+            padding: device === "mobile" ? 0 : 20,
           }}
         >
-          <FormRenderer
-            schema={schema}
-            initialResponses={initialResponses}
-            draftKey={{ templateId: form.id }}
-            action={submitFormAction}
-            formId={form.id}
-            slug={slug}
-            pairingId={pairingId || null}
-            context={context}
-          />
+          {device === "mobile" ? (
+            // Spec 133 — full-screen step-through layout. Same schema /
+            // initialResponses / context / action contract as FormRenderer
+            // so a draft saved on desktop is consumable on mobile and vice
+            // versa.
+            <MobileFormRunner
+              schema={schema}
+              initialResponses={initialResponses}
+              draftKey={{ templateId: form.id }}
+              action={submitFormAction}
+              formId={form.id}
+              slug={slug}
+              pairingId={pairingId || null}
+              context={context}
+            />
+          ) : (
+            <FormRenderer
+              schema={schema}
+              initialResponses={initialResponses}
+              draftKey={{ templateId: form.id }}
+              action={submitFormAction}
+              formId={form.id}
+              slug={slug}
+              pairingId={pairingId || null}
+              context={context}
+            />
+          )}
         </section>
 
         <footer

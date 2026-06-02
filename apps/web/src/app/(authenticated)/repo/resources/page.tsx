@@ -16,6 +16,9 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources, resourceSubjects, subjects } from "@gml/db/schema";
 import { auth } from "@/auth";
+// Spec 138 — mobile card-list fallback (desktop keeps the table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +95,9 @@ export default async function RepoResourcesIndexPage({
   const totalActive = counts.reduce((acc, c) => acc + c.n, 0);
   const countMap = new Map(counts.map((c) => [c.kind, c.n]));
 
+  // Spec 138 — device-aware card/table fork.
+  const device = await getDeviceType();
+
   return (
     <div>
       <div className="page-header">
@@ -122,7 +128,44 @@ export default async function RepoResourcesIndexPage({
           ))}
         </section>
 
-        <div className="card" style={{ overflow: "hidden" }}>
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="resources"
+            emptyMessage="No reading material matches this filter."
+            items={rows.map((r) => {
+              const subs = r.subjectsAgg ?? [];
+              const subjectLabel =
+                subs.length === 0
+                  ? "—"
+                  : subs
+                      .slice(0, 2)
+                      .map((s) => s.name)
+                      .join(", ") + (subs.length > 2 ? ` +${subs.length - 2}` : "");
+              const updatedLabel = r.updatedAt
+                ? new Date(r.updatedAt).toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })
+                : "—";
+              return {
+                id: r.id,
+                primary: r.name,
+                href: `/repo/resource/${r.id}`,
+                chip: { label: r.kind, kind: "" },
+                secondary: [
+                  { label: "Subjects", value: subjectLabel },
+                  {
+                    value: `${r.owner ?? "—"} · ${r.pages ?? "—"} pages`,
+                  },
+                  { label: "Updated", value: updatedLabel, mono: true },
+                ],
+              };
+            })}
+          />
+        ) : null}
+        <div className="card" style={device === "mobile" ? { display: "none", overflow: "hidden" } : { overflow: "hidden" }} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
               No reading material matches this filter.

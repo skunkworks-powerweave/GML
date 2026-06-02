@@ -36,7 +36,10 @@ const TOPBAR = "apps/web/src/components/nav/Topbar.tsx";
 const SIDEBAR = "apps/web/src/components/nav/Sidebar.tsx";
 const BOTTOMTABS = "apps/web/src/components/nav/BottomTabs.tsx";
 const GATE_PAGE = "apps/web/src/app/gate/[slug]/page.tsx";
-const LOGIN_PAGE = "apps/web/src/app/login/page.tsx";
+// Spec 136 split `login/page.tsx` into a server-side device branch +
+// DesktopLogin.tsx (client). The original client-side useTranslations()
+// calls now live in DesktopLogin.tsx; the spec 125 contract follows.
+const LOGIN_PAGE = "apps/web/src/app/login/DesktopLogin.tsx";
 const LOGIN_LAYOUT = "apps/web/src/app/login/layout.tsx";
 const DASHBOARD = "apps/web/src/app/(authenticated)/dashboard/page.tsx";
 

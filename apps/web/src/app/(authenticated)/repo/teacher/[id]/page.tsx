@@ -20,6 +20,8 @@ import {
   observationCycles,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { getDeviceType } from "@/lib/device";
+import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
 
@@ -157,7 +159,13 @@ export default async function RepoTeacherDetailPage({
     (teacher.subjectSpecialism &&
       SUBJECT_COLOR[teacher.subjectSpecialism]) || { chip: "" };
 
-  return (
+  // Spec 137 — device-aware MobileDetailFrame adoption. Wraps the desktop
+  // two-column body in the thin-header chrome on mobile; on desktop the
+  // existing layout renders unchanged. Data fetching above is untouched.
+  const device = await getDeviceType();
+  const mobileTitle = teacher.fullName;
+
+  const body = (
     <div>
       <div className="page-header">
         <Link
@@ -531,6 +539,14 @@ export default async function RepoTeacherDetailPage({
         </div>
       </div>
     </div>
+  );
+
+  return device === "mobile" ? (
+    <MobileDetailFrame title={mobileTitle} backHref="/repo/teachers">
+      {body}
+    </MobileDetailFrame>
+  ) : (
+    body
   );
 }
 

@@ -8,6 +8,9 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings } from "@gml/db/schema";
 import { auth } from "@/auth";
+// Spec 138 — mobile card-list fallback (desktop keeps the table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -52,6 +55,9 @@ export default async function RepoMentorsIndexPage() {
     : [];
   const menteeCount = new Map(counts.map((c) => [c.mentorId, c.mentees]));
 
+  // Spec 138 — device-aware card/table fork.
+  const device = await getDeviceType();
+
   return (
     <div>
       <div className="page-header">
@@ -62,7 +68,34 @@ export default async function RepoMentorsIndexPage() {
         </p>
       </div>
       <div className="page-body">
-        <div className="card card-hi">
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="mentors"
+            emptyMessage="No mentors yet."
+            items={rows.map((m) => {
+              const base = m.baseLocation ?? "";
+              const chipKind = BASE_CHIP[base] ?? "";
+              const expertise = Array.isArray(m.expertiseAreas)
+                ? m.expertiseAreas.join(", ")
+                : "";
+              return {
+                id: m.id,
+                primary: m.name,
+                hindi: m.hindiName ?? null,
+                href: `/repo/mentor/${m.id}`,
+                chip: base ? { label: base, kind: chipKind } : null,
+                secondary: [
+                  { label: "Expertise", value: expertise || "—" },
+                  {
+                    value: `${menteeCount.get(m.id) ?? 0} mentees`,
+                  },
+                ],
+              };
+            })}
+          />
+        ) : null}
+        <div className="card card-hi" style={device === "mobile" ? { display: "none" } : undefined} aria-hidden={device === "mobile"}>
           <table className="t">
             <thead>
               <tr>

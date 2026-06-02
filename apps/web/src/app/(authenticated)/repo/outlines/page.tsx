@@ -10,6 +10,9 @@ import Link from "next/link";
 import { and, asc, eq, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { courseOutlines, subjects, teachers } from "@gml/db/schema";
+// Spec 138 — mobile card-list fallback (desktop keeps the 9-col table).
+import { getDeviceType } from "@/lib/device";
+import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +73,9 @@ export default async function RepoOutlinesIndexPage({
     .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(asc(subjects.name), asc(courseOutlines.grade), asc(courseOutlines.term))
     .limit(200);
+
+  // Spec 138 — device-aware card/table fork.
+  const device = await getDeviceType();
 
   return (
     <div>
@@ -152,7 +158,31 @@ export default async function RepoOutlinesIndexPage({
             <span className="chip">{rows.length} shown</span>
           </div>
         </form>
-        <div className="card card-hi" style={{ overflow: "hidden" }}>
+        {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
+        {device === "mobile" ? (
+          <MobileRepoCardList
+            testIdSuffix="outlines"
+            emptyMessage="No outlines match this filter."
+            items={rows.map((o) => {
+              const chip = STATUS_CHIP[o.status] ?? STATUS_CHIP.planned;
+              return {
+                id: o.id,
+                primary: o.name,
+                hindi: o.ownerHindi ?? null,
+                href: `/repo/outline/${o.id}`,
+                chip: { label: chip.label, kind: chip.kind },
+                secondary: [
+                  { label: "Subject", value: o.subjectName ?? "—" },
+                  {
+                    value: `Grade ${o.grade} · Term ${o.term} · ${o.sessionsCount} sessions${o.weeks ? ` · ${o.weeks} weeks` : ""}`,
+                  },
+                  o.ownerName ? { label: "Owner", value: o.ownerName } : { value: "—" },
+                ],
+              };
+            })}
+          />
+        ) : null}
+        <div className="card card-hi" style={device === "mobile" ? { display: "none", overflow: "hidden" } : { overflow: "hidden" }} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
               No outlines match this filter.

@@ -16,6 +16,8 @@ import {
   subjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { getDeviceType } from "@/lib/device";
+import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
 
@@ -150,7 +152,12 @@ export default async function RepoSchoolDetailPage({
 
   const districtChip = districtChipFor(school.districtCode, school.districtName);
 
-  return (
+  // Spec 137 — device-aware MobileDetailFrame adoption. The mobile chrome
+  // wraps the existing two-column desktop body with a thin back-arrow header.
+  // Data fetching + role gating above are unchanged.
+  const device = await getDeviceType();
+
+  const body = (
     <div>
       <div className="page-header">
         <Link
@@ -436,6 +443,14 @@ export default async function RepoSchoolDetailPage({
         </div>
       </section>
     </div>
+  );
+
+  return device === "mobile" ? (
+    <MobileDetailFrame title={school.name} backHref="/repo/schools">
+      {body}
+    </MobileDetailFrame>
+  ) : (
+    body
   );
 }
 
