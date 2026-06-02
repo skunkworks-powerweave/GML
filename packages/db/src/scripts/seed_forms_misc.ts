@@ -32,6 +32,54 @@ const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
 type FieldKind = "boolean" | "boolean-group" | "rating" | "textarea" | "single-choice" | "text";
 
+// Spec 140 — canonical kinds accepted by FormRenderer/MobileFormRunner.
+// The misc seed uses a per-file vocabulary (boolean / single-choice etc.) that
+// the dedicated misc-form renderer (spec 080) maps to canonical kinds at
+// render-time. The guard validates that every field kind maps to a canonical
+// kind; an unmappable kind would silently fall through to the text-input
+// fallback in any future generic-renderer path (same drift class as the
+// singular "checkbox" rename fixes elsewhere in this spec).
+const CANONICAL_FIELD_KINDS = [
+  "text",
+  "textarea",
+  "select",
+  "radio",
+  "checkbox",
+  "number",
+  "date",
+  "likert",
+  "rating",
+] as const;
+
+const MISC_KIND_TO_CANONICAL: Record<FieldKind, (typeof CANONICAL_FIELD_KINDS)[number]> = {
+  boolean: "checkbox",
+  "boolean-group": "checkbox",
+  rating: "rating",
+  textarea: "textarea",
+  "single-choice": "radio",
+  text: "text",
+};
+
+function assertCanonicalFieldKinds<T extends { label: string; kind: string; audience: string; version: string; schema: { fields: { kind: string; id: string }[] } }>(rows: T[]): T[] {
+  const valid = new Set<string>(CANONICAL_FIELD_KINDS);
+  const filtered: T[] = [];
+  for (const row of rows) {
+    let allValid = true;
+    for (const field of row.schema.fields) {
+      const mapped = (MISC_KIND_TO_CANONICAL as Record<string, string>)[field.kind];
+      if (!mapped || !valid.has(mapped)) {
+        console.warn(
+          `[seed-forms-misc] WARN — dropping row (label=${row.label}): field "${field.id}" has unmappable kind "${field.kind}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
+        );
+        allValid = false;
+        break;
+      }
+    }
+    if (allValid) filtered.push(row);
+  }
+  return filtered;
+}
+
 interface FormField {
   id: string;
   kind: FieldKind;
@@ -167,7 +215,7 @@ interface SeedRow {
   schema: FormSchema;
 }
 
-const ROWS: SeedRow[] = [
+const ROWS: SeedRow[] = assertCanonicalFieldKinds([
   {
     label: "school-visit checklist",
     kind: "baseline", // route-around: closest existing enum value
@@ -182,7 +230,7 @@ const ROWS: SeedRow[] = [
     version: "endline-1",
     schema: ENDLINE_SCHEMA,
   },
-];
+]);
 
 // ---------------------------------------------------------------------------
 // Main.

@@ -84,8 +84,10 @@ export const quizSubmissions = pgTable(
     quizId: uuid("quiz_id").notNull().references(() => quizzes.id, { onDelete: "cascade" }),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     // Per-question answer record: [{ questionId, selectedIndex }, ...].
+    // Spec 146 — `selectedIndex` may be `null` to mark a skipped question.
+    // Pre-146 rows store only number values; both shapes are valid.
     answers: jsonb("answers")
-      .$type<Array<{ questionId: string; selectedIndex: number }>>()
+      .$type<Array<{ questionId: string; selectedIndex: number | null }>>()
       .notNull()
       .default(sql`'[]'::jsonb`),
     // Percentage correct (0-100).

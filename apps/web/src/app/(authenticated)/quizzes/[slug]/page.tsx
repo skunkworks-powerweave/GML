@@ -31,7 +31,7 @@ export const dynamic = "force-dynamic";
 
 export async function submitQuizAttempt(
   slug: string,
-  answers: Array<{ questionId: string; selectedIndex: number }>,
+  answers: Array<{ questionId: string; selectedIndex: number | null }>,
 ): Promise<void> {
   "use server";
 
@@ -54,14 +54,27 @@ export async function submitQuizAttempt(
     .where(eq(quizQuestions.quizId, quiz.id))
     .orderBy(asc(quizQuestions.sequence));
 
-  // Grade — percentage correct, rounded to int.
+  // Spec 146 — grading-bug fix.
+  // The denominator MUST be the count of questions stored in the DB,
+  // NOT the count of answers the client posted. Before this fix the
+  // client filtered to "answered only" before submitting, so a learner
+  // who answered 3/10 questions correctly was scored 100% — the server
+  // graded against the 3 they answered, not the 10 in the DB.
+  // Now: skipped questions arrive as `selectedIndex: null` (or are
+  // absent from the map for defensive back-compat), and BOTH cases
+  // count as wrong (0 points). The learner had the chance to answer
+  // and chose not to — same outcome as picking the wrong option.
   const answerMap = new Map(
     answers.map((a) => [a.questionId, a.selectedIndex] as const),
   );
   let correct = 0;
+  let answeredCount = 0;
   for (const q of qs) {
     const picked = answerMap.get(q.id);
-    if (picked !== undefined && picked === q.correctIndex) correct += 1;
+    if (picked !== undefined && picked !== null) {
+      answeredCount += 1;
+      if (picked === q.correctIndex) correct += 1;
+    }
   }
   const score = qs.length === 0 ? 0 : Math.round((correct / qs.length) * 100);
   const passed = score >= quiz.passThreshold;
@@ -87,6 +100,9 @@ export async function submitQuizAttempt(
       score,
       passed,
       questionCount: qs.length,
+      // Spec 146 — emit `answeredCount` so the audit trail can
+      // distinguish "answered X / N correctly" from "skipped N - X".
+      answeredCount,
     },
   });
 

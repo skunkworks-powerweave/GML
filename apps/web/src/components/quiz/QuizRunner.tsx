@@ -25,9 +25,12 @@ export type QuizRunnerProps = {
   title: string;
   questions: QuizRunnerQuestion[];
   // Server action — receives slug + answers; redirects to /quizzes/[slug]/result/[id].
+  // Spec 146: client sends ALL questions; skipped answers carry
+  // `selectedIndex: null` so the server can count them as wrong (0 points)
+  // instead of silently shrinking the denominator.
   submitAction: (
     slug: string,
-    answers: Array<{ questionId: string; selectedIndex: number }>,
+    answers: Array<{ questionId: string; selectedIndex: number | null }>,
   ) => Promise<void>;
 };
 
@@ -61,9 +64,17 @@ export function QuizRunner({ slug, title, questions, submitAction }: QuizRunnerP
     setSelected((s) => ({ ...s, [q.id]: i }));
 
   const onSubmit = () => {
-    const answers = questions
-      .filter((qq) => selected[qq.id] !== undefined)
-      .map((qq) => ({ questionId: qq.id, selectedIndex: selected[qq.id]! }));
+    // Spec 146 — grading-bug fix. Send EVERY question, with
+    // `selectedIndex: null` for any the learner skipped. Before this fix
+    // we filtered to "answered only", which caused the server to grade
+    // against a shorter list than the DB held and silently turned
+    // skipped questions into a free pass on the denominator. Skipped
+    // questions are now graded as wrong (0 points) — the learner had
+    // the chance to answer and chose not to.
+    const answers = questions.map((qq) => ({
+      questionId: qq.id,
+      selectedIndex: selected[qq.id] === undefined ? null : selected[qq.id],
+    }));
     setServerErr(null);
     startTransition(async () => {
       try {

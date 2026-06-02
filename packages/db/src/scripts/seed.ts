@@ -1,5 +1,10 @@
 // Spec 086 — Ladakh v2 seed data.
 // Spec 103 — extended with super_admin bootstrap (Workflow Run 6 Tier B1).
+// Spec 143 — bootstrapSystemSettings helper removed; migration 0015 owns the
+//            singleton INSERT idempotently and was racing the seed-time UPSERT
+//            on concurrent first-deploy runs. The migration alone is now the
+//            single source of truth for the well-known row. See
+//            specs/143-schema-cleanup-fk-check-singleton/research.md.
 // Idempotent: skips inserts if rows already exist for any seed key.
 
 import "dotenv/config";
@@ -27,11 +32,13 @@ export async function main() {
   // from environment variables so a fresh deployment has a working super_admin out-of-box.
   await bootstrapSuperAdmin(db);
 
-  // Spec 124 — system_settings singleton bootstrap (runs second, idempotent, no env deps).
-  // The migration also INSERTs the singleton row on first apply; this helper covers the
-  // case where the table exists but the row was somehow cleared, and gives an explicit
-  // dev hook for re-seeding defaults.
-  await bootstrapSystemSettings(db);
+  // Spec 143 — system_settings singleton bootstrap moved entirely into migration 0015
+  // (which already used INSERT … ON CONFLICT DO NOTHING). The previous seed-side helper
+  // raced the migration on simultaneous first-deploy runs; deleting it eliminates the
+  // race while keeping the bootstrap idempotent — `pnpm db:migrate` always inserts the
+  // sentinel row before the app starts. The audit-recovery hook for an accidentally
+  // truncated table is now `pnpm db:migrate` (re-applies 0015's INSERT) rather than
+  // `pnpm db:seed`.
 
   console.log("[seed] checking existing rows…");
   // db.execute() with node-postgres returns a pg QueryResult { rows, rowCount }, not an array.
@@ -265,38 +272,10 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
   console.log(`[seed] ✓ super_admin user created: ${email}`);
 }
 
-// ── Spec 124 — System settings singleton bootstrap ─────────────────────────────
-// Inserts the well-known sentinel row '00000000-0000-0000-0000-000000000001'
-// into system_settings with all default column values. Idempotent:
-// ON CONFLICT DO NOTHING on the PK. The 0015 migration also INSERTs the row
-// during migrate-only deployments, so this helper is a safety net for dev DBs
-// that were truncated after migrate.
-async function bootstrapSystemSettings(db: ReturnType<typeof drizzle>): Promise<void> {
-  const SYSTEM_SETTINGS_ID = "00000000-0000-0000-0000-000000000001";
-
-  // Existence check — short-circuit when the singleton already exists so the log
-  // line is a clean "exists/skipping" rather than a redundant INSERT attempt.
-  const existing = await db
-    .select({ id: schema.systemSettings.id })
-    .from(schema.systemSettings)
-    .where(eq(schema.systemSettings.id, SYSTEM_SETTINGS_ID))
-    .limit(1);
-
-  if (existing.length > 0) {
-    console.log("[seed] system_settings singleton already exists — skipping");
-    return;
-  }
-
-  await db
-    .insert(schema.systemSettings)
-    .values({
-      id: SYSTEM_SETTINGS_ID,
-      // All other columns rely on Drizzle/Postgres defaults declared in the schema.
-    })
-    .onConflictDoNothing({ target: schema.systemSettings.id });
-
-  console.log("[seed] ✓ system_settings singleton row created");
-}
+// Spec 143 — bootstrapSystemSettings() was removed here. The single source of truth
+// for the well-known singleton row is now migration 0015_system_settings.sql, whose
+// `INSERT … ON CONFLICT DO NOTHING` runs once during `pnpm db:migrate` and is
+// idempotent on re-runs. If a dev truncates the table they re-run migrate, not seed.
 
 // Auto-run only when invoked directly (e.g. `tsx seed.ts`), not when imported
 // by the seed_all.ts orchestrator (spec 104).

@@ -65,6 +65,25 @@ export default async function QuizResultPage({
   const score = submission.score;
   const threshold = quiz.passThreshold;
 
+  // Spec 146 — grading-bug fix surfaces a separate "answered" vs
+  // "correct" count. Skipped (null/undefined) and explicitly-answered
+  // are now distinct on the result page so a learner who skipped
+  // questions sees that called out (rather than being told they "got
+  // them wrong" — which is technically true for the grade but isn't
+  // the most useful framing).
+  const totalCount = questions.length;
+  let answeredCount = 0;
+  let correctCount = 0;
+  for (const q of questions) {
+    const picked = answerMap.get(q.id);
+    const wasAnswered = picked !== undefined && picked !== null;
+    if (wasAnswered) {
+      answeredCount += 1;
+      if (picked === q.correctIndex) correctCount += 1;
+    }
+  }
+  const skippedCount = totalCount - answeredCount;
+
   return (
     <main>
       <div className="page-header">
@@ -129,6 +148,34 @@ export default async function QuizResultPage({
               ? "Well done — you may proceed to the next module."
               : "Review the explanations below and retake when you are ready."}
           </div>
+          {/* Spec 146 — answered vs total breakdown. Skipped questions
+              are counted as wrong against the denominator (same
+              percentage shown above), but called out separately here so
+              the learner can see "I skipped 3" vs "I got 3 wrong". */}
+          <div
+            data-testid="quiz-result-breakdown"
+            style={{
+              marginTop: 14,
+              fontSize: 12,
+              color: "var(--ink-3)",
+              fontFamily: "var(--mono)",
+              letterSpacing: "0.02em",
+            }}
+          >
+            {answeredCount} of {totalCount} answered ·{" "}
+            <span style={{ color: "var(--lichen)" }}>
+              {correctCount} correct
+            </span>{" "}
+            of {totalCount}
+            {skippedCount > 0 ? (
+              <>
+                {" "}·{" "}
+                <span style={{ color: "var(--saffron)" }}>
+                  {skippedCount} skipped
+                </span>
+              </>
+            ) : null}
+          </div>
 
           <div
             style={{
@@ -140,7 +187,12 @@ export default async function QuizResultPage({
           >
             {questions.map((q, i) => {
               const picked = answerMap.get(q.id);
-              const isCorrect = picked === q.correctIndex;
+              // Spec 146 — `picked` is now `number | null | undefined`.
+              // null = explicit "skipped" from the new client contract;
+              // undefined = legacy submission predating spec 146.
+              // Both count as wrong, but neither is "correct".
+              const wasAnswered = picked !== undefined && picked !== null;
+              const isCorrect = wasAnswered && picked === q.correctIndex;
               return (
                 <div
                   key={q.id}
@@ -188,15 +240,16 @@ export default async function QuizResultPage({
                           marginTop: 6,
                         }}
                       >
-                        {picked !== undefined ? (
+                        {wasAnswered ? (
                           <>
                             Your answer:{" "}
                             <span style={{ color: "var(--ink)" }}>
-                              {q.options[picked] ?? `(option ${picked})`}
+                              {q.options[picked as number] ??
+                                `(option ${picked})`}
                             </span>
                           </>
                         ) : (
-                          <em>No answer</em>
+                          <em>Skipped</em>
                         )}
                       </div>
                       <div

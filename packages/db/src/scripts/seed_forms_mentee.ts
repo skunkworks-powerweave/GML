@@ -15,6 +15,53 @@ const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 // Field descriptor — mirrors the shape the renderer (spec 073) expects.
 type FieldType = "likert_5" | "textarea" | "radio" | "short_text" | "number";
 
+// Spec 140 — canonical kinds accepted by FormRenderer/MobileFormRunner.
+// The mentee seed uses a per-file vocabulary (likert_5, short_text) that the
+// dedicated mentee-form renderer (spec 073) maps to canonical kinds at
+// render-time. The guard validates that every field type can be mapped to a
+// canonical kind; an unmappable type would silently fall through to the
+// text-input fallback in any future generic-renderer path (the same class of
+// bug the singular "checkbox" rename fixes elsewhere in this spec).
+const CANONICAL_FIELD_KINDS = [
+  "text",
+  "textarea",
+  "select",
+  "radio",
+  "checkbox",
+  "number",
+  "date",
+  "likert",
+  "rating",
+] as const;
+
+const MENTEE_TYPE_TO_CANONICAL: Record<FieldType, (typeof CANONICAL_FIELD_KINDS)[number]> = {
+  likert_5: "likert",
+  textarea: "textarea",
+  radio: "radio",
+  short_text: "text",
+  number: "number",
+};
+
+function assertCanonicalFieldKinds<T extends { kind: string; audience: string; version: string; schema: { fields: { type: string; id: string }[] } }>(rows: T[]): T[] {
+  const valid = new Set<string>(CANONICAL_FIELD_KINDS);
+  const filtered: T[] = [];
+  for (const row of rows) {
+    let allValid = true;
+    for (const field of row.schema.fields) {
+      const mapped = (MENTEE_TYPE_TO_CANONICAL as Record<string, string>)[field.type];
+      if (!mapped || !valid.has(mapped)) {
+        console.warn(
+          `[seed:forms-mentee] WARN — dropping row (kind=${row.kind}, audience=${row.audience}, version=${row.version}): field "${field.id}" has unmappable type "${field.type}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
+        );
+        allValid = false;
+        break;
+      }
+    }
+    if (allValid) filtered.push(row);
+  }
+  return filtered;
+}
+
 interface FieldDescriptor {
   id: string;
   label: string;
@@ -355,12 +402,12 @@ interface FormSeedRow {
   schema: FormSchema;
 }
 
-const ROWS: FormSeedRow[] = [
+const ROWS: FormSeedRow[] = assertCanonicalFieldKinds([
   { kind: "baseline", audience: "mentee", version: "1", schema: baselineMentee },
   { kind: "progress_1", audience: "mentee", version: "1", schema: progress1Mentee },
   { kind: "progress_2", audience: "mentee", version: "2", schema: progress2Mentee },
   { kind: "final", audience: "mentee", version: "1", schema: finalMentee },
-];
+]);
 
 export async function main() {
   const url = process.env.DATABASE_URL;

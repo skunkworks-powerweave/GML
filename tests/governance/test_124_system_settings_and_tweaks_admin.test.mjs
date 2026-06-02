@@ -155,23 +155,26 @@ test("spec 124 — 0015 snapshot exists and chains off the 0014 snapshot id", ()
   );
 });
 
-test("spec 124 — seed.ts ships bootstrapSystemSettings and calls it from main()", () => {
-  const src = read(SEED);
-  assert.match(
-    src,
-    /async function bootstrapSystemSettings\b/,
-    "seed.ts must declare the bootstrap helper",
+test("spec 124 — singleton row bootstrap is owned by migration 0015 (spec 143 audit closure)", () => {
+  // Spec 143 removed the bootstrapSystemSettings helper from seed.ts because the
+  // seed-side INSERT was racing migration 0015 on simultaneous first-deploy runs.
+  // Migration 0015 already INSERTs the sentinel row with ON CONFLICT DO NOTHING,
+  // so the migration alone is now the single source of truth for the singleton.
+  const seed = read(SEED);
+  assert.ok(
+    !/async function bootstrapSystemSettings\b/.test(seed),
+    "seed.ts must NOT redeclare bootstrapSystemSettings (race with migration 0015 — spec 143)",
   );
-  assert.match(
-    src,
-    /await bootstrapSystemSettings\(db\)/,
-    "main() must await bootstrapSystemSettings(db)",
+  assert.ok(
+    !/await bootstrapSystemSettings\(db\)/.test(seed),
+    "seed.ts main() must NOT call bootstrapSystemSettings (migration 0015 owns the bootstrap)",
   );
-  // The bootstrap inserts only when missing
+  // The migration must still be the idempotent source of truth.
+  const migration = read(MIGRATION);
   assert.match(
-    src,
-    /onConflictDoNothing/,
-    "bootstrapSystemSettings must use onConflictDoNothing for idempotency",
+    migration,
+    /INSERT INTO\s+"system_settings"[\s\S]*'00000000-0000-0000-0000-000000000001'[\s\S]*ON CONFLICT\s*\("id"\)\s*DO NOTHING/,
+    "migration 0015 must remain the idempotent singleton INSERT (single source of truth)",
   );
 });
 

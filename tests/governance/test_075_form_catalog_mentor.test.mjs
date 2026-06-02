@@ -55,14 +55,25 @@ test("spec 075: each form schema uses the locked {fields:[{name,label,kind,requi
     assert.match(src, new RegExp(`const\\s+${c}:\\s*SeedForm`), `${c} declared as SeedForm`);
   }
   // FORMS array gathers exactly those four.
-  assert.match(src, /const\s+FORMS:\s*SeedForm\[\]\s*=\s*\[\s*MENTOR_BASELINE,\s*MENTOR_PROGRESS_Q1,\s*MENTOR_PROGRESS_Q2,\s*MENTOR_FINAL\s*\]/);
+  // Spec 140 — the FORMS array is now wrapped by the assertCanonicalFieldKinds(...)
+  // runtime guard at the seed-array declaration so the canonical renderer
+  // allow-list is enforced at module load. The four constants are still listed
+  // in the same order; the `as SeedForm[]` cast preserves the precise tuple
+  // type because the guard's generic signature widens to the structural type.
+  assert.match(
+    src,
+    /const\s+FORMS:\s*SeedForm\[\]\s*=\s*assertCanonicalFieldKinds\(\[[\s\S]*?MENTOR_BASELINE,?[\s\S]*?MENTOR_PROGRESS_Q1,?[\s\S]*?MENTOR_PROGRESS_Q2,?[\s\S]*?MENTOR_FINAL,?[\s\S]*?\]\)/,
+  );
 });
 
 test("spec 075: mentor baseline covers bio + expertise + goals + meeting style fields", () => {
   const src = read(SCRIPT);
   // The brief explicitly requires these four mentor-baseline questions.
   assert.match(src, /name:\s*"bio"/, "baseline includes bio field");
-  assert.match(src, /name:\s*"expertise_areas"[\s\S]*?kind:\s*"checkboxes"/, "expertise_areas is a checkboxes multi-select");
+  // Spec 140 — the canonical renderer kind is the singular "checkbox" (matches
+  // FormRenderer/MobileFormRunner's CheckboxGroup dispatch). The original
+  // plural "checkboxes" silently fell through to the text-input fallback.
+  assert.match(src, /name:\s*"expertise_areas"[\s\S]*?kind:\s*"checkbox"/, "expertise_areas is a checkbox multi-select (canonical singular kind)");
   assert.match(src, /name:\s*"expected_goals"[\s\S]*?kind:\s*"textarea"/, "expected_goals is a textarea");
   assert.match(src, /name:\s*"preferred_meeting_style"[\s\S]*?kind:\s*"radio"/, "preferred_meeting_style is a radio");
 });

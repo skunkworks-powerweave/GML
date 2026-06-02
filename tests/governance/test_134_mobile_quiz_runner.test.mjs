@@ -95,11 +95,13 @@ test("spec 134 — MobileQuizRunner mirrors the desktop QuizRunner prop surface 
     "MobileQuizRunner must accept questions: MobileQuizRunnerQuestion[]",
   );
   // The submit action must take (slug, answers) and return Promise<void> —
-  // identical shape to the desktop runner.
+  // identical shape to the desktop runner. Post-spec-146 the
+  // `selectedIndex` is widened to `number | null` so the server can tell
+  // skipped questions apart from answered ones.
   assert.match(
     src,
-    /submitAction:\s*\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
-    "MobileQuizRunner submitAction must match the desktop QuizRunner contract exactly",
+    /submitAction:\s*\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
+    "MobileQuizRunner submitAction must match the desktop QuizRunner contract exactly (selectedIndex: number | null per spec 146)",
   );
   // Same React state primitives — server-side grading, no client scoring.
   assert.match(
@@ -291,8 +293,8 @@ test("spec 134 — desktop QuizRunner is unchanged (sanity — drop-in replaceme
   );
   assert.match(
     src,
-    /submitAction:\s*\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
-    "desktop QuizRunner submitAction shape must match the mobile contract",
+    /submitAction:\s*\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
+    "desktop QuizRunner submitAction shape must match the mobile contract (selectedIndex: number | null per spec 146)",
   );
 });
 

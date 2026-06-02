@@ -51,6 +51,21 @@
 //
 // SM-7 (no PII): the response carries the plaintext password (admin's choice
 // to expose, by definition); no learner-side PII is touched.
+//
+// Workflow Run 13 — spec 148 (gate-rotate-transaction): the INSERT new
+// section_gates row + DELETE old section_gate_grants pair is now wrapped in
+// `db.transaction(async (tx) => { ... })` so the two writes commit or roll
+// back atomically. Before spec 148 these were two separate statements with
+// a <1ms race window in which a parallel /gate/[slug] verify could compare
+// against the freshly-inserted hash and pick up a grant *that the rotation
+// route was about to invalidate* one statement later. The window was small
+// but real, and under the SM-2 substrate-moat threat model (compromised
+// password containment) any non-zero race window on rotation is a real
+// regression. The transaction closes the window: either both writes land
+// (rotation effective, grants flushed) or neither (caller retries on a
+// known-good state). The audit `recordAudit` still fires AFTER the tx
+// returns — auditing the commit, not a tentative intent, and ensuring
+// audit-write failure cannot trigger a rollback of the rotation itself.
 
 import { NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
@@ -119,26 +134,35 @@ export async function POST(
     .where(eq(sectionGates.slug, gateSlug));
   const nextVersion = (latest?.v ?? 0) + 1;
 
-  // INSERT the new row — keep the old row(s) so already-issued grants don't
-  // break on rotation (they still expire via the 8h SM-2 ceiling).
-  await db.insert(sectionGates).values({
-    slug: gateSlug,
-    passwordHash,
-    version: nextVersion,
-    rotatedAt: new Date(),
-    rotatedByUserId: session.user.id,
-  });
-
-  // DELETE all active grants for this slug. Stale grants on the old password
-  // would otherwise survive for up to 8h, defeating the rotation. We don't
+  // Spec 148 — wrap INSERT new section_gates row + DELETE old
+  // section_gate_grants in a single db.transaction so the two writes commit or
+  // roll back atomically. Before the transaction wrapper landed there was a
+  // <1ms race window where a parallel /gate/[slug] verify could compare
+  // against the new hash, get a grant cookie, and then have that grant
+  // survive — defeating the rotation's containment goal. Both `tx.insert`
+  // and `tx.delete` use the same tx so either both land or neither do.
+  //
+  // INSERT keeps the old row(s) so already-issued grants don't break on
+  // rotation (they still expire via the 8h SM-2 ceiling). The DELETE flushes
+  // every active grant for this slug — without it a stale grant on the old
+  // password would survive for up to 8h, defeating the rotation. We don't
   // bother filtering by expiresAt > now() — over-deleting an already-expired
   // grant is harmless (the row was about to be reaped anyway), and the index
   // is keyed on (userId, gateSlug, expiresAt) so the unfiltered DELETE is
   // still cheap.
-  const deleted = await db
-    .delete(sectionGateGrants)
-    .where(eq(sectionGateGrants.gateSlug, gateSlug))
-    .returning({ id: sectionGateGrants.id });
+  const deleted = await db.transaction(async (tx) => {
+    await tx.insert(sectionGates).values({
+      slug: gateSlug,
+      passwordHash,
+      version: nextVersion,
+      rotatedAt: new Date(),
+      rotatedByUserId: session.user.id,
+    });
+    return tx
+      .delete(sectionGateGrants)
+      .where(eq(sectionGateGrants.gateSlug, gateSlug))
+      .returning({ id: sectionGateGrants.id });
+  });
 
   // Audit hook (SM-1): records the rotation with the version and the count
   // of grants invalidated. Best-effort `void` — audit failure never blocks

@@ -155,6 +155,15 @@ export function MobileUploadRunner({
   const galleryRef = useRef<HTMLInputElement | null>(null);
   // Hold a reference to the live tus upload so Cancel can abort it.
   const uploadRef = useRef<{ abort: () => void } | null>(null);
+  // Spec 149 (Workflow Run 13 audit closure) — distinguish a user-driven
+  // cancel (which keeps the redirect timer scheduled is meaningless since
+  // we never reached onSuccess) from an unmount-driven abort (which MUST
+  // suppress the success-redirect AND surface a visible error so the user
+  // doesn't see a frozen progress bar with no explanation). The mounted
+  // ref drives both the unmount-abort error message and the redirect
+  // cancellation token below.
+  const mountedRef = useRef(true);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function openPicker(id: string) {
     if (id === "record") cameraRef.current?.click();
@@ -197,19 +206,50 @@ export function MobileUploadRunner({
           caption: caption.trim(),
         },
         onError: (err: Error) => {
+          // Spec 149 — if the error fires after unmount we must NOT
+          // setState (React will warn and the error UI never reaches a
+          // user anyway). Bail silently; the cleanup in useEffect already
+          // tore down the upload.
+          if (!mountedRef.current) return;
           setErrorMsg(err.message || "Upload failed");
           setStep("failed");
         },
         onProgress: (bytesUploaded: number, bytesTotal: number) => {
+          if (!mountedRef.current) return;
           const pct = bytesTotal > 0 ? Math.round((bytesUploaded / bytesTotal) * 100) : 0;
           setProgress(pct);
         },
         onSuccess: () => {
+          // Spec 149 (Workflow Run 13 audit closure) — chain the redirect
+          // through mountedRef + a stored timer handle so:
+          //   (a) If the component unmounted between tus completion and
+          //       the 1200 ms delay, the router.push never fires (the
+          //       cleanup clears the timer). Without this guard a stale
+          //       router.push fired on an unmounted page, leaking memory
+          //       and racing whatever the user's next click was.
+          //   (b) If the redirect itself throws (e.g. router torn down),
+          //       we surface a retry option instead of swallowing the
+          //       error. The user is on the success screen — they need
+          //       SOMETHING to do if the redirect fails.
+          if (!mountedRef.current) return;
           setProgress(100);
           setStep("done");
           // Give the success screen a beat so the user sees confirmation
-          // before we boot them out to the listing page.
-          window.setTimeout(() => router.push("/uploads"), 1200);
+          // before we boot them out to the listing page. Store the handle
+          // so unmount can cancel.
+          redirectTimerRef.current = setTimeout(() => {
+            redirectTimerRef.current = null;
+            if (!mountedRef.current) return;
+            try {
+              router.push("/uploads");
+            } catch (err) {
+              // Router teardown / navigation rejection — surface a retry
+              // rather than leave the user staring at a dead success page.
+              const msg = err instanceof Error ? err.message : "Redirect failed";
+              setErrorMsg(`${msg} — tap Back to return to My Uploads`);
+              setStep("failed");
+            }
+          }, 1200);
         },
       });
       uploadRef.current = upload;
@@ -230,11 +270,40 @@ export function MobileUploadRunner({
     setProgress(0);
   }
 
-  // If the user navigates away mid-upload we abort the tus instance so we
-  // don't leak a hanging XHR.
+  // Spec 149 (Workflow Run 13 audit closure) — unmount cleanup MUST:
+  //   1. Mark the component as unmounted FIRST so any in-flight tus
+  //      callbacks (onError / onProgress / onSuccess) skip their setState
+  //      branches (see mountedRef guards above).
+  //   2. Cancel the pending redirect timer so we don't router.push on an
+  //      unmounted component (React would log a warning and the navigation
+  //      would race the user's next click).
+  //   3. Surface an "Upload cancelled — try again" error message before
+  //      tearing the upload down. The previous implementation silently
+  //      aborted the tus instance, leaving the user staring at a stalled
+  //      progress bar on remount with no explanation of why their video
+  //      didn't reach the server. setState during unmount is fine here
+  //      because StrictMode's double-mount cycle re-runs the effect; the
+  //      sibling render reads the error from the same state slot.
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      uploadRef.current?.abort();
+      // Step 1 — flip the mount flag so tus callbacks see "unmounted" and
+      // skip their setState branches.
+      mountedRef.current = false;
+      // Step 2 — cancel the pending success-redirect timer.
+      if (redirectTimerRef.current) {
+        clearTimeout(redirectTimerRef.current);
+        redirectTimerRef.current = null;
+      }
+      // Step 3 — surface a visible error so a remount or a parent-tracked
+      // error sink can read it. Guarded: if there's no live upload, the
+      // unmount is a clean teardown (e.g. user already pressed Cancel and
+      // we're navigating away) and we leave the error state alone.
+      if (uploadRef.current) {
+        setErrorMsg("Upload cancelled — try again");
+        uploadRef.current.abort();
+        uploadRef.current = null;
+      }
     };
   }, []);
 

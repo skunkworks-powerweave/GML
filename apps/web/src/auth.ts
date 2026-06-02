@@ -7,6 +7,23 @@ import { db } from "@gml/db";
 import { users, accounts, authSessions, verificationTokens } from "@gml/db/schema";
 import { verifyPassword } from "@/lib/password";
 import { rateLimit } from "@/lib/rate-limit";
+import { recordAudit } from "@/lib/audit";
+
+// Spec 141: never let a raw IP leak into the audit log; mask the last octet
+// (v4) or the last hextet (v6). The audit row still carries enough to count
+// distinct sources but not enough to identify a single household.
+function maskIp(ip: string): string {
+  if (!ip || ip === "unknown") return "unknown";
+  if (ip.includes(":")) {
+    // IPv6 — drop the last hextet.
+    const parts = ip.split(":");
+    return parts.slice(0, -1).join(":") + ":xxxx";
+  }
+  // IPv4 — mask last octet.
+  const parts = ip.split(".");
+  if (parts.length === 4) return parts.slice(0, 3).join(".") + ".xxx";
+  return "masked";
+}
 
 // Augment the default session type so callers get `role` + `userId` on `session.user`.
 declare module "next-auth" {
@@ -68,6 +85,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           request?.headers?.get?.("x-forwarded-for")?.split(",")[0]?.trim() ??
           request?.headers?.get?.("x-real-ip") ??
           "unknown";
+        // Spec 141: rate-limit fail-CLOSED. Previously the catch silently
+        // allowed every login when Redis was down — an attacker who could
+        // partition Redis would unlock unbounded password guessing. Now a
+        // Redis fault returns null (deny) and emits a SEVERE audit row so
+        // ops can react. The user-facing error remains a generic credential
+        // failure so the degraded state isn't leaked to attackers probing
+        // for the weakness.
         try {
           const rl = await rateLimit({
             bucket: "login",
@@ -76,8 +100,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             windowMs: 15 * 60 * 1000,
           });
           if (!rl.ok) return null;
-        } catch {
-          // If Redis is down, fall back to allowing — don't lock everyone out.
+        } catch (err) {
+          void recordAudit({
+            action: "auth.rate_limit.redis_down",
+            entityType: "auth",
+            ipOverride: ip,
+            metadata: {
+              method: "credentials",
+              ipMasked: maskIp(ip),
+              severity: "SEVERE",
+              error: String(err).slice(0, 200),
+            },
+          });
+          // Fail-closed: deny login when the rate-limit channel is degraded.
+          return null;
         }
 
         const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);

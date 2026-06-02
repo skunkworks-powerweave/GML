@@ -48,6 +48,51 @@ type Template = {
   fields: FieldDef[];
 };
 
+// Spec 140 — canonical kinds accepted by FormRenderer/MobileFormRunner.
+// The observation seed uses a per-file vocabulary (text/textarea/scale) that
+// the dedicated observation-form renderer maps to canonical kinds at
+// render-time. The guard validates that every field type maps to a canonical
+// kind; an unmappable type would silently fall through to the text-input
+// fallback in any future generic-renderer path (same drift class as the
+// singular "checkbox" rename fixes elsewhere in this spec).
+const CANONICAL_FIELD_KINDS = [
+  "text",
+  "textarea",
+  "select",
+  "radio",
+  "checkbox",
+  "number",
+  "date",
+  "likert",
+  "rating",
+] as const;
+
+const OBSERVATION_TYPE_TO_CANONICAL: Record<string, (typeof CANONICAL_FIELD_KINDS)[number]> = {
+  text: "text",
+  textarea: "textarea",
+  scale: "rating",
+};
+
+function assertCanonicalFieldKinds(templates: readonly Template[]): readonly Template[] {
+  const valid = new Set<string>(CANONICAL_FIELD_KINDS);
+  const filtered: Template[] = [];
+  for (const t of templates) {
+    let allValid = true;
+    for (const field of t.fields) {
+      const mapped = OBSERVATION_TYPE_TO_CANONICAL[field.type];
+      if (!mapped || !valid.has(mapped)) {
+        console.warn(
+          `[seed:forms:obs] WARN — dropping template (kind=${t.kind}): field "${field.key}" has unmappable type "${field.type}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
+        );
+        allValid = false;
+        break;
+      }
+    }
+    if (allValid) filtered.push(t);
+  }
+  return filtered;
+}
+
 // --- Template definitions -------------------------------------------------
 
 const PRE_TEMPLATE: Template = {
@@ -208,11 +253,11 @@ const OBSERVER_TEMPLATE: Template = {
   ],
 };
 
-const TEMPLATES: readonly Template[] = [
+const TEMPLATES: readonly Template[] = assertCanonicalFieldKinds([
   PRE_TEMPLATE,
   POST_TEMPLATE,
   OBSERVER_TEMPLATE,
-];
+]);
 
 // --- Main -----------------------------------------------------------------
 

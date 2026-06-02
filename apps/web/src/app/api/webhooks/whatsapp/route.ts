@@ -17,7 +17,7 @@ import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@gml/db";
 import { files, videoSubmissions, observationCycles, mentorMeetings } from "@gml/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import { putObject, BUCKETS } from "@/lib/video/minio";
 import { recordAudit } from "@/lib/audit";
 import { transcodeQueue } from "@gml/worker/queues";
@@ -95,6 +95,28 @@ async function ingestVideoMessage(
     entityType: "video_submission",
     metadata: { msgId: msg.id, mime: msg.video.mime_type, caption: msg.video.caption, from: msg.from, to: recipientPhone },
   });
+
+  // Spec 144 — idempotency pre-check. Meta's webhook uses at-least-once
+  // delivery; the same msg.id arrives 2-3 times when our 200 is delayed.
+  // Without this guard we'd insert 2-3 video_submissions rows + enqueue
+  // 2-3 transcode jobs running ffmpeg in parallel. The DB-side partial
+  // UNIQUE INDEX (migration 0017) is the belt; this SELECT is the
+  // suspenders — it lets us return a clean 200 and audit the replay so
+  // ops sees the retry pattern instead of an ON CONFLICT noise spike.
+  const existing = await db
+    .select({ id: videoSubmissions.id })
+    .from(videoSubmissions)
+    .where(eq(videoSubmissions.whatsappMessageId, msg.id))
+    .limit(1);
+  if (existing.length > 0) {
+    void recordAudit({
+      action: "whatsapp.message.replay_ignored",
+      entityType: "video_submission",
+      entityId: existing[0].id,
+      metadata: { msgId: msg.id, from: msg.from, to: recipientPhone },
+    });
+    return;
+  }
 
   // 1. Fetch the media URL from Graph API
   const mediaUrl = await fetchMediaUrl(msg.video.id);
@@ -209,7 +231,12 @@ async function ingestVideoMessage(
     });
   }
 
-  const [sub] = await db
+  // Spec 144 — set whatsapp_message_id on insert and gracefully handle the
+  // race where two concurrent Meta retries pass the pre-check (above) but
+  // only one wins at the DB layer. onConflictDoNothing leaves the index as
+  // the sole arbiter; the loser path returns no rows and we audit it as a
+  // replay too. Downstream transcode enqueue only fires when sub is defined.
+  const inserted = await db
     .insert(videoSubmissions)
     .values({
       fileId: fileRow.id,
@@ -218,8 +245,26 @@ async function ingestVideoMessage(
       contextType,
       contextId,
       captionRaw: caption,
+      whatsappMessageId: msg.id,
+    })
+    .onConflictDoNothing({
+      target: videoSubmissions.whatsappMessageId,
+      where: isNotNull(videoSubmissions.whatsappMessageId),
     })
     .returning({ id: videoSubmissions.id });
+
+  const sub = inserted[0];
+  if (!sub) {
+    // Lost the race against a concurrent Meta retry. The other request
+    // already inserted the row and enqueued the transcode; we just audit
+    // and return so this attempt is a true no-op.
+    void recordAudit({
+      action: "whatsapp.message.replay_ignored",
+      entityType: "video_submission",
+      metadata: { msgId: msg.id, reason: "insert_conflict" },
+    });
+    return;
+  }
 
   // 6. Enqueue the BullMQ transcode job. The worker (apps/worker) picks it
   //    up, runs ffmpeg → HLS 480p, uploads segments to MinIO, then flips

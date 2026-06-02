@@ -49,12 +49,18 @@ import {
 
 // Same prop shape as FormRenderer (spec 072) so the page server component
 // can swap one for the other based on the device cookie.
+//
+// Spec 142 — `action` and `onSubmit` are a discriminated union, never both:
+// `action` is the server-action submit path the forms-runner uses; `onSubmit`
+// is the client-callback path admin preview surfaces use. The dev-mode
+// assertion in the component body catches the both-set mistake.
 export type MobileFormRunnerProps = {
   schema: FormSchema;
   initialResponses?: Record<string, unknown>;
   draftKey?: DraftKey;
   submitLabel?: string;
   action?: (formData: FormData) => Promise<void> | void;
+  onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
   formId?: string;
   slug?: string;
   pairingId?: string | null;
@@ -431,11 +437,24 @@ export function MobileFormRunner({
   draftKey,
   submitLabel,
   action,
+  onSubmit,
   formId,
   slug,
   pairingId,
   context,
 }: MobileFormRunnerProps) {
+  // Spec 142 — match FormRenderer's both-set guard. The forms-runner page
+  // (spec 074) only ever passes `action`; preview surfaces only ever pass
+  // `onSubmit`; wiring both would double-submit. Caught in dev only.
+  if (process.env.NODE_ENV !== "production" && action && onSubmit) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[MobileFormRunner] Both `action` and `onSubmit` were provided. " +
+        "Use `action` for server-action submits (forms-runner) or `onSubmit` " +
+        "for client-callback previews — never both.",
+    );
+  }
+
   const fields = useMemo(() => schema.fields ?? [], [schema.fields]);
   // Step index — 0..fields.length-1 = field screens, fields.length = review.
   const [step, setStep] = useState(0);
@@ -537,7 +556,30 @@ export function MobileFormRunner({
   // ---- Submit ----
   // Run validateAll one last time. If any field still has an error, jump
   // back to the first failing step so the user lands on the offending screen.
-  const onSubmitClick = useCallback(() => {
+  //
+  // Spec 149 (Workflow Run 13 audit closure) — mirror desktop FormRenderer
+  // exactly: AWAIT the final flushSave before triggering the server-action
+  // requestSubmit. The previous `void flushSave()` raced the form post — on
+  // a slow link the POST landed before the autosave PATCH, so a refresh of
+  // the page mid-submit could resurrect a stale draft and the user would
+  // see the prior answers come back. Awaiting closes the race: the draft
+  // row is byte-identical to the FormData being POSTed before the POST
+  // ever leaves the browser.
+  //
+  // Spec 142 — rapid double-tap race guard:
+  //   (a) gate the handler on `submitting` so re-entry while already in
+  //       flight is a no-op (covers the keyboard-Enter + tap collision
+  //       window when the button is briefly enabled);
+  //   (b) the validation gate uses the LOCAL `errs` constant — never the
+  //       `errors` state — so a stale snapshot can't slip a bad submit
+  //       past the gate;
+  //   (c) when wired through the new `onSubmit` discriminator (preview
+  //       surfaces), reset `submitting` in finally so a thrown callback
+  //       doesn't lock the form. The action path can't reset here because
+  //       the browser is mid-navigation by then; the page unmounts on
+  //       success and re-renders on a validation redirect.
+  const onSubmitClick = useCallback(async () => {
+    if (submitting) return;
     setSubmitError(null);
     const errs = validateAll(fields, values);
     setErrors(errs);
@@ -547,13 +589,31 @@ export function MobileFormRunner({
       return;
     }
     setSubmitting(true);
-    // The hidden inputs in the form already carry the per-field values via
-    // serializeValue() below. Submitting via the ref lets the server action
-    // pick up the FormData the way it does on desktop.
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    void flushSave();
-    formRef.current?.requestSubmit();
-  }, [fields, values, flushSave]);
+    if (action) {
+      // Server-action path — the hidden inputs in the form below already
+      // carry the per-field values via serializeValue(). Submitting via the
+      // ref lets the server action pick up the FormData the way it does on
+      // desktop. await the flushSave so the draft row matches the FormData
+      // about to be POSTed (spec 149 race fix).
+      await flushSave();
+      formRef.current?.requestSubmit();
+      return;
+    }
+    // Client-callback path (preview surfaces). Match FormRenderer's contract.
+    if (!onSubmit) {
+      setSubmitting(false);
+      return;
+    }
+    try {
+      if (autosaveEnabled) await flushSave();
+      await onSubmit(values);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [action, autosaveEnabled, fields, flushSave, onSubmit, submitting, values]);
 
   // ---- Progress dots ----
   // One pill per step (field screens + review). Active is a wide pill,

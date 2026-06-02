@@ -6,6 +6,7 @@ import { observationKindEnum, observationStatusEnum } from "./enums";
 import { teachers } from "./geography";
 import { users } from "./identity";
 import { subjects } from "./subjects";
+import { videoSubmissions } from "./videos";
 
 export const observationCycles = pgTable(
   "observation_cycles",
@@ -55,7 +56,11 @@ export const observationEvidence = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     cycleId: uuid("cycle_id").notNull().references(() => observationCycles.id, { onDelete: "cascade" }),
-    videoSubmissionId: uuid("video_submission_id"), // FK to video_submissions in spec 036
+    // Spec 143 — FK to video_submissions hardened at the TS + SQL layers. ON DELETE SET NULL
+    // mirrors the existing app-level contract: deleting a video_submission must not cascade
+    // and wipe the observation evidence row (the row still carries the caption + cycle link
+    // and is a legitimate audit artefact even when the underlying video has been purged).
+    videoSubmissionId: uuid("video_submission_id").references(() => videoSubmissions.id, { onDelete: "set null" }),
     caption: text("caption"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

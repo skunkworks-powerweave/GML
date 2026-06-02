@@ -58,11 +58,19 @@ export type FormSchema = {
 type FormRendererProps = {
   schema: FormSchema;
   initialResponses?: Record<string, unknown>;
+  // Spec 142 — `onSubmit` and `action` are a discriminated union. Exactly
+  // one of them is expected at a time:
+  //   - `onSubmit` runs as a client callback (admin form-builder preview,
+  //     in-test renderers). No FormData is POSTed; we just hand the caller
+  //     the typed responses dictionary.
+  //   - `action` is a Next.js server action; the <form action={...}> path
+  //     POSTs the FormData natively and the browser handles the redirect.
+  //     The forms-runner page (spec 074) lives on this path.
+  // Passing both is a programmer mistake and is asserted in dev.
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
+  action?: (formData: FormData) => Promise<void> | void;
   draftKey?: DraftKey;
   submitLabel?: string;
-  // Server-action mode (spec 074 forms-runner uses these):
-  action?: (formData: FormData) => Promise<void> | void;
   formId?: string;
   slug?: string;
   pairingId?: string | null;
@@ -447,11 +455,29 @@ export function FormRenderer({
   onSubmit,
   draftKey,
   submitLabel,
+  action,
   formId,
   slug,
   pairingId,
   context,
 }: FormRendererProps) {
+  // Spec 142 — `action` and `onSubmit` are a discriminated union, never both.
+  // The forms-runner page (spec 074) plumbs `action={submitFormAction}` for
+  // the server-action submit path that the catalogue links rely on; preview
+  // surfaces (admin form builder, in-test renderers) pass `onSubmit` instead
+  // because they don't have a server action and want the response synchronously
+  // for previewing. Wiring both at once would mean the click ran the callback
+  // AND posted the FormData server-side — silent double-submit. Catch that
+  // mistake in dev so it never reaches production.
+  if (process.env.NODE_ENV !== "production" && action && onSubmit) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[FormRenderer] Both `action` and `onSubmit` were provided. " +
+        "Use `action` for server-action submits (forms-runner) or `onSubmit` " +
+        "for client-callback previews — never both.",
+    );
+  }
+
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -519,20 +545,53 @@ export function FormRenderer({
     [scheduleSave],
   );
 
+  // Spec 142 — client-callback submit path (`onSubmit`).
+  //
+  // The gate uses the LOCAL `errs` constant — never the `errors` state — so
+  // a rapid double-click can't read a stale snapshot from the previous render
+  // and skip past validation. We also set `submitting` BEFORE the await and
+  // disable the submit button on it, which is the second half of the race
+  // guard: the second click on a button that is already `disabled` cannot
+  // re-enter this handler. Both halves are required: a screen-reader user
+  // could fire submit via Enter on a focused-but-not-yet-disabled button,
+  // and the local-errs gate covers that hand-off window. `submitting` is
+  // always reset in finally so a thrown server action doesn't lock the form.
   const onFormSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
-      e.preventDefault();
-      setSubmitError(null);
-      const errs = validateAll(schema.fields ?? [],values);
+      // Server-action mode: don't preventDefault. Let the browser POST the
+      // FormData up to the action declared on <form action={...}>. We still
+      // run validation client-side so the user sees errors immediately, and
+      // the action re-validates on the server. If client validation fails we
+      // preventDefault to keep the user on the page with the error showing.
+      const isServerAction = Boolean(action);
+      const errs = validateAll(schema.fields ?? [], values);
+      // Set state for rendering; do NOT use it for the gate below.
       setErrors(errs);
-      if (Object.keys(errs).length > 0) return;
+      setSubmitError(null);
+      if (Object.keys(errs).length > 0) {
+        e.preventDefault();
+        return;
+      }
+      if (isServerAction) {
+        // Flush any pending autosave synchronously-ish so the draft on disk
+        // matches what the server is about to persist. We can't await here
+        // without preventDefault'ing, so we fire-and-forget; the browser will
+        // submit the form on the next tick. Mark submitting so the button
+        // disables and a second click does nothing.
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        if (autosaveEnabled) void flushSave();
+        setSubmitting(true);
+        return;
+      }
+      // Client-callback mode (preview surfaces). preventDefault, then run
+      // the caller's async onSubmit and clear the draft.
+      e.preventDefault();
+      if (!onSubmit) return;
       setSubmitting(true);
       try {
-        // Flush any pending autosave before final submit so the draft mirrors
-        // exactly what the server is about to receive.
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (autosaveEnabled) await flushSave();
-        if (onSubmit) await onSubmit(values);
+        await onSubmit(values);
         if (autosaveEnabled && draftKey) {
           // Best-effort cleanup of the draft row. Failure is non-fatal — the
           // user's submission has already gone through.
@@ -548,7 +607,7 @@ export function FormRenderer({
         setSubmitting(false);
       }
     },
-    [autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, values],
+    [action, autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, values],
   );
 
   // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
@@ -567,6 +626,12 @@ export function FormRenderer({
 
   return (
     <form
+      // Spec 142 — when `action` is provided we render a real server-action
+      // form. The browser handles the POST + redirect natively; our onSubmit
+      // only runs client validation and toggles `submitting`. When `onSubmit`
+      // is provided instead, action stays undefined and the click runs the
+      // callback. The dev-mode assertion above catches the both-set mistake.
+      action={action}
       onSubmit={onFormSubmit}
       style={{
         background: "var(--card)",
@@ -704,7 +769,12 @@ export function FormRenderer({
       >
         <button
           type="submit"
+          // Spec 142 — `disabled={submitting}` is the second half of the
+          // double-submit race guard. The first half is the local-errs gate
+          // inside onFormSubmit; together they ensure no second click can
+          // re-enter the submit path until the first one has resolved.
           disabled={submitting}
+          data-testid="form-renderer-submit"
           style={{
             padding: "9px 18px",
             background: "var(--ink)",

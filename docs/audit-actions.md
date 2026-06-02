@@ -13,8 +13,9 @@
 | `delete` | `delete` | generic delete through admin CRUD |
 | `upload.*` | `upload.start`, `upload.complete`, `upload.failed` | direct-upload flow (spec 038+) |
 | `transcode.*` | `transcode.queued`, `transcode.success`, `transcode.failed` | ffmpeg worker (spec 040) |
-| `gate.*` | `gate.enter`, `gate.attempt.fail`, `gate.attempt.success`, `gate.rotated` | section gate flow (spec 009 + 021) |
+| `gate.*` | `gate.enter`, `gate.attempt.fail`, `gate.attempt.success`, `gate.rotated`, `gate.rate_limit.redis_down` | section gate flow (spec 009 + 021 + 141) |
 | `login` / `logout` | `login`, `logout` | Auth.js session events |
+| `auth.*` | `auth.rate_limit.redis_down` | auth-channel degraded states (spec 141) |
 | `whatsapp.*` | `whatsapp.message.received`, `whatsapp.media.fetched`, `whatsapp.media.failed` | WhatsApp webhook (spec 043) |
 | `<entity>.view` | `learners.view`, `students.view` | SM-9 PII reads (spec 019) |
 | `<entity>.bulk_export` | `learners.bulk_export` | SM-9 bulk-export ops |

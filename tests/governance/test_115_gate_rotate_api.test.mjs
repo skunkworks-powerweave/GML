@@ -104,7 +104,11 @@ test("spec 115 — rotate INSERTs new section_gates row with bumped version", ()
   const src = read(ROTATE_PATH);
   assert.match(src, /from\s+"@gml\/db\/schema"/);
   assert.match(src, /sectionGates/);
-  assert.match(src, /db\s*\.\s*insert\(\s*sectionGates\s*\)/);
+  // Spec 148 wrapped this in a db.transaction so the call site is now
+  // tx.insert(sectionGates) rather than db.insert(sectionGates). Either
+  // prefix satisfies spec 115's intent (a write to section_gates as part of
+  // the rotation path).
+  assert.match(src, /(?:db|tx)\s*\.\s*insert\(\s*sectionGates\s*\)/);
   // Version-bump computation
   assert.match(src, /max\(/);
   assert.match(src, /version/);
@@ -114,7 +118,11 @@ test("spec 115 — rotate INSERTs new section_gates row with bumped version", ()
 test("spec 115 — rotate DELETEs section_gate_grants for the slug to invalidate active grants", () => {
   const src = read(ROTATE_PATH);
   assert.match(src, /sectionGateGrants/);
-  assert.match(src, /db\s*\.\s*delete\(\s*sectionGateGrants\s*\)/);
+  // Spec 148 wrapped this in a db.transaction so the call site is now
+  // tx.delete(sectionGateGrants) rather than db.delete(sectionGateGrants).
+  // Either prefix satisfies spec 115's intent (mass-DELETE of active grants
+  // for the slug as part of the rotation path).
+  assert.match(src, /(?:db|tx)\s*\.\s*delete\(\s*sectionGateGrants\s*\)/);
   assert.match(src, /eq\(\s*sectionGateGrants\.gateSlug/);
   assert.match(src, /\.returning\(/);
 });

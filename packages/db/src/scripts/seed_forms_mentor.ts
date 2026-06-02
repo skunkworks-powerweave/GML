@@ -18,12 +18,48 @@ const DRY_RUN = process.env.SEED_DRY_RUN === "true" || process.env.DRY_RUN === "
 type FieldKind =
   | "text"
   | "textarea"
-  | "checkboxes"
+  | "checkbox"
   | "radio"
   | "select"
   | "rating"
   | "number"
   | "date";
+
+// Spec 140 — canonical kinds accepted by FormRenderer/MobileFormRunner.
+// Any field.kind outside this set falls through to the text-input fallback
+// in the renderer, which silently broke the previous plural form here.
+// Validation runs at module load (see assertCanonicalFieldKinds below).
+const CANONICAL_FIELD_KINDS = [
+  "text",
+  "textarea",
+  "select",
+  "radio",
+  "checkbox",
+  "number",
+  "date",
+  "likert",
+  "rating",
+] as const;
+type CanonicalFieldKind = (typeof CANONICAL_FIELD_KINDS)[number];
+
+function assertCanonicalFieldKinds(forms: { kind: string; audience: string; version: string; schema: { fields: { kind: string; name: string }[] } }[]): typeof forms {
+  const valid = new Set<string>(CANONICAL_FIELD_KINDS);
+  const filtered: typeof forms = [];
+  for (const form of forms) {
+    let allValid = true;
+    for (const field of form.schema.fields) {
+      if (!valid.has(field.kind)) {
+        console.warn(
+          `[seed-forms-mentor] WARN — dropping form (kind=${form.kind}, audience=${form.audience}, version=${form.version}): field "${field.name}" has invalid kind "${field.kind}" (not in canonical renderer set ${CANONICAL_FIELD_KINDS.join(", ")})`,
+        );
+        allValid = false;
+        break;
+      }
+    }
+    if (allValid) filtered.push(form);
+  }
+  return filtered;
+}
 
 interface FormField {
   name: string;
@@ -71,7 +107,7 @@ const MENTOR_BASELINE: SeedForm = {
       {
         name: "expertise_areas",
         label: "Expertise areas you bring to this pairing",
-        kind: "checkboxes",
+        kind: "checkbox",
         required: true,
         options: [
           "Reading comprehension",
@@ -312,7 +348,12 @@ const MENTOR_FINAL: SeedForm = {
   },
 };
 
-const FORMS: SeedForm[] = [MENTOR_BASELINE, MENTOR_PROGRESS_Q1, MENTOR_PROGRESS_Q2, MENTOR_FINAL];
+const FORMS: SeedForm[] = assertCanonicalFieldKinds([
+  MENTOR_BASELINE,
+  MENTOR_PROGRESS_Q1,
+  MENTOR_PROGRESS_Q2,
+  MENTOR_FINAL,
+]) as SeedForm[];
 
 export async function main() {
   const url = process.env.DATABASE_URL;

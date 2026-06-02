@@ -83,6 +83,14 @@ export const videoSubmissions = pgTable(
     contextType: varchar("context_type", { length: 32 }).notNull(),
     contextId: uuid("context_id"),
     captionRaw: text("caption_raw"), // raw WhatsApp caption (when source='whatsapp')
+    // Spec 144 — Meta's webhook delivers the same wa_message_id 2-3 times during
+    // their at-least-once retry policy. We dedupe by storing the wa message_id
+    // here and enforcing a partial UNIQUE index (WHERE NOT NULL) at the DB layer.
+    // The webhook also pre-checks SELECT WHERE whatsapp_message_id = msg.id
+    // and short-circuits to a 200 with audit 'whatsapp.message.replay_ignored'
+    // so Meta stops retrying. Nullable: non-whatsapp submissions (tusd upload,
+    // external_url) carry NULL and are exempt from the partial unique index.
+    whatsappMessageId: text("whatsapp_message_id"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     verifiedAt: timestamp("verified_at", { withTimezone: true, mode: "date" }),
   },
@@ -90,6 +98,11 @@ export const videoSubmissions = pgTable(
     index("video_submissions_context_idx").on(t.contextType, t.contextId),
     index("video_submissions_submitter_idx").on(t.submittedByUserId, t.createdAt),
     index("video_submissions_status_idx").on(t.status, t.createdAt),
+    // Spec 144 — partial unique index for WhatsApp idempotency. Only enforced
+    // when whatsapp_message_id IS NOT NULL so other ingest sources are exempt.
+    uniqueIndex("video_submissions_whatsapp_message_id_uq")
+      .on(t.whatsappMessageId)
+      .where(sql`${t.whatsappMessageId} IS NOT NULL`),
     check(
       "video_submissions_context_type_check",
       sql`${t.contextType} IN ('observation_cycle','teach_back','mentor_meeting','mentee_quarterly','classroom_session','generic')`,
@@ -124,9 +137,14 @@ export const transcodeJobs = pgTable(
   (t) => [
     index("transcode_jobs_video_idx").on(t.videoSubmissionId),
     index("transcode_jobs_status_idx").on(t.status, t.createdAt),
+    // Spec 143 — tightened to ONLY 480p. 720p was dropped in spec 041 (SM-4 / Tier-0 only)
+    // but the CHECK at this level was left permissive. A bug in the BullMQ worker or a
+    // hand-written test fixture could have written 'profile=720p' and the DB would have
+    // accepted it silently, contradicting the documented anti-download / single-rendition
+    // contract. The 0016 migration drops the old constraint and re-adds the tightened one.
     check(
       "transcode_jobs_profile_check",
-      sql`${t.profile} IN ('480p','720p')`,
+      sql`${t.profile} IN ('480p')`,
     ),
     check(
       "transcode_jobs_status_check",
