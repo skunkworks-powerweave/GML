@@ -11,15 +11,27 @@ import type { RoleName } from "@gml/shared/auth/roles";
 import { BottomTabs } from "@/components/nav/BottomTabs";
 import { ConfidentialityFooter } from "@/components/ConfidentialityFooter";
 import { MobileHelpFAB } from "@/components/MobileHelpFAB";
+import type { NavCounts } from "@/lib/chrome-counts";
 
 type MobileShellProps = {
   user: { id: string; name?: string | null; email?: string | null; role: RoleName; image?: string | null };
   title?: string;
   activeTab?: string;
+  /** Spec 128 — live nav counts forwarded to BottomTabs. */
+  navCounts?: NavCounts;
+  /** Spec 128 — unread notifications count; drives the inbox-tab dot. */
+  unreadCount?: number;
   children: ReactNode;
 };
 
-export function MobileShell({ user, title, activeTab, children }: MobileShellProps) {
+export function MobileShell({
+  user,
+  title,
+  activeTab,
+  navCounts,
+  unreadCount,
+  children,
+}: MobileShellProps) {
   return (
     <div style={{ minHeight: "100dvh", background: "var(--paper)", paddingBottom: 80 }}>
       <header
@@ -60,7 +72,12 @@ export function MobileShell({ user, title, activeTab, children }: MobileShellPro
       <main style={{ padding: "16px" }}>{children}</main>
       <ConfidentialityFooter user={{ name: user.name, email: user.email }} compact />
       <MobileHelpFAB />
-      <BottomTabs role={user.role} activeTab={activeTab} />
+      <BottomTabs
+        role={user.role}
+        activeTab={activeTab}
+        counts={navCounts}
+        unreadCount={unreadCount}
+      />
     </div>
   );
 }

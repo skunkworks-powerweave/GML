@@ -1,10 +1,15 @@
 // /repo/sessions — every classroom session held (planned / in progress / complete).
 // Port of repository.jsx::RepoSessionsIndex (lines 693-746) — 1:1 visual fidelity.
-// Filters by status + subject in-memory (table is paged at 200 server-side).
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): the status + subject
+// filters used to run in-memory over `rows.filter(...)` after a 200-row
+// query. They now apply directly in the SQL WHERE clause via URL search
+// params. Adds an optional `from` / `to` date range so operators can scope
+// to a specific window (the prototype's "More filters" affordance).
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@gml/db";
 import { sessions, schools, classes, subjects, teachers } from "@gml/db/schema";
@@ -26,7 +31,16 @@ const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
   cancelled: { kind: "", label: "Cancelled" },
 };
 
-type SearchParams = Promise<{ status?: string; subject?: string }>;
+const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "cancelled"]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+type SearchParams = Promise<{
+  status?: string;
+  subject?: string;
+  from?: string;
+  to?: string;
+}>;
 
 export default async function RepoSessionsIndex({
   searchParams,
@@ -38,10 +52,22 @@ export default async function RepoSessionsIndex({
   if (!role || !ALLOWED_ROLES.has(role)) redirect("/forbidden");
 
   const sp = await searchParams;
-  const statusFilter = sp.status ?? "all";
-  const subjectFilter = sp.subject ?? "all";
+  const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
+  const subjectFilter =
+    sp.subject && UUID_RE.test(sp.subject) ? sp.subject : "all";
+  const fromFilter =
+    sp.from && ISO_DATE_RE.test(sp.from) ? sp.from : undefined;
+  const toFilter = sp.to && ISO_DATE_RE.test(sp.to) ? sp.to : undefined;
 
-  const rows = await db
+  // Build the WHERE clause server-side. We compare scheduled_date (date
+  // column) against ISO yyyy-mm-dd strings — Postgres handles the cast.
+  const conds: SQL[] = [];
+  if (statusFilter !== "all") conds.push(eq(sessions.status, statusFilter));
+  if (subjectFilter !== "all") conds.push(eq(sessions.subjectId, subjectFilter));
+  if (fromFilter) conds.push(gte(sessions.scheduledDate, fromFilter));
+  if (toFilter) conds.push(lte(sessions.scheduledDate, toFilter));
+
+  const visible = await db
     .select({
       id: sessions.id,
       scheduledDate: sessions.scheduledDate,
@@ -64,6 +90,7 @@ export default async function RepoSessionsIndex({
     .leftJoin(classes, eq(sessions.classId, classes.id))
     .leftJoin(subjects, eq(sessions.subjectId, subjects.id))
     .leftJoin(teachers, eq(sessions.teacherId, teachers.id))
+    .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(desc(sessions.scheduledDate), desc(sessions.scheduledTime))
     .limit(200);
 
@@ -73,17 +100,23 @@ export default async function RepoSessionsIndex({
     .where(eq(subjects.active, true))
     .orderBy(subjects.displayOrder);
 
-  const visible = rows.filter(
-    (s) =>
-      (statusFilter === "all" || s.status === statusFilter) &&
-      (subjectFilter === "all" || s.subjectId === subjectFilter),
-  );
-
+  // Per-status counts in a single GROUP BY round-trip so the filter tabs
+  // stay accurate even when the table has narrowed.
+  const statusCountRows = await db
+    .select({
+      status: sessions.status,
+      n: sql<number>`count(*)::int`.as("n"),
+    })
+    .from(sessions)
+    .groupBy(sessions.status);
+  const totalSessions = statusCountRows.reduce((acc, r) => acc + r.n, 0);
+  const countByStatus = (v: string) =>
+    statusCountRows.find((r) => r.status === v)?.n ?? 0;
   const counts = {
-    all: rows.length,
-    planned: rows.filter((s) => s.status === "planned").length,
-    in_progress: rows.filter((s) => s.status === "in_progress").length,
-    complete: rows.filter((s) => s.status === "complete").length,
+    all: totalSessions,
+    planned: countByStatus("planned"),
+    in_progress: countByStatus("in_progress"),
+    complete: countByStatus("complete"),
   };
 
   const filterTabs = [
@@ -113,10 +146,13 @@ export default async function RepoSessionsIndex({
           <div style={{ display: "flex", gap: 4 }}>
             {filterTabs.map((f) => {
               const active = statusFilter === f.v;
-              const href = `/repo/sessions?${new URLSearchParams({
-                ...(f.v === "all" ? {} : { status: f.v }),
-                ...(subjectFilter !== "all" ? { subject: subjectFilter } : {}),
-              }).toString()}`;
+              const qs = new URLSearchParams();
+              if (f.v !== "all") qs.set("status", f.v);
+              if (subjectFilter !== "all") qs.set("subject", subjectFilter);
+              if (fromFilter) qs.set("from", fromFilter);
+              if (toFilter) qs.set("to", toFilter);
+              const q = qs.toString();
+              const href = q ? `/repo/sessions?${q}` : "/repo/sessions";
               return (
                 <Link
                   key={f.v}
@@ -154,6 +190,22 @@ export default async function RepoSessionsIndex({
                 </option>
               ))}
             </select>
+            <input
+              type="date"
+              name="from"
+              defaultValue={fromFilter ?? ""}
+              aria-label="from"
+              className="text"
+              style={{ padding: "5px 10px", fontSize: 12 }}
+            />
+            <input
+              type="date"
+              name="to"
+              defaultValue={toFilter ?? ""}
+              aria-label="to"
+              className="text"
+              style={{ padding: "5px 10px", fontSize: 12 }}
+            />
             <button type="submit" className="btn btn-sm">
               Apply
             </button>

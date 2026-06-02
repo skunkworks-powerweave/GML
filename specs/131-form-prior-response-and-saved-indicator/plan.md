@@ -1,0 +1,5 @@
+# Plan 131
+
+CREATED: `specs/131-form-prior-response-and-saved-indicator/{spec,plan,research,quickstart,tasks}.md`, `tests/governance/test_131_form_prior_response_and_saved_indicator.test.mjs`
+EDITED: `apps/web/src/app/(authenticated)/forms/[slug]/page.tsx` (add `desc` import; query `feedbackResponses` keyed by formId+respondentUserId+pairingId ordered by submittedAt DESC limit 1 when pairingId is truthy; compose `initialResponses = draft.responses ?? priorResponses ?? {}` and thread it into the FormRenderer mount), `apps/web/src/components/forms/FormRenderer.tsx` (move savedIndicator JSX from the bottom button row into a top-of-card flex row with `marginLeft: "auto"`; switch error copy to "Save failed — retrying…" with U+2026; add `data-saved-indicator` + `aria-live="polite"`; reuse the existing `forceTick` setInterval — no new timer)
+MIGRATED: none — `feedback_responses.formId`, `feedback_responses.respondentUserId`, and `feedback_responses.pairingId` already carry the key columns the prefill query reads, and the existing `feedback_responses_pairing_idx` makes the lookup cheap

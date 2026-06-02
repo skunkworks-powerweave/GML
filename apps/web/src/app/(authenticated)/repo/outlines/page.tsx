@@ -1,9 +1,13 @@
 // /repo/outlines — repository index of curriculum course outlines.
 // Ports LMS GML Frontend/repository.jsx :: RepoOutlinesIndex (lines 565-599).
 // Table by subject × grade × term with status pill; click-through to detail.
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): add server-side
+// filters for grade, term, and status. Each one is a URL searchParam so the
+// filtered view is bookmarkable and the WHERE clause runs in Postgres.
 
 import Link from "next/link";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { courseOutlines, subjects, teachers } from "@gml/db/schema";
 
@@ -16,7 +20,36 @@ const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
   archived: { kind: "", label: "Archived" },
 };
 
-export default async function RepoOutlinesIndexPage() {
+const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "archived"]);
+
+type SearchParams = Promise<{ grade?: string; term?: string; status?: string }>;
+
+export default async function RepoOutlinesIndexPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const sp = await searchParams;
+
+  const gradeParsed = Number(sp.grade);
+  const gradeFilter =
+    Number.isInteger(gradeParsed) && gradeParsed >= 1 && gradeParsed <= 12
+      ? gradeParsed
+      : null;
+
+  const termParsed = Number(sp.term);
+  const termFilter =
+    Number.isInteger(termParsed) && termParsed >= 1 && termParsed <= 6
+      ? termParsed
+      : null;
+
+  const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : null;
+
+  const conds: SQL[] = [];
+  if (gradeFilter !== null) conds.push(eq(courseOutlines.grade, gradeFilter));
+  if (termFilter !== null) conds.push(eq(courseOutlines.term, termFilter));
+  if (statusFilter !== null) conds.push(eq(courseOutlines.status, statusFilter));
+
   const rows = await db
     .select({
       id: courseOutlines.id,
@@ -34,6 +67,7 @@ export default async function RepoOutlinesIndexPage() {
     .from(courseOutlines)
     .leftJoin(subjects, eq(courseOutlines.subjectId, subjects.id))
     .leftJoin(teachers, eq(courseOutlines.ownerTeacherId, teachers.id))
+    .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(asc(subjects.name), asc(courseOutlines.grade), asc(courseOutlines.term))
     .limit(200);
 
@@ -47,11 +81,81 @@ export default async function RepoOutlinesIndexPage() {
           sessions delivered against it.
         </p>
       </div>
-      <div className="page-body">
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        <form
+          method="GET"
+          action="/repo/outlines"
+          className="card"
+          style={{ padding: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}
+        >
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Grade
+            <select
+              name="grade"
+              defaultValue={gradeFilter === null ? "" : String(gradeFilter)}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
+            >
+              <option value="">All</option>
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Term
+            <select
+              name="term"
+              defaultValue={termFilter === null ? "" : String(termFilter)}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
+            >
+              <option value="">All</option>
+              {[1, 2, 3, 4, 5, 6].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Status
+            <select
+              name="status"
+              defaultValue={statusFilter ?? ""}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
+            >
+              <option value="">All</option>
+              {Object.entries(STATUS_CHIP).map(([v, info]) => (
+                <option key={v} value={v}>
+                  {info.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" className="btn btn-sm">
+            Apply
+          </button>
+          {(gradeFilter !== null || termFilter !== null || statusFilter !== null) ? (
+            <Link
+              href="/repo/outlines"
+              className="btn btn-sm"
+              style={{ textDecoration: "none" }}
+            >
+              Reset
+            </Link>
+          ) : null}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <span className="chip">{rows.length} shown</span>
+          </div>
+        </form>
         <div className="card card-hi" style={{ overflow: "hidden" }}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-              No outlines yet. Seed via <code className="mono" style={{ fontSize: 12 }}>/admin/data/course-outlines</code>.
+              No outlines match this filter.
             </div>
           ) : (
             <table className="t">
@@ -128,4 +232,3 @@ export default async function RepoOutlinesIndexPage() {
     </div>
   );
 }
-

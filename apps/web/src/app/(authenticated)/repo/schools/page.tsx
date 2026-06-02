@@ -1,10 +1,16 @@
 // /repo/schools — Repository: index of partner schools across Leh + Kargil.
 // Port of repository.jsx::RepoSchoolsIndex (lines 152-221) — 1:1 visual fidelity.
 // District filter is server-side via ?district= so the URL is shareable.
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): the filter card was
+// already URL-driven via <Link>, but the row narrowing happened in JS via
+// a post-fetch .filter() call. Now the WHERE clause is built up against
+// districts.code so Postgres returns the visible set directly. Counts
+// come from a single GROUP BY round-trip.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   schools,
@@ -87,7 +93,30 @@ export default async function RepoSchoolsIndexPage({
     .groupBy(classroomSessions.schoolId)
     .as("session_counts");
 
-  const rows = await db
+  // Spec 129 — build the district WHERE clause server-side. Accept either
+  // the JSX-prototype's "kgl" code or the longer "kargil" canonical form so
+  // older bookmarks keep working.
+  function districtPredicate(v: string): SQL | undefined {
+    if (v === "all") return undefined;
+    if (v === "leh") {
+      return or(ilike(districts.code, "leh"), ilike(districts.name, "leh"));
+    }
+    if (v === "kgl" || v === "kargil") {
+      return or(
+        ilike(districts.code, "kgl"),
+        ilike(districts.code, "kargil"),
+        ilike(districts.name, "kargil"),
+      );
+    }
+    return or(ilike(districts.code, v), ilike(districts.name, v));
+  }
+
+  const districtCond = districtPredicate(districtFilter);
+  const whereCond = districtCond
+    ? and(eq(schools.active, true), districtCond)
+    : eq(schools.active, true);
+
+  const visible = await db
     .select({
       id: schools.id,
       code: schools.code,
@@ -105,33 +134,32 @@ export default async function RepoSchoolsIndexPage({
     .leftJoin(teacherCounts, eq(teacherCounts.schoolId, schools.id))
     .leftJoin(classCounts, eq(classCounts.schoolId, schools.id))
     .leftJoin(sessionCounts, eq(sessionCounts.schoolId, schools.id))
-    .where(eq(schools.active, true))
+    .where(whereCond)
     .orderBy(asc(schools.name))
     .limit(200);
 
-  const matchesDistrict = (r: (typeof rows)[number]): boolean => {
-    if (districtFilter === "all") return true;
-    const dn = (r.districtName ?? "").toLowerCase();
-    const dc = (r.districtCode ?? "").toLowerCase();
-    if (districtFilter === "leh") return dn === "leh" || dc === "leh";
-    if (districtFilter === "kgl" || districtFilter === "kargil") {
-      return dn === "kargil" || dc === "kgl" || dc === "kargil";
-    }
-    return dn === districtFilter || dc === districtFilter;
-  };
+  // One extra round-trip for the per-tab counts so the filter chips stay
+  // accurate even when the visible slice has narrowed.
+  const countRows = await db
+    .select({
+      districtCode: districts.code,
+      n: sql<number>`count(*)::int`.as("n"),
+    })
+    .from(schools)
+    .leftJoin(zones, eq(schools.zoneId, zones.id))
+    .leftJoin(districts, eq(zones.districtId, districts.id))
+    .where(eq(schools.active, true))
+    .groupBy(districts.code);
 
-  const visible = rows.filter(matchesDistrict);
-
+  const totalSchools = countRows.reduce((acc, r) => acc + r.n, 0);
   const counts = {
-    all: rows.length,
-    leh: rows.filter((r) =>
-      ["leh"].includes((r.districtName ?? "").toLowerCase()) ||
-      (r.districtCode ?? "").toLowerCase() === "leh"
-    ).length,
-    kgl: rows.filter((r) =>
-      ["kargil"].includes((r.districtName ?? "").toLowerCase()) ||
-      ["kgl", "kargil"].includes((r.districtCode ?? "").toLowerCase())
-    ).length,
+    all: totalSchools,
+    leh: countRows
+      .filter((r) => (r.districtCode ?? "").toLowerCase() === "leh")
+      .reduce((acc, r) => acc + r.n, 0),
+    kgl: countRows
+      .filter((r) => ["kgl", "kargil"].includes((r.districtCode ?? "").toLowerCase()))
+      .reduce((acc, r) => acc + r.n, 0),
   };
 
   const filterTabs = [
@@ -148,7 +176,7 @@ export default async function RepoSchoolsIndexPage({
           Schools
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          {rows.length} government schools across Leh and Kargil districts. Click any row to see
+          {totalSchools} government schools across Leh and Kargil districts. Click any row to see
           its classes, teachers and sessions.
         </p>
       </div>

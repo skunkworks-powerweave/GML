@@ -6,13 +6,27 @@
 // matched zero rows (the audit-log surface has no LIKE filter). It now
 // links to the dedicated /admin/whatsapp-log surface and is hidden from
 // roles other than programme_admin + super_admin (programme oversight).
+//
+// Spec 132 (Workflow Run 11 frontend-parity) — the Upload button used to
+// link to /uploads as a placeholder. It now opens a client-side modal
+// (UploadModal) that surfaces the PRIMARY WhatsApp ingest path
+// alongside the secondary direct-browser-upload path. The /uploads
+// route still exists for the teacher's own "My Uploads" tray; the modal
+// is the discovery point from the library header.
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): the status filter
+// used to run client-side over a pre-fetched 100-row array. It now applies
+// directly in the SQL WHERE so a future deep-paged library still narrows
+// at the DB. Adds a ?source= filter (whatsapp / direct / external_link /
+// google_drive) so operators can scope by ingest channel.
 
 import Link from "next/link";
-import { desc } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
-import { videoSubmissions, observationCycles, teachers } from "@gml/db/schema";
+import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
+import { UploadModal } from "@/components/video/UploadModal";
 
 export const dynamic = "force-dynamic";
 
@@ -36,9 +50,39 @@ const STATE_CHIP: Record<string, string> = {
   reviewed: "chip-indigo",
 };
 
-export default async function VideoLibraryPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
+const STATUS_VALUES = new Set([
+  "received",
+  "queued",
+  "transcoding",
+  "ready",
+  "failed",
+  "review_pending",
+  "reviewed",
+]);
+const SOURCE_VALUES = new Set([
+  "direct",
+  "whatsapp",
+  "external_link",
+  "google_drive",
+]);
+type VideoStatus =
+  | "received"
+  | "queued"
+  | "transcoding"
+  | "ready"
+  | "failed"
+  | "review_pending"
+  | "reviewed";
+type VideoSource = "direct" | "whatsapp" | "external_link" | "google_drive";
+
+export default async function VideoLibraryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; source?: string }>;
+}) {
   const sp = await searchParams;
-  const filter = sp.status;
+  const filter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : undefined;
+  const sourceFilter = SOURCE_VALUES.has(sp.source ?? "") ? sp.source! : undefined;
 
   // Spec 126: only programme-oversight roles see the WhatsApp ingest log
   // header button. Teachers / observers / mentors get no affordance at all
@@ -50,7 +94,13 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
     "super_admin",
   ]);
 
-  const baseRows = await db
+  // Spec 129: build the WHERE clause server-side from URL searchParams.
+  const conds: SQL[] = [];
+  if (filter) conds.push(eq(videoSubmissions.status, filter as VideoStatus));
+  if (sourceFilter)
+    conds.push(eq(videoSubmissions.source, sourceFilter as VideoSource));
+
+  const rows = await db
     .select({
       id: videoSubmissions.id,
       source: videoSubmissions.source,
@@ -62,15 +112,27 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
       hlsKey: videoSubmissions.hlsMasterKey,
     })
     .from(videoSubmissions)
+    .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(100);
 
-  const rows = filter ? baseRows.filter((r) => r.status === filter) : baseRows;
+  // Per-status counts as a single GROUP BY so the chips stay accurate
+  // even when filtering by source.
+  const statusCountRows = await db
+    .select({
+      status: videoSubmissions.status,
+      n: sql<number>`count(*)::int`.as("n"),
+    })
+    .from(videoSubmissions)
+    .groupBy(videoSubmissions.status);
+  const totalVideos = statusCountRows.reduce((acc, r) => acc + r.n, 0);
+  const countByStatus = (v: string) =>
+    statusCountRows.find((r) => r.status === v)?.n ?? 0;
   const counts = {
-    all: baseRows.length,
-    ready: baseRows.filter((r) => r.status === "ready").length,
-    transcoding: baseRows.filter((r) => r.status === "transcoding").length,
-    queued: baseRows.filter((r) => r.status === "queued").length,
+    all: totalVideos,
+    ready: countByStatus("ready"),
+    transcoding: countByStatus("transcoding"),
+    queued: countByStatus("queued"),
   };
 
   return (
@@ -86,7 +148,19 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
             </p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Link href="/uploads" className="btn btn-primary">Upload</Link>
+            {/*
+              Spec 132 — Upload trigger now opens the WhatsApp / direct-upload
+              modal. We pass the programme WhatsApp number from env (set in
+              spec 043 deployment as WHATSAPP_PHONE_NUMBER_ID) with a
+              GML_WHATSAPP_NUMBER override for human-readable formatting.
+            */}
+            <UploadModal
+              whatsappPhone={
+                process.env.GML_WHATSAPP_NUMBER ??
+                process.env.WHATSAPP_PHONE_NUMBER_ID ??
+                null
+              }
+            />
             {canSeeWhatsappLog && (
               <Link href="/admin/whatsapp-log" className="btn">WhatsApp ingest log</Link>
             )}
@@ -95,7 +169,7 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
       </div>
 
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
-        <div className="card" style={{ display: "flex", padding: 10, gap: 12, alignItems: "center" }}>
+        <div className="card" style={{ display: "flex", padding: 10, gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 4 }}>
             {(
               [
@@ -106,10 +180,15 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
               ] as const
             ).map((f) => {
               const isActive = filter === f.v || (!filter && !f.v);
+              const qs = new URLSearchParams();
+              if (f.v) qs.set("status", f.v);
+              if (sourceFilter) qs.set("source", sourceFilter);
+              const q = qs.toString();
+              const href = q ? `/videos?${q}` : "/videos";
               return (
                 <Link
                   key={f.l}
-                  href={f.v ? `?status=${f.v}` : "/videos"}
+                  href={href}
                   className="btn btn-sm"
                   style={{
                     background: isActive ? "var(--ink)" : "transparent",
@@ -123,6 +202,28 @@ export default async function VideoLibraryPage({ searchParams }: { searchParams:
                 </Link>
               );
             })}
+          </div>
+          <div style={{ width: 1, height: 20, background: "var(--line)" }} />
+          <form method="GET" action="/videos" style={{ display: "contents" }}>
+            {filter ? <input type="hidden" name="status" value={filter} /> : null}
+            <select
+              name="source"
+              defaultValue={sourceFilter ?? ""}
+              className="text"
+              style={{ padding: "5px 10px", fontSize: 12 }}
+            >
+              <option value="">All sources</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="direct">Direct</option>
+              <option value="external_link">External link</option>
+              <option value="google_drive">Google Drive</option>
+            </select>
+            <button type="submit" className="btn btn-sm">
+              Apply
+            </button>
+          </form>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <span className="chip">{rows.length} shown</span>
           </div>
         </div>
 

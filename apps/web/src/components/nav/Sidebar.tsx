@@ -6,10 +6,19 @@
 // `nav.*`; section literals map (via SECTION_KEY) to `navSection.*`. Missing
 // keys fall through to the original English label so the chrome stays
 // readable while translation work catches up.
+//
+// Spec 128 — count badges (the `5` on "My mentees" etc) now come from the
+// authenticated layout's `loadNavCounts()` call and arrive as the `counts`
+// prop. The sidebar merges them into the static NAV_BY_ROLE config via
+// `applyNavCounts` so a nav row with an id in the merge map gets its live
+// number, and any row without a live mapping keeps the prototype number (or
+// none). When counts is missing the static prototype numbers still render —
+// chrome stays readable in degraded mode.
 
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
+import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { Icon } from "./Icon";
 
@@ -17,6 +26,9 @@ type SidebarProps = {
   role: RoleName;
   /** Slug of the currently active route's nav id (best-effort highlight). */
   activeId?: string;
+  /** Spec 128 — live count badges keyed by nav item id. Optional; falls back
+   * to NAV_BY_ROLE's static prototype numbers when absent. */
+  counts?: NavCounts;
 };
 
 /** Section heading literal → `navSection.*` key. */
@@ -55,8 +67,12 @@ const ITEM_KEY: Record<string, string> = {
   "uploads": "uploads",
 };
 
-export async function Sidebar({ role, activeId }: SidebarProps) {
-  const sections = NAV_BY_ROLE[role] ?? NAV_BY_ROLE.teacher;
+export async function Sidebar({ role, activeId, counts }: SidebarProps) {
+  // Static config + live counts merge. When `counts` is absent (layout opted
+  // out, or the chrome is rendered outside the authenticated route group),
+  // applyNavCounts is a no-op and the prototype's seed numbers remain.
+  const baseSections = NAV_BY_ROLE[role] ?? NAV_BY_ROLE.teacher;
+  const sections = counts ? applyNavCounts(baseSections, counts) : baseSections;
   const tNav = await getTranslations("nav");
   const tSection = await getTranslations("navSection");
   const tStatus = await getTranslations("status");

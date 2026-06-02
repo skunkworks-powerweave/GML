@@ -66,6 +66,12 @@ type FormRendererProps = {
   formId?: string;
   slug?: string;
   pairingId?: string | null;
+  // Spec 130 — arbitrary contextual params threaded from the catalogue URL
+  // (`?cycleId=…&quarter=2&observerId=…&kind=…`) into hidden inputs. The
+  // server action reads these back via `formData.get("__ctx_<key>")`. Keys
+  // outside a closed allow-list are dropped on the action side, so this prop
+  // is safe to widen incrementally without surface-area churn.
+  context?: Record<string, string>;
 };
 
 const DEFAULT_LIKERT: [string, string, string, string, string] = [
@@ -438,6 +444,10 @@ export function FormRenderer({
   onSubmit,
   draftKey,
   submitLabel,
+  formId,
+  slug,
+  pairingId,
+  context,
 }: FormRendererProps) {
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -538,9 +548,13 @@ export function FormRenderer({
     [autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, values],
   );
 
+  // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
+  // it as a prop because the autosave bookkeeping above is the only source
+  // of truth. The forceTick interval already running for autosave gives us
+  // a 1 s ticker for free — no extra timer needed here.
   const savedIndicator = useMemo(() => {
     if (!autosaveEnabled) return null;
-    if (saveState === "error") return "Save failed — retrying";
+    if (saveState === "error") return "Save failed — retrying…";
     if (saveState === "pending") return "Saving…";
     if (lastSavedAt === null) return "Not saved yet";
     const seconds = Math.max(0, Math.floor((Date.now() - lastSavedAt) / 1000));
@@ -560,17 +574,66 @@ export function FormRenderer({
         gap: 18,
       }}
     >
-      {schema.title ? (
-        <h2
+      {/*
+        Spec 074 / 130 — hidden context inputs the server action reads.
+        - __formId, __slug, __pairingId carry the routing context (074).
+        - __ctx_<key> carries the closed Spec 130 context set
+          (cycleId / quarter / observerId / kind). The server action
+          re-sanitizes every value, so even a tampered DOM cannot inject
+          surprise fields downstream.
+      */}
+      {formId ? <input type="hidden" name="__formId" value={formId} /> : null}
+      {slug ? <input type="hidden" name="__slug" value={slug} /> : null}
+      {pairingId ? (
+        <input type="hidden" name="__pairingId" value={pairingId} />
+      ) : null}
+      {context
+        ? Object.entries(context).map(([k, v]) =>
+            v && v.length > 0 ? (
+              <input
+                key={`__ctx_${k}`}
+                type="hidden"
+                name={`__ctx_${k}`}
+                value={v}
+              />
+            ) : null,
+          )
+        : null}
+      {(schema.title || savedIndicator) ? (
+        <div
           style={{
-            fontFamily: "var(--serif)",
-            fontSize: 20,
-            margin: 0,
-            color: "var(--ink)",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
           }}
         >
-          {schema.title}
-        </h2>
+          {schema.title ? (
+            <h2
+              style={{
+                fontFamily: "var(--serif)",
+                fontSize: 20,
+                margin: 0,
+                color: "var(--ink)",
+              }}
+            >
+              {schema.title}
+            </h2>
+          ) : null}
+          {savedIndicator ? (
+            <div
+              data-saved-indicator
+              style={{
+                marginLeft: "auto",
+                fontSize: 11,
+                color: saveState === "error" ? "var(--rust)" : "var(--ink-3)",
+                fontFamily: "var(--mono)",
+              }}
+              aria-live="polite"
+            >
+              {savedIndicator}
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {(schema.fields ?? []).map((field) => {
@@ -653,19 +716,6 @@ export function FormRenderer({
         >
           {submitting ? "Submitting…" : submitLabel ?? "Submit"}
         </button>
-        {savedIndicator ? (
-          <div
-            style={{
-              marginLeft: "auto",
-              fontSize: 11,
-              color: saveState === "error" ? "var(--rust)" : "var(--ink-3)",
-              fontFamily: "var(--mono)",
-            }}
-            aria-live="polite"
-          >
-            {savedIndicator}
-          </div>
-        ) : null}
       </div>
     </form>
   );

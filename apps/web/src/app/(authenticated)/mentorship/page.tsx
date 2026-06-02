@@ -1,7 +1,13 @@
 // /mentorship — pairings list with quarter chip + status.
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): add a server-side
+// ?status= filter (active / review / paused / ended / complete). Filter
+// chips are <Link>s that round-trip the URL searchParam through Postgres.
+// Counts come from a single GROUP BY so the chip totals stay accurate
+// even when the visible slice has narrowed.
 
 import Link from "next/link";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorPairings, mentors, teachers } from "@gml/db/schema";
 
@@ -15,7 +21,34 @@ const STATUS_CHIP: Record<string, string> = {
   complete: "chip-indigo",
 };
 
-export default async function MentorshipListPage() {
+const STATUS_VALUES = new Set(["active", "review", "paused", "ended", "complete"]);
+
+const STATUS_TABS = [
+  { v: "all", l: "All" },
+  { v: "active", l: "Active" },
+  { v: "review", l: "In review" },
+  { v: "paused", l: "Paused" },
+  { v: "complete", l: "Complete" },
+  { v: "ended", l: "Ended" },
+];
+
+type PairingStatus = "active" | "review" | "paused" | "ended" | "complete";
+
+type SearchParams = Promise<{ status?: string }>;
+
+export default async function MentorshipListPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const sp = await searchParams;
+  const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
+
+  const conds: SQL[] = [];
+  if (statusFilter !== "all") {
+    conds.push(eq(mentorPairings.status, statusFilter as PairingStatus));
+  }
+
   const rows = await db
     .select({
       id: mentorPairings.id,
@@ -32,8 +65,22 @@ export default async function MentorshipListPage() {
     .from(mentorPairings)
     .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
     .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
+    .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(desc(mentorPairings.startedAt))
     .limit(80);
+
+  // Per-status counts so the filter chips remain truthful regardless of
+  // the active filter. Cheap — pairing count is ≤ a few hundred.
+  const statusCountRows = await db
+    .select({
+      status: mentorPairings.status,
+      n: sql<number>`count(*)::int`.as("n"),
+    })
+    .from(mentorPairings)
+    .groupBy(mentorPairings.status);
+  const totalPairings = statusCountRows.reduce((acc, r) => acc + r.n, 0);
+  const statusCount = (v: string) =>
+    v === "all" ? totalPairings : (statusCountRows.find((r) => r.status === v)?.n ?? 0);
 
   return (
     <div>
@@ -45,7 +92,34 @@ export default async function MentorshipListPage() {
         </p>
       </div>
 
-      <div className="page-body">
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        <div
+          className="card"
+          style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+        >
+          <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>Status</span>
+          {STATUS_TABS.map((f) => {
+            const active = statusFilter === f.v;
+            const href = f.v === "all" ? "/mentorship" : `/mentorship?status=${f.v}`;
+            return (
+              <Link
+                key={f.v}
+                href={href}
+                className="btn btn-sm"
+                style={{
+                  background: active ? "var(--ink)" : "transparent",
+                  color: active ? "var(--paper)" : "var(--ink-2)",
+                  borderColor: active ? "var(--ink)" : "transparent",
+                  boxShadow: "none",
+                  textDecoration: "none",
+                }}
+              >
+                {f.l}
+                <span style={{ opacity: 0.6, marginLeft: 4 }}>{statusCount(f.v)}</span>
+              </Link>
+            );
+          })}
+        </div>
         <section
           style={{
             display: "grid",
@@ -54,7 +128,7 @@ export default async function MentorshipListPage() {
           }}
         >
           {rows.length === 0 ? (
-            <div style={{ padding: 32, color: "var(--ink-3)" }}>No pairings yet.</div>
+            <div style={{ padding: 32, color: "var(--ink-3)" }}>No pairings match this filter.</div>
           ) : (
             rows.map((p) => {
               const chipKind = STATUS_CHIP[p.status] ?? "";
@@ -105,4 +179,3 @@ export default async function MentorshipListPage() {
     </div>
   );
 }
-

@@ -12,7 +12,7 @@
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   feedbackForms,
@@ -103,6 +103,36 @@ function readSchema(form: FeedbackForm): FormSchemaShape {
 // `?error=missing_pairing`.
 // ---------------------------------------------------------------------------
 
+// Spec 130 — allowed context keys threaded through from
+// `?cycleId=…&quarter=2&observerId=…&kind=…` into hidden FormRenderer inputs
+// and back here. The set is closed; we never trust an arbitrary `__ctx_*` key
+// on the way back. The prefix `__ctx_` keeps these slots separate from real
+// schema field names so they cannot collide with seeded answer fields.
+const CONTEXT_KEYS = ["cycleId", "quarter", "observerId", "kind"] as const;
+type ContextKey = (typeof CONTEXT_KEYS)[number];
+
+// Quarter is a numeric enum 1..4 — anything outside that range is dropped so
+// we never persist a malformed audit row from a tampered query string.
+// cycle/observer IDs and kind are gated on a safe character class to keep
+// HTML-injection or audit-log poisoning impossible.
+function sanitizeContextValue(key: ContextKey, raw: string): string | null {
+  const v = raw.trim();
+  if (v.length === 0) return null;
+  if (v.length > 64) return null;
+  if (key === "quarter") {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 4) return null;
+    return String(n);
+  }
+  if (key === "kind") {
+    if (!/^[\w.-]+$/.test(v)) return null;
+    return v;
+  }
+  // cycleId, observerId
+  if (!/^[a-zA-Z0-9_-]+$/.test(v)) return null;
+  return v;
+}
+
 export async function submitFormAction(formData: FormData): Promise<void> {
   "use server";
 
@@ -134,6 +164,16 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   const schema = readSchema(form);
   const fieldIds = new Set((schema.fields ?? []).map((f) => f.name));
 
+  // Spec 130 — pick up the context hidden inputs the renderer planted on the
+  // way out. We never trust the client to send a key outside CONTEXT_KEYS.
+  const context: Record<string, string> = {};
+  for (const key of CONTEXT_KEYS) {
+    const raw = formData.get(`__ctx_${key}`);
+    if (typeof raw !== "string") continue;
+    const sanitized = sanitizeContextValue(key, raw);
+    if (sanitized !== null) context[key] = sanitized;
+  }
+
   const responses: Record<string, unknown> = {};
   for (const [key, value] of formData.entries()) {
     if (key.startsWith("__")) continue; // internal pairs we own
@@ -148,6 +188,14 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     } else {
       responses[cleanKey] = [String(existing), typeof value === "string" ? value : String(value)];
     }
+  }
+
+  // Spec 130 — persist the context block alongside the user-supplied answers.
+  // Using a __context key (double-underscore prefix is already reserved above)
+  // keeps the schema locked (no new column) while still letting reports join
+  // responses back to an observation_cycle / quarter / observer downstream.
+  if (Object.keys(context).length > 0) {
+    responses.__context = context;
   }
 
   let newResponseId = "";
@@ -169,7 +217,9 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)));
   });
 
-  // Best-effort audit (failure does not roll back the response).
+  // Best-effort audit (failure does not roll back the response). The audit
+  // payload mirrors the persisted context so reviewers can filter the log by
+  // observation_cycle / quarter without reading responses jsonb.
   void recordAudit({
     action: "form.submit",
     entityType: "feedback_response",
@@ -179,6 +229,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       kind: form.kind,
       audience: form.audience,
       version: form.version,
+      ...context,
     },
   });
 
@@ -194,7 +245,12 @@ export default async function FormRunnerPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ pairingId?: string; error?: string }>;
+  // Spec 130 — catalogue links pass arbitrary contextual params alongside
+  // pairingId: cycleId/quarter/observerId/kind let the runner route a single
+  // response back to the right observation_cycle / mentor quarter / observer;
+  // prefill_<field> seeds scalar fields with sensible defaults (mentor name,
+  // school name, etc.) so the user is not retyping context they already supplied.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -202,8 +258,18 @@ export default async function FormRunnerPage({
 
   const { slug } = await params;
   const sp = await searchParams;
-  const pairingId = (sp.pairingId ?? "").trim();
-  const error = (sp.error ?? "").trim();
+
+  // Helper — coerce string-or-string-array searchParams to a single trimmed
+  // string. URL `?pairingId=a&pairingId=b` collapses to "a" (first wins) to
+  // match Next.js' own behaviour on duplicate keys.
+  const readParam = (raw: string | string[] | undefined): string => {
+    if (typeof raw === "string") return raw.trim();
+    if (Array.isArray(raw)) return (raw[0] ?? "").trim();
+    return "";
+  };
+
+  const pairingId = readParam(sp.pairingId);
+  const error = readParam(sp.error);
 
   const parsed = parseSlug(slug);
   if (!parsed) return <NotFoundShell slug={slug} />;
@@ -228,7 +294,78 @@ export default async function FormRunnerPage({
     .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)))
     .limit(1);
 
+  // Spec 131-A — prior-response prefill.
+  //
+  // If the same user has already submitted this template against the same
+  // pairing, surface those answers as the starting point. Drafts (in-progress
+  // edits) still take priority — they're newer than the persisted response.
+  // The query is keyed by (formId, respondentUserId, pairingId), all of which
+  // are indexable on feedback_responses; ordering by submittedAt DESC + limit
+  // 1 picks the most recent canonical answer if multiple exist (re-takes).
+  let priorResponses: Record<string, unknown> | null = null;
+  if (pairingId) {
+    const [prior] = await db
+      .select({ responses: feedbackResponses.responses })
+      .from(feedbackResponses)
+      .where(
+        and(
+          eq(feedbackResponses.formId, form.id),
+          eq(feedbackResponses.respondentUserId, userId),
+          eq(feedbackResponses.pairingId, pairingId),
+        ),
+      )
+      .orderBy(desc(feedbackResponses.submittedAt))
+      .limit(1);
+    priorResponses = (prior?.responses as Record<string, unknown> | undefined) ?? null;
+  }
+
   const schema = readSchema(form);
+  const fieldNames = new Set((schema.fields ?? []).map((f) => f.name));
+
+  // Spec 130 — extract the closed context set from the query string. Anything
+  // outside the closed set is dropped on the floor here (defence in depth —
+  // the server action re-sanitizes on submit). Each kept value becomes a
+  // hidden `__ctx_<key>` input the renderer plants in the form.
+  const context: Record<string, string> = {};
+  for (const key of CONTEXT_KEYS) {
+    const raw = readParam(sp[key]);
+    const sanitized = raw ? sanitizeContextValue(key, raw) : null;
+    if (sanitized !== null && sanitized !== "") context[key] = sanitized;
+  }
+
+  // Spec 130 — scalar field prefill via `?prefill_<fieldName>=value`. We only
+  // honour prefill keys whose `<fieldName>` matches a known schema field — any
+  // unknown key is dropped on the floor here so a crafted URL cannot inject a
+  // surprise hidden input via FormRenderer. Drafts and prior submissions
+  // still win because they reflect work-in-progress, not pre-context.
+  const prefill: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(sp)) {
+    if (!rawKey.startsWith("prefill_")) continue;
+    const fieldName = rawKey.slice("prefill_".length);
+    if (!fieldNames.has(fieldName)) continue;
+    const value = readParam(rawValue);
+    if (value.length === 0) continue;
+    if (value.length > 256) continue; // sanity cap on per-field length
+    prefill[fieldName] = value;
+  }
+
+  const draftResponses = draft?.responses as Record<string, unknown> | undefined;
+  const baseResponses =
+    draftResponses ??
+    priorResponses ??
+    {};
+
+  // Layer prefill UNDER baseResponses so a draft / prior response always wins
+  // — prefill is a starting hint, never an override of work the user has
+  // already committed to. Only keys not already present in baseResponses pick
+  // up the prefill value.
+  const initialResponses: Record<string, unknown> = { ...baseResponses };
+  for (const [name, value] of Object.entries(prefill)) {
+    if (initialResponses[name] === undefined || initialResponses[name] === "") {
+      initialResponses[name] = value;
+    }
+  }
+
   const title = schema.title ?? `${parsed.kind.replace("_", " ")} · ${parsed.audience}`;
   const hindiTitle = schema.hindiTitle;
   const description = schema.description;
@@ -333,12 +470,13 @@ export default async function FormRunnerPage({
         >
           <FormRenderer
             schema={schema}
-            initialResponses={(draft?.responses as Record<string, unknown> | undefined) ?? {}}
+            initialResponses={initialResponses}
             draftKey={{ templateId: form.id }}
             action={submitFormAction}
             formId={form.id}
             slug={slug}
             pairingId={pairingId || null}
+            context={context}
           />
         </section>
 

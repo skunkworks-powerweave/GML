@@ -2,10 +2,14 @@
 // with a Drizzle roll-up over subjects + course_outlines + sessions +
 // resource_subjects. Visual layout: ports `repository.jsx` RepoSubjectsIndex
 // (lines 444-484) 1:1.
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): add a server-side
+// grade-range filter (?grade=N) — the WHERE narrows to subjects whose
+// grades_min ≤ N ≤ grades_max. Defaults to "all" when the param is absent.
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   subjects,
@@ -35,9 +39,34 @@ function chipClassForColor(hex: string | null): string {
   }
 }
 
-export default async function RepoSubjectsIndexPage() {
+export default async function RepoSubjectsIndexPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ grade?: string }>;
+}) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+
+  const sp = await searchParams;
+  // Grade-range filter — accept 1..12. Anything else (including the
+  // sentinel "all" or missing) falls through to no filter.
+  const gradeParsed = Number(sp.grade);
+  const gradeFilter =
+    Number.isInteger(gradeParsed) && gradeParsed >= 1 && gradeParsed <= 12
+      ? gradeParsed
+      : null;
+
+  const conds: SQL[] = [eq(subjects.active, true)];
+  if (gradeFilter !== null) {
+    // A subject covers grade N if grades_min ≤ N ≤ grades_max. NULL bounds
+    // mean "all grades" so they always match.
+    conds.push(
+      or(isNull(subjects.gradesMin), lte(subjects.gradesMin, gradeFilter))!,
+    );
+    conds.push(
+      or(isNull(subjects.gradesMax), gte(subjects.gradesMax, gradeFilter))!,
+    );
+  }
 
   // One round-trip: subjects + grouped counts via correlated subqueries.
   // Aggregates are evaluated per-row in Postgres; ~9 subjects so cost is O(1).
@@ -64,7 +93,7 @@ export default async function RepoSubjectsIndexPage() {
       )`.as("readings"),
     })
     .from(subjects)
-    .where(eq(subjects.active, true))
+    .where(and(...conds))
     .orderBy(asc(subjects.displayOrder), asc(subjects.name));
 
   return (
@@ -77,11 +106,49 @@ export default async function RepoSubjectsIndexPage() {
           sessions and reading material.
         </p>
       </div>
-      <div className="page-body">
+      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        <form
+          method="GET"
+          action="/repo/subjects"
+          className="card"
+          style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+        >
+          <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Grade
+          </span>
+          <select
+            name="grade"
+            defaultValue={gradeFilter === null ? "" : String(gradeFilter)}
+            className="text"
+            style={{ maxWidth: 160, padding: "5px 10px", fontSize: 12 }}
+          >
+            <option value="">All grades</option>
+            {Array.from({ length: 12 }, (_, i) => i + 1).map((g) => (
+              <option key={g} value={g}>
+                Grade {g}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="btn btn-sm">
+            Apply
+          </button>
+          {gradeFilter !== null ? (
+            <Link
+              href="/repo/subjects"
+              className="btn btn-sm"
+              style={{ textDecoration: "none" }}
+            >
+              Reset
+            </Link>
+          ) : null}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <span className="chip">{rows.length} shown</span>
+          </div>
+        </form>
         <div className="card">
           {rows.length === 0 ? (
             <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
-              No subjects seeded yet. Run the spec 086 seed script.
+              No subjects match this filter.
             </div>
           ) : (
             <table className="t">

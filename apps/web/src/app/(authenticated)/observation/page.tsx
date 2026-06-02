@@ -1,8 +1,15 @@
 // /observation — Classroom Observation cycles list.
-// Filter by kind (baseline | developmental | evaluative) and status.
+// Filter by kind (baseline | developmental | evaluative) and status — both
+// reach the DB via URL searchParams so the filtered view is bookmarkable.
+//
+// Spec 129 (Workflow Run 11 frontend-parity closure): port the filter strip
+// from LMS GML Frontend/observation-list.jsx:41-65 into the live Next page.
+// Before this spec the page had zero filter UI and just dumped the latest
+// 80 cycles; now the filter chips submit GET against the same URL so the
+// WHERE clause runs in Postgres, not over an already-fetched mock array.
 
 import Link from "next/link";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, teachers, subjects } from "@gml/db/schema";
 
@@ -22,9 +29,64 @@ const STATUS_LABEL: Record<string, string> = {
   complete: "Complete",
 };
 
-const CYCLE_STAGES = ["nominated", "pre_submitted", "observed", "post_submitted", "complete"];
+const CYCLE_STAGES = ["nominated", "pre_submitted", "observed", "post_submitted", "complete"] as const;
 
-export default async function ObservationListPage() {
+const STATUS_VALUES = new Set([
+  "nominated",
+  "pre_submitted",
+  "observed",
+  "post_submitted",
+  "complete",
+]);
+
+const KIND_VALUES = new Set(["baseline", "developmental", "evaluative"]);
+
+const STATUS_TABS = [
+  { v: "all", l: "All" },
+  { v: "nominated", l: "Nominated" },
+  { v: "pre_submitted", l: "Pre-form in" },
+  { v: "observed", l: "Observed" },
+  { v: "post_submitted", l: "Post-form in" },
+  { v: "complete", l: "Complete" },
+];
+
+const KIND_TABS = [
+  { v: "all", l: "All kinds" },
+  { v: "baseline", l: "Baseline" },
+  { v: "developmental", l: "Developmental" },
+  { v: "evaluative", l: "Evaluative" },
+];
+
+type SearchParams = Promise<{ status?: string; kind?: string }>;
+
+function buildHref(status: string, kind: string): string {
+  const qs = new URLSearchParams();
+  if (status !== "all") qs.set("status", status);
+  if (kind !== "all") qs.set("kind", kind);
+  const s = qs.toString();
+  return s ? `/observation?${s}` : "/observation";
+}
+
+export default async function ObservationListPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const sp = await searchParams;
+  const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
+  const kindFilter = KIND_VALUES.has(sp.kind ?? "") ? sp.kind! : "all";
+
+  // Build the WHERE clause server-side — only emit predicates for filters
+  // the user actively chose. Empty array → no WHERE → whole table.
+  const conds: SQL[] = [];
+  if (statusFilter !== "all") {
+    conds.push(eq(observationCycles.status, statusFilter as (typeof CYCLE_STAGES)[number]));
+  }
+  if (kindFilter !== "all") {
+    const kindValue = kindFilter as "baseline" | "developmental" | "evaluative";
+    conds.push(eq(observationCycles.kind, kindValue));
+  }
+
   const rows = await db
     .select({
       id: observationCycles.id,
@@ -41,8 +103,33 @@ export default async function ObservationListPage() {
     .from(observationCycles)
     .leftJoin(teachers, eq(observationCycles.teacherId, teachers.id))
     .leftJoin(subjects, eq(observationCycles.subjectId, subjects.id))
+    .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(desc(observationCycles.scheduledAt))
     .limit(80);
+
+  // Per-tab counts run as a single GROUP BY so the chips can show the
+  // current totals even when a filter is active. One extra round-trip.
+  const statusCounts = await db
+    .select({
+      status: observationCycles.status,
+      n: sql<number>`count(*)::int`.as("n"),
+    })
+    .from(observationCycles)
+    .groupBy(observationCycles.status);
+
+  const kindCounts = await db
+    .select({
+      kind: observationCycles.kind,
+      n: sql<number>`count(*)::int`.as("n"),
+    })
+    .from(observationCycles)
+    .groupBy(observationCycles.kind);
+
+  const totalRows = statusCounts.reduce((acc, r) => acc + r.n, 0);
+  const statusCount = (v: string) =>
+    v === "all" ? totalRows : (statusCounts.find((c) => c.status === v)?.n ?? 0);
+  const kindCount = (v: string) =>
+    v === "all" ? totalRows : (kindCounts.find((c) => c.kind === v)?.n ?? 0);
 
   return (
     <div>
@@ -60,10 +147,61 @@ export default async function ObservationListPage() {
       </div>
 
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        <div
+          className="card"
+          style={{ display: "flex", padding: 10, gap: 16, alignItems: "center", flexWrap: "wrap" }}
+        >
+          <div style={{ display: "flex", gap: 4 }}>
+            {STATUS_TABS.map((f) => {
+              const active = statusFilter === f.v;
+              return (
+                <Link
+                  key={f.v}
+                  href={buildHref(f.v, kindFilter)}
+                  className="btn btn-sm"
+                  style={{
+                    background: active ? "var(--ink)" : "transparent",
+                    color: active ? "var(--paper)" : "var(--ink-2)",
+                    borderColor: active ? "var(--ink)" : "transparent",
+                    boxShadow: "none",
+                    textDecoration: "none",
+                  }}
+                >
+                  {f.l}
+                  <span style={{ opacity: 0.6, marginLeft: 4 }}>{statusCount(f.v)}</span>
+                </Link>
+              );
+            })}
+          </div>
+          <div style={{ width: 1, height: 20, background: "var(--line)" }} />
+          <div style={{ display: "flex", gap: 4 }}>
+            {KIND_TABS.map((f) => {
+              const active = kindFilter === f.v;
+              return (
+                <Link
+                  key={f.v}
+                  href={buildHref(statusFilter, f.v)}
+                  className="btn btn-sm"
+                  style={{
+                    background: active ? "var(--ink-2)" : "transparent",
+                    color: active ? "var(--paper)" : "var(--ink-2)",
+                    borderColor: active ? "var(--ink-2)" : "transparent",
+                    boxShadow: "none",
+                    textDecoration: "none",
+                  }}
+                >
+                  {f.l}
+                  <span style={{ opacity: 0.6, marginLeft: 4 }}>{kindCount(f.v)}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="card">
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-              No observation cycles yet. They appear once observers nominate teachers.
+              No observation cycles match this filter.
             </div>
           ) : (
             <table className="t">
@@ -135,7 +273,7 @@ export default async function ObservationListPage() {
 }
 
 function CycleStage({ status }: { status: string }) {
-  const idx = CYCLE_STAGES.indexOf(status);
+  const idx = (CYCLE_STAGES as readonly string[]).indexOf(status);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
       {CYCLE_STAGES.map((s, i) => (

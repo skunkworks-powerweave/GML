@@ -21,6 +21,11 @@ import {
   LOCALE_FONT_FAMILY,
   LOCALE_HTML_LANG,
 } from "@/i18n/config";
+import {
+  loadNavCounts,
+  loadUnreadNotifications,
+  loadQueueDepth,
+} from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
 
 // Spec 088 — every authenticated route renders the AntiDownloadGuard alongside
@@ -94,10 +99,29 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
     email: process.env.GML_HELPDESK_EMAIL ?? process.env.SMTP_FROM ?? null,
   };
 
+  // Spec 128 — dynamic chrome counts. Each loader is React.cache'd so calling
+  // them in this layout AND from any descendant server component yields one
+  // DB / Redis round-trip per request. All loaders fail-closed (empty/0) so
+  // the chrome stays readable when the data source is down.
+  const [navCounts, unreadCount, queueDepth] = await Promise.all([
+    loadNavCounts(user.id, user.role),
+    loadUnreadNotifications(user.id),
+    loadQueueDepth(),
+  ]);
+
   const content = device === "mobile" ? (
-    <MobileShell user={user}>{children}</MobileShell>
+    <MobileShell user={user} navCounts={navCounts} unreadCount={unreadCount}>
+      {children}
+    </MobileShell>
   ) : (
-    <DesktopShell user={user}>{children}</DesktopShell>
+    <DesktopShell
+      user={user}
+      navCounts={navCounts}
+      unreadCount={unreadCount}
+      queueDepth={queueDepth}
+    >
+      {children}
+    </DesktopShell>
   );
 
   return (
