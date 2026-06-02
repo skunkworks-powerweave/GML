@@ -16,7 +16,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, asc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, ilike, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   teachers,
@@ -55,7 +55,16 @@ const READ_ROLES = new Set([
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type SearchParams = Promise<{ school?: string; phase?: string }>;
+// Spec 158 — name search. 200-char cap + escape ILIKE wildcards so a user
+// querying for a literal "%" or "_" in a teacher name doesn't accidentally
+// turn it into a wildcard (no teacher has those today, but the contract
+// is the same across all repo index pages).
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+type SearchParams = Promise<{ school?: string; phase?: string; q?: string }>;
 
 export default async function RepoTeachersIndexPage({
   searchParams,
@@ -71,6 +80,9 @@ export default async function RepoTeachersIndexPage({
   const sp = await searchParams;
   const schoolFilter = sp.school && UUID_RE.test(sp.school) ? sp.school : null;
   const phaseFilter = sp.phase && UUID_RE.test(sp.phase) ? sp.phase : null;
+  // Spec 158 — name search on teachers.fullName.
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   // Per-teacher session counter joined inline so the index hits the DB once.
   const sessionCounts = db
@@ -94,6 +106,8 @@ export default async function RepoTeachersIndexPage({
   const conds: SQL[] = [eq(teachers.active, true)];
   if (schoolFilter) conds.push(eq(teachers.schoolId, schoolFilter));
   if (phaseFilter) conds.push(eq(teachers.currentPhaseId, phaseFilter));
+  // Spec 158 — combine the new ?q= filter via and(...).
+  if (qFilter) conds.push(ilike(teachers.fullName, `%${escapeIlike(qFilter)}%`));
 
   const rows = await db
     .select({
@@ -152,6 +166,22 @@ export default async function RepoTeachersIndexPage({
           className="card"
           style={{ padding: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}
         >
+          {/* Spec 158 — name search input. Combines with existing
+              school/phase filters via the same GET form (all submit
+              together) so the URL stays a single shareable bookmark. */}
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Name
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search teachers by name"
+              title="Search teachers by name"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
+          </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
             School
             <select
@@ -187,13 +217,13 @@ export default async function RepoTeachersIndexPage({
           <button type="submit" className="btn btn-sm">
             Apply
           </button>
-          {(schoolFilter || phaseFilter) ? (
+          {(schoolFilter || phaseFilter || qFilter) ? (
             <Link
               href="/repo/teachers"
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Reset
+              Clear
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>

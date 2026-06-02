@@ -50,7 +50,16 @@ function chipFor(code: string | null | undefined) {
   return DISTRICT_CHIP[k] ?? { kind: "", label: code };
 }
 
-type SearchParams = Promise<{ district?: string }>;
+type SearchParams = Promise<{ district?: string; q?: string }>;
+
+// Spec 158 — inline name-search bar. Cap at 200 chars so a copy-paste of
+// a giant payload neither bloats the URL nor stresses Postgres' planner.
+// We escape ILIKE wildcards because a user may legitimately search for a
+// school whose name contains a literal '%' or '_'.
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
 
 export default async function RepoSchoolsIndexPage({
   searchParams,
@@ -65,6 +74,11 @@ export default async function RepoSchoolsIndexPage({
 
   const sp = await searchParams;
   const districtFilter = (sp.district ?? "all").toLowerCase();
+  // Spec 158 — name search. Empty string and "all whitespace" both treat
+  // as absent so the input behaves intuitively (typing then deleting
+  // doesn't leave a non-matching filter live).
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   // Inline correlated counts so the index hits the DB in one round-trip.
   const teacherCounts = db
@@ -115,9 +129,16 @@ export default async function RepoSchoolsIndexPage({
   }
 
   const districtCond = districtPredicate(districtFilter);
-  const whereCond = districtCond
-    ? and(eq(schools.active, true), districtCond)
-    : eq(schools.active, true);
+  // Spec 158 — combine districtCond AND name-search via and(...). The
+  // ilike pattern wraps the escaped query in % so it's a substring match,
+  // matching the JSX-prototype's case-insensitive name filter behaviour.
+  const qCond: SQL | undefined = qFilter
+    ? ilike(schools.name, `%${escapeIlike(qFilter)}%`)
+    : undefined;
+  const conds: SQL[] = [eq(schools.active, true)];
+  if (districtCond) conds.push(districtCond);
+  if (qCond) conds.push(qCond);
+  const whereCond = and(...conds);
 
   const visible = await db
     .select({
@@ -199,7 +220,13 @@ export default async function RepoSchoolsIndexPage({
           </span>
           {filterTabs.map((f) => {
             const active = districtFilter === f.v || (districtFilter === "kargil" && f.v === "kgl");
-            const href = f.v === "all" ? "/repo/schools" : `/repo/schools?district=${f.v}`;
+            // Spec 158 — preserve `q` across district-tab clicks so the user
+            // doesn't lose their search when narrowing by district.
+            const qs = new URLSearchParams();
+            if (f.v !== "all") qs.set("district", f.v);
+            if (qFilter) qs.set("q", qFilter);
+            const q = qs.toString();
+            const href = q ? `/repo/schools?${q}` : "/repo/schools";
             return (
               <Link
                 key={f.v}
@@ -218,6 +245,45 @@ export default async function RepoSchoolsIndexPage({
               </Link>
             );
           })}
+
+          {/* Spec 158 — name search. Native HTML GET form so the URL is
+              shareable and no client component is needed. The district
+              hidden input preserves the active tab across submissions. */}
+          <form
+            method="GET"
+            action="/repo/schools"
+            style={{ display: "flex", gap: 6, alignItems: "center" }}
+          >
+            {districtFilter !== "all" ? (
+              <input type="hidden" name="district" value={districtFilter} />
+            ) : null}
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search schools by name"
+              title="Search schools by name"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
+            <button type="submit" className="btn btn-sm">
+              Search
+            </button>
+            {qFilter ? (
+              <Link
+                href={
+                  districtFilter !== "all"
+                    ? `/repo/schools?district=${districtFilter}`
+                    : "/repo/schools"
+                }
+                className="btn btn-sm"
+                style={{ textDecoration: "none" }}
+              >
+                Clear
+              </Link>
+            ) : null}
+          </form>
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <Link

@@ -21,6 +21,7 @@
 // match the LoginLanguagePicker's contract so a future swap is one import.
 
 import { useActionState, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { loginAction, type LoginState } from "./actions";
@@ -274,6 +275,20 @@ export function MobileLogin() {
             >
               {pending ? tAction("signingIn") : tAction("signIn")}
             </button>
+            {/* Spec 161 — Forgot password link below the credentials form. */}
+            <Link
+              href="/login/forgot"
+              data-testid="mobile-forgot-password"
+              style={{
+                fontSize: 13,
+                color: "var(--ink-2)",
+                textAlign: "center",
+                marginTop: 8,
+                textDecoration: "underline",
+              }}
+            >
+              {tAction("forgotPassword")}
+            </Link>
           </form>
         ) : (
           <EmailLinkForm />

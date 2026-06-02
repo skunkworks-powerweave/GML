@@ -98,8 +98,10 @@ test("spec 107: retention.ts CLI entry point is guarded so imports don't auto-ru
   const src = read(RETENTION_PATH);
   assert.match(
     src,
-    /import\s*\{\s*pathToFileURL\s*\}\s*from\s*["']node:url["']/,
-    "retention.ts must import pathToFileURL from node:url",
+    // Allow other node:url imports alongside (spec 163 added fileURLToPath
+    // for the basename-fallback in isDirectInvocation).
+    /import\s*\{[^}]*\bpathToFileURL\b[^}]*\}\s*from\s*["']node:url["']/,
+    "retention.ts must import pathToFileURL from node:url (other named imports OK)",
   );
   assert.match(
     src,

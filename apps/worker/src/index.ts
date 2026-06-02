@@ -10,6 +10,11 @@
 //
 // Runs in the `worker` container of docker-compose. Single replica is fine;
 // concurrency is set via env.
+//
+// Spec 163 — Workflow Run 15 audit-closure NIT: all log emissions go
+// through the `log` helper in ./log.ts so output is consistently tagged
+// and timestamped (the audit flagged the ad-hoc console.log / warn /
+// error scatter as a maintenance hazard). See ./log.ts for format.
 
 import "dotenv/config";
 import { Worker } from "bullmq";
@@ -17,6 +22,7 @@ import IORedis from "ioredis";
 import { deleteOldNotifications } from "@gml/db/scripts/retention";
 import { transcode480p } from "./transcode.js";
 import { transcodeQueue, retentionQueue, type TranscodeJobInput } from "./queues.js";
+import { log } from "./log.js";
 
 // Re-export queue producers so existing `@gml/worker` consumers keep working.
 export { transcodeQueue, retentionQueue, type TranscodeJobInput };
@@ -49,7 +55,7 @@ const connection = new IORedis(REDIS_URL, {
 const worker = new Worker<TranscodeJobInput>(
   "transcode",
   async (job) => {
-    console.log(`[worker] picking job ${job.id}`, job.data);
+    log.info("picking transcode job", { id: job.id, data: job.data });
     await transcode480p(job.data);
     return { ok: true };
   },
@@ -60,10 +66,10 @@ const worker = new Worker<TranscodeJobInput>(
 );
 
 worker.on("completed", (job) => {
-  console.log(`[worker] job ${job.id} completed`);
+  log.info("transcode job completed", { id: job.id });
 });
 worker.on("failed", (job, err) => {
-  console.error(`[worker] job ${job?.id} failed:`, err);
+  log.error("transcode job failed", { id: job?.id, err: String(err) });
 });
 
 // Spec 107 — Tier D1: SM-8 retention worker. Concurrency 1 since this is a
@@ -75,7 +81,7 @@ const retentionWorker = new Worker(
       const deleted = await deleteOldNotifications();
       return { deleted };
     }
-    console.warn(`[retention] unknown job name '${job.name}'`);
+    log.warn("retention: unknown job name", { name: job.name });
     return { skipped: true };
   },
   {
@@ -85,10 +91,10 @@ const retentionWorker = new Worker(
 );
 
 retentionWorker.on("completed", (job, result) => {
-  console.log(`[retention] job ${job.id} completed`, result);
+  log.info("retention job completed", { id: job.id, result });
 });
 retentionWorker.on("failed", (job, err) => {
-  console.error(`[retention] job ${job?.id} failed:`, err);
+  log.error("retention job failed", { id: job?.id, err: String(err) });
 });
 
 // Register the nightly repeat job. BullMQ deduplicates by jobId, so it's safe
@@ -112,10 +118,10 @@ retentionQueue
     { repeat: { cron: "0 3 * * *" }, jobId: "retention:nightly" },
   )
   .then(() => {
-    console.log(`[retention] nightly schedule registered (cron '0 3 * * *')`);
+    log.info("retention nightly schedule registered", { cron: "0 3 * * *" });
   })
   .catch((err) => {
-    console.error(`[retention] failed to register nightly schedule:`, err);
+    log.error("retention nightly schedule registration failed", { err: String(err) });
   });
 
-console.log(`[worker] online · redis=${REDIS_URL} · concurrency=${CONCURRENCY}`);
+log.info("online", { redis: REDIS_URL, concurrency: CONCURRENCY });

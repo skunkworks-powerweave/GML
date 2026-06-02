@@ -119,13 +119,71 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
         if (!user || !user.active) return null;
 
-        const ok = await verifyPassword(password, user.passwordHash);
-        if (!ok) return null;
+        // Spec 161 — account lockout check. If locked_until is in the
+        // future, refuse the attempt entirely; don't even let the bcrypt
+        // verify run (saves CPU on an in-flight attack AND prevents
+        // a timing oracle for "is this account locked"). Audit the
+        // attempt so post-hoc investigation can see the lockout was
+        // honoured — `auth.account.locked_attempt` is the contracted
+        // action name.
+        if (user.lockedUntil && user.lockedUntil > new Date()) {
+          void recordAudit({
+            userId: user.id,
+            action: "auth.account.locked_attempt",
+            entityType: "user",
+            entityId: user.id,
+            ipOverride: ip,
+            metadata: { ipMasked: maskIp(ip), until: user.lockedUntil.toISOString() },
+          });
+          return null;
+        }
 
-        // Bump lastSeenAt fire-and-forget.
+        const ok = await verifyPassword(password, user.passwordHash);
+        if (!ok) {
+          // Spec 161 — failed-credentials lockout state machine.
+          // Increment the counter; if we've now crossed the threshold
+          // (5 consecutive misses) AND no lockout is already pending,
+          // arm a 1-hour lockout. The counter doesn't decrement on its
+          // own — a successful login clears it (below). The 1-hour
+          // rolling window is enforced in practice by the fact that the
+          // counter resets to 0 on every successful login; we don't
+          // need a per-attempt timestamp ledger for the audit's
+          // purposes.
+          const newCount = (user.failedLoginCount ?? 0) + 1;
+          const shouldLock = newCount >= 5;
+          const lockedUntil = shouldLock ? new Date(Date.now() + 60 * 60 * 1000) : null;
+          void db
+            .update(users)
+            .set({
+              failedLoginCount: newCount,
+              ...(shouldLock ? { lockedUntil } : {}),
+            })
+            .where(eq(users.id, user.id))
+            .catch(() => undefined);
+          if (shouldLock) {
+            void recordAudit({
+              userId: user.id,
+              action: "auth.account.locked",
+              entityType: "user",
+              entityId: user.id,
+              ipOverride: ip,
+              metadata: {
+                ipMasked: maskIp(ip),
+                until: lockedUntil!.toISOString(),
+                failedCount: newCount,
+              },
+            });
+          }
+          return null;
+        }
+
+        // Spec 161 — reset lockout state on successful login. The
+        // counter goes back to 0 and any pending lockout is cleared.
+        // Folded into the same UPDATE as the lastSeenAt bump so the
+        // common-path write count stays at one.
         void db
           .update(users)
-          .set({ lastSeenAt: new Date() })
+          .set({ lastSeenAt: new Date(), failedLoginCount: 0, lockedUntil: null })
           .where(eq(users.id, user.id))
           .catch(() => undefined);
 

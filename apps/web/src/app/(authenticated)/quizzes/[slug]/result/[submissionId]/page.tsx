@@ -291,10 +291,22 @@ export default async function QuizResultPage({
               display: "flex",
               gap: 8,
               justifyContent: "center",
+              flexWrap: "wrap",
             }}
           >
             <Link href={`/quizzes/${slug}`} className="btn">
               Retake
+            </Link>
+            {/* Spec 159 — link to the per-user attempts history. The
+                history page is server-rendered and scopes to the
+                current user, so this link is safe to surface
+                unconditionally for any logged-in viewer. */}
+            <Link
+              href={`/quizzes/${slug}/history`}
+              className="btn btn-ghost"
+              data-testid="quiz-result-history-link"
+            >
+              View history
             </Link>
             <Link href="/dashboard" className="btn btn-primary">
               Continue

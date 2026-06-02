@@ -11,8 +11,17 @@
 // The component is intentionally dumb about scoring — grading happens entirely
 // server-side via the server action passed in from the parent page. The UI only
 // collects answers and redirects to the result page on submit.
+//
+// Spec 159 — Workflow Run 15 audit-closure MISS: optional time-limit
+// countdown. When `timeLimitSeconds` is set on the quiz, the runner shows a
+// mono-font countdown banner ("08:42 remaining"). The banner shifts to
+// var(--rust) under 60 seconds remaining. On 00:00 the runner submits
+// whatever state it has — same wire shape as a click on the Submit button,
+// but with every unanswered question carrying `selectedIndex: null` per the
+// spec 146 contract. The countdown uses setInterval + a useEffect cleanup
+// so navigating away tears the timer down cleanly.
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 export type QuizRunnerQuestion = {
   id: string;
@@ -24,6 +33,8 @@ export type QuizRunnerProps = {
   slug: string;
   title: string;
   questions: QuizRunnerQuestion[];
+  // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
+  timeLimitSeconds?: number | null;
   // Server action — receives slug + answers; redirects to /quizzes/[slug]/result/[id].
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
@@ -34,12 +45,92 @@ export type QuizRunnerProps = {
   ) => Promise<void>;
 };
 
-export function QuizRunner({ slug, title, questions, submitAction }: QuizRunnerProps) {
+// Spec 159 — format a non-negative number of seconds as MM:SS for the
+// countdown banner. Clamped at 0 (no negative-time flash if a tick fires
+// after the auto-submit has already redirected). The pad is fine for
+// timers up to 99:59 (5999 s); the DB CHECK caps the field at 7200s so
+// the worst case is 120:00 which renders without surprise.
+function formatRemaining(s: number): string {
+  const clamped = Math.max(0, Math.floor(s));
+  const mm = Math.floor(clamped / 60)
+    .toString()
+    .padStart(2, "0");
+  const ss = (clamped % 60).toString().padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+export function QuizRunner({
+  slug,
+  title,
+  questions,
+  timeLimitSeconds,
+  submitAction,
+}: QuizRunnerProps) {
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
+  // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
+  // left until auto-submit. We seed it from the prop once (the useEffect
+  // dep array is intentionally [] so a parent re-render does NOT reset
+  // the timer mid-attempt).
+  const [remaining, setRemaining] = useState<number | null>(
+    typeof timeLimitSeconds === "number" ? timeLimitSeconds : null,
+  );
+  // Spec 159 — a ref so the interval tick can call the latest selection
+  // map / submit path without re-arming the timer when those change.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const submittedRef = useRef(false);
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+
+  // Spec 159 — countdown effect. Mounted ONCE on first render; reads the
+  // initial `timeLimitSeconds` prop. Ticks once per second; when remaining
+  // hits 0 it fires the auto-submit (idempotent via submittedRef so a
+  // race between the tick and a manual click can't double-submit). The
+  // cleanup function clears the interval so navigating away tears the
+  // timer down. Empty dep array is intentional: we don't want a parent
+  // re-render to reset the timer mid-attempt.
+  useEffect(() => {
+    if (typeof timeLimitSeconds !== "number") return;
+    // Auto-submit closure — reads from refs so it always sees the latest
+    // selection map and the latest question list, even though the effect
+    // captured the initial values.
+    const autoSubmit = () => {
+      if (submittedRef.current) return;
+      submittedRef.current = true;
+      const live = selectedRef.current;
+      const answers = questionsRef.current.map((qq) => ({
+        questionId: qq.id,
+        selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
+      }));
+      // Fire-and-forget: same shape as the manual onSubmit but without
+      // the useTransition wrapper (we're already inside an interval
+      // callback, not a render path).
+      submitAction(slug, answers).catch((e: unknown) => {
+        setServerErr((e as Error).message);
+        submittedRef.current = false; // permit retry if the server bounced
+      });
+    };
+    const id = setInterval(() => {
+      setRemaining((prev) => {
+        if (prev === null) return prev;
+        const next = prev - 1;
+        if (next <= 0) {
+          // Defer the submit to a microtask so React finishes this state
+          // update before the redirect fires. `queueMicrotask` is enough —
+          // we don't need setTimeout's macrotask delay.
+          queueMicrotask(autoSubmit);
+          return 0;
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (questions.length === 0) {
     return (
@@ -71,6 +162,11 @@ export function QuizRunner({ slug, title, questions, submitAction }: QuizRunnerP
     // skipped questions into a free pass on the denominator. Skipped
     // questions are now graded as wrong (0 points) — the learner had
     // the chance to answer and chose not to.
+    // Spec 159 — mark submittedRef so the auto-submit tick can't fire
+    // a second submit if the user happens to click Submit exactly at
+    // the 0-second boundary.
+    if (submittedRef.current) return;
+    submittedRef.current = true;
     const answers = questions.map((qq) => ({
       questionId: qq.id,
       selectedIndex: selected[qq.id] === undefined ? null : selected[qq.id],
@@ -81,6 +177,7 @@ export function QuizRunner({ slug, title, questions, submitAction }: QuizRunnerP
         await submitAction(slug, answers);
       } catch (e) {
         setServerErr((e as Error).message);
+        submittedRef.current = false;
       }
     });
   };
@@ -110,6 +207,41 @@ export function QuizRunner({ slug, title, questions, submitAction }: QuizRunnerP
             {idx + 1} / {totalCount}
           </div>
         </div>
+        {/* Spec 159 — countdown banner. Only renders when the quiz has a
+            time limit. The banner shifts to var(--rust) under 60s
+            remaining so the learner has a clear last-minute cue. The
+            data-testid attribute makes the banner scrapable by the
+            governance test (and any future Playwright integration). */}
+        {remaining !== null ? (
+          <div
+            data-testid="quiz-countdown"
+            role="timer"
+            aria-live="polite"
+            style={{
+              marginTop: 12,
+              padding: "8px 12px",
+              background:
+                remaining < 60 ? "var(--rust-soft)" : "var(--paper-2)",
+              border:
+                "1px solid " +
+                (remaining < 60 ? "var(--rust)" : "var(--line)"),
+              borderRadius: "var(--r-2)",
+              fontFamily: "var(--mono)",
+              fontSize: 13,
+              color: remaining < 60 ? "var(--rust)" : "var(--ink)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 11, opacity: 0.7 }}>
+              Time remaining
+            </span>
+            <span style={{ fontWeight: 600 }}>
+              {formatRemaining(remaining)}
+            </span>
+          </div>
+        ) : null}
         <div className="bar" style={{ marginTop: 14 }}>
           <div style={{ width: `${progressPct}%` }} />
         </div>

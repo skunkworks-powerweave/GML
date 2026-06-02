@@ -34,9 +34,15 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     .where(eq(quizQuestions.quizId, row.id))
     .orderBy(asc(quizQuestions.sequence));
 
+  // Spec 159 — Workflow Run 15 audit-closure MISS: time_limit_seconds is
+  // now part of the editable JSON. The export shape carries it (NULL =
+  // untimed) and the schema reference aside calls out the valid range so
+  // the editor knows what numbers are accepted. The saveQuizSchema
+  // server action validates the same range before writing.
   const exportShape = {
     title: row.title,
     passThreshold: row.passThreshold,
+    timeLimitSeconds: row.timeLimitSeconds,
     active: row.active,
     questions: qs.map((q) => ({
       prompt: q.prompt,
@@ -112,6 +118,28 @@ export default async function AdminQuizDetailPage({ params }: Props) {
             >
               {row.passThreshold}%
             </div>
+            {/* Spec 159 — time-limit summary. Renders "untimed" for legacy
+                quizzes (timeLimitSeconds = NULL) and "Nm Xs" (or "Nm") for
+                quizzes carrying a value. Editors change the value via the
+                JSON editor below; the read-out here keeps the at-a-glance
+                contract symmetric with the pass-threshold display. */}
+            <div
+              data-testid="quiz-time-limit-summary"
+              style={{
+                fontSize: 11,
+                fontFamily: "var(--mono)",
+                color: "var(--ink-3)",
+                marginTop: 6,
+              }}
+            >
+              {row.timeLimitSeconds === null || row.timeLimitSeconds === undefined
+                ? "untimed"
+                : `time limit: ${Math.floor(row.timeLimitSeconds / 60)}m${
+                    row.timeLimitSeconds % 60 !== 0
+                      ? ` ${row.timeLimitSeconds % 60}s`
+                      : ""
+                  }`}
+            </div>
             <span
               style={{
                 display: "inline-block",
@@ -145,10 +173,13 @@ export default async function AdminQuizDetailPage({ params }: Props) {
         >
           <strong style={{ color: "var(--ink-2)" }}>Schema reference.</strong>{" "}
           The payload accepts <code>title</code>, <code>passThreshold</code>,
-          <code> active</code>, and a <code>questions[]</code> array. Each
-          question must have <code>prompt</code> (string), <code>options</code>
-          (array of ≥ 2 strings), <code>correctIndex</code> (0-based integer
-          into options), and an optional <code>explanation</code>.
+          <code> active</code>, an optional <code>timeLimitSeconds</code>
+          (Spec 159; <code>null</code> = untimed; otherwise an integer
+          between 60 and 7200 = 1 min to 2 h), and a{" "}
+          <code>questions[]</code> array. Each question must have{" "}
+          <code>prompt</code> (string), <code>options</code> (array of ≥ 2
+          strings), <code>correctIndex</code> (0-based integer into options),
+          and an optional <code>explanation</code>.
         </aside>
       </section>
     </main>

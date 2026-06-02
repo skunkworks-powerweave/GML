@@ -39,6 +39,17 @@ export const quizzes = pgTable(
     subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "set null" }),
     rttSubjectId: uuid("rtt_subject_id").references(() => rttSubjects.id, { onDelete: "set null" }),
     passThreshold: smallint("pass_threshold").notNull().default(60),
+    // Spec 159 — Workflow Run 15 audit-closure MISS: optional time limit on
+    // the quiz attempt. NULL = untimed (the default for every legacy quiz);
+    // a positive integer = number of seconds the learner has to submit
+    // before the runner auto-submits whatever it has collected. Range
+    // enforced at the DB layer (60..7200) — 1 minute is the floor (anything
+    // shorter is a UX trap, the learner can't realistically read questions
+    // in under a minute) and 2 hours is the ceiling (the seed quizzes top
+    // out at 30 questions × 90s per question ≈ 45 min; 2h is a comfortable
+    // headroom for hypothetical long-form assessments without inviting
+    // "infinite" timers that exist only to bypass the cap).
+    timeLimitSeconds: integer("time_limit_seconds"),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
@@ -53,6 +64,14 @@ export const quizzes = pgTable(
     check(
       "quizzes_pass_threshold_range",
       sql`${t.passThreshold} BETWEEN 0 AND 100`,
+    ),
+    // Spec 159 — time_limit_seconds is NULLABLE (untimed quiz) or in
+    // [60, 7200]. The CHECK uses the literal column name because Drizzle's
+    // sql tagged-template emits the unqualified identifier inside CHECK
+    // clauses (mirrors quizzes_pass_threshold_range above).
+    check(
+      "quizzes_time_limit_range",
+      sql`${t.timeLimitSeconds} IS NULL OR ${t.timeLimitSeconds} BETWEEN 60 AND 7200`,
     ),
     index("quizzes_subject_idx").on(t.subjectId),
     index("quizzes_rtt_subject_idx").on(t.rttSubjectId),

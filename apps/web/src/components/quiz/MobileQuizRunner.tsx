@@ -19,8 +19,16 @@
 //   - Respects env(safe-area-inset-*) for notch devices
 //
 // Spec 134.
+//
+// Spec 159 — Workflow Run 15 audit-closure MISS: the mobile runner mirrors
+// the desktop time-limit countdown. When `timeLimitSeconds` is set on the
+// quiz, a mono-font countdown chip renders in the sticky header (next to
+// the "1 / N" counter). It shifts to var(--rust) under 60s. On 00:00 the
+// runner auto-submits whatever state the learner has collected, via the
+// same submitAction wire shape used on click — every unanswered question
+// carries `selectedIndex: null` per the spec 146 grading contract.
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -32,6 +40,8 @@ export type MobileQuizRunnerProps = {
   slug: string;
   title: string;
   questions: MobileQuizRunnerQuestion[];
+  // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
+  timeLimitSeconds?: number | null;
   // Server action — receives slug + answers; redirects to
   // /quizzes/[slug]/result/[id]. Drop-in same shape as QuizRunner.
   // Spec 146: client sends ALL questions; skipped answers carry
@@ -43,10 +53,24 @@ export type MobileQuizRunnerProps = {
   ) => Promise<void>;
 };
 
+// Spec 159 — format a non-negative number of seconds as MM:SS. Same helper
+// shape as the desktop QuizRunner (kept inline-duplicated rather than
+// extracted to a shared module: the helper is 7 lines and the duplication
+// avoids introducing a cross-component dependency for a single fix).
+function formatRemaining(s: number): string {
+  const clamped = Math.max(0, Math.floor(s));
+  const mm = Math.floor(clamped / 60)
+    .toString()
+    .padStart(2, "0");
+  const ss = (clamped % 60).toString().padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
 export function MobileQuizRunner({
   slug,
   title,
   questions,
+  timeLimitSeconds,
   submitAction,
 }: MobileQuizRunnerProps) {
   const [idx, setIdx] = useState(0);
@@ -54,6 +78,54 @@ export function MobileQuizRunner({
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
+  // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
+  // left until auto-submit. Seeded once from the prop; the useEffect
+  // below ticks it down to 0 and fires the auto-submit.
+  const [remaining, setRemaining] = useState<number | null>(
+    typeof timeLimitSeconds === "number" ? timeLimitSeconds : null,
+  );
+  // Spec 159 — refs let the interval tick read the latest selection /
+  // question list / submitted flag without re-arming the timer when those
+  // change. submittedRef is the idempotency guard that prevents a race
+  // between a 0-second tick and a manual Submit click.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+  const submittedRef = useRef(false);
+
+  // Spec 159 — countdown effect. Empty dep array (timer mounts once and
+  // tears down on unmount). Same shape as the desktop runner so the two
+  // surfaces have identical auto-submit semantics.
+  useEffect(() => {
+    if (typeof timeLimitSeconds !== "number") return;
+    const autoSubmit = () => {
+      if (submittedRef.current) return;
+      submittedRef.current = true;
+      const live = selectedRef.current;
+      const answers = questionsRef.current.map((qq) => ({
+        questionId: qq.id,
+        selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
+      }));
+      submitAction(slug, answers).catch((e: unknown) => {
+        setServerErr((e as Error).message);
+        submittedRef.current = false;
+      });
+    };
+    const id = setInterval(() => {
+      setRemaining((prev) => {
+        if (prev === null) return prev;
+        const next = prev - 1;
+        if (next <= 0) {
+          queueMicrotask(autoSubmit);
+          return 0;
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (questions.length === 0) {
     return (
@@ -90,6 +162,11 @@ export function MobileQuizRunner({
     // skipped questions into a free pass on the denominator. Skipped
     // questions are now graded as wrong (0 points) — the learner had
     // the chance to answer and chose not to.
+    // Spec 159 — submittedRef guards against a race with the auto-
+    // submit interval tick. If the user clicks Submit exactly at the
+    // 0-second boundary we want exactly one server action, not two.
+    if (submittedRef.current) return;
+    submittedRef.current = true;
     const answers = questions.map((qq) => ({
       questionId: qq.id,
       selectedIndex: selected[qq.id] === undefined ? null : selected[qq.id],
@@ -100,6 +177,7 @@ export function MobileQuizRunner({
         await submitAction(slug, answers);
       } catch (e) {
         setServerErr((e as Error).message);
+        submittedRef.current = false;
       }
     });
   };
@@ -138,10 +216,40 @@ export function MobileQuizRunner({
             Quiz
           </div>
           <div
-            className="mono"
-            style={{ fontSize: 12, color: "var(--ink-3)" }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 10 }}
           >
-            {idx + 1} / {totalCount}
+            {/* Spec 159 — countdown chip lives next to the question
+                counter so it stays visible on the narrow mobile header
+                without competing for the question prompt's vertical
+                space. role="timer" + aria-live="polite" matches the
+                desktop runner's a11y contract. */}
+            {remaining !== null ? (
+              <span
+                data-testid="mobile-quiz-countdown"
+                role="timer"
+                aria-live="polite"
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 12,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background:
+                    remaining < 60 ? "var(--rust-soft)" : "var(--paper-2)",
+                  color: remaining < 60 ? "var(--rust)" : "var(--ink-2)",
+                  border:
+                    "1px solid " +
+                    (remaining < 60 ? "var(--rust)" : "var(--line)"),
+                }}
+              >
+                {formatRemaining(remaining)}
+              </span>
+            ) : null}
+            <div
+              className="mono"
+              style={{ fontSize: 12, color: "var(--ink-3)" }}
+            >
+              {idx + 1} / {totalCount}
+            </div>
           </div>
         </div>
         <h1

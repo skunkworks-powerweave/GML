@@ -20,6 +20,12 @@ type IncomingQuestion = {
 type IncomingPayload = {
   title?: string;
   passThreshold?: number;
+  // Spec 159 — Workflow Run 15 audit-closure MISS: optional per-attempt
+  // time limit. `null` = explicit "untimed" (the editor can flip a timed
+  // quiz back to untimed by sending null). `undefined` = field omitted
+  // (no change to the existing value). A finite integer between 60 and
+  // 7200 = the new time limit in seconds.
+  timeLimitSeconds?: number | null;
   active?: boolean;
   questions?: IncomingQuestion[];
 };
@@ -113,6 +119,31 @@ export async function saveQuizSchema(
   ) {
     updateSet.passThreshold = Math.round(parsed.passThreshold);
   }
+  // Spec 159 — timeLimitSeconds validation mirrors the DB CHECK
+  // constraint (60..7200) so the editor refuses the same set of values
+  // Postgres would refuse. `null` explicitly clears any existing limit;
+  // an out-of-range number returns an editor error instead of silently
+  // dropping the field (which would have surprised the editor — "I sent
+  // 30 and the save said OK but the field still shows 600").
+  if (parsed.timeLimitSeconds === null) {
+    updateSet.timeLimitSeconds = null;
+  } else if (parsed.timeLimitSeconds !== undefined) {
+    if (
+      typeof parsed.timeLimitSeconds !== "number" ||
+      !Number.isFinite(parsed.timeLimitSeconds) ||
+      !Number.isInteger(parsed.timeLimitSeconds) ||
+      parsed.timeLimitSeconds < 60 ||
+      parsed.timeLimitSeconds > 7200
+    ) {
+      return {
+        ok: false,
+        error: "invalid_time_limit",
+        message:
+          "timeLimitSeconds must be null (untimed) or an integer between 60 (1 min) and 7200 (2 h).",
+      };
+    }
+    updateSet.timeLimitSeconds = parsed.timeLimitSeconds;
+  }
   if (typeof parsed.active === "boolean") {
     updateSet.active = parsed.active;
   }
@@ -143,6 +174,12 @@ export async function saveQuizSchema(
       questionCount: incoming.length,
       title: updateSet.title,
       passThreshold: updateSet.passThreshold,
+      // Spec 159 — record the time-limit change in audit. `undefined`
+      // means the editor didn't touch the field; the audit reader can
+      // tell "explicitly set to null (untimed)" from "left as-is" by
+      // this key being present at all (the key is dropped from the
+      // metadata when undefined per JSON serialization rules).
+      timeLimitSeconds: updateSet.timeLimitSeconds,
       active: updateSet.active,
     },
   });

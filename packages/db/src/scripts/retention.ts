@@ -8,7 +8,8 @@ import "dotenv/config";
 import { lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { pathToFileURL } from "node:url";
+import { basename } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { notifications } from "../schema/notifications";
 
 const RETAIN_DAYS = 90;
@@ -42,7 +43,35 @@ export async function main(): Promise<void> {
 
 // Entry-point guard: only auto-run when invoked directly (e.g. `tsx retention.ts`),
 // not when imported by the worker or by tests.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+//
+// Spec 163 — Workflow Run 15 audit-closure NIT: the strict
+// `import.meta.url === pathToFileURL(...)` equality works under normal
+// invocation but is fragile under symlinks (a `pnpm` symlinked package
+// can have a different absolute path on the two sides of the
+// comparison even though they resolve to the same script). The
+// fallback below compares the BASENAME of both paths so a symlinked
+// script still auto-runs when invoked directly. This is intentionally
+// a defensive net rather than the primary check — the strict equality
+// remains first because it's the only one that catches a same-named
+// script run from a different directory (which is the original guard's
+// purpose).
+function isDirectInvocation(): boolean {
+  const argvPath = process.argv[1];
+  if (!argvPath) return false;
+  // Primary: strict absolute-path equality (the original guard shape).
+  if (import.meta.url === pathToFileURL(argvPath).href) return true;
+  // Fallback: basename equality. Catches the symlink case (pnpm-linked
+  // packages, container bind mounts, etc.) where the two paths point
+  // at the same script but resolve to different absolute paths.
+  try {
+    const selfPath = fileURLToPath(import.meta.url);
+    return basename(selfPath) === basename(argvPath);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectInvocation()) {
   main().catch((err) => {
     console.error("[SM-8 retention] failed:", err);
     process.exit(1);

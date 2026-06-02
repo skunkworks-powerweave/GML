@@ -134,6 +134,20 @@
       "when": 1780586400000,
       "tag": "0018_index_mentor_pairings_teacher",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780629600000,
+      "tag": "0019_quiz_time_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1780672800000,
+      "tag": "0020_password_reset_and_lockout",
+      "breakpoints": true
     }
   ]
 }

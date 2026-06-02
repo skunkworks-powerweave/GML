@@ -155,6 +155,12 @@ export default async function QuizRunnerPage({
     options: Array.isArray(q.options) ? q.options : [],
   }));
 
+  // Spec 159 — optional per-quiz time-limit. The schema field is NULLABLE
+  // and the legacy seed quizzes all carry NULL, so this prop is opt-in
+  // and existing learners see no change. When set, the runner renders
+  // a countdown banner and auto-submits at 00:00.
+  const timeLimitSeconds = quiz.timeLimitSeconds ?? null;
+
   if (device === "mobile") {
     return (
       <main>
@@ -162,6 +168,7 @@ export default async function QuizRunnerPage({
           slug={slug}
           title={quiz.title}
           questions={mappedQuestions}
+          timeLimitSeconds={timeLimitSeconds}
           submitAction={submitQuizAttempt}
         />
       </main>
@@ -183,6 +190,7 @@ export default async function QuizRunnerPage({
         slug={slug}
         title={quiz.title}
         questions={mappedQuestions}
+        timeLimitSeconds={timeLimitSeconds}
         submitAction={submitQuizAttempt}
       />
     </main>

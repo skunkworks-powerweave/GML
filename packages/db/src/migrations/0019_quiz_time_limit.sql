@@ -1,0 +1,34 @@
+-- Spec 159 — Workflow Run 15 audit-closure MISS: quiz time-limit field.
+--
+-- The Workflow Run 14 audit closed CRITICAL/HIGH/MEDIUM findings, but left
+-- one MISS: the quiz schema carries no notion of a per-attempt time limit.
+-- The seed catalogue uses untimed quizzes (the learner can re-open the
+-- runner across sessions and keep picking answers) which is fine for the
+-- low-stakes formative assessments shipped in v1. The audit MISS flagged
+-- this as a gap for the eventual summative assessments — instructors need
+-- a way to say "you have 20 minutes from your first answer" and have the
+-- UI enforce the cap.
+--
+-- This migration adds `time_limit_seconds int` to `quizzes`. The column
+-- is NULLABLE — every legacy row stays untimed and the new field is opt-in
+-- per-quiz from the admin editor (spec 159 ships the editor input
+-- alongside this migration). The DB-layer CHECK constraint enforces the
+-- valid range (60..7200) so a typo in the editor can't ship a 5-second
+-- quiz or an "infinite" 100-hour quiz that exists only to bypass the cap.
+--
+-- Why these bounds:
+--   - 60s floor: anything shorter is a UX trap. The learner can't read a
+--     single 2-line MCQ prompt + 4 options in under a minute on a 2G
+--     handset, and we don't want the editor to ship a quiz that is
+--     impossible to complete.
+--   - 7200s ceiling: the seed quizzes top out at 30 questions × 90s per
+--     question ≈ 45 min. 2h gives comfortable headroom for hypothetical
+--     long-form assessments without becoming an arbitrary "infinite"
+--     value.
+--
+-- No data migration is needed — the column is added as NULL and every
+-- existing quiz becomes untimed. No FK chains, no orphans. The CHECK
+-- constraint is satisfied trivially by all NULL rows. drizzle-kit wraps
+-- the migration in a transaction; the ALTER + CHECK run atomically.
+ALTER TABLE "quizzes" ADD COLUMN "time_limit_seconds" integer;--> statement-breakpoint
+ALTER TABLE "quizzes" ADD CONSTRAINT "quizzes_time_limit_range" CHECK ("quizzes"."time_limit_seconds" IS NULL OR "quizzes"."time_limit_seconds" BETWEEN 60 AND 7200);

@@ -1,7 +1,16 @@
 // RBAC + section-gate dispatcher middleware.
 //
-// Substrate-moat reminder: changes here must not bypass SM-1 (audit log) once
-// the auditing middleware lands in spec 010.
+// Substrate-moat reminder: changes here must not bypass SM-1 (the audit
+// log). The auditing middleware shipped in spec 010 and is wired through
+// the API handlers — see `recordAudit` calls in apps/web/src/app/api/**.
+// Any new branch added below that bypasses an API call must explicitly
+// consider whether SM-1 coverage is still preserved on the bypassed path.
+//
+// Spec 163 — Workflow Run 15 audit-closure NIT: the previous comment
+// at this position promised the auditing middleware was still
+// inbound — but that promise was stale (the relevant phase-1 spec
+// shipped long ago). Replaced with the up-to-date note above so a
+// future reader isn't sent looking for a non-existent gap.
 //
 // Spec 150 (Workflow Run 14 audit-closure, MEDIUM): the auth-failure path is
 // split into two distinct response shapes so observers (humans and tools)

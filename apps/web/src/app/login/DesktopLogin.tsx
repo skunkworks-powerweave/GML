@@ -218,7 +218,9 @@ export function DesktopLogin() {
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
                   <span style={{ color: "var(--ink-2)", fontWeight: 500 }}>{tAction("password")}</span>
-                  <Link href="#" style={{ fontSize: 11 }}>{tAction("forgotPassword")}</Link>
+                  {/* Spec 161 — wires the previously-stubbed `#` href to
+                      the /login/forgot page (added by this spec). */}
+                  <Link href="/login/forgot" style={{ fontSize: 11 }}>{tAction("forgotPassword")}</Link>
                 </div>
                 <input
                   name="password"

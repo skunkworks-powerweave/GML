@@ -9,7 +9,7 @@
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, asc, eq, gte, isNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   subjects,
@@ -42,10 +42,18 @@ function chipClassForColor(hex: string | null): string {
   }
 }
 
+// Spec 158 — repo-search-bar contract: ?q= name filter, 200-char cap,
+// escape ILIKE wildcards so a literal "%" / "_" in the query doesn't
+// become a pattern character.
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 export default async function RepoSubjectsIndexPage({
   searchParams,
 }: {
-  searchParams: Promise<{ grade?: string }>;
+  searchParams: Promise<{ grade?: string; q?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -58,6 +66,9 @@ export default async function RepoSubjectsIndexPage({
     Number.isInteger(gradeParsed) && gradeParsed >= 1 && gradeParsed <= 12
       ? gradeParsed
       : null;
+  // Spec 158 — name search on subjects.name.
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   const conds: SQL[] = [eq(subjects.active, true)];
   if (gradeFilter !== null) {
@@ -70,6 +81,8 @@ export default async function RepoSubjectsIndexPage({
       or(isNull(subjects.gradesMax), gte(subjects.gradesMax, gradeFilter))!,
     );
   }
+  // Spec 158 — combine the new name search filter via and(...).
+  if (qFilter) conds.push(ilike(subjects.name, `%${escapeIlike(qFilter)}%`));
 
   // One round-trip: subjects + grouped counts via correlated subqueries.
   // Aggregates are evaluated per-row in Postgres; ~9 subjects so cost is O(1).
@@ -119,6 +132,21 @@ export default async function RepoSubjectsIndexPage({
           className="card"
           style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
         >
+          {/* Spec 158 — name search input. Submits with the grade filter
+              so the URL is one bookmarkable shareable state. */}
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Name
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search subjects by name"
+              title="Search subjects by name"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
+          </label>
           <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
             Grade
           </span>
@@ -138,13 +166,13 @@ export default async function RepoSubjectsIndexPage({
           <button type="submit" className="btn btn-sm">
             Apply
           </button>
-          {gradeFilter !== null ? (
+          {(gradeFilter !== null || qFilter) ? (
             <Link
               href="/repo/subjects"
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Reset
+              Clear
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>

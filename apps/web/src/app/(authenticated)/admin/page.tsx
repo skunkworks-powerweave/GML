@@ -86,6 +86,17 @@ export default async function AdminIndexPage() {
               </div>
             </Link>
           </li>
+          <li>
+            <Link
+              href="/admin/transcode-jobs"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">Transcode jobs</div>
+              <div className="text-xs text-neutral-500">
+                Inspect the BullMQ DLQ · retry or drop failed transcodes (spec 162)
+              </div>
+            </Link>
+          </li>
         </ul>
       </section>
     </main>

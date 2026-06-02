@@ -146,9 +146,16 @@ export const transcodeJobs = pgTable(
       "transcode_jobs_profile_check",
       sql`${t.profile} IN ('480p')`,
     ),
+    // Spec 162 — Adds 'dropped' as a terminal status used by the /admin/transcode-jobs
+    // DLQ-admin view. 'dropped' means an operator looked at a permanently
+    // failed job and decided NOT to retry it (e.g. the source video was
+    // unusable / corrupted / off-topic). This is a manual operator decision
+    // distinct from 'failed' (BullMQ ran out of retries) and 'cancelled'
+    // (programmatic abort): once 'dropped', the job is excluded from retry
+    // queries and the BullMQ DLQ entry is removed alongside.
     check(
       "transcode_jobs_status_check",
-      sql`${t.status} IN ('queued','running','succeeded','failed','cancelled')`,
+      sql`${t.status} IN ('queued','running','succeeded','failed','cancelled','dropped')`,
     ),
   ],
 );

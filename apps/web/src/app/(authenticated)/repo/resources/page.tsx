@@ -12,7 +12,7 @@
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources, resourceSubjects, subjects } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -38,10 +38,18 @@ const KIND_FILTERS = [
 ] as const;
 type KindFilter = (typeof KIND_FILTERS)[number];
 
+// Spec 158 — repo-search-bar contract: ?q= name filter, 200-char cap,
+// escape ILIKE wildcards so a literal "%" / "_" in the query doesn't
+// become a pattern character.
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 export default async function RepoResourcesIndexPage({
   searchParams,
 }: {
-  searchParams: Promise<{ kind?: string }>;
+  searchParams: Promise<{ kind?: string; q?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -52,6 +60,9 @@ export default async function RepoResourcesIndexPage({
   )
     ? (sp.kind as KindFilter)
     : undefined;
+  // Spec 158 — name search on resources.name.
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   // One round-trip: resources + per-row jsonb_agg of (id, name) subject pairs.
   // Eval'd per row in Postgres; library is <500 docs in practice so cost is fine.
@@ -75,10 +86,15 @@ export default async function RepoResourcesIndexPage({
       )`.as("subjects_agg"),
     })
     .from(resources)
+    // Spec 158 — combine the existing kind filter with the new ?q= name
+    // search via and(...). Empty filters fall through.
     .where(
-      kindFilter
-        ? and(eq(resources.active, true), eq(resources.kind, kindFilter))
-        : eq(resources.active, true),
+      (() => {
+        const conds: SQL[] = [eq(resources.active, true)];
+        if (kindFilter) conds.push(eq(resources.kind, kindFilter));
+        if (qFilter) conds.push(ilike(resources.name, `%${escapeIlike(qFilter)}%`));
+        return conds.length === 1 ? conds[0] : and(...conds);
+      })(),
     )
     .orderBy(desc(resources.updatedAt))
     .limit(200);
@@ -110,22 +126,67 @@ export default async function RepoResourcesIndexPage({
         </p>
       </div>
       <div className="page-body">
+        {/* Spec 158 — name search bar. Inline above the filter pills so it
+            sits at the top of the card just like the other repo indexes.
+            Preserves the active kind filter via hidden input. */}
+        <form
+          method="GET"
+          action="/repo/resources"
+          className="card"
+          style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}
+        >
+          {kindFilter ? <input type="hidden" name="kind" value={kindFilter} /> : null}
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Name
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search resources by name"
+              title="Search resources by name"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
+          </label>
+          <button type="submit" className="btn btn-sm">
+            Search
+          </button>
+          {qFilter ? (
+            <Link
+              href={kindFilter ? `/repo/resources?kind=${encodeURIComponent(kindFilter)}` : "/repo/resources"}
+              className="btn btn-sm"
+              style={{ textDecoration: "none" }}
+            >
+              Clear
+            </Link>
+          ) : null}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <span className="chip">{rows.length} shown</span>
+          </div>
+        </form>
         <section style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
           <FilterPill
-            href="/repo/resources"
+            href={qFilter ? `/repo/resources?q=${encodeURIComponent(qFilter)}` : "/repo/resources"}
             active={!kindFilter}
             label="All"
             count={totalActive}
           />
-          {KIND_FILTERS.map((k) => (
-            <FilterPill
-              key={k}
-              href={`/repo/resources?kind=${encodeURIComponent(k)}`}
-              active={kindFilter === k}
-              label={k}
-              count={countMap.get(k) ?? 0}
-            />
-          ))}
+          {KIND_FILTERS.map((k) => {
+            // Spec 158 — preserve `q` across kind-pill clicks.
+            const qs = new URLSearchParams();
+            qs.set("kind", k);
+            if (qFilter) qs.set("q", qFilter);
+            return (
+              <FilterPill
+                key={k}
+                href={`/repo/resources?${qs.toString()}`}
+                active={kindFilter === k}
+                label={k}
+                count={countMap.get(k) ?? 0}
+              />
+            );
+          })}
         </section>
 
         {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}

@@ -25,10 +25,27 @@
 // finite-number guard; unknown / unsupported → skip silently. The skipped
 // filters are logged in `appliedFilters._skipped` so the audit-trail of a
 // PII-audited entity (SM-9) still records the user's intent.
+//
+// Spec 157 (admin-grid-sort-and-bulk-delete, Workflow Run 15 MISS closure) —
+// adds two features the JSX prototype carried but the v1 grid missed:
+//   (1) Sortable columns. URL-driven `?sort=<col>&dir=<asc|desc>`. Whitelist
+//       the sortable column to `entity.displayColumns[].key` so a user
+//       cannot inject SQL via the search param. Default sort is
+//       `createdAt DESC` when the table has that column, falling back to
+//       `id ASC`. Each <th> header becomes a button that navigates to the
+//       same page with the new sort params.
+//   (2) Bulk row select + delete. A leftmost checkbox column per row plus a
+//       header "select all" checkbox feed a small client island
+//       (bulk-toolbar.tsx::BulkSelectionProvider). A sticky toolbar above
+//       the table renders "Delete N selected" when ≥1 row is checked. The
+//       server action `bulkDeleteAction` runs DELETE in a single transaction
+//       and audits `admin.row.bulk_delete` with count + ids[0..5] in metadata.
+//   Sort + bulk delete are role-gated identically to the existing single-row
+//   delete (entity.mutateRoles via mutateRolesFor in actions.ts).
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { and, eq, ilike, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
@@ -38,6 +55,12 @@ import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
+import {
+  BulkDeleteToolbar,
+  BulkRowCheckbox,
+  BulkSelectAllCheckbox,
+  BulkSelectionProvider,
+} from "./bulk-toolbar";
 
 export const dynamic = "force-dynamic";
 
@@ -215,6 +238,28 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     editRow = editRows[0];
   }
 
+  // Spec 157: sort param parsing. Whitelist the `sort` column to one of the
+  // entity.displayColumns[].key values so a malicious user cannot inject SQL
+  // via the search param. Default sort is `createdAt DESC` when the table
+  // carries that column (every v2 table does), falling back to `id ASC`.
+  const rawSort = typeof sp.sort === "string" ? sp.sort : Array.isArray(sp.sort) ? sp.sort[0] : undefined;
+  const rawDir = typeof sp.dir === "string" ? sp.dir : Array.isArray(sp.dir) ? sp.dir[0] : undefined;
+  const sortableKeys = new Set(entity.displayColumns.map((c) => c.key));
+  const hasCreatedAt = "createdAt" in tableColumns;
+  const sortKey =
+    rawSort && sortableKeys.has(rawSort)
+      ? rawSort
+      : hasCreatedAt
+        ? "createdAt"
+        : "id";
+  const sortDir: "asc" | "desc" =
+    rawDir === "asc" || rawDir === "desc"
+      ? rawDir
+      : sortKey === "createdAt"
+        ? "desc"
+        : "asc";
+  const sortCol = tableColumns[sortKey] ?? tableColumns["id"];
+
   // Drizzle's loose table typing here is acceptable for the generic grid path.
   // Specific admin views (spec 047+) can replace this with typed selects.
   const baseQuery = db.select().from(entity.table as never);
@@ -222,7 +267,10 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     whereClauses.length > 0
       ? baseQuery.where(whereClauses.length === 1 ? whereClauses[0]! : and(...whereClauses)!)
       : baseQuery;
-  const rows = (await filteredQuery.limit(PAGE_SIZE).offset(offset)) as Record<string, unknown>[];
+  const sortedQuery = sortCol
+    ? filteredQuery.orderBy((sortDir === "desc" ? desc : asc)(sortCol as never))
+    : filteredQuery;
+  const rows = (await sortedQuery.limit(PAGE_SIZE).offset(offset)) as Record<string, unknown>[];
 
   // SM-9 enforcement: PII-bearing entities (e.g. learners) must record every
   // server-side read in the audit log. recordAudit is fire-and-forget so a
@@ -255,15 +303,45 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     return String(v);
   };
 
-  // Preserve filter querystring on pagination links.
+  // Preserve filter + sort querystring on pagination links (spec 157).
   const buildPageHref = (page: number) => {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(appliedFilters)) {
       params.set(`filter[${k}]`, v);
     }
+    if (rawSort && sortableKeys.has(rawSort)) params.set("sort", sortKey);
+    if (rawDir === "asc" || rawDir === "desc") params.set("dir", sortDir);
     params.set("page", String(page));
     return `?${params.toString()}`;
   };
+
+  // Spec 157: build a sort link for a column header. Clicking cycles between
+  // asc / desc (same column toggle) or sets a new column (default asc, or
+  // desc for createdAt to keep recent rows on top).
+  const buildSortHref = (colKey: string) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(appliedFilters)) {
+      params.set(`filter[${k}]`, v);
+    }
+    const nextDir: "asc" | "desc" =
+      sortKey === colKey
+        ? sortDir === "asc"
+          ? "desc"
+          : "asc"
+        : colKey === "createdAt"
+          ? "desc"
+          : "asc";
+    params.set("sort", colKey);
+    params.set("dir", nextDir);
+    return `?${params.toString()}`;
+  };
+
+  // Row ids for the bulk-select client island. We compute server-side so the
+  // "select all" checkbox knows which ids are currently rendered (page slice,
+  // post-filter, post-sort).
+  const allRowIds = rows
+    .map((r) => (r.id != null ? String(r.id) : ""))
+    .filter(Boolean);
 
   return (
     <main className="mx-auto max-w-6xl p-6">
@@ -379,20 +457,56 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
         style={device === "mobile" ? { display: "none" } : undefined}
         aria-hidden={device === "mobile"}
       >
-        <div className="overflow-x-auto">
+        <BulkSelectionProvider allRowIds={allRowIds}>
+          {/* Spec 157: sticky bulk-action toolbar — only visible when ≥1 row is selected. */}
+          <BulkDeleteToolbar entitySlug={slug} />
+          <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
               <tr>
-                {entity.displayColumns.map((c) => (
-                  <th key={c.key} className="px-3 py-2 font-medium">{c.label}</th>
-                ))}
+                {/* Spec 157: select-all checkbox column. */}
+                <th
+                  scope="col"
+                  className="w-8 px-3 py-2 font-medium"
+                  data-bulk-select-col="true"
+                >
+                  <BulkSelectAllCheckbox />
+                </th>
+                {entity.displayColumns.map((c) => {
+                  const isActive = sortKey === c.key;
+                  const arrow = isActive ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+                  return (
+                    <th
+                      key={c.key}
+                      scope="col"
+                      className="px-3 py-2 font-medium"
+                      aria-sort={
+                        isActive
+                          ? sortDir === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                    >
+                      <Link
+                        href={buildSortHref(c.key)}
+                        role="button"
+                        data-sort-header={c.key}
+                        className="inline-flex items-center gap-1 hover:text-neutral-900"
+                      >
+                        {c.label}
+                        <span aria-hidden="true">{arrow}</span>
+                      </Link>
+                    </th>
+                  );
+                })}
                 <th className="px-3 py-2 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={entity.displayColumns.length + 1} className="px-3 py-8 text-center text-neutral-500">
+                  <td colSpan={entity.displayColumns.length + 2} className="px-3 py-8 text-center text-neutral-500">
                     {Object.keys(appliedFilters).length > 0
                       ? "No rows match the active filters. Clear filters to see everything."
                       : "No rows yet. Add one above."}
@@ -404,6 +518,10 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                   const rowLabel = entity.describeRow?.(row);
                   return (
                     <tr key={rowId || i} className="border-t border-neutral-100">
+                      {/* Spec 157: per-row bulk-select checkbox. */}
+                      <td className="px-3 py-2">
+                        {rowId ? <BulkRowCheckbox rowId={rowId} /> : null}
+                      </td>
                       {entity.displayColumns.map((c) => (
                         <td key={c.key} className="px-3 py-2">{fmt(c, row)}</td>
                       ))}
@@ -450,6 +568,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             )}
           </div>
         </nav>
+        </BulkSelectionProvider>
       </section>
     </main>
   );

@@ -7,7 +7,7 @@
 // filtered view is bookmarkable and the WHERE clause runs in Postgres.
 
 import Link from "next/link";
-import { and, asc, eq, type SQL } from "drizzle-orm";
+import { and, asc, eq, ilike, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { courseOutlines, subjects, teachers } from "@gml/db/schema";
 // Spec 138 — mobile card-list fallback (desktop keeps the 9-col table).
@@ -25,7 +25,15 @@ const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
 
 const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "archived"]);
 
-type SearchParams = Promise<{ grade?: string; term?: string; status?: string }>;
+// Spec 158 — repo-search-bar contract: ?q= name filter, 200-char cap,
+// escape ILIKE wildcards so a literal "%" / "_" in the query doesn't
+// become a pattern character.
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+type SearchParams = Promise<{ grade?: string; term?: string; status?: string; q?: string }>;
 
 export default async function RepoOutlinesIndexPage({
   searchParams,
@@ -47,11 +55,16 @@ export default async function RepoOutlinesIndexPage({
       : null;
 
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : null;
+  // Spec 158 — name search on courseOutlines.name.
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   const conds: SQL[] = [];
   if (gradeFilter !== null) conds.push(eq(courseOutlines.grade, gradeFilter));
   if (termFilter !== null) conds.push(eq(courseOutlines.term, termFilter));
   if (statusFilter !== null) conds.push(eq(courseOutlines.status, statusFilter));
+  // Spec 158 — combine the new ?q= filter via and(...).
+  if (qFilter) conds.push(ilike(courseOutlines.name, `%${escapeIlike(qFilter)}%`));
 
   const rows = await db
     .select({
@@ -94,6 +107,21 @@ export default async function RepoOutlinesIndexPage({
           className="card"
           style={{ padding: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}
         >
+          {/* Spec 158 — name search input. Submits alongside grade/term/
+              status so a single Apply call refreshes the URL state. */}
+          <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+            Name
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search outlines by name"
+              title="Search outlines by name"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
+          </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
             Grade
             <select
@@ -145,13 +173,13 @@ export default async function RepoOutlinesIndexPage({
           <button type="submit" className="btn btn-sm">
             Apply
           </button>
-          {(gradeFilter !== null || termFilter !== null || statusFilter !== null) ? (
+          {(gradeFilter !== null || termFilter !== null || statusFilter !== null || qFilter) ? (
             <Link
               href="/repo/outlines"
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Reset
+              Clear
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>

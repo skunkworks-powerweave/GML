@@ -21,7 +21,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lte, sql, type SQL } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@gml/db";
 import { sessions, schools, classes, subjects, teachers } from "@gml/db/schema";
@@ -50,6 +50,14 @@ const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "cancelled"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Spec 158 — repo-search-bar contract: ?q= filters on sessions.topic
+// (sessions don't have a "name"; topic is the primary user-visible
+// label). 200-char cap + escape ILIKE wildcards.
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 // Spec 153 — accept only well-formed ISO yyyy-mm-dd strings AND validate the
 // calendar values (month 1-12, day in range for the month). Postgres would
 // otherwise throw on the date-column cast with a malformed value, surfacing
@@ -72,6 +80,7 @@ type SearchParams = Promise<{
   subject?: string;
   from?: string;
   to?: string;
+  q?: string;
 }>;
 
 export default async function RepoSessionsIndex({
@@ -92,6 +101,9 @@ export default async function RepoSessionsIndex({
   // calendar day, or after the Date round-trip normalisation diverges).
   const fromFilter = parseIsoDateFilter(sp.from);
   const toFilter = parseIsoDateFilter(sp.to);
+  // Spec 158 — topic search on sessions.topic.
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   // Build the WHERE clause server-side. We compare scheduled_date (date
   // column) against ISO yyyy-mm-dd strings — Postgres handles the cast.
@@ -100,6 +112,8 @@ export default async function RepoSessionsIndex({
   if (subjectFilter !== "all") conds.push(eq(sessions.subjectId, subjectFilter));
   if (fromFilter) conds.push(gte(sessions.scheduledDate, fromFilter));
   if (toFilter) conds.push(lte(sessions.scheduledDate, toFilter));
+  // Spec 158 — combine the topic filter via and(...).
+  if (qFilter) conds.push(ilike(sessions.topic, `%${escapeIlike(qFilter)}%`));
 
   const visible = await db
     .select({
@@ -188,6 +202,8 @@ export default async function RepoSessionsIndex({
               if (subjectFilter !== "all") qs.set("subject", subjectFilter);
               if (fromFilter) qs.set("from", fromFilter);
               if (toFilter) qs.set("to", toFilter);
+              // Spec 158 — preserve the active topic search across status-tab clicks.
+              if (qFilter) qs.set("q", qFilter);
               const q = qs.toString();
               const href = q ? `/repo/sessions?${q}` : "/repo/sessions";
               return (
@@ -214,6 +230,19 @@ export default async function RepoSessionsIndex({
 
           <form method="GET" action="/repo/sessions" style={{ display: "contents" }}>
             {statusFilter !== "all" ? <input type="hidden" name="status" value={statusFilter} /> : null}
+            {/* Spec 158 — topic search input. Submits alongside the
+                existing subject/from/to fields so the URL is one shareable
+                state. */}
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search sessions by topic"
+              title="Search sessions by topic"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
             <select
               name="subject"
               defaultValue={subjectFilter}
@@ -246,6 +275,23 @@ export default async function RepoSessionsIndex({
             <button type="submit" className="btn btn-sm">
               Apply
             </button>
+            {qFilter ? (
+              <Link
+                href={(() => {
+                  const qs = new URLSearchParams();
+                  if (statusFilter !== "all") qs.set("status", statusFilter);
+                  if (subjectFilter !== "all") qs.set("subject", subjectFilter);
+                  if (fromFilter) qs.set("from", fromFilter);
+                  if (toFilter) qs.set("to", toFilter);
+                  const q = qs.toString();
+                  return q ? `/repo/sessions?${q}` : "/repo/sessions";
+                })()}
+                className="btn btn-sm"
+                style={{ textDecoration: "none" }}
+              >
+                Clear
+              </Link>
+            ) : null}
           </form>
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>

@@ -14,6 +14,11 @@ import { getDeviceType } from "@/lib/device";
 import { DesktopLogin } from "./DesktopLogin";
 import { MobileLogin } from "./MobileLogin";
 
+// Spec 161 — the credentials forms inside DesktopLogin / MobileLogin now
+// link to /login/forgot for the password-reset flow. This page itself
+// remains a thin device-router; the link wiring lives one level down so
+// the device shells can present the link in their own style language.
+
 export default async function LoginPage() {
   const device = await getDeviceType();
   return device === "mobile" ? <MobileLogin /> : <DesktopLogin />;

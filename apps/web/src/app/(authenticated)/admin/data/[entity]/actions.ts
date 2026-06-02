@@ -12,11 +12,11 @@
 // SM-1 + spec 021 convention.
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
-import { withAudit } from "@/lib/audit";
+import { recordAudit, withAudit } from "@/lib/audit";
 
 export type AdminActionState = {
   ok?: boolean;
@@ -211,5 +211,67 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
   } catch (err) {
     console.error("[admin.row.delete] failed", err);
   }
+  revalidatePath(`/admin/data/${slug}`);
+}
+
+/**
+ * Server action: bulk-delete N rows in a single transaction.
+ *
+ * Spec 157 — admin grid bulk select + delete. The client toolbar
+ * (bulk-toolbar.tsx::BulkDeleteToolbar) appends every selected rowId to the
+ * FormData under the repeated key "rowIds", then posts here. We:
+ *
+ *   1. Role-gate identically to deleteRowAction (mutateRolesFor(entity)).
+ *   2. Run DELETE ... WHERE id IN (...) inside `db.transaction(...)` so
+ *      either every row is deleted or none are.
+ *   3. Audit "admin.row.bulk_delete" AFTER the transaction commits (same
+ *      commit-then-audit shape as spec 148 / spec 152). Metadata carries
+ *      the count and the first ≤5 ids — enough to investigate the action
+ *      from the audit log without leaking a 200-id payload.
+ *
+ * Re-uses recordAudit() rather than withAudit() because withAudit() wraps a
+ * single op with implicit success/failure logging; we want the audit row to
+ * land only on commit (the bulk op is atomic, so a failure halfway through
+ * rolls everything back and there's no inconsistent state to audit).
+ */
+export async function bulkDeleteAction(formData: FormData): Promise<void> {
+  const slug = String(formData.get("entitySlug") ?? "");
+  const rowIds = formData.getAll("rowIds").map(String).filter(Boolean);
+  if (!slug || rowIds.length === 0) return;
+
+  const entity = getEntityOrThrow(slug);
+  await requireRole(mutateRolesFor(entity));
+
+  const idCol = (entity.table as unknown as { id: unknown }).id;
+  let deletedCount = 0;
+
+  try {
+    await db.transaction(async (tx) => {
+      // Single DELETE ... WHERE id IN (...) — atomic, one round-trip.
+      // Drizzle's `inArray` builds the correct parameterised SQL list.
+      await tx
+        .delete(entity.table as never)
+        .where(inArray(idCol as never, rowIds as never[]));
+      deletedCount = rowIds.length;
+    });
+  } catch (err) {
+    console.error("[admin.row.bulk_delete] transaction failed", err);
+    return;
+  }
+
+  // Commit-then-audit. The audit row lands only on a successful commit —
+  // a tx rollback never leaves a phantom audit entry.
+  void recordAudit({
+    action: "admin.row.bulk_delete",
+    entityType: entity.slug,
+    metadata: {
+      op: "bulk_delete",
+      count: deletedCount,
+      // First 5 ids for traceability. A full N-id dump can blow the metadata
+      // JSON column on big selections; 5 is enough to spot-check.
+      ids: rowIds.slice(0, 5),
+    },
+  });
+
   revalidatePath(`/admin/data/${slug}`);
 }
