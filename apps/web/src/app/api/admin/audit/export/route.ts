@@ -46,7 +46,7 @@ import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { recordAudit } from "@/lib/audit";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
 
 export const dynamic = "force-dynamic";
@@ -123,9 +123,14 @@ export async function GET(req: Request) {
     );
   }
 
-  // Audit the export itself — best-effort `void` so audit-insert failure
-  // never blocks the user-facing 200.
-  void recordAudit({
+  // Spec 167 — HIGH-STAKES audit. Recursively meta: exporting the audit log
+  // itself is a privileged operation whose own audit row is the only record
+  // anyone can use to detect that someone read the audit log. If the insert
+  // fails we noteAuditDegraded() (logs the miss + bumps the process counter)
+  // but still return the CSV — failing the response would leave the operator
+  // with no exfiltrated data and a one-line stderr message, which is worse
+  // than the captured-degraded state we're flagging.
+  const auditOk = await recordAudit({
     action: "audit.bulk_export",
     entityType: "audit_log",
     metadata: {
@@ -139,6 +144,9 @@ export async function GET(req: Request) {
       },
     },
   });
+  if (!auditOk) {
+    noteAuditDegraded("/api/admin/audit/export");
+  }
 
   // Shape rows into the documented CSV columns. JSON metadata is stringified
   // so it survives the flat CSV cell.

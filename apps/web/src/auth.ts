@@ -1,4 +1,4 @@
-import NextAuth, { type DefaultSession } from "next-auth";
+import NextAuth, { type DefaultSession, CredentialsSignin } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Nodemailer from "next-auth/providers/nodemailer";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -8,6 +8,20 @@ import { users, accounts, authSessions, verificationTokens } from "@gml/db/schem
 import { verifyPassword } from "@/lib/password";
 import { rateLimit } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
+
+// Spec 170 — Workflow Run 16 post-audit hardening. The forbidden page
+// renders different copy depending on WHY the auth failed. The
+// authorize() callback below distinguishes the locked-account case
+// (where retry-after copy applies) from the bad-credentials case
+// (where generic "wrong email or password" copy applies) by THROWING
+// `AccountLockedError` for the lockout path. The loginAction in
+// app/login/actions.ts catches this distinct class and redirects to
+// `/forbidden?reason=locked` rather than re-rendering the login page
+// with a generic error. The class extends CredentialsSignin so the
+// next-auth signIn pipeline still propagates it as an AuthError.
+export class AccountLockedError extends CredentialsSignin {
+  code = "account_locked";
+}
 
 // Spec 141: never let a raw IP leak into the audit log; mask the last octet
 // (v4) or the last hextet (v6). The audit row still carries enough to count
@@ -126,6 +140,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         // attempt so post-hoc investigation can see the lockout was
         // honoured — `auth.account.locked_attempt` is the contracted
         // action name.
+        //
+        // Spec 170 — throw AccountLockedError so the loginAction can
+        // distinguish this from a bad-credentials failure and redirect
+        // to `/forbidden?reason=locked` (which renders retry-after copy)
+        // rather than re-rendering the login page with a generic
+        // "wrong password" string. The audit row still fires below
+        // before the throw so SM-1 coverage is preserved.
         if (user.lockedUntil && user.lockedUntil > new Date()) {
           void recordAudit({
             userId: user.id,
@@ -135,7 +156,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             ipOverride: ip,
             metadata: { ipMasked: maskIp(ip), until: user.lockedUntil.toISOString() },
           });
-          return null;
+          throw new AccountLockedError();
         }
 
         const ok = await verifyPassword(password, user.passwordHash);

@@ -273,18 +273,23 @@ test("spec 158 — native HTML method='GET' form submission across all 7 pages",
   }
 });
 
-test("spec 158 — /repo/students is intentionally NOT touched by this spec", () => {
-  // SM-9 audits every render of /repo/students; adding a search would
-  // flood the audit log. The spec excludes it explicitly. This test
-  // pins the exclusion so a future contributor who adds the search
-  // there gets a red light first.
+test("spec 158 — /repo/students name-search is allowed ONLY when audit dedup is wired", () => {
+  // SM-9 audits every render of /repo/students; adding an un-deduped search
+  // would flood the audit log (a user typing "kunzang" letter-by-letter
+  // produces 7 audit rows). Originally this assertion pinned the absence of
+  // the ilike-on-name predicate entirely. Spec 168 (half-wired-features-
+  // finish) added the search anyway and protects the audit log via
+  // recordAuditDedup — one row per (user × query × hour). This test now
+  // enforces the LOOSENED contract: the page MAY carry an ilike on
+  // learners.name, but ONLY IF it also calls recordAuditDedup (or doesn't
+  // carry the search at all). A future contributor who adds the search
+  // without the dedup helper still gets a red light first.
   const STUDENTS_PATH = "apps/web/src/app/(authenticated)/repo/students/page.tsx";
   const src = read(STUDENTS_PATH);
-  // The page MUST NOT declare an ilike-on-name predicate without also
-  // wiring per-query audit dedup. Pinning the absence of the literal
-  // ilike(learners.name pattern.
+  const hasIlikeOnName = /ilike\(\s*learners\.name/.test(src);
+  const hasAuditDedup = /recordAuditDedup\s*\(/.test(src);
   assert.ok(
-    !/ilike\(\s*learners\.name/.test(src),
-    "/repo/students must NOT carry an ilike on learners.name without per-query audit dedup (out of scope for spec 158)",
+    !hasIlikeOnName || hasAuditDedup,
+    "/repo/students may carry ilike(learners.name, …) ONLY when recordAuditDedup is also called (spec 168) — adding the search without dedup floods the SM-9 audit log",
   );
 });

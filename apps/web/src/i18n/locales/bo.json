@@ -106,5 +106,26 @@
     "bhoti": "བོད་ཡིག",
     "pickerLabel": "སྐད་ཡིག",
     "ladakhi": "ལ་དྭགས་སྐད།"
+  },
+  "login": {
+    "forgot": {
+      "title": "",
+      "email_label": "",
+      "submit_label": "",
+      "smtp_unavailable": ""
+    },
+    "reset": {
+      "title": "",
+      "new_password_label": "",
+      "submit_label": "",
+      "token_expired": ""
+    }
+  },
+  "forbidden": {
+    "title": "",
+    "locked": "",
+    "smtp_unconfigured": "",
+    "session_expired": "",
+    "default": ""
   }
 }

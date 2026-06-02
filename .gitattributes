@@ -1,0 +1,30 @@
+# Spec 166 — repo-wide line-ending and binary-file declarations.
+#
+# The default rule normalises all text to LF in the repo (working-tree
+# line endings stay platform-native on checkout via the developer's
+# core.autocrlf setting — Windows contributors don't see jagged diffs).
+# The binary pins below stop Git from trying to convert / diff /
+# auto-merge file formats that are not text.
+
+* text=auto eol=lf
+
+# ── Documents / images ────────────────────────────────────────────────
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+
+# ── Video ─────────────────────────────────────────────────────────────
+*.mp4 binary
+*.mov binary
+*.webm binary
+
+# ── Fonts ─────────────────────────────────────────────────────────────
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# ── Archives ──────────────────────────────────────────────────────────
+*.zip binary
+*.gz binary

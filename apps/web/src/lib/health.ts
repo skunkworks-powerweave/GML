@@ -37,15 +37,20 @@ export async function pingDb(): Promise<PingResult> {
 }
 
 export async function pingRedis(): Promise<PingResult> {
+  // Spec 170 — Workflow Run 16 post-audit hardening. /api/health now
+  // shares the same ioredis client as the rate limiter (and any other
+  // direct-redis call site) via `getRedis()` from ./redis. Previously
+  // this function built its own one-shot client per probe, which
+  // (a) opened a second TCP connection on every health check and
+  // (b) had its own subtly-different defaults (connectTimeout: 2000,
+  // maxRetriesPerRequest: 1) divergent from the rate limiter. The
+  // singleton consolidates the connection surface.
   const url = process.env.REDIS_URL;
   if (!url) return { ok: false, detail: "REDIS_URL not set" };
   try {
-    const { default: Redis } = await import("ioredis");
-    const client = new Redis(url, { connectTimeout: 2000, maxRetriesPerRequest: 1, lazyConnect: true });
-    await client.connect();
-    const pong = await client.ping();
-    await client.quit();
-    return { ok: pong === "PONG" };
+    const { pingRedis: ping } = await import("./redis");
+    const r = await ping();
+    return r.ok ? { ok: true } : { ok: false, detail: r.error };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

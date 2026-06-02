@@ -1,88 +1,38 @@
-// Spec 161 — /login/forgot page. Standalone form that POSTs the user's email
-// to /api/auth/forgot-password and renders a generic "if this email matches
-// an account, we sent a link" success state regardless of whether the email
-// actually resolved to a user. The no-enumeration contract is enforced at
-// the API layer (route.ts always returns 200); this page mirrors it in copy
-// so an attacker tabbing through the form can't distinguish a real teacher
-// email from a typo by reading the response.
+// Spec 161 — /login/forgot page. Server component that reads SMTP_HOST at
+// render time, then either:
+//   (a) Renders a yellow banner explaining that password reset is
+//       unavailable on deployments where SMTP_HOST is unset, or
+//   (b) Renders the client-side ForgotPasswordForm that POSTs the email
+//       to /api/auth/forgot-password.
 //
-// The "Back to login" link sits below the form so a user who tabbed here by
-// mistake can return without losing their pre-auth locale cookie (which is
-// scoped to `/`, not `/login`, so it survives the navigation).
+// Spec 168 (SMTP-aware UX) — the previous version was a single client
+// component that rendered the form unconditionally. Operators running
+// without an outbound SMTP relay (the LAN-only Ladakh deployment
+// scenario) would type their email, see "Check your email", and never
+// receive anything because the API silently no-ops the send when no
+// transporter is configured. The route still returns 200 regardless of
+// whether the email actually fired (no-enumeration contract), but the
+// page now surfaces the truth up-front so the user contacts their
+// programme admin instead of waiting for an email that will never come.
+//
+// The /api/auth/forgot-password POST route still returns 200 in BOTH
+// branches — the SMTP banner is purely a UX affordance, not a security
+// signal. An attacker probing the API directly still gets the same
+// no-enumeration shape regardless of whether SMTP_HOST is set.
 
-"use client";
-
-import { useState } from "react";
 import Link from "next/link";
+import { ForgotPasswordForm } from "./ForgotPasswordForm";
+
+export const dynamic = "force-dynamic";
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
-    setPending(true);
-    try {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim().toLowerCase() }),
-      });
-      // Spec 161 — the API is intentionally non-leaky: 200 on success, 200
-      // even if the email doesn't resolve to a user. The page therefore
-      // shows the same success state for both. A 429 (rate-limit) is the
-      // only signal the user can distinguish — we surface that as a
-      // generic "try again later" so the failure mode is recoverable
-      // without leaking which emails are real.
-      if (res.status === 429) {
-        setError("Too many requests. Please wait an hour and try again.");
-      } else if (!res.ok) {
-        setError("Something went wrong. Please try again.");
-      } else {
-        setSubmitted(true);
-      }
-    } catch {
-      setError("Network error — please try again.");
-    } finally {
-      setPending(false);
-    }
-  }
-
-  if (submitted) {
-    return (
-      <div
-        style={{
-          minHeight: "100dvh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 24,
-          background: "var(--paper)",
-        }}
-      >
-        <div style={{ maxWidth: 420, width: "100%" }}>
-          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginBottom: 12 }}>Check your email</h1>
-          <p
-            data-testid="forgot-password-success"
-            role="status"
-            style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.5 }}
-          >
-            If an account exists for that email address, we have sent a password reset link. The link
-            expires in 30 minutes.
-          </p>
-          <Link
-            href="/login"
-            style={{ display: "inline-block", marginTop: 24, fontSize: 13, color: "var(--ink)" }}
-          >
-            ← Back to sign in
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  // Spec 168 — read SMTP_HOST at render time on the server. We DON'T
+  // expose this value to the client (no NEXT_PUBLIC_ prefix) so an
+  // attacker can't enumerate which deployments have SMTP configured by
+  // sniffing bundled JS.
+  const smtpConfigured =
+    typeof process.env.SMTP_HOST === "string" &&
+    process.env.SMTP_HOST.trim().length > 0;
 
   return (
     <div
@@ -96,60 +46,46 @@ export default function ForgotPasswordPage() {
       }}
     >
       <div style={{ maxWidth: 420, width: "100%" }}>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginBottom: 8 }}>Reset your password</h1>
-        <p style={{ fontSize: 13, color: "var(--ink-3)", marginBottom: 20, lineHeight: 1.5 }}>
-          Enter the email associated with your Goldenmile account and we will send you a one-time link
-          to choose a new password.
-        </p>
-        <form
-          onSubmit={onSubmit}
-          style={{ display: "flex", flexDirection: "column", gap: 14 }}
-          data-testid="forgot-password-form"
-        >
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>Email</span>
-            <input
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginBottom: 8 }}>
+          Reset your password
+        </h1>
+        {smtpConfigured ? (
+          <ForgotPasswordForm />
+        ) : (
+          <>
+            <div
+              role="alert"
+              data-testid="forgot-password-smtp-unavailable"
               style={{
-                padding: "9px 11px",
-                border: "1px solid var(--line-2)",
+                marginTop: 16,
+                marginBottom: 20,
+                padding: "12px 14px",
+                border: "1px solid var(--saffron)",
+                background: "var(--saffron-soft)",
                 borderRadius: "var(--r-2)",
-                background: "var(--card-hi)",
-                fontSize: 14,
+                fontSize: 13,
+                color: "var(--ink-2)",
+                lineHeight: 1.5,
               }}
-            />
-          </label>
-          {error ? (
-            <p style={{ fontSize: 12, color: "var(--rust)" }} role="alert">
-              {error}
-            </p>
-          ) : null}
-          <button
-            type="submit"
-            disabled={pending || !email}
-            className="btn btn-primary"
-            style={{
-              width: "100%",
-              justifyContent: "center",
-              padding: "10px 12px",
-              fontSize: 14,
-              opacity: pending || !email ? 0.6 : 1,
-            }}
-          >
-            {pending ? "Sending…" : "Send reset link"}
-          </button>
-        </form>
-        <Link
-          href="/login"
-          style={{ display: "inline-block", marginTop: 20, fontSize: 13, color: "var(--ink-2)" }}
-        >
-          ← Back to sign in
-        </Link>
+            >
+              <strong>Password reset is unavailable on this deployment.</strong>
+              <br />
+              Contact your programme administrator to have your password reset
+              manually.
+            </div>
+            <Link
+              href="/login"
+              style={{
+                display: "inline-block",
+                marginTop: 12,
+                fontSize: 13,
+                color: "var(--ink-2)",
+              }}
+            >
+              ← Back to sign in
+            </Link>
+          </>
+        )}
       </div>
     </div>
   );

@@ -30,10 +30,14 @@ import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { users, passwordResetTokens } from "@gml/db/schema";
 import { rateLimit } from "@/lib/rate-limit";
-import { recordAudit } from "@/lib/audit";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
+// Spec 167 — pull the bcrypt cost from the canonical source so a future
+// hardening pass (e.g. cost 12) only has to edit lib/password.ts. The local
+// `const BCRYPT_COST = 10` that lived here pre-167 was the second of five
+// duplicated literals in the codebase and the easiest one to forget to bump.
+import { BCRYPT_COST } from "@/lib/password";
 
 const TOKEN_EXPIRY_MS = 30 * 60 * 1000; // 30 min — spec contract
-const BCRYPT_COST = 10;
 
 // Spec 161 — IP masking helper. Mirrors the maskIp() in auth.ts; keep both
 // in sync if either changes. We can't import from auth.ts because that
@@ -177,7 +181,11 @@ existing password will keep working.
     }
   }
 
-  void recordAudit({
+  // Spec 167 — HIGH-STAKES audit: the matched-and-emailed reset is the only
+  // record that proves a particular reset link was actually issued. If the
+  // insert fails we still keep the 200 response (no-enumeration contract is
+  // load-bearing) but we noteAuditDegraded() so an operator can see the gap.
+  const auditOk = await recordAudit({
     userId: user.id,
     action: "auth.password.reset_requested",
     entityType: "user",
@@ -190,6 +198,9 @@ existing password will keep working.
       smtpConfigured: Boolean(process.env.SMTP_HOST),
     },
   });
+  if (!auditOk) {
+    noteAuditDegraded("/api/auth/forgot-password");
+  }
 
   return NextResponse.json({ ok: true }, { status: 200 });
 }

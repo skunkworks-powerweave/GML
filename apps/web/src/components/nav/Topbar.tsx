@@ -29,6 +29,7 @@ import type { RoleName } from "@gml/shared/auth/roles";
 import type { Locale } from "@/i18n/config";
 import { Icon } from "./Icon";
 import LanguagePicker from "./LanguagePicker";
+import { SignOutButton } from "./SignOutButton";
 
 type TopbarProps = {
   user: { name?: string | null; email?: string | null; role: RoleName; image?: string | null };
@@ -182,14 +183,17 @@ export async function Topbar({
         <LanguagePicker current={locale} ariaLabel={tLanguage("pickerLabel")} />
 
         {/* User pill */}
+        {/* Spec 169 — the submit button is a 'use client' SignOutButton
+            island so the device-local QuickFind recents (spec 121) are
+            cleared from localStorage BEFORE the server-action signOut
+            fires. The wipe is best-effort and never blocks sign-out. */}
         <form
           action={async () => {
             "use server";
             await signOut({ redirectTo: "/login" });
           }}
         >
-          <button
-            type="submit"
+          <SignOutButton
             title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
             style={{
               display: "flex",
@@ -223,7 +227,7 @@ export async function Topbar({
               <span style={{ color: "var(--ink)", fontWeight: 500 }}>{user.name ?? user.email}</span>
               <span style={{ color: "var(--ink-3)" }}>{ROLE_LABEL[user.role]}</span>
             </span>
-          </button>
+          </SignOutButton>
         </form>
       </div>
     </header>

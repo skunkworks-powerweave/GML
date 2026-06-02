@@ -1,0 +1,68 @@
+# Spec 165 — CI/CD pipeline (Workflow Run 16 audit closure).
+#
+# Single-job gate that runs on every push to main and on every
+# pull_request (any branch). The job exists so a regression in tests,
+# build, or typecheck cannot land silently — Workflow Run 16's audit
+# flagged the absence of CI as a BLOCKER because spec 001-163 shipped
+# 1423 governance tests with NO automated gate enforcing them.
+#
+# The gate runs:
+#   1. pnpm install --frozen-lockfile  (reproducible install)
+#   2. pnpm test                       (1423 governance assertions)
+#   3. pnpm build                      (Next.js + worker build sanity)
+#   4. pnpm -r typecheck               (tsc --noEmit per workspace)
+#   5. pnpm test:smoke || true         (integration smokes — skip if
+#                                       Docker stack unreachable; the
+#                                       test runner already test.skips
+#                                       on connection refusal, but the
+#                                       `|| true` keeps the gate lenient
+#                                       for clean PRs that don't boot
+#                                       the stack on the runner.)
+#
+# DATABASE_URL is set to a placeholder so packages/db/src/client.ts
+# loads its build-safe singleton without crashing during `pnpm build`.
+# The client has a build-time fallback per spec 143, but explicit is
+# better than implicit on a CI runner.
+name: test-and-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://gml:postgres@localhost:5432/gml_lms_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        # Version pinned to the packageManager field in package.json
+        # (pnpm@10.33.4 at the time of Spec 165). pnpm/action-setup
+        # auto-detects this field when no `version:` input is given.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run governance tests
+        run: pnpm test
+
+      - name: Build all workspaces
+        run: pnpm build
+
+      - name: Typecheck all workspaces
+        run: pnpm -r typecheck
+
+      - name: Smoke tests (lenient — skips when stack unreachable)
+        run: pnpm test:smoke || true

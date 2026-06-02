@@ -10,6 +10,7 @@ import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
+import { assertEnv } from "@/lib/env";
 import { DesktopShell, MobileShell } from "@/components/shells";
 import AntiDownloadGuard from "@/components/AntiDownloadGuard";
 import { FTUXTour } from "@/components/ftux/FTUXTour";
@@ -93,10 +94,19 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   // We fall back to existing env contracts (WHATSAPP_PHONE_NUMBER_ID,
   // SMTP_FROM) so no new env vars are required to ship this spec, but a
   // deployment may set GML_HELPDESK_PHONE / GML_HELPDESK_EMAIL to override.
+  //
+  // Spec 169 — the GML_* overrides are now validated by assertEnv() before
+  // they reach the UI. A set-but-invalid value (typo, missing `+`, stray
+  // whitespace) is logged SEVERE in production and surfaced to consumers
+  // as `null` so the affected affordance hides instead of rendering a
+  // broken wa.me / mailto link. The legacy fallbacks (WHATSAPP_PHONE_NUMBER_ID,
+  // SMTP_FROM) are kept unchanged for backwards compat with deployments
+  // that haven't migrated to the GML_HELPDESK_* names yet.
+  const envSummary = assertEnv();
   const helpdeskContact = {
     whatsappPhone:
-      process.env.GML_HELPDESK_PHONE ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
-    email: process.env.GML_HELPDESK_EMAIL ?? process.env.SMTP_FROM ?? null,
+      envSummary.helpdeskPhone.value ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+    email: envSummary.helpdeskEmail.value ?? process.env.SMTP_FROM ?? null,
   };
 
   // Spec 128 — dynamic chrome counts. Each loader is React.cache'd so calling

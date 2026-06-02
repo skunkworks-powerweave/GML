@@ -148,6 +148,13 @@
       "when": 1780672800000,
       "tag": "0020_password_reset_and_lockout",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1780716000000,
+      "tag": "0021_transcode_jobs_dropped_status",
+      "breakpoints": true
     }
   ]
 }

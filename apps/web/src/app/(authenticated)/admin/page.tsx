@@ -1,9 +1,18 @@
 // Admin index. Lists every entity registered in ADMIN_ENTITIES, plus links
 // to /admin/audit and /admin/forms (which land in their own specs).
+//
+// Spec 168 — the page header used to hardcode "Goldenmile RTT" as the programme
+// name and offered no academic-year context. Both values now come from
+// `system_settings` (the singleton row spec 124 created) so an operator who
+// edits the row at /admin/system-settings sees the change reflected here
+// immediately. Fail-shape: when the row is missing (pre-bootstrap) we fall
+// back to the schema defaults (Goldenmile RTT / 2026-27) so the page never
+// renders a blank header.
 
 import Link from "next/link";
 import { requireRole } from "@/lib/guards";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import { getSystemSettings } from "@/lib/system-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -12,10 +21,22 @@ export default async function AdminIndexPage() {
 
   const entries = Object.entries(ADMIN_ENTITIES);
 
+  // Spec 168 — surface programmeName + academicYear instead of the
+  // hardcoded "Goldenmile RTT". The defaults below match the schema
+  // defaults so an unbootstrapped DB still renders sensibly.
+  const settings = await getSystemSettings();
+  const programmeName = settings?.programmeName ?? "Goldenmile RTT";
+  const academicYear = settings?.academicYear ?? "2026-27";
+
   return (
     <main className="mx-auto max-w-4xl p-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold">Admin</h1>
+      <header className="mb-6" data-testid="admin-home-header">
+        <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          Admin · {academicYear}
+        </div>
+        <h1 className="text-2xl font-semibold" data-testid="admin-programme-name">
+          {programmeName}
+        </h1>
         <p className="text-sm text-neutral-500">
           No-code data management. Every change is logged to the audit trail.
         </p>

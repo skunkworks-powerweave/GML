@@ -53,6 +53,20 @@ type HelpPanelProps = {
   initialTopic?: string | null;
 };
 
+// Spec 169 — assertEnv() in (authenticated)/layout.tsx passes a null
+// whatsappPhone when the env value was missing OR set-but-invalid (e.g.
+// the operator typo'd the country prefix). In both cases we HIDE the
+// WhatsApp action row entirely rather than showing a "(number not
+// configured)" disabled stub: a broken wa.me link launches WhatsApp into
+// an error screen with no useful context. Email + in-app helpdesk-ticket
+// paths remain visible. `isUsableWhatsappContact` is the single gate.
+function isUsableWhatsappContact(phone: string | null | undefined): boolean {
+  if (!phone) return false;
+  const trimmed = phone.trim();
+  if (trimmed.length === 0) return false;
+  return /^\+?\d{8,15}$/.test(trimmed);
+}
+
 export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
   const [open, setOpen] = useState(false);
   const [topic, setTopic] = useState<string | null>(initialTopic);
@@ -155,8 +169,11 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
   const contextHint = entry
     ? `Hi! I have a question about ${entry.title} (page ${pageSlug}).`
     : `Hi! I need help with the LMS on page ${pageSlug}.`;
-  const waHref = contact.whatsappPhone
-    ? `https://wa.me/${encodeURIComponent(contact.whatsappPhone.replace(/[^0-9]/g, ""))}?text=${encodeURIComponent(
+  // Spec 169 — only build the wa.me href when assertEnv() certified
+  // the phone format. Invalid / unset → null → HumanHelpCard hides the
+  // row entirely (no "(number not configured)" stub).
+  const waHref = isUsableWhatsappContact(contact.whatsappPhone)
+    ? `https://wa.me/${encodeURIComponent((contact.whatsappPhone as string).replace(/[^0-9]/g, ""))}?text=${encodeURIComponent(
         contextHint,
       )}`
     : null;
@@ -506,6 +523,11 @@ function HumanHelpCard({
         We're in your time-zone, Mon–Sat. Pick whichever is easiest right now.
       </div>
       <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
+        {/* Spec 169 — when assertEnv() rejected GML_HELPDESK_PHONE the
+            WhatsApp row is HIDDEN, not rendered as a disabled stub. A
+            misconfigured deep-link is worse than no link: it would
+            launch WhatsApp into a broken state with no recourse. The
+            email and in-app helpdesk-ticket paths remain available. */}
         {waHref ? (
           <a
             href={waHref}
@@ -516,11 +538,7 @@ function HumanHelpCard({
           >
             WhatsApp programme team
           </a>
-        ) : (
-          <button type="button" disabled style={{ ...btnStyle, opacity: 0.6 }} data-help-action="whatsapp-disabled">
-            WhatsApp programme team (number not configured)
-          </button>
-        )}
+        ) : null}
         {mailHref ? (
           <a href={mailHref} data-help-action="email" style={btnStyle}>
             Email admin

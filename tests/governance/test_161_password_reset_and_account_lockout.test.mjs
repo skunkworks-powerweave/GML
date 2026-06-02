@@ -294,21 +294,39 @@ test("spec 161 — reset-password route validates, transactions, and audits", ()
 // ---------- (5) UI pages ----------
 
 test("spec 161 — /login/forgot page renders the email-input form and a no-enumeration success state", () => {
+  // Spec 168 — the /login/forgot page was refactored into a server component
+  // (page.tsx) that reads SMTP_HOST and either renders a banner or delegates
+  // to a client island (ForgotPasswordForm.tsx). The original spec 161
+  // contract (POST to /api/auth/forgot-password, email input, no-enumeration
+  // success copy) is preserved BYTE-FOR-BYTE in the client island; the
+  // assertion below reads from both files so the test passes regardless of
+  // whether the form lives in the page or in an island.
   assert.ok(existsSync(resolve(root, FORGOT_PAGE_PATH)), "/login/forgot page must exist");
-  const src = read(FORGOT_PAGE_PATH);
+  const pageSrc = read(FORGOT_PAGE_PATH);
+  // The client island lives at apps/web/src/app/login/forgot/ForgotPasswordForm.tsx
+  // (created by spec 168). If absent, the page is responsible for the full form.
+  const formIslandPath = "apps/web/src/app/login/forgot/ForgotPasswordForm.tsx";
+  const formIslandSrc = existsSync(resolve(root, formIslandPath))
+    ? read(formIslandPath)
+    : "";
+  const combinedSrc = pageSrc + "\n" + formIslandSrc;
   // POSTs to the forgot-password API
   assert.match(
-    src,
+    combinedSrc,
     /\/api\/auth\/forgot-password/,
-    "/login/forgot page must POST to /api/auth/forgot-password",
+    "/login/forgot must POST to /api/auth/forgot-password (page or its ForgotPasswordForm island)",
   );
   // Has a form with an email input
-  assert.match(src, /type=["']email["']/, "/login/forgot page must have an email input");
+  assert.match(
+    combinedSrc,
+    /type=["']email["']/,
+    "/login/forgot must have an email input (page or its ForgotPasswordForm island)",
+  );
   // The success state is generic ("If an account exists for that email")
   assert.match(
-    src,
+    combinedSrc,
     /If an account exists for that email/i,
-    "/login/forgot page success state must be generic (no enumeration) — phrasing 'If an account exists for that email'",
+    "/login/forgot success state must be generic (no enumeration) — phrasing 'If an account exists for that email'",
   );
 });
 

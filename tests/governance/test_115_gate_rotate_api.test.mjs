@@ -97,7 +97,12 @@ test("spec 115 — rotate generates password via crypto.randomBytes + bcrypt cos
   assert.match(src, /from\s+"node:crypto"/);
   assert.match(src, /randomBytes\(/);
   assert.match(src, /from\s+"bcryptjs"/);
-  assert.match(src, /bcrypt\.hash\([^,]+,\s*10\)/);
+  // Spec 167 — the literal `10` became the exported `BCRYPT_COST` const
+  // (apps/web/src/lib/password.ts is the single source of truth for the
+  // bcrypt cost across apps/web). Accept either the historical literal or
+  // the spec-167 import so this regression test pins the bcrypt-hash call
+  // shape without forbidding the const-ification cleanup.
+  assert.match(src, /bcrypt\.hash\([^,]+,\s*(?:10|BCRYPT_COST)\)/);
 });
 
 test("spec 115 — rotate INSERTs new section_gates row with bumped version", () => {

@@ -33,11 +33,24 @@ export const LOCALE_LABELS: Record<Locale, { label: string; native: string; scri
   bo: { label: "Bhoti / Ladakhi", native: "བོད་ཡིག", script: "བོད་" },
 };
 
-/** Source of truth for the messages bundles. Order matters: `en` is the fallback. */
-const MESSAGES: Record<Locale, Record<string, Record<string, string>>> = {
-  en: enMessages,
-  hi: hiMessages,
-  bo: boMessages,
+/**
+ * Source of truth for the messages bundles. Order matters: `en` is the
+ * fallback locale.
+ *
+ * Spec 169 — values may now be either a flat `string` (the original
+ * shape, kept for back-compat with most chrome namespaces) OR a nested
+ * object of strings (used by the new `login.forgot.*` / `login.reset.*`
+ * branches so the keys read naturally as `t("forgot.title")` etc.).
+ * `loadMessages` walks both shapes per-key.
+ */
+type MessageValue = string | { [key: string]: MessageValue };
+type MessageNamespace = Record<string, MessageValue>;
+type MessageBundle = Record<string, MessageNamespace>;
+
+const MESSAGES: Record<Locale, MessageBundle> = {
+  en: enMessages as MessageBundle,
+  hi: hiMessages as MessageBundle,
+  bo: boMessages as MessageBundle,
 };
 
 /**
@@ -55,37 +68,79 @@ export function normalizeLocale(value: string | null | undefined): Locale {
 
 /**
  * Build the messages bundle for a given locale, merging with English as a
- * deep fallback (per-key, per-namespace). The fallback keeps the UI usable
- * when a translator has not yet filled in every Bhoti string; missing keys
- * render the English string instead of next-intl's default `{key}` ICU
- * placeholder, which would visually break the chrome.
+ * deep fallback (per-key, per-namespace, per-nested-subkey). The fallback
+ * keeps the UI usable when a translator has not yet filled in every Bhoti
+ * string; missing keys render the English string instead of next-intl's
+ * default `{key}` ICU placeholder, which would visually break the chrome.
  *
  * In development a `console.warn` is emitted per missing key so the gap is
- * visible during translation work; production stays quiet.
+ * visible during translation work.
+ *
+ * Spec 169 — the bo (Bhoti / Ladakhi) bundle currently ships with EMPTY-
+ * STRING placeholders for the new `login.forgot.*` / `login.reset.*` /
+ * `forbidden.*` keys (the strings are awaiting a Ladakhi translator). An
+ * empty string here counts as MISSING so the English fallback wins and
+ * the chrome remains readable. A `console.warn` is emitted for any empty
+ * bo key when NODE_ENV !== 'production' so the gap is loud during
+ * translation work. Production stays silent to keep the log channel
+ * unspammed.
  */
-export function loadMessages(locale: Locale): Record<string, Record<string, string>> {
+function isLeafString(value: MessageValue | undefined): value is string {
+  return typeof value === "string";
+}
+
+function mergeRecursive(
+  targetGroup: MessageNamespace | MessageValue,
+  fallbackGroup: MessageNamespace | MessageValue,
+  locale: Locale,
+  path: string,
+): MessageValue {
+  // Leaf: a non-empty string in the target wins; empty/missing → fallback.
+  if (isLeafString(fallbackGroup)) {
+    if (isLeafString(targetGroup) && targetGroup.length > 0) {
+      return targetGroup;
+    }
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[i18n] missing ${locale}:${path} — falling back to en`);
+    }
+    return fallbackGroup;
+  }
+  // Branch: recurse per-key.
+  const out: Record<string, MessageValue> = {};
+  const fallbackBranch = fallbackGroup as Record<string, MessageValue>;
+  const targetBranch =
+    typeof targetGroup === "object" && targetGroup !== null
+      ? (targetGroup as Record<string, MessageValue>)
+      : {};
+  for (const key of Object.keys(fallbackBranch)) {
+    out[key] = mergeRecursive(
+      targetBranch[key],
+      fallbackBranch[key],
+      locale,
+      path === "" ? key : `${path}.${key}`,
+    );
+  }
+  return out;
+}
+
+export function loadMessages(locale: Locale): MessageBundle {
   if (locale === DEFAULT_LOCALE) {
     return MESSAGES[DEFAULT_LOCALE];
   }
   const target = MESSAGES[locale];
   const fallback = MESSAGES[DEFAULT_LOCALE];
-  const merged: Record<string, Record<string, string>> = {};
+  const merged: MessageBundle = {};
   for (const namespace of Object.keys(fallback)) {
-    const targetGroup = target[namespace] ?? {};
-    const fallbackGroup = fallback[namespace];
-    const out: Record<string, string> = {};
-    for (const key of Object.keys(fallbackGroup)) {
-      if (targetGroup[key]) {
-        out[key] = targetGroup[key];
-      } else {
-        if (process.env.NODE_ENV === "development") {
-          // eslint-disable-next-line no-console
-          console.warn(`[i18n] missing ${locale}:${namespace}.${key} — falling back to en`);
-        }
-        out[key] = fallbackGroup[key];
-      }
-    }
-    merged[namespace] = out;
+    const merged_namespace = mergeRecursive(
+      target[namespace],
+      fallback[namespace],
+      locale,
+      namespace,
+    );
+    merged[namespace] =
+      typeof merged_namespace === "object" && merged_namespace !== null
+        ? (merged_namespace as MessageNamespace)
+        : {};
   }
   return merged;
 }

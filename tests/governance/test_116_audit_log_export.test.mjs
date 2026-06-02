@@ -80,8 +80,13 @@ test("spec 116 — audit.bulk_export hook fires with rowCount + filters metadata
   assert.match(src, /entityType:\s*"audit_log"/);
   assert.match(src, /rowCount/);
   assert.match(src, /filters/);
-  // best-effort void so audit failure never blocks the 200
-  assert.match(src, /void\s+recordAudit/);
+  // Spec 167 — the prior `void recordAudit(...)` shape is now a captured-
+  // boolean `const auditOk = await recordAudit(...)` so a degraded audit
+  // channel can be detected via noteAuditDegraded. Accept either shape so
+  // this regression test pins the audit-fire intent without forbidding the
+  // spec-167 upgrade. Both shapes are best-effort with respect to the user-
+  // facing 200 (failure does not block the response).
+  assert.match(src, /(?:void\s+recordAudit|const\s+auditOk\s*=\s*await\s+recordAudit)/);
 });
 
 test("spec 116 — response is text/csv with audit-log-YYYYMMDD.csv attachment header", () => {

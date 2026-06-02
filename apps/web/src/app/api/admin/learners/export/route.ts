@@ -44,7 +44,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { recordAudit } from "@/lib/audit";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -91,9 +91,18 @@ export async function GET(req: Request) {
     .where(whereExpr)
     .orderBy(asc(schools.code), asc(learners.grade), asc(learners.name));
 
-  // SM-9 audit — fires AFTER the SELECT so rowCount is accurate. Best-effort
-  // `void` so audit-log failure never blocks the user-facing 200.
-  void recordAudit({
+  // SM-9 audit — fires AFTER the SELECT so rowCount is accurate. Spec 167
+  // upgraded the call from `void recordAudit(...)` to a captured-boolean
+  // check: a bulk-PII export is the single highest-severity forensic event
+  // in the LMS (one super_admin slip can exfiltrate every learner row), and
+  // the audit trail is the ONLY mechanism the spec 010 / SM-1 substrate
+  // exposes for post-hoc detection. On `false` we both `console.error` (via
+  // noteAuditDegraded) and increment the process-local degraded-mode counter
+  // so an operator can see the channel is broken. We still return the CSV
+  // because failing the user-facing response would not bring the audit row
+  // back — the export already ran, and the right failure mode is loud
+  // logging plus a counter bump, not blocking.
+  const auditOk = await recordAudit({
     action: "learners.bulk_export",
     entityType: "all",
     metadata: {
@@ -102,6 +111,9 @@ export async function GET(req: Request) {
       schoolFilter: schoolFilter ?? null,
     },
   });
+  if (!auditOk) {
+    noteAuditDegraded("/api/admin/learners/export");
+  }
 
   // Shape rows into the documented CSV columns. The `class_label` is rendered
   // as "Grade N" to match the on-screen label in /repo/students.

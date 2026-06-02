@@ -27,6 +27,8 @@ import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { UploadModal } from "@/components/video/UploadModal";
+import { assertEnv } from "@/lib/env";
+import { getSystemSettings } from "@/lib/system-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -94,6 +96,11 @@ export default async function VideoLibraryPage({
     "super_admin",
   ]);
 
+  // Spec 168 — surface the programme-configured default quality in the
+  // upload modal's browser-upload explainer. Falls back to "480p" (the
+  // shipped pipeline default) if the singleton row hasn't bootstrapped.
+  const sysSettings = await getSystemSettings();
+
   // Spec 129: build the WHERE clause server-side from URL searchParams.
   const conds: SQL[] = [];
   if (filter) conds.push(eq(videoSubmissions.status, filter as VideoStatus));
@@ -153,13 +160,20 @@ export default async function VideoLibraryPage({
               modal. We pass the programme WhatsApp number from env (set in
               spec 043 deployment as WHATSAPP_PHONE_NUMBER_ID) with a
               GML_WHATSAPP_NUMBER override for human-readable formatting.
+
+              Spec 169 — the GML_WHATSAPP_NUMBER override is now validated
+              via assertEnv(); a set-but-invalid value falls through to the
+              legacy WHATSAPP_PHONE_NUMBER_ID before defaulting to null.
+              When the final value is null the modal hides the WhatsApp
+              section entirely (broken wa.me link > no link).
             */}
             <UploadModal
               whatsappPhone={
-                process.env.GML_WHATSAPP_NUMBER ??
+                assertEnv().whatsappNumber.value ??
                 process.env.WHATSAPP_PHONE_NUMBER_ID ??
                 null
               }
+              videoDefaultQuality={sysSettings?.videoDefaultQuality ?? "480p"}
             />
             {canSeeWhatsappLog && (
               <Link href="/admin/whatsapp-log" className="btn">WhatsApp ingest log</Link>

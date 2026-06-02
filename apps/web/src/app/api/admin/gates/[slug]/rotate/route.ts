@@ -74,7 +74,8 @@ import bcrypt from "bcryptjs";
 import { db } from "@gml/db";
 import { sectionGates, sectionGateGrants } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { recordAudit } from "@/lib/audit";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
+import { BCRYPT_COST } from "@/lib/password";
 
 export const dynamic = "force-dynamic";
 
@@ -120,10 +121,11 @@ export async function POST(
   }
   const gateSlug = slug as GateSlug;
 
-  // Generate fresh plaintext password and bcrypt it at cost 10
-  // (same cost as apps/web/src/lib/password.ts so the verify path is uniform).
+  // Generate fresh plaintext password and bcrypt it at the shared BCRYPT_COST
+  // (imported from apps/web/src/lib/password.ts — spec 167 made the const the
+  // single source of truth so a future cost bump only edits one file).
   const plaintext = generatePassword();
-  const passwordHash = await bcrypt.hash(plaintext, 10);
+  const passwordHash = await bcrypt.hash(plaintext, BCRYPT_COST);
 
   // Determine next version = max(version) + 1. We SELECT first because the
   // section_gates row count per slug is tiny (one per rotation, lifetime) and
@@ -165,10 +167,16 @@ export async function POST(
   });
 
   // Audit hook (SM-1): records the rotation with the version and the count
-  // of grants invalidated. Best-effort `void` — audit failure never blocks
-  // the user-facing 200 (the rotation already committed; logging the audit
-  // miss to stderr is the right failure mode).
-  void recordAudit({
+  // of grants invalidated. HIGH-STAKES — the gate-rotation audit is the only
+  // forensic trail for a compromised-credential containment event, so spec
+  // 167 upgrades the call from `void recordAudit(...)` to a captured-boolean
+  // check. On `false` we both `console.error` (via noteAuditDegraded) AND
+  // bump the process-local degraded-mode counter so an operator can see the
+  // miss in a future diagnostic surface. We do NOT roll back the rotation —
+  // audit failure must not block the business flow, the rotation already
+  // committed, and refusing to return the plaintext would leave the operator
+  // unable to share the new password and recover the lockout.
+  const auditOk = await recordAudit({
     action: "gate.password.rotated",
     entityType: "section_gate",
     entityId: gateSlug,
@@ -179,6 +187,9 @@ export async function POST(
       grantsInvalidated: deleted.length,
     },
   });
+  if (!auditOk) {
+    noteAuditDegraded("/api/admin/gates/[slug]/rotate");
+  }
 
   return NextResponse.json(
     { ok: true, plaintext, version: nextVersion },

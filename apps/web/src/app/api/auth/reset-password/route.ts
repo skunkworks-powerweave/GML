@@ -26,8 +26,14 @@ import bcrypt from "bcryptjs";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { users, passwordResetTokens } from "@gml/db/schema";
-import { hashPassword } from "@/lib/password";
-import { recordAudit } from "@/lib/audit";
+// Spec 167 — pull both `hashPassword` (which the new-password write uses
+// directly) and the underlying `BCRYPT_COST` (recorded in the audit metadata
+// so an investigator can see which bcrypt cost the row was hashed at without
+// having to read the hash string itself). The import also documents the
+// dependency: a future cost bump in lib/password.ts will surface in the audit
+// row as soon as the next reset lands.
+import { hashPassword, BCRYPT_COST } from "@/lib/password";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -130,14 +136,23 @@ export async function POST(request: Request) {
       .where(eq(passwordResetTokens.id, matched.id));
   });
 
-  void recordAudit({
+  // Spec 167 — HIGH-STAKES audit: a password reset is one of the most
+  // privileged account-mutation events, and the audit row is the only
+  // forensic trail proving WHICH token landed on WHICH user with WHICH
+  // bcrypt cost. On failure we noteAuditDegraded() but do NOT roll back
+  // the password change — audit failure must not block a user from
+  // recovering their account.
+  const auditOk = await recordAudit({
     userId: matched.userId,
     action: "auth.password.reset_completed",
     entityType: "user",
     entityId: matched.userId,
     ipOverride: ip,
-    metadata: { tokenId: matched.id },
+    metadata: { tokenId: matched.id, bcryptCost: BCRYPT_COST },
   });
+  if (!auditOk) {
+    noteAuditDegraded("/api/auth/reset-password");
+  }
 
   return NextResponse.json({ ok: true }, { status: 200 });
 }

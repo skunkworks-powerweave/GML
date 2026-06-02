@@ -47,9 +47,29 @@ type UploadModalProps = {
   /** Programme WhatsApp number (E.164, no +). Falls back to a placeholder
    *  shown in italic when the deployment has not set GML_WHATSAPP_NUMBER. */
   whatsappPhone?: string | null;
+  /** Spec 168 — default HLS rendition the worker pipeline emits, read from
+   *  system_settings.videoDefaultQuality. Surfaced in the browser-upload
+   *  explainer so the teacher knows what bitrate their lesson will become.
+   *  Defaults to "480p" when the row hasn't bootstrapped yet — matches the
+   *  pipeline reality (spec 041 deferred 720p, 1080p was never a goal). */
+  videoDefaultQuality?: string | null;
 };
 
-export function UploadModal({ whatsappPhone }: UploadModalProps) {
+// Spec 169 — when assertEnv() rejects GML_WHATSAPP_NUMBER (set-but-invalid
+// or never configured) the videos page passes null. In that case the
+// PRIMARY WhatsApp section is HIDDEN entirely so the modal never renders
+// a broken wa.me hint or shows a `—` placeholder where a real phone
+// belongs. The direct-browser-upload section remains available; admins
+// and mentors can still upload, and the email/in-app paths in HelpPanel
+// stay reachable for help.
+function isUsableWhatsappPhone(phone: string | null | undefined): boolean {
+  if (!phone) return false;
+  const trimmed = phone.trim();
+  if (trimmed.length === 0) return false;
+  return /^\+?\d{8,15}$/.test(trimmed);
+}
+
+export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalProps) {
   const [open, setOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -167,7 +187,13 @@ export function UploadModal({ whatsappPhone }: UploadModalProps) {
               </button>
             </div>
 
-            {/* Path 1 — WhatsApp (PRIMARY for teachers) */}
+            {/* Path 1 — WhatsApp (PRIMARY for teachers).
+                Spec 169 — gated on assertEnv()'s GML_WHATSAPP_NUMBER
+                check. When the env is invalid or unset the entire
+                section is removed from the DOM (we do not render a
+                stubbed disabled state); the direct-browser-upload
+                section below remains the only path. */}
+            {isUsableWhatsappPhone(whatsappPhone) ? (
             <section
               style={{
                 border: "1px solid var(--line)",
@@ -242,6 +268,7 @@ export function UploadModal({ whatsappPhone }: UploadModalProps) {
                 from the WhatsApp ingest log.
               </p>
             </section>
+            ) : null}
 
             {/* Path 2 — Direct browser upload */}
             <section data-testid="browser-path">
@@ -249,9 +276,14 @@ export function UploadModal({ whatsappPhone }: UploadModalProps) {
                 <span className="chip">Admin / mentor</span>
                 <h3 style={{ fontSize: 14, fontWeight: 600 }}>Or upload from this browser</h3>
               </div>
-              <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 6, marginBottom: 10 }}>
-                Resumable upload, MP4 / MOV / 3GP, transcodes to 480p HLS after the upload finishes. Use this when
-                you already have the file on disk (e.g. classroom recording).
+              <p
+                style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 6, marginBottom: 10 }}
+                data-testid="upload-quality-explainer"
+              >
+                Resumable upload, MP4 / MOV / 3GP, transcodes to{" "}
+                <strong>{videoDefaultQuality ?? "480p"} HLS</strong> after the upload finishes
+                (set by the programme admin in system settings — spec 168). Use this when you
+                already have the file on disk (e.g. classroom recording).
               </p>
               <UploadProgress contextType="generic" onComplete={onUploadComplete} />
             </section>

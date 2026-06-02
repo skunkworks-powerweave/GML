@@ -6,35 +6,64 @@
 // Schema reality (SM-7): `learners.name` is the only name column — there is
 // no `hindi_name` on this table, so we render English only. The JSX prototype
 // also shows a single name field, so this is 1:1 visual fidelity.
+//
+// Spec 168 — name search via ?q= was previously excluded from spec 158
+// (the "inline search bars on every /repo/* index" round) because the
+// surface writes an SM-9 audit row on every render and a search bar
+// without dedup would flood the audit log (a user typing "kunzang" one
+// letter at a time = 7 audit rows). This spec wires the search anyway
+// and protects the audit log via `recordAuditDedup` — one row per
+// (user × query × hour). The bulk_view row still fires for the
+// page-render audit; the new "learners.search" row is a SEPARATE event
+// keyed on the search query text.
 
 import Link from "next/link";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, ilike, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
-import { recordAudit } from "@/lib/audit";
+import { recordAudit, recordAuditDedup } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 100;
 
+// Spec 168 — name search input cap, matching spec 158's 200-char ceiling so
+// a copy-paste of a giant payload neither bloats the URL nor stresses the
+// planner. ILIKE wildcards (% _ \) are escaped via escapeIlike so a user
+// searching for a literal underscore in a learner name doesn't trigger a
+// single-char wildcard match.
+const SEARCH_Q_MAX = 200;
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 type PageProps = {
-  searchParams: Promise<{ page?: string; school?: string }>;
+  searchParams: Promise<{ page?: string; school?: string; q?: string }>;
 };
 
 export default async function RepoStudentsPage({ searchParams }: PageProps) {
   // SM-9: PII-bearing learner index is gated to programme leads + super admins.
   const session = await requireRole(["programme_admin", "super_admin"]);
   const isSuperAdmin = session.user.role === "super_admin";
+  const userId = session.user.id;
 
   const sp = await searchParams;
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
   const schoolFilter = typeof sp.school === "string" && sp.school.length > 0 ? sp.school : undefined;
+  // Spec 168 — name search. Empty / whitespace-only queries treat as absent
+  // so typing then deleting doesn't leave a no-op filter live.
+  const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
+  const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
-  const whereExpr = schoolFilter
-    ? and(eq(learners.active, true), isNull(learners.deletedAt), eq(learners.schoolId, schoolFilter))
-    : and(eq(learners.active, true), isNull(learners.deletedAt));
+  // Spec 168 — combine the existing school filter with the new name search
+  // via and(...). The ILIKE predicate wraps the user query in % so it's a
+  // case-insensitive substring match against learners.name.
+  const conds = [eq(learners.active, true), isNull(learners.deletedAt)];
+  if (schoolFilter) conds.push(eq(learners.schoolId, schoolFilter));
+  if (qFilter) conds.push(ilike(learners.name, `%${escapeIlike(qFilter)}%`));
+  const whereExpr = and(...conds);
 
   const rows = await db
     .select({
@@ -68,8 +97,24 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
       rowCount: rows.length,
       page: pageNum,
       schoolFilter: schoolFilter ?? null,
+      qFilter,
     },
   });
+
+  // Spec 168 — when a search query is present, record a separate
+  // "learners.search" audit row via recordAuditDedup so the audit log
+  // doesn't flood when a user types incrementally. One row per
+  // (user × query × hour); the dedupKey collapses every render with
+  // the same query string inside the TTL window into one row.
+  if (qFilter) {
+    void recordAuditDedup({
+      action: "learners.search",
+      entityType: "all",
+      dedupKey: `q=${qFilter}|user=${userId}`,
+      ttlSeconds: 3600,
+      metadata: { q: qFilter, resultCount: rows.length },
+    });
+  }
 
   return (
     <div>
@@ -113,6 +158,53 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
             Learner records contain PII (name, age, guardian). Access is restricted to school staff and programme
             leads. Bulk export is audited and requires Super Admin approval.
           </span>
+        </div>
+
+        {/* Spec 168 — inline name-search bar. Native HTML GET form so the
+            URL is shareable and the page stays a server component. The
+            school hidden input preserves the active school filter across
+            search submissions. The /repo/students audit log is protected
+            from flooding by recordAuditDedup (one row per user × query ×
+            hour) — see the dedupKey above. */}
+        <div
+          className="card"
+          style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+        >
+          <form
+            method="GET"
+            action="/repo/students"
+            style={{ display: "flex", gap: 6, alignItems: "center" }}
+          >
+            {schoolFilter ? (
+              <input type="hidden" name="school" value={schoolFilter} />
+            ) : null}
+            <input
+              type="search"
+              name="q"
+              defaultValue={qFilter ?? ""}
+              aria-label="Search learners by name"
+              title="Search learners by name"
+              maxLength={SEARCH_Q_MAX}
+              className="text"
+              style={{ padding: "5px 10px", fontSize: 12, minWidth: 160 }}
+            />
+            <button type="submit" className="btn btn-sm">
+              Search
+            </button>
+            {qFilter ? (
+              <Link
+                href={
+                  schoolFilter
+                    ? `/repo/students?school=${encodeURIComponent(schoolFilter)}`
+                    : "/repo/students"
+                }
+                className="btn btn-sm"
+                style={{ textDecoration: "none" }}
+              >
+                Clear
+              </Link>
+            ) : null}
+          </form>
         </div>
 
         <div className="card" style={{ overflow: "hidden" }}>
@@ -194,7 +286,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
             <div>
               {pageNum > 1 ? (
                 <Link
-                  href={buildHref({ page: pageNum - 1, school: schoolFilter })}
+                  href={buildHref({ page: pageNum - 1, school: schoolFilter, q: qFilter })}
                   style={{ color: "var(--ink-2)", textDecoration: "none" }}
                 >
                   ← Prev
@@ -209,7 +301,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
             <div>
               {rows.length === PAGE_SIZE ? (
                 <Link
-                  href={buildHref({ page: pageNum + 1, school: schoolFilter })}
+                  href={buildHref({ page: pageNum + 1, school: schoolFilter, q: qFilter })}
                   style={{ color: "var(--ink-2)", textDecoration: "none" }}
                 >
                   Next →
@@ -225,10 +317,11 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
   );
 }
 
-function buildHref(opts: { page: number; school?: string }) {
+function buildHref(opts: { page: number; school?: string; q?: string | null }) {
   const qs = new URLSearchParams();
   qs.set("page", String(opts.page));
   if (opts.school) qs.set("school", opts.school);
+  if (opts.q) qs.set("q", opts.q);
   return `?${qs.toString()}`;
 }
 

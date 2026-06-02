@@ -469,12 +469,19 @@ export function FormRenderer({
   // for previewing. Wiring both at once would mean the click ran the callback
   // AND posted the FormData server-side — silent double-submit. Catch that
   // mistake in dev so it never reaches production.
+  //
+  // Spec 167 — upgraded from `console.error` to `throw new Error`. The prior
+  // shape relied on a developer noticing a console message scroll past during
+  // local dev or a test run; in practice a noisy console-error can sit unread
+  // for weeks while the silent double-submit ships. Throwing in non-production
+  // ensures the mistake surfaces as a hard test failure (jsdom rethrows) and
+  // a visible React error boundary in dev, so it can never reach a prod build.
+  // The production guard preserves graceful fallback: a misbehaving caller in
+  // production silently picks `action` (the native <form action={...}> path)
+  // and the click goes through cleanly rather than crashing the page.
   if (process.env.NODE_ENV !== "production" && action && onSubmit) {
-    // eslint-disable-next-line no-console
-    console.error(
-      "[FormRenderer] Both `action` and `onSubmit` were provided. " +
-        "Use `action` for server-action submits (forms-runner) or `onSubmit` " +
-        "for client-callback previews — never both.",
+    throw new Error(
+      "FormRenderer: pass either `action` (server) or `onSubmit` (client), not both.",
     );
   }
 

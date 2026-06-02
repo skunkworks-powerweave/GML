@@ -78,6 +78,13 @@ type QueueDepth = {
   delayed: number;
 };
 
+// Spec 168 — wrap the BullMQ getJobCounts() call in try/catch and surface
+// a Redis-down banner above the historical table. The existing code already
+// returned null on error; this spec makes the failure visible with an
+// explicit banner ABOVE the depth strip rather than hiding the failure
+// inside a "depth unavailable" hint in the strip itself. Operators
+// triaging a transcode incident need to know up-front that the live
+// depth is stale — the historical DB table below is still accurate.
 async function loadDlqDepth(): Promise<QueueDepth | null> {
   try {
     const counts = await transcodeQueue.getJobCounts(
@@ -95,7 +102,8 @@ async function loadDlqDepth(): Promise<QueueDepth | null> {
   } catch (err) {
     // Redis unreachable / queue not initialised — return null so the
     // top strip shows a "depth unavailable" hint rather than misleading
-    // zeros. The DB table view is still usable.
+    // zeros. The DB table view is still usable. Spec 168 adds a banner
+    // ABOVE the table making the failure obvious.
     console.error("[transcode-jobs] loadDlqDepth failed", err);
     return null;
   }
@@ -203,6 +211,10 @@ export default async function TranscodeJobsAdminPage({
   }
 
   const depth = await loadDlqDepth();
+  // Spec 168 — explicit "Redis unreachable" flag drives the banner
+  // ABOVE the table. loadDlqDepth already returns null on error; this
+  // boolean is just the more readable name at the JSX site.
+  const redisUnavailable = depth === null;
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
@@ -215,6 +227,22 @@ export default async function TranscodeJobsAdminPage({
           logged to the audit trail.
         </p>
       </header>
+
+      {redisUnavailable ? (
+        <div
+          role="alert"
+          data-testid="dlq-redis-down-banner"
+          className="rounded-lg border border-saffron bg-saffron-soft p-3 text-sm"
+          style={{
+            border: "1px solid var(--saffron)",
+            background: "var(--saffron-soft)",
+            color: "var(--ink-2)",
+          }}
+        >
+          <strong>Live queue depth unavailable (Redis is unreachable).</strong>{" "}
+          The historical job table below is still accurate.
+        </div>
+      ) : null}
 
       <section
         aria-label="BullMQ queue depth"

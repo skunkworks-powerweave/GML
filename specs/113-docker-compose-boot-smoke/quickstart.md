@@ -121,6 +121,47 @@ roughly 15 minutes. Allow up to an hour if any step fails.
      and re-check; if still empty, inspect `docker compose logs app
      | grep seed_form_catalog`.
 
+7.5. **Admin surface: quizzes catalog.** Navigate to `/admin/quizzes`
+   (spec 120 + run-16 audit closure surface).
+   - Expected: a table listing at least **1 seeded quiz** if
+     `seed_quiz_catalog.ts` ran successfully (the post-Phase-9 seed
+     ships a small Ladakh-specific RTT quiz). If no quizzes were
+     seeded, the page renders an empty state with a "no quizzes yet"
+     message and a link to the admin docs — that is also acceptable.
+   - **Pass:** the page returns 200, the layout chrome renders, and
+     either at least one row OR the empty-state copy is visible.
+   - **Fail:** 500 / 403 / blank. 403 indicates the seeded super_admin
+     role lost its assignment (re-check `users.role`). 500 indicates
+     a missing `quizzes` table or a server-side render crash — capture
+     `docker compose logs app --tail=100`.
+
+7.6. **Admin surface: transcode DLQ.** Navigate to
+   `/admin/transcode-jobs` (spec 162 + run-16 closure).
+   - Expected: a table listing every `video_submissions` row with
+     `transcode_state = 'failed'`. On a freshly-deployed box with no
+     failures this is intentionally **empty** — the page should render
+     a "no failed transcode jobs" empty state.
+   - **Pass:** page returns 200 and either renders failed-job rows
+     (each with Retry / Drop buttons) OR the empty-state copy.
+   - **Fail:** 500 / 403 / blank. Likely cause: spec 162 migration
+     didn't apply the new `transcode_state` enum value. Re-check
+     `pnpm --filter @gml/db migrate` ran clean.
+
+7.7. **Admin surface: system settings.** Navigate to
+   `/admin/system-settings` (spec 124 + run-16 closure).
+   - Expected: a form-style surface listing the singleton
+     `system_settings` row. At minimum these fields must be visible
+     and populated: **programme name** (e.g. "Ladakh RTT 2026") and
+     **academic year** (e.g. "2026-27"). The default video quality
+     selector and notification-types checkbox grid should render
+     below.
+   - **Pass:** page returns 200, programme name and academic year
+     are populated (i.e. the spec 124 seed inserted the singleton
+     row).
+   - **Fail:** empty form / null programme name → spec 124 seed did
+     not run. Re-run `pnpm --filter @gml/db exec tsx
+     packages/db/src/scripts/seed_system_settings.ts`.
+
 8. **WhatsApp ingest (conditional — skip if WHATSAPP_* unset).**
    Only if `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
    `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_APP_SECRET` are all set in
@@ -177,11 +218,34 @@ roughly 15 minutes. Allow up to an hour if any step fails.
       `workspace/last_restore_drill.json` to the original recent
       timestamp before any further deploys.
 
+11. **Password-reset flow (spec 161 + run-16 closure).** Visit
+    `/login/forgot` from a private browser window (no active session).
+    - **If `SMTP_HOST` is configured in `.env`:** the page renders the
+      reset form. Submit `$SUPER_ADMIN_EMAIL` (or any seeded account's
+      email). The form's "we sent you a link" success state should
+      appear within two seconds. Check the configured inbox (or the
+      SMTP relay's outbound log) for an email landing within ~30s
+      with subject containing "Reset your GML LMS password". The link
+      should resolve to `/login/reset?token=...`; clicking it opens
+      the new-password form. **Pass:** form submits, email arrives,
+      reset link works. **Fail:** form returns 503 (Redis outage —
+      check `docker compose logs redis`); email never arrives
+      (SMTP creds wrong — `docker compose logs app | grep -i smtp`);
+      link returns "token expired" immediately (server clock drift —
+      check `date` on the VPS, compare to your workstation).
+    - **If `SMTP_HOST` is empty / unset:** the page renders a
+      "feature unavailable — contact your programme admin" banner
+      instead of the form. The form must NOT appear; the endpoint
+      must NOT mint a token even if force-posted. **Pass:** banner
+      visible, no form, no email. **Fail:** form renders anyway
+      (env-detection logic broken — likely `SMTP_HOST` is set but
+      empty-string rather than truly unset).
+
 ---
 
 ## Sign-off
 
-After all ten steps pass, append a record to
+After all eleven steps pass, append a record to
 `workspace/last_smoke.json` (create the file if absent) with the
 following shape:
 
@@ -190,7 +254,7 @@ following shape:
   "last_smoke_at": "2026-06-02T10:30:00Z",
   "operator": "your.email@example.org",
   "git_sha": "abc1234",
-  "steps_passed": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "steps_passed": [1, 2, 3, 4, 5, 6, 7, 7.5, 7.6, 7.7, 8, 9, 10, 11],
   "notes": "Clean run on prod-vps-01."
 }
 ```

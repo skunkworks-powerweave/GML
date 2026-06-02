@@ -30,8 +30,11 @@
  * the security boundary.
  *
  * Concretely the throws come from:
- *   - `client()` if `REDIS_URL` is unset — `new Error("REDIS_URL not set")`.
- *   - The underlying ioredis client on connection / command failure.
+ *   - The shared `getRedis()` client on connection refused, ECONNRESET,
+ *     command timeout, or AUTH failure (the underlying ioredis surface).
+ *     If `REDIS_URL` is unset, `getRedis()` falls back to the in-network
+ *     default `redis://redis:6379`; with no redis on that host the first
+ *     command throws ECONNREFUSED, which is still fail-closed.
  *   - The explicit `throw new Error("rate-limit: multi exec returned
  *     null")` below when the MULTI pipeline returns null (a defensive
  *     check; in practice this only happens if ioredis is in a broken
@@ -43,19 +46,15 @@
  * pick the open behaviour explicitly — don't change the default here.
  */
 
-import Redis from "ioredis";
-
-let _client: Redis | null = null;
-
-function client(): Redis {
-  if (_client) return _client;
-  const url = process.env.REDIS_URL;
-  if (!url) {
-    throw new Error("REDIS_URL not set");
-  }
-  _client = new Redis(url, { maxRetriesPerRequest: 3, lazyConnect: false });
-  return _client;
-}
+// Spec 170 — Workflow Run 16 post-audit hardening. The web app now
+// shares a single ioredis instance across all direct-redis call sites
+// via `getRedis()` from ./redis. This module previously constructed
+// its own `new Redis(url, ...)` client, which meant two TCP connections
+// to redis (one here, one in health.ts) and divergent failure-mode
+// defaults. The singleton consolidates both: see ./redis for the full
+// rationale. Behaviour is otherwise identical — the FAIL-CLOSED
+// contract documented below is preserved.
+import { getRedis } from "./redis";
 
 export type RateLimitOptions = {
   bucket: string;
@@ -80,7 +79,7 @@ export async function rateLimit({
   limit,
   windowMs,
 }: RateLimitOptions): Promise<RateLimitResult> {
-  const r = client();
+  const r = getRedis();
   const key = `rl:${bucket}:${id}`;
   const now = Date.now();
   const cutoff = now - windowMs;

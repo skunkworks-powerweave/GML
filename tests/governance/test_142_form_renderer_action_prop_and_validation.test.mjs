@@ -121,19 +121,25 @@ test("spec 142 — FormRenderer asserts in dev when both `action` and `onSubmit`
     /action\s*&&\s*onSubmit/,
     "FormRenderer must check `action && onSubmit` for the both-set assertion",
   );
-  // The error message must mention FormRenderer so a developer scrolling
-  // the console can see which component complained.
+  // Spec 167 — the assertion was upgraded from `console.error` to
+  // `throw new Error(...)` because a console.error scrolls past unread
+  // while a guarded throw crashes the dev render / fails the test, which
+  // is the loudness level the discriminated-union contract actually needs.
+  // The message must still mention FormRenderer so the dev sees which
+  // component complained (in either the React error boundary or the test
+  // failure assertion).
   assert.match(
     src,
-    /\[FormRenderer\]/,
-    "FormRenderer's dev assertion message must be prefixed with [FormRenderer]",
+    /FormRenderer/,
+    "FormRenderer's dev assertion message must mention FormRenderer so the dev knows which component complained",
   );
-  // console.error (not warn / log) because this is a programmer mistake
-  // that breaks production semantics.
+  // Accept either the historical `console.error(...)` or the spec-167
+  // `throw new Error(...)` shape. Both keep the dev-only programmer-
+  // mistake surface; the throw is strictly louder.
   assert.match(
     src,
-    /console\.error\(/,
-    "FormRenderer must use console.error for the both-set dev assertion",
+    /(?:console\.error\(|throw\s+new\s+Error\()/,
+    "FormRenderer must use console.error or throw new Error for the both-set dev assertion",
   );
 });
 

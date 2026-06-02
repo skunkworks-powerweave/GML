@@ -17,6 +17,9 @@
     "dev": "pnpm --filter @gml/web dev",
     "lint": "pnpm -r --if-present lint",
     "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "migrate": "pnpm --filter @gml/db migrate",
+    "seed:all": "pnpm --filter @gml/db seed:all",
     "session-start": "node scripts/session_start.mjs"
   }
 }

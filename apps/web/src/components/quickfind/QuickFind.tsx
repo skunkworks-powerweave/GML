@@ -69,6 +69,35 @@ function recentsKey(userId: string): string {
   return `gml.quickfind.recent.${userId}`;
 }
 
+/**
+ * Spec 169 — clear ALL QuickFind recents from localStorage. Called from the
+ * sign-out path (Topbar user-pill form) before the server action fires so a
+ * shared-device handoff (teacher A logs out, teacher B logs in on the same
+ * tablet) doesn't surface teacher A's recently-viewed entities to teacher B
+ * via the empty-state recents card.
+ *
+ * Wipes the canonical key prefix (`gml.quickfind.recent.`) — both the
+ * current user's row and any orphaned rows from previous accounts that
+ * touched this device. Best-effort; failures (private browsing / quota /
+ * localStorage disabled) are swallowed because we cannot block the
+ * sign-out path on a client-storage hiccup.
+ */
+export function clearAllQuickFindRecents(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith("gml.quickfind.recent.")) keys.push(k);
+    }
+    for (const k of keys) {
+      window.localStorage.removeItem(k);
+    }
+  } catch {
+    // localStorage quota / disabled / private-browsing — nothing to do.
+  }
+}
+
 function readRecents(userId: string): QuickFindResult[] {
   if (typeof window === "undefined") return [];
   try {

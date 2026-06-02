@@ -255,6 +255,13 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
     return;
   }
 
+  // Spec 167 — cost 10 mirrors `BCRYPT_COST` in
+  // apps/web/src/lib/password.ts (single source of truth for the bcrypt cost
+  // across the LMS). seed.ts can't import from apps/web (the seed runs from
+  // packages/db and reaches across the workspace boundary would be a
+  // dependency-direction inversion), so the value is duplicated here with
+  // this paired comment as the contract. The spec-167 governance test pins
+  // both literals — a future cost bump that misses one side fails the test.
   const passwordHash = await bcrypt.hash(password, 10);
 
   await db

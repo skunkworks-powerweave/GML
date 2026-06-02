@@ -17,15 +17,22 @@
 //   `pnpm test` to depend on a live Postgres+Redis+MinIO+Next.js stack
 //   being up. Smoke is opt-in via the `test:smoke` script.
 //
-// Endpoints covered (8 distinct fetches against the running app):
-//   1. GET  /api/health                       → 200, JSON shape with db/redis/minio/migrations
-//   2. GET  /login                            → 200, contains visible "Sign in" text
-//   3. GET  /api/auth/csrf                    → 200, csrfToken present
-//   4. POST /api/auth/callback/credentials    → 401 / redirect-with-error (bad credentials)
-//   5. GET  /dashboard (no auth)              → 302 → /login (middleware gate)
-//   6. GET  /api/health (re-check)            → migrations.ok must be true (boot ran migrations)
-//   7. POST /api/notifications/mark-read      → 401 (auth gate, spec 096)
-//   8. POST /api/webhooks/whatsapp (no sig)   → 401 (signature verification, spec 040)
+// Endpoints covered (12 distinct fetches against the running app — the
+// first 8 are the spec-111 originals; the last 4 were added in
+// the spec-171 run-16 audit-closure docs refresh to cover the new
+// admin surfaces and the password-reset entry point):
+//   1.  GET  /api/health                       → 200, JSON shape with db/redis/minio/migrations
+//   2.  GET  /login                            → 200, contains visible "Sign in" text
+//   3.  GET  /api/auth/csrf                    → 200, csrfToken present
+//   4.  POST /api/auth/callback/credentials    → 401 / redirect-with-error (bad credentials)
+//   5.  GET  /dashboard (no auth)              → 302 → /login (middleware gate)
+//   6.  GET  /api/health (re-check)            → migrations.ok must be true (boot ran migrations)
+//   7.  POST /api/notifications/mark-read      → 401 (auth gate, spec 096)
+//   8.  POST /api/webhooks/whatsapp (no sig)   → 401 (signature verification, spec 040)
+//   9.  GET  /admin/quizzes (anon)             → 302 to /login OR 403 to /forbidden (spec 120 surface)
+//   10. GET  /admin/transcode-jobs (anon)      → 302 to /login OR 403 to /forbidden (spec 162 surface)
+//   11. GET  /admin/system-settings (anon)     → 302 to /login OR 403 to /forbidden (spec 124 surface)
+//   12. GET  /login/forgot                     → 200 (public surface — gates SMTP-availability rendering)
 
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
@@ -206,5 +213,75 @@ test("smoke 8: POST /api/webhooks/whatsapp without an HMAC signature returns 401
     res.status,
     401,
     "unsigned WhatsApp webhook payload must be rejected with 401 (signature_failed)",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Helper: an anonymous GET against an admin-gated page must either redirect
+// to /login (302) or hand back a 403 /forbidden body. Either is acceptable;
+// the surface MUST NOT 200 with content. Added in spec 171 to cover the
+// post-audit-closure admin surfaces.
+// ---------------------------------------------------------------------------
+function assertAuthGated(res, path) {
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get("location") ?? "";
+    assert.ok(
+      /\/login|\/forbidden/.test(loc),
+      `${path} redirect must point at /login or /forbidden, got: ${loc}`,
+    );
+    return;
+  }
+  if (res.status === 403) return; // also acceptable
+  assert.fail(
+    `${path} (anon) must redirect (302) or 403; got status ${res.status}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 9. /admin/quizzes (anon) — must be auth-gated (spec 120 + 171)
+// ---------------------------------------------------------------------------
+test("smoke 9: GET /admin/quizzes (anon) redirects to /login or 403s", async (t) => {
+  if (skipIfUnreachable(t)) return;
+  const res = await fetch(BASE + "/admin/quizzes", { redirect: "manual" });
+  assertAuthGated(res, "/admin/quizzes");
+});
+
+// ---------------------------------------------------------------------------
+// 10. /admin/transcode-jobs (anon) — must be auth-gated (spec 162 + 171)
+// ---------------------------------------------------------------------------
+test("smoke 10: GET /admin/transcode-jobs (anon) redirects to /login or 403s", async (t) => {
+  if (skipIfUnreachable(t)) return;
+  const res = await fetch(BASE + "/admin/transcode-jobs", { redirect: "manual" });
+  assertAuthGated(res, "/admin/transcode-jobs");
+});
+
+// ---------------------------------------------------------------------------
+// 11. /admin/system-settings (anon) — must be auth-gated (spec 124 + 171)
+// ---------------------------------------------------------------------------
+test("smoke 11: GET /admin/system-settings (anon) redirects to /login or 403s", async (t) => {
+  if (skipIfUnreachable(t)) return;
+  const res = await fetch(BASE + "/admin/system-settings", { redirect: "manual" });
+  assertAuthGated(res, "/admin/system-settings");
+});
+
+// ---------------------------------------------------------------------------
+// 12. /login/forgot — public surface, must render 200 (spec 161 + 171)
+// ---------------------------------------------------------------------------
+test("smoke 12: GET /login/forgot returns 200 (public surface)", async (t) => {
+  if (skipIfUnreachable(t)) return;
+  const res = await fetch(BASE + "/login/forgot");
+  assert.equal(
+    res.status,
+    200,
+    "/login/forgot must be reachable without a session — it's the password-reset entry point",
+  );
+  // The page either renders the reset form (SMTP configured) or the
+  // "feature unavailable" banner (no SMTP). Either is fine; pin presence
+  // of the page chrome by looking for the "password" word somewhere in
+  // the HTML — both branches mention it.
+  const html = await res.text();
+  assert.ok(
+    /password|reset|forgot/i.test(html),
+    "/login/forgot HTML must contain the words 'password' / 'reset' / 'forgot' (either the form copy OR the unavailable-banner copy)",
   );
 });

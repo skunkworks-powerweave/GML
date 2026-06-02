@@ -27,8 +27,18 @@
 // runner auto-submits whatever state the learner has collected, via the
 // same submitAction wire shape used on click — every unanswered question
 // carries `selectedIndex: null` per the spec 146 grading contract.
+//
+// Spec 169 — Workflow Run 16 polish: thumb-friendly horizontal swipes
+// jump between questions, mirroring the spec 139 pattern wired into
+// MobileFormRunner. Left-swipe (→ next) advances after the same
+// "selection required" gate the Next button uses; right-swipe (→ prev)
+// is a free move back, clamped to step 0. Swipes are ADDITIVE — the
+// Previous / Next buttons remain the canonical affordance so keyboard
+// and screen-reader users have unchanged paths. Submit always happens
+// via the explicit button; we never let a swipe finalise the quiz.
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { useSwipe } from "@/lib/use-swipe";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -127,6 +137,40 @@ export function MobileQuizRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Spec 169 — named nav helpers so swipe + button share one path.
+  // Hoisted above the empty-questions early return so the useSwipe
+  // hook below is called unconditionally on every render (Rules of
+  // Hooks). goNext mirrors the disabled state of the Next button: a
+  // swipe can advance only when the current question has a selection
+  // AND we are not on the last screen (the last screen's right-side
+  // action is Submit, which is button-only by design — see swipe
+  // wire below).
+  const totalCount = questions.length;
+  const isLast = totalCount > 0 && idx === totalCount - 1;
+  const currentQ = totalCount > 0 ? questions[idx] : undefined;
+  const selection = currentQ ? selected[currentQ.id] : undefined;
+  const goNext = () => {
+    if (isPending) return;
+    if (totalCount === 0) return;
+    if (selection === undefined) return;
+    if (isLast) return;
+    setIdx((i) => Math.min(totalCount - 1, i + 1));
+  };
+  const goPrev = () => {
+    if (isPending) return;
+    setIdx((i) => Math.max(0, i - 1));
+  };
+
+  // Spec 169 — swipe gestures. Left-swipe = next (gated by goNext);
+  // right-swipe = previous (gated by goPrev). The hook honours the
+  // same 80px / 40px / 400ms thresholds as the form runner so a
+  // vertical scroll never registers as a swipe. `useSwipe` is SSR-safe
+  // and a no-op on browsers without PointerEvent.
+  const { ref: swipeRef, reducedMotion } = useSwipe<HTMLDivElement>(
+    () => goNext(),
+    () => goPrev(),
+  );
+
   if (questions.length === 0) {
     return (
       <div
@@ -146,10 +190,8 @@ export function MobileQuizRunner({
     );
   }
 
-  const q = questions[idx];
-  const totalCount = questions.length;
-  const selection = selected[q.id];
-  const isLast = idx === totalCount - 1;
+  // After the early return above, currentQ is guaranteed non-undefined.
+  const q = currentQ as MobileQuizRunnerQuestion;
 
   const onPick = (i: number) =>
     setSelected((s) => ({ ...s, [q.id]: i }));
@@ -184,11 +226,15 @@ export function MobileQuizRunner({
 
   return (
     <div
+      ref={swipeRef}
       data-testid="mobile-quiz-runner"
+      data-reduced-motion={reducedMotion ? "true" : "false"}
       style={{
         display: "flex",
         flexDirection: "column",
         minHeight: "calc(100dvh - 120px)",
+        // Allow vertical scroll natively; horizontal travel is the swipe.
+        touchAction: "pan-y",
       }}
     >
       {/* Top: progress dots + title + counter */}
@@ -416,7 +462,7 @@ export function MobileQuizRunner({
           className="btn"
           data-testid="mobile-quiz-prev"
           disabled={idx === 0 || isPending}
-          onClick={() => setIdx((i) => Math.max(0, i - 1))}
+          onClick={goPrev}
           style={{
             flex: 1,
             minHeight: 48,
@@ -430,7 +476,7 @@ export function MobileQuizRunner({
             className="btn btn-primary"
             data-testid="mobile-quiz-next"
             disabled={selection === undefined || isPending}
-            onClick={() => setIdx((i) => Math.min(totalCount - 1, i + 1))}
+            onClick={goNext}
             style={{
               flex: 1.6,
               minHeight: 48,

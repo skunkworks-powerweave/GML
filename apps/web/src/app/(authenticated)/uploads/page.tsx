@@ -21,6 +21,7 @@ import { videoSubmissions, files, observationCycles } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
 import { MobileUploadRunner } from "@/components/video/MobileUploadRunner";
 import { getDeviceType } from "@/lib/device";
+import { assertEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -143,9 +144,16 @@ export default async function UploadsPage() {
   const viewerId = session.user.id;
   // Spec 135 — device-aware shell. The same env-var contract as
   // /videos UploadModal (spec 132) is reused for the WhatsApp fallback.
+  // Spec 169 — `process.env.GML_WHATSAPP_NUMBER` is now read THROUGH
+  // assertEnv() so a typo'd value (missing `+`, stray whitespace) falls
+  // through to `WHATSAPP_PHONE_NUMBER_ID` / null and the downstream
+  // UploadModal / MobileUploadRunner hide the WhatsApp path entirely
+  // rather than rendering a broken wa.me link. The legacy env name is
+  // preserved for backwards compatibility with deployments that pre-date
+  // the GML_* override.
   const device = await getDeviceType();
   const whatsappPhone =
-    process.env.GML_WHATSAPP_NUMBER ??
+    assertEnv().whatsappNumber.value ??
     process.env.WHATSAPP_PHONE_NUMBER_ID ??
     null;
 
