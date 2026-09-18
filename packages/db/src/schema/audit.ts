@@ -19,13 +19,25 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
-import { users } from "./identity";
 
 export const auditLog = pgTable(
   "audit_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    // Deliberately NOT a foreign key. See migration 0023.
+    //
+    // It was `references(() => users.id, { onDelete: "set null" })`, and
+    // "SET NULL" is an UPDATE — which audit_log's own BEFORE UPDATE trigger
+    // rejects, because the table is append-only (SM-1). The two features
+    // cancelled out, so any user who had ever acted could never be deleted:
+    //   DELETE user -> "audit_log is append-only (SM-1). UPDATE/DELETE blocked."
+    //
+    // CASCADE would be worse — deleting a user would erase their own trail.
+    // A forensic log should carry no referential action at all: it records what
+    // was true at the time and is never revised. Attribution survives the actor.
+    //
+    // Consequence: this may reference a deleted user. Always LEFT JOIN.
+    userId: uuid("user_id"),
     action: varchar("action", { length: 64 }).notNull(),
     entityType: varchar("entity_type", { length: 64 }),
     entityId: text("entity_id"),
