@@ -70,6 +70,17 @@ export default async function AdminIndexPage() {
         <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
           <li>
             <Link
+              href="/admin/users"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">Users</div>
+              <div className="text-xs text-neutral-500">
+                Create accounts, set roles, deactivate &middot; programme_admin and above
+              </div>
+            </Link>
+          </li>
+          <li>
+            <Link
               href="/admin/audit"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >

@@ -61,6 +61,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
     {
       section: "System",
       items: [
+        { id: "users", label: "Users", icon: "users", href: "/admin/users" },
         { id: "audit", label: "Audit log", icon: "shield", href: "/admin/audit", gate: "admin" },
         { id: "gates", label: "Section gates", icon: "lock", href: "/admin/gates" },
         { id: "forms", label: "Forms & quizzes", icon: "file", href: "/admin/forms" },
@@ -102,6 +103,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
     {
       section: "System",
       items: [
+        { id: "users", label: "Users", icon: "users", href: "/admin/users" },
         { id: "audit", label: "Audit log", icon: "shield", href: "/admin/audit", gate: "admin" },
         { id: "forms", label: "Forms & quizzes", icon: "file", href: "/admin/forms" },
       ],
