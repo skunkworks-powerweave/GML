@@ -155,6 +155,13 @@
       "when": 1780716000000,
       "tag": "0021_transcode_jobs_dropped_status",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1780720000000,
+      "tag": "0022_video_review_timestamp",
+      "breakpoints": true
     }
   ]
 }

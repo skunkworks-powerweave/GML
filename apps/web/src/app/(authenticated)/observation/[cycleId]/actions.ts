@@ -51,6 +51,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
@@ -143,6 +144,15 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
   const cycleId = String(formData.get("cycleId") ?? "").trim();
   if (!cycleId) redirect("/observation?error=invalid_cycle");
 
+  // OWNERSHIP GATE. requireRole() above answers "may this KIND of user act";
+  // it never asked whether THIS cycle is theirs. cycleId arrives straight from
+  // the form body, so without this any authenticated user could drive any
+  // teacher's observation cycle -- submit its forms, sign it off, overwrite its
+  // remark -- simply by posting a different UUID.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessCycle(actor, cycleId);
+
   const responses = collectResponses(formData);
 
   await db
@@ -184,6 +194,15 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
 
   const cycleId = String(formData.get("cycleId") ?? "").trim();
   if (!cycleId) redirect("/observation?error=invalid_cycle");
+
+  // OWNERSHIP GATE. requireRole() above answers "may this KIND of user act";
+  // it never asked whether THIS cycle is theirs. cycleId arrives straight from
+  // the form body, so without this any authenticated user could drive any
+  // teacher's observation cycle -- submit its forms, sign it off, overwrite its
+  // remark -- simply by posting a different UUID.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
 
@@ -227,6 +246,15 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
 
   const cycleId = String(formData.get("cycleId") ?? "").trim();
   if (!cycleId) redirect("/observation?error=invalid_cycle");
+
+  // OWNERSHIP GATE. requireRole() above answers "may this KIND of user act";
+  // it never asked whether THIS cycle is theirs. cycleId arrives straight from
+  // the form body, so without this any authenticated user could drive any
+  // teacher's observation cycle -- submit its forms, sign it off, overwrite its
+  // remark -- simply by posting a different UUID.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
 
@@ -275,6 +303,15 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
   const cycleId = String(formData.get("cycleId") ?? "").trim();
   if (!cycleId) redirect("/observation?error=invalid_cycle");
 
+  // OWNERSHIP GATE. requireRole() above answers "may this KIND of user act";
+  // it never asked whether THIS cycle is theirs. cycleId arrives straight from
+  // the form body, so without this any authenticated user could drive any
+  // teacher's observation cycle -- submit its forms, sign it off, overwrite its
+  // remark -- simply by posting a different UUID.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessCycle(actor, cycleId);
+
   const code = await transitionCycleStatus(cycleId, "post_submitted", "complete");
 
   void recordAudit({
@@ -303,7 +340,7 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function addNoteAction(formData: FormData): Promise<void> {
-  await requireRole([
+  const session = await requireRole([
     "observer",
     "mentor",
     "programme_admin",
@@ -313,6 +350,15 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   const cycleId = String(formData.get("cycleId") ?? "").trim();
   const note = String(formData.get("note") ?? "").trim();
   if (!cycleId) redirect("/observation?error=invalid_cycle");
+
+  // OWNERSHIP GATE. requireRole() above answers "may this KIND of user act";
+  // it never asked whether THIS cycle is theirs. cycleId arrives straight from
+  // the form body, so without this any authenticated user could drive any
+  // teacher's observation cycle -- submit its forms, sign it off, overwrite its
+  // remark -- simply by posting a different UUID.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessCycle(actor, cycleId);
   if (!note) {
     redirect(`/observation/${cycleId}?error=empty_note`);
   }

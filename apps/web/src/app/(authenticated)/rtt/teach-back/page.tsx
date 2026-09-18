@@ -62,6 +62,8 @@ type Row = {
   source: "direct" | "whatsapp" | "external_link" | "google_drive";
   captionRaw: string | null;
   hlsKey: string | null;
+  /** Null until a mentor/observer reviews it. Review is NOT a `status` value. */
+  reviewedAt: Date | null;
   teacherName: string | null;
   teacherHindi: string | null;
   teacherSubject: string | null;
@@ -88,6 +90,7 @@ export default async function TeachBackQueuePage({
       source: videoSubmissions.source,
       captionRaw: videoSubmissions.captionRaw,
       hlsKey: videoSubmissions.hlsMasterKey,
+      reviewedAt: videoSubmissions.reviewedAt,
       teacherName: teachers.fullName,
       teacherHindi: teachers.hindiName,
       teacherSubject: teachers.subjectSpecialism,
@@ -99,11 +102,19 @@ export default async function TeachBackQueuePage({
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(80);
 
-  const rows = filter ? baseRows.filter((r) => r.status === filter) : baseRows;
+  // Review state is now a timestamp, not a value of `status`. These counters
+  // previously tested status === "review_pending", which NOTHING in the codebase
+  // ever wrote -- the worker writes ready/failed and the webhook writes received
+  // -- so "Pending review" was permanently zero while every unreviewed clip sat
+  // in the queue uncounted. See migration 0022.
+  const isReviewed = (r: Row) => r.reviewedAt !== null;
+  const rows = filter
+    ? baseRows.filter((r) => (filter === "reviewed" ? isReviewed(r) : !isReviewed(r)))
+    : baseRows;
   const counts = {
     all: baseRows.length,
-    review_pending: baseRows.filter((r) => r.status === "review_pending").length,
-    reviewed: baseRows.filter((r) => r.status === "reviewed").length,
+    review_pending: baseRows.filter((r) => !isReviewed(r)).length,
+    reviewed: baseRows.filter(isReviewed).length,
   };
 
   // Right-pane selection — clear ?id if it isn't in the current filtered view
@@ -457,7 +468,7 @@ export default async function TeachBackQueuePage({
               >
                 View video
               </Link>
-              {selected.status === "reviewed" ? (
+              {selected.reviewedAt !== null ? (
                 <span
                   style={{
                     padding: "8px 14px",

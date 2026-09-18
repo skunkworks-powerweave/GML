@@ -160,3 +160,85 @@ Stated so the results are not over-read:
   running it. Re-verify on a host with unrestricted egress.
 - `minio`, `minio-init` and `tusd` were skipped via `--no-deps` after B9 made them
   unpullable.
+
+---
+
+# Authorization verification (Phase 3)
+
+Executed over real HTTP against the running stack, with a migrated and seeded
+database. Accounts: a seeded `super_admin`, plus `teacher.a` / `teacher.b`
+linked to two different `teachers` rows and `mentor.m` linked to a `mentors` row.
+
+## Credentials login works end to end
+
+Never verified before this session. `GET /api/auth/csrf` -> `POST
+/api/auth/callback/credentials` -> session cookie set -> `GET /dashboard` = 200.
+
+## The section gate was bypassable with a cookie I typed
+
+Before the fix, signed in as a teacher with no gate unlocked:
+
+```
+no gate cookie      -> 307  /gate/observation?next=...
+Cookie: gml-gate-observation=1   -> 200  (page rendered)
+```
+
+No password, no grant, no signature. That is the "section-level rotatable
+passwords" hard requirement, defeated by one header.
+
+Three separate layers were non-functional at once:
+  1. `section_gates` was seeded by nothing -- the table was EMPTY on every
+     deployment, so no section password existed to enter in the first place.
+  2. The decision was an unsigned cookie compared to the string `"1"`.
+  3. `section_gate_grants` was written on every unlock and read by nothing --
+     `getActiveGrant()` had zero call sites.
+
+## After the fix
+
+Enforcement moved into server layouts for the gated segments
+(`assertSectionGate` -> `getActiveGrant`). The proxy no longer gates at all: a
+cookie "fast path" produces FALSE NEGATIVES (a user with a valid grant but no
+cookie gets bounced before the layout runs), which this test caught.
+
+| State | Result |
+|---|---|
+| Valid grant in DB, **no cookie at all** | **200 ACCESS** — correct, and the old cookie-only design would have wrongly denied it |
+| After rotation deletes grants, no cookie | **307 DENIED** |
+| After rotation, **forged cookie** | **307 DENIED** (was: 200 ACCESS) |
+
+Rotation revokes for the first time.
+
+## IDOR matrix
+
+| Actor | Target | Result |
+|---|---|---|
+| teacher A | own observation cycle | 200 PASS |
+| teacher A | **another teacher's cycle** | **404 PASS** |
+| teacher A | a mentorship pairing | **404 PASS** |
+| super_admin | another teacher's cycle | 200 PASS |
+| super_admin | a mentorship pairing | 200 PASS |
+
+404 rather than 403 is deliberate: a 403 on `/observation/<uuid>` confirms the
+uuid names a real cycle, which is the enumeration signal being removed.
+
+## Incidentally verified
+
+- **The login rate limiter works.** Repeated attempts began returning
+  `CredentialsSignin` with no session; Redis held
+  `rl:login:127.0.0.1:teacher.a@test.invalid`. 5 attempts / 15 min per
+  `ip:email`, as configured. It denied a *correct* password once the budget was
+  spent, which is the intended fail-closed behaviour.
+- **Migrations are idempotent across runs.** A second `migrate` applied only
+  the new 0022 and logged
+  `_post/001_revoke_audit_writes.sql already applied — skipping`.
+- **SM-1 append-only triggers exist and are attached** (`audit_log_no_update`,
+  `audit_log_no_delete`).
+
+## Still open
+
+- **There are no teacher or mentor accounts.** After a full seed the `users`
+  table holds exactly ONE row, the `super_admin`; all 10 `teachers` and 2
+  `mentors` rows have `user_id IS NULL`. The accounts above had to be created by
+  hand for this test. Onboarding the people this product is for still has no
+  mechanism -- and any invite flow must also LINK the new user to their
+  `teachers` / `mentors` row, or the ownership checks resolve to nothing.

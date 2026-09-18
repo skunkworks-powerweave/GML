@@ -80,6 +80,12 @@ export const videoSubmissions = pgTable(
     height: integer("height"),
     processingLog: text("processing_log"),
     submittedByUserId: uuid("submitted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    // Review is its own state, NOT a value of `status`. Folding it into the
+    // pipeline enum meant marking a teach-back reviewed set status='reviewed',
+    // and the player only renders when status='ready' -- so reviewing a video
+    // permanently destroyed playback. See migration 0022.
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true, mode: "date" }),
+    reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
     contextType: varchar("context_type", { length: 32 }).notNull(),
     contextId: uuid("context_id"),
     captionRaw: text("caption_raw"), // raw WhatsApp caption (when source='whatsapp')

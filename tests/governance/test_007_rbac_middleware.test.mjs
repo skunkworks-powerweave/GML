@@ -19,10 +19,28 @@ test("guards.tsx exports Guarded + requireRole", () => {
   assert.match(src, /Guarded/);
 });
 
-test("shared roles.ts has ROLE_RANK and hasRole", () => {
+test("shared roles.ts compares roles by exact membership, not by rank", () => {
   const src = read("packages/shared/src/auth/roles.ts");
-  assert.match(src, /ROLE_RANK/);
+
+  // Inverted deliberately. This used to assert that ROLE_RANK was PRESENT --
+  // i.e. it pinned the bug in place. The rank map made hasRole a `>=`
+  // comparison, so a roles array behaved as a minimum-rank floor: `observer`
+  // and `mentor` (both rank 2) satisfied each other, and any list containing
+  // `teacher` (rank 1) admitted every authenticated user.
+  assert.doesNotMatch(
+    src,
+    /export\s+const\s+ROLE_RANK/,
+    "roles.ts must not export a ROLE_RANK map — role checks are exact, not ranked",
+  );
+  assert.doesNotMatch(
+    src,
+    /ROLE_RANK\[[^\]]+\]\s*>=/,
+    "roles.ts must not compare roles with >= — that turns an allow-list into a floor",
+  );
+
   assert.match(src, /hasRole/);
+  assert.match(src, /hasAnyRole/);
+  assert.match(src, /isRoleName/, "roles.ts must export an isRoleName type guard");
   for (const r of ["super_admin", "programme_admin", "mentor", "observer", "teacher"]) {
     assert.match(src, new RegExp(r));
   }

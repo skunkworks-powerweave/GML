@@ -1,12 +1,9 @@
 // /videos/[id] — HLS player page with signed URL + watermark.
 
-import { notFound } from "next/navigation";
 import Link from "next/link";
 import { headers } from "next/headers";
-import { eq } from "drizzle-orm";
-import { db } from "@gml/db";
-import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
 import { redirect } from "next/navigation";
 import { signMediaToken } from "@/lib/video/signed-url";
 import { recordAudit } from "@/lib/audit";
@@ -21,8 +18,19 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   if (!session?.user?.id) redirect("/login");
   const userId = session.user.id;
 
-  const [video] = await db.select().from(videoSubmissions).where(eq(videoSubmissions.id, id)).limit(1);
-  if (!video) notFound();
+  // OWNERSHIP GATE. This was the single highest-severity IDOR in the app: the
+  // page called auth(), selected the video by id with NO ownership predicate,
+  // and then minted a playable media token. Any signed-in teacher could play any
+  // video in the programme -- including mentorship meeting recordings and mentee
+  // quarterly videos -- from a guessed or observed UUID. The check must run
+  // BEFORE signMediaToken() below.
+  //
+  // assertCanAccessVideo returns the row, so this replaces the old SELECT rather
+  // than adding a query. It notFound()s (not 403) so an unauthorised id is
+  // indistinguishable from a non-existent one.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const video = await assertCanAccessVideo(actor, id);
 
   const hdr = await headers();
   const ip = hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ?? hdr.get("x-real-ip") ?? "unknown";

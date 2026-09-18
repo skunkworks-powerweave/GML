@@ -31,6 +31,7 @@ import {
   type FeedbackForm,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
@@ -195,6 +196,10 @@ export async function submitFormAction(formData: FormData): Promise<void> {
 
   const formId = String(formData.get("__formId") ?? "").trim();
   const slug = String(formData.get("__slug") ?? "").trim();
+  // pairingId arrives in the POST BODY and is written straight to
+  // feedback_responses.pairing_id, so without a check any authenticated user
+  // could file feedback against any mentorship pairing -- and, on the read path
+  // below, prefill the form with another pairing's previously submitted answers.
   const pairingId = String(formData.get("__pairingId") ?? "").trim();
 
   if (!formId || !slug) {
@@ -203,6 +208,14 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   if (!pairingId) {
     redirect(`/forms/${slug}?error=missing_pairing`);
   }
+
+  // OWNERSHIP GATE on the write path. The read path below is already scoped by
+  // respondentUserId, so it only ever surfaces the caller's own prior answers --
+  // but the INSERT took pairingId from the body unchecked, so any authenticated
+  // user could file mentorship feedback against any pairing in the programme.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessPairing(actor, pairingId);
 
   // Pull the form back so we know which field ids to accept. Drop unknown keys.
   const [form] = await db

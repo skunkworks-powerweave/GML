@@ -48,11 +48,24 @@ test("spec 097 — role gate covers exactly the four reader roles, returns 403 o
   assert.match(src, /status:\s*403/);
 });
 
-test("spec 097 — UPDATE is scoped to context_type='teach_back' and sets status='reviewed'", () => {
+test("spec 097 — UPDATE is scoped to context_type='teach_back' and records review without clobbering status", () => {
   const src = read(ROUTE_PATH);
   // drizzle update on videoSubmissions
   assert.match(src, /db\s*\.\s*update\(videoSubmissions\)/);
-  assert.match(src, /\.set\(\{\s*status:\s*"reviewed"\s*\}\)/);
+
+  // Inverted deliberately. This used to REQUIRE `.set({ status: "reviewed" })`,
+  // pinning a real bug in place: `video_status` is one mutually-exclusive enum
+  // doing double duty as pipeline state and review state, and the player only
+  // renders when status === "ready". So marking a teach-back reviewed
+  // permanently destroyed playback, and the review page's own "View video" link
+  // landed on a dead player. Review is now its own timestamp (migration 0022).
+  assert.doesNotMatch(
+    src,
+    /\.set\(\{[^}]*status:\s*"reviewed"/,
+    "review must not overwrite `status` — that makes the video unplayable",
+  );
+  assert.match(src, /reviewedAt/, "review must record a reviewedAt timestamp");
+  assert.match(src, /reviewedByUserId/, "review must record who reviewed it");
   // WHERE clauses: id match AND context_type='teach_back'
   assert.match(src, /videoSubmissions\.id/);
   assert.match(src, /videoSubmissions\.contextType/);

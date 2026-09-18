@@ -7,7 +7,11 @@ export const sessionsEntity: AdminEntity = {
   label: "Classroom sessions",
   table: sessions,
   readRoles: ["teacher", "observer", "mentor", "programme_admin", "super_admin"],
-  mutateRoles: ["teacher", "programme_admin", "super_admin"],
+  // "teacher" removed. PLAN.md's permission matrix has /admin/data/sessions as
+  // admin-write only, and with rank-based role checks this list admitted EVERY
+  // authenticated user (teacher was the lowest rank, so it set the floor) --
+  // including via POST /api/admin/data/sessions/import, which bulk-inserts.
+  mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
     { key: "scheduledDate", label: "Date" },
     { key: "schoolId", label: "School" },

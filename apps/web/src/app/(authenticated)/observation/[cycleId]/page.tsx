@@ -7,11 +7,13 @@
 // and the video-upload context handle. All status transitions go through
 // guarded server actions in ./actions.ts.
 
-import { notFound } from "next/navigation";
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { observationCycles, teachers, subjects, observationForms, observationEvidence } from "@gml/db/schema";
+import { teachers, subjects, observationForms, observationEvidence } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
@@ -44,12 +46,21 @@ export default async function CycleDetailPage({
   const sp = (await searchParams) ?? {};
   const error = (sp.error ?? "").trim();
 
-  const [cycle] = await db
-    .select()
-    .from(observationCycles)
-    .where(eq(observationCycles.id, cycleId))
-    .limit(1);
-  if (!cycle) notFound();
+  // OWNERSHIP GATE. This page did not call auth() at all -- it was login-gated
+  // only by the proxy policy and the (authenticated) layout, then loaded the
+  // cycle by id with no ownership predicate. Any signed-in user could read any
+  // teacher's evaluative observation, including its form responses and the
+  // mentor's private remark.
+  //
+  // Note the layout alone was never sufficient here: layouts and pages render
+  // in PARALLEL in the App Router, so this query would begin before the
+  // layout's redirect() resolved.
+  //
+  // assertCanAccessCycle returns the row, so this replaces the old SELECT.
+  const session = await auth();
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const cycle = await assertCanAccessCycle(actor, cycleId);
 
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, cycle.teacherId)).limit(1);
   const [subject] = cycle.subjectId

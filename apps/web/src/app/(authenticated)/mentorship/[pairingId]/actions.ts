@@ -30,6 +30,7 @@ import { db } from "@gml/db";
 import { mentorPairings, mentorMeetings } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
+import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 
 // ---------------------------------------------------------------------------
@@ -63,15 +64,14 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
     redirect(`/mentorship/${pairingId}?error=invalid_meeting_time`);
   }
 
-  // Confirm the pairing exists (cheap guard against URL tampering).
-  const [pairing] = await db
-    .select({ id: mentorPairings.id })
-    .from(mentorPairings)
-    .where(eq(mentorPairings.id, pairingId))
-    .limit(1);
-  if (!pairing) {
-    redirect(`/mentorship?error=pairing_not_found`);
-  }
+  // OWNERSHIP GATE. What stood here was described as a "cheap guard against URL
+  // tampering", but it only confirmed the pairing EXISTED -- not that the caller
+  // had anything to do with it. With no role check either, any authenticated
+  // user could log meetings against any mentorship pairing and bump its
+  // meetings_count / last_meeting_at counters.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertCanAccessPairing(actor, pairingId);
 
   let newMeetingId = "";
   await db.transaction(async (tx) => {
@@ -116,10 +116,17 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function completePairingAction(formData: FormData): Promise<void> {
-  await requireRole(["programme_admin", "super_admin"]);
+  const session = await requireRole(["programme_admin", "super_admin"]);
 
   const pairingId = String(formData.get("pairingId") ?? "").trim();
   if (!pairingId) redirect(`/mentorship?error=invalid_pairing`);
+
+  // Admin-only already, so this is defence in depth rather than a fix -- but it
+  // keeps every mutation on this resource behind one predicate, so the next
+  // action added here inherits the check instead of forgetting it.
+  const completeActor = actorFrom(session);
+  if (!completeActor) redirect("/login");
+  await assertCanAccessPairing(completeActor, pairingId);
 
   const endedAt = new Date();
   const updated = await db
@@ -155,6 +162,8 @@ export async function completePairingAction(formData: FormData): Promise<void> {
 export async function toggleCommitmentAction(formData: FormData): Promise<void> {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const commitmentActor = actorFrom(session);
+  if (!commitmentActor) redirect("/login");
 
   const pairingId = String(formData.get("pairingId") ?? "").trim();
   const index = Number(formData.get("index") ?? -1);
@@ -165,11 +174,21 @@ export async function toggleCommitmentAction(formData: FormData): Promise<void> 
     redirect(`/mentorship/${pairingId || ""}?error=invalid_commitment`);
   }
 
+  // OWNERSHIP GATE. This action had a session check and nothing else, so any
+  // authenticated user could write an unbounded attacker-controlled `text` into
+  // the APPEND-ONLY audit log against any pairing id -- rows the application
+  // role cannot delete afterwards.
+  await assertCanAccessPairing(commitmentActor, pairingId);
+
+  // Bound the free-text field. It is attacker-controlled and lands in a table
+  // that is append-only by trigger.
+  const boundedText = text.slice(0, 500);
+
   void recordAudit({
     action: "mentor.commitment.toggled",
     entityType: "mentor_pairing",
     entityId: pairingId,
-    metadata: { index, done, text },
+    metadata: { index, done, text: boundedText },
   });
 
   revalidatePath(`/mentorship/${pairingId}`);

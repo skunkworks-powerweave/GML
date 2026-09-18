@@ -11,6 +11,7 @@
 //   - "Complete"      → completePairingAction (super_admin + programme_admin).
 
 import { notFound, redirect } from "next/navigation";
+import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
 import { eq, desc } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -64,8 +65,14 @@ export default async function PairingDetailPage({
   const canComplete = hasAnyRole(session.user.role, ["programme_admin", "super_admin"]);
   const showLogMeetingForm = sp.logMeeting === "1";
 
-  const [pairing] = await db.select().from(mentorPairings).where(eq(mentorPairings.id, pairingId)).limit(1);
-  if (!pairing) notFound();
+  // OWNERSHIP GATE. auth() above only established that SOMEONE is signed in.
+  // The page then loaded the pairing by id and rendered the mentee teacher's
+  // row -- including their phone number, straight into a wa.me deep link -- so
+  // any authenticated user could read any mentee's contact details from a
+  // guessed UUID.
+  const pairingActor = actorFrom(session);
+  if (!pairingActor) redirect("/login");
+  const pairing = await assertCanAccessPairing(pairingActor, pairingId);
   const [mentor] = await db.select().from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
 

@@ -9,6 +9,7 @@
 
 import "dotenv/config";
 import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -31,6 +32,7 @@ export async function main() {
   // after first login because no seeded super_admin existed. This block creates that user
   // from environment variables so a fresh deployment has a working super_admin out-of-box.
   await bootstrapSuperAdmin(db);
+  await bootstrapSectionGates(db);
 
   // Spec 143 — system_settings singleton bootstrap moved entirely into migration 0015
   // (which already used INSERT … ON CONFLICT DO NOTHING). The previous seed-side helper
@@ -227,6 +229,64 @@ export async function main() {
 
   console.log("[seed] DONE: 2 districts, 11 zones, 10 schools, 10 teachers, 2 mentors, 10 pairings, 8 cycles, 9 curriculum subjects, 3 phases, 5 terms, 3 RTT subjects.");
   await pool.end();
+}
+
+// ── Section gate bootstrap ────────────────────────────────────────────────────
+// The section_gates table was seeded by NOTHING. It was empty on every
+// deployment, so there was no password to enter for /observation or
+// /mentorship -- and because the gate decision was a forgeable `gml-gate-<slug>`
+// cookie compared to the string "1", nobody noticed: you got in without one.
+// Now that the decision reads section_gate_grants server-side (see
+// apps/web/src/lib/gates.ts assertSectionGate), a gate with no row is a section
+// nobody can reach. So it has to be seeded.
+//
+// Password source, in order:
+//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION)
+//   2. a generated 16-char random password, PRINTED ONCE so the operator can
+//      distribute it. It is not recoverable afterwards -- only the bcrypt hash
+//      is stored -- which is the same contract as the super_admin bootstrap.
+//
+// Idempotent: a slug that already has a row is left alone, so re-running seed
+// never rotates a live password out from under its users. Rotation is an
+// explicit admin action (/admin/gates), not a side effect of deployment.
+async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
+  // 'tkt' and 'ttt' are deliberately NOT seeded: they gate /rtt/tkt and
+  // /rtt/ttt, and neither route exists in the app.
+  const slugs = ["observation", "mentorship", "admin"] as const;
+
+  for (const slug of slugs) {
+    const existing = await db
+      .select({ id: schema.sectionGates.id })
+      .from(schema.sectionGates)
+      .where(eq(schema.sectionGates.slug, slug))
+      .limit(1);
+
+    if (existing.length > 0) {
+      console.log(`[seed] exists — skipping section gate '${slug}'`);
+      continue;
+    }
+
+    const envKey = `GATE_PASSWORD_${slug.toUpperCase()}`;
+    const fromEnv = process.env[envKey];
+    const password = fromEnv ?? randomBytes(12).toString("base64url").slice(0, 16);
+
+    await db.insert(schema.sectionGates).values({
+      slug,
+      passwordHash: await bcrypt.hash(password, 10),
+      version: 1,
+    });
+
+    if (fromEnv) {
+      console.log(`[seed] ✓ section gate '${slug}' created from ${envKey}`);
+    } else {
+      console.log(
+        `[seed] ✓ section gate '${slug}' created — GENERATED PASSWORD: ${password}`,
+      );
+      console.log(
+        `[seed]   ^ store this now; only the hash is kept. Set ${envKey} to choose your own.`,
+      );
+    }
+  }
 }
 
 // ── Spec 103 — Super admin bootstrap ──────────────────────────────────────────

@@ -21,10 +21,12 @@
 // google_drive) so operators can scope by ingest channel.
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom, videoVisibilityFilter } from "@/lib/authz";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { UploadModal } from "@/components/video/UploadModal";
 import { assertEnv } from "@/lib/env";
@@ -103,6 +105,22 @@ export default async function VideoLibraryPage({
 
   // Spec 129: build the WHERE clause server-side from URL searchParams.
   const conds: SQL[] = [];
+
+  // VISIBILITY SCOPE. Until now this query had no user predicate at all: its
+  // only conditions were the optional status/source filters, so EVERY
+  // authenticated user -- teachers included -- could page through the whole
+  // programme's video library, mentorship meeting recordings and mentee
+  // quarterly videos among them. Chained with the /videos/[id] IDOR, a teacher
+  // could then open any of them.
+  //
+  // This has to be a WHERE clause rather than a post-fetch filter: the status
+  // counts below aggregate over the same predicate, so filtering in JS would
+  // still leak the totals.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const visibility = await videoVisibilityFilter(actor);
+  if (visibility) conds.push(visibility);
+
   if (filter) conds.push(eq(videoSubmissions.status, filter as VideoStatus));
   if (sourceFilter)
     conds.push(eq(videoSubmissions.source, sourceFilter as VideoSource));

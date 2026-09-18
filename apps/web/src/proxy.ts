@@ -55,22 +55,11 @@ const POLICIES: PolicyRule[] = [
 
 // Gated prefixes — checked via `gml-gate-<slug>=1` cookie (set by gate page) so
 // middleware (Edge runtime) avoids a DB hit per request.
-const GATED_PREFIXES: { prefix: string; slug: string }[] = [
-  { prefix: "/mentorship", slug: "mentorship" },
-  { prefix: "/observation", slug: "observation" },
-  { prefix: "/rtt/tkt", slug: "tkt" },
-  { prefix: "/rtt/ttt", slug: "ttt" },
-];
 
 function matchPolicy(pathname: string): PolicyRule | undefined {
   return POLICIES.find((p) => pathname === p.prefix || pathname.startsWith(p.prefix + "/"));
 }
 
-function matchGate(pathname: string): { slug: string } | undefined {
-  return GATED_PREFIXES.find(
-    (g) => pathname === g.prefix || pathname.startsWith(g.prefix + "/"),
-  );
-}
 
 // Next 16 renamed the `middleware` file convention to `proxy`. The rename is not
 // cosmetic here: `proxy` runs on the NODE.JS runtime (and that is not
@@ -87,7 +76,9 @@ function matchGate(pathname: string): { slug: string } | undefined {
 // policies, section gates, the login redirect -- was dead in production and
 // nothing said so. See docs/verification.md (B11).
 export default auth((req) => {
-  const { nextUrl, cookies: reqCookies } = req as unknown as NextRequest;
+  // `cookies` is no longer destructured: section gates were the only reader,
+  // and they are enforced in the gated segments' layouts now.
+  const { nextUrl } = req as unknown as NextRequest;
   const session = (req as unknown as { auth?: { user?: { role?: string } } }).auth;
   const policy = matchPolicy(nextUrl.pathname);
   if (!policy) return NextResponse.next();
@@ -125,20 +116,22 @@ export default auth((req) => {
     return NextResponse.rewrite(url, { status: 403 });
   }
 
-  const gateHit = matchGate(nextUrl.pathname);
-  if (gateHit) {
-    // Cookie marker (`gml-gate-<slug>=1`) is set by /gate/<slug>/actions on
-    // successful password entry. Lasts 8h (SM-2). Middleware reads cookie here
-    // so the Edge runtime doesn't have to hit Postgres on every request.
-    const cookieName = `gml-gate-${gateHit.slug}`;
-    const cookieValue = reqCookies?.get?.(cookieName)?.value;
-    if (cookieValue !== "1") {
-      const url = nextUrl.clone();
-      url.pathname = `/gate/${gateHit.slug}`;
-      url.searchParams.set("next", nextUrl.pathname);
-      return NextResponse.redirect(url);
-    }
-  }
+  // SECTION GATES ARE NOT ENFORCED HERE ANY MORE.
+  //
+  // This used to compare a `gml-gate-<slug>` cookie to the string "1". That was
+  // the entire check: unsigned, not bound to a user, never validated against
+  // section_gate_grants. Sending the header by hand walked straight in, and
+  // rotating a section password revoked nobody because the decision never read
+  // the rows rotation deletes.
+  //
+  // Enforcement now lives in the server layouts for the gated segments
+  // (app/(authenticated)/{observation,mentorship}/layout.tsx -> assertSectionGate),
+  // which does the grant lookup the cookie was standing in for.
+  //
+  // The check is NOT duplicated here as a "fast path". A cookie hint produces
+  // FALSE NEGATIVES -- a user holding a valid grant but no cookie (cleared
+  // cookies, a second browser, an expired marker on a live grant) would be
+  // bounced here before the layout ever ran. One authority, one answer.
 
   return NextResponse.next();
 });

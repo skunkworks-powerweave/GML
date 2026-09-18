@@ -1,0 +1,24 @@
+// Section-gate boundary for /observation.
+//
+// The gate decision lives HERE, not in the proxy. The proxy still checks the
+// `gml-gate-observation` cookie, but only to redirect quickly without a database
+// round-trip -- that cookie is an unsigned marker and was, until this layout
+// existed, the ONLY thing standing between any authenticated user and this
+// section (see lib/gates.ts assertSectionGate for the full account).
+//
+// A layout covers every nested route, so /observation/<id> inherits the check
+// automatically rather than each page having to remember it.
+
+import type { ReactNode } from "react";
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+import { assertSectionGate } from "@/lib/gates";
+
+export default async function ObservationGateLayout({ children }: { children: ReactNode }) {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+
+  await assertSectionGate(session.user.id, "observation", "/observation");
+
+  return <>{children}</>;
+}

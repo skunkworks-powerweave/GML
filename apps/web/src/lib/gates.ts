@@ -2,6 +2,7 @@
 // page (spec 009).
 
 import "server-only";
+import { redirect } from "next/navigation";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { db } from "@gml/db";
 import { sectionGates, sectionGateGrants } from "@gml/db/schema";
@@ -11,8 +12,10 @@ export type GateSlug = "mentorship" | "observation" | "tkt" | "ttt";
 export const GATED_PREFIXES: { prefix: string; slug: GateSlug }[] = [
   { prefix: "/mentorship", slug: "mentorship" },
   { prefix: "/observation", slug: "observation" },
-  { prefix: "/rtt/tkt", slug: "tkt" },
-  { prefix: "/rtt/ttt", slug: "ttt" },
+  // '/rtt/tkt' and '/rtt/ttt' were listed here and have been removed: neither
+  // route exists in the app. The RTT surfaces that actually ship are /rtt,
+  // /rtt/subject/[id], /rtt/teach-back and /rtt/online/{a,}synchronous, none of
+  // which is gated. Their gate passwords were therefore decorative.
 ];
 
 export function gateForPath(pathname: string): GateSlug | null {
@@ -48,4 +51,44 @@ export async function getCurrentGate(slug: GateSlug) {
     .orderBy(desc(sectionGates.version))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Server-side section-gate enforcement.
+ *
+ * THE BUG THIS CLOSES. Authorization for a gated section was a cookie whose
+ * value was compared to the literal string "1":
+ *
+ *     if (reqCookies?.get?.(`gml-gate-${slug}`)?.value !== "1") redirect(...)
+ *
+ * Unsigned, not bound to a user, and never checked against the database. Any
+ * authenticated user could send `Cookie: gml-gate-observation=1` and walk
+ * straight in -- verified against a running stack, see docs/verification.md.
+ * `section_gate_grants` was written on every successful unlock and then read by
+ * nothing: getActiveGrant() above had ZERO call sites.
+ *
+ * It also made password ROTATION a no-op. /api/admin/gates/[slug]/rotate
+ * deletes the grant rows and its own comment says that is what stops "a stale
+ * grant cookie" working -- but since the decision never consulted those rows,
+ * every issued cookie kept working for its full 8 hours after a rotation.
+ * "Section-level rotatable passwords" is a stated hard requirement of this
+ * product.
+ *
+ * Reading the grant makes rotation real: delete the rows and the very next
+ * request re-prompts. The cookie stays, but only as a fast-redirect UX hint in
+ * the proxy -- it is no longer the authorization decision.
+ *
+ * This runs in a server LAYOUT rather than the proxy because getActiveGrant is
+ * `server-only` and uses Drizzle. One indexed lookup per gated request
+ * (section_gate_grants_user_slug_idx covers user_id, gate_slug, expires_at).
+ */
+export async function assertSectionGate(
+  userId: string,
+  slug: GateSlug,
+  nextPath: string,
+): Promise<void> {
+  const grant = await getActiveGrant(userId, slug);
+  if (!grant) {
+    redirect(`/gate/${slug}?next=${encodeURIComponent(nextPath)}`);
+  }
 }

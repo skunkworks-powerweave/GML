@@ -56,8 +56,13 @@ export type NavCounts = {
 // counts.
 const ACTIVE_CYCLE_STATUSES = ["pre_submitted", "observed", "post_submitted"] as const;
 
-// Statuses that count a video as awaiting reviewer attention.
-const REVIEW_PENDING_STATUSES = ["review_pending"] as const;
+// "Awaiting reviewer attention" is now derived, not a status value.
+//
+// This used to be `["review_pending"]`, a status NOTHING in the codebase ever
+// wrote -- the worker writes ready/failed, the WhatsApp webhook writes received
+// -- so this badge counted rows that could not exist and was permanently zero
+// while the teach-back queue filled up. A clip needs review when it is a
+// playable teach-back that nobody has reviewed yet. See migration 0022.
 
 /**
  * Per-request cached nav badge loader. Returns a single object containing the
@@ -104,7 +109,9 @@ export const loadNavCounts = cache(async function loadNavCounts(
           .from(videoSubmissions)
           .where(
             and(
-              inArray(videoSubmissions.status, [...REVIEW_PENDING_STATUSES]),
+              eq(videoSubmissions.contextType, "teach_back"),
+              eq(videoSubmissions.status, "ready"),
+              isNull(videoSubmissions.reviewedAt),
               gte(videoSubmissions.createdAt, cutoff30d),
             ),
           ),

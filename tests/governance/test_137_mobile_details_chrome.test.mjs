@@ -321,10 +321,17 @@ test("spec 137 — adopting pages preserve their original data-fetching above th
   // role gates are still present after our edits — the wrap should be
   // purely cosmetic.
   const mentorshipSrc = read(MENTORSHIP_PAGE);
+  // The pairing lookup moved into assertCanAccessPairing() in lib/authz.ts.
+  // That is not a loss of data-fetching -- it is the same SELECT with an
+  // ownership predicate attached, returning the row so the page does not pay
+  // for a second round-trip. Previously this page loaded the pairing by id with
+  // no ownership check at all and rendered the mentee teacher's phone number
+  // into a wa.me link, so any authenticated user could read any mentee's
+  // contact details from a guessed UUID.
   assert.match(
     mentorshipSrc,
-    /\.from\(mentorPairings\)/,
-    "mentorship page must still fetch mentorPairings via drizzle",
+    /assertCanAccessPairing\(|\.from\(mentorPairings\)/,
+    "mentorship page must still resolve the pairing (directly or via assertCanAccessPairing)",
   );
   assert.match(
     mentorshipSrc,
@@ -332,10 +339,14 @@ test("spec 137 — adopting pages preserve their original data-fetching above th
     "mentorship page must still gate on hasAnyRole for the canComplete decision",
   );
   const obsSrc = read(OBSERVATION_PAGE);
+  // Same reasoning as the mentorship assertion above: the cycle SELECT moved
+  // into assertCanAccessCycle(). This page previously never called auth() at
+  // all and loaded any cycle by id, so any signed-in user could read any
+  // teacher's evaluative observation.
   assert.match(
     obsSrc,
-    /\.from\(observationCycles\)/,
-    "observation page must still fetch observationCycles via drizzle",
+    /assertCanAccessCycle\(|\.from\(observationCycles\)/,
+    "observation page must still resolve the cycle (directly or via assertCanAccessCycle)",
   );
   const repoSchoolSrc = read(REPO_SCHOOL_PAGE);
   assert.match(

@@ -56,7 +56,11 @@ export async function POST(
   // `.returning({id})` lets us treat zero rows as 404 without a separate SELECT.
   const updated = await db
     .update(videoSubmissions)
-    .set({ status: "reviewed" })
+    // Records the review WITHOUT touching `status`. This previously set
+    // status='reviewed', and because the player only builds a source when
+    // status='ready', pressing "Mark reviewed" permanently destroyed playback
+    // with no route back through the UI. See migration 0022.
+    .set({ reviewedAt: new Date(), reviewedByUserId: session.user.id })
     .where(
       and(
         eq(videoSubmissions.id, id),
