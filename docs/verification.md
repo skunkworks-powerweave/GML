@@ -242,3 +242,63 @@ uuid names a real cycle, which is the enumeration signal being removed.
   hand for this test. Onboarding the people this product is for still has no
   mechanism -- and any invite flow must also LINK the new user to their
   `teachers` / `mentors` row, or the ownership checks resolve to nothing.
+
+---
+
+# Worker image (B4) — resolved, verified by running it
+
+`docker/worker.Dockerfile` produced an image with **no application source in
+it**. Fixing that took four separate changes, and each one was only visible
+because the container was actually started:
+
+1. **No `COPY` of source at all.** The Dockerfile copied five `package.json`
+   files, ran `pnpm install`, then `COPY --from=deps /repo /app` — so the image
+   held `node_modules` and manifests and nothing else.
+   `/app/apps/worker/src/index.ts` did not exist.
+2. **`corepack enable` ran only in the deps stage**, so `pnpm` was not on `PATH`
+   in the runner. The `CMD` could not have started even with source present.
+3. **`pnpm exec` at runtime re-entered corepack**, which tried to download the
+   pinned pnpm into `$HOME/.cache/node/corepack`. The container runs as the
+   unprivileged `worker` user:
+   `Error: EACCES: permission denied, mkdir '/home/worker/.cache/node/corepack/v1'`.
+   The image still crash-looped — just on a different error. `CMD` now invokes
+   the resolved bin directly, which also removes a network dependency from
+   process start.
+4. **`dotenv` was imported but never declared.** `apps/worker/src/index.ts`
+   line 19 is `import "dotenv/config"`, and `dotenv` was not in
+   `apps/worker/package.json` — it worked in the monorepo by hoisting and failed
+   in a clean image with `ERR_MODULE_NOT_FOUND`. Now declared.
+
+Booted against the real stack:
+
+```
+[worker][info] online {"redis":"redis://redis:6379","concurrency":1}
+[worker][info] retention nightly schedule registered {"cron":"0 3 * * *"}
+```
+
+Connects to Redis and registers the SM-8 nightly retention job. First time this
+container has ever run.
+
+**Caveat:** the *real* image could not be built on this machine — local
+antivirus blocks `apt-get` fetches for ffmpeg
+(`499 Request has been forbidden by antivirus`). The verification above used an
+otherwise-identical image with the ffmpeg layer removed, so the source layout,
+module resolution, user permissions and startup path are all proven; the ffmpeg
+binary itself is not. CI builds the real image on every push.
+
+# CI — first run in the repository's history
+
+The workflow had never executed once: it triggered on `push: branches: [main]`
+while the branch was `master`, and there was no git remote at all. Both fixed.
+
+The first run failed, on exactly the two things it was built to catch:
+
+- **`container images` → `worker image has no entrypoint source`.** The job
+  asserts the built worker image contains its entrypoint, and it caught B4 on
+  its first execution. A Dockerfile can only be verified by building it.
+- **`static` → `ENOENT: workspace/state.json`.** `test_001` asserted on
+  `workspace/`, which `.gitignore` excludes (not even `workspace/.gitkeep` is
+  tracked). The suite passed on a developer machine and failed on every clean
+  checkout — precisely the failure mode predicted in the audit. Those two
+  assertions now skip when the directory is absent, since per-machine agent
+  scratch state is not a build input.

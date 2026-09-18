@@ -56,7 +56,18 @@ test("FR-006: .claude/settings.json declares the 6 hooks", () => {
   assert.ok(cfg.hooks.PreToolUse.length >= 3, "expected ≥3 PreToolUse hooks");
 });
 
-test("FR-007: workspace/state.json has a valid current spec pointer", () => {
+test("FR-007: workspace/state.json has a valid current spec pointer", (t) => {
+  // workspace/ is PER-MACHINE RUNTIME STATE for the local agent harness, and
+  // .gitignore excludes it (not even workspace/.gitkeep is tracked). Asserting
+  // it exists made this suite pass on a developer box and fail on every fresh
+  // clone -- which is exactly what happened on this repository's first-ever CI
+  // run, with ENOENT on workspace/state.json. A gate that only passes where the
+  // scratch files happen to exist is not a gate. Skip when absent; still verify
+  // the contents when a developer does have it.
+  if (!existsSync(resolve(root, "workspace/state.json"))) {
+    t.skip("workspace/ is gitignored runtime state — absent on a clean checkout");
+    return;
+  }
   const state = readJson("workspace/state.json");
   assert.match(String(state.currentSpec), /^\d{3}$/, "currentSpec must be 3-digit string");
   // specsTotal grew from v1's 70 → v2's 95 (spec 013 amendment). Keep it loose.
@@ -65,7 +76,12 @@ test("FR-007: workspace/state.json has a valid current spec pointer", () => {
   assert.equal(typeof state.specsCompleted, "number", "specsCompleted must be a number");
 });
 
-test("FR-007: workspace/session_log.md and marathon_log.md exist", () => {
+test("FR-007: workspace/session_log.md and marathon_log.md exist", (t) => {
+  // Same reasoning as above: gitignored local harness state, not a build input.
+  if (!existsSync(resolve(root, "workspace"))) {
+    t.skip("workspace/ is gitignored runtime state — absent on a clean checkout");
+    return;
+  }
   assert.ok(existsSync(resolve(root, "workspace/session_log.md")));
   assert.ok(existsSync(resolve(root, "workspace/marathon_log.md")));
 });

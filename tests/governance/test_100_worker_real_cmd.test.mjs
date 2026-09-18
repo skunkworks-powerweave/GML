@@ -45,7 +45,18 @@ test("FR-002: CMD invokes the real worker entrypoint (tsx / node / pnpm)", () =>
     // pnpm filter form: "pnpm" "--filter" "@gml/worker" "exec" "tsx" "src/index.ts"
     (/@gml\/worker/.test(cmd) && /src\/index\.ts/.test(cmd)) ||
     // package-script form: "pnpm" "--filter" "@gml/worker" "start"
-    (/@gml\/worker/.test(cmd) && /\bstart\b/.test(cmd));
+    (/@gml\/worker/.test(cmd) && /\bstart\b/.test(cmd)) ||
+    // direct-bin form: "./node_modules/.bin/tsx" "src/index.ts", resolved
+    // against WORKDIR /repo/apps/worker. This is what the Dockerfile now uses.
+    //
+    // Going through `pnpm exec` re-enters corepack at container start, and
+    // corepack then tries to download the pinned pnpm into
+    // $HOME/.cache/node/corepack. The container runs as the unprivileged
+    // `worker` user, so that is EACCES and the process dies before reaching a
+    // single line of application code — found by actually running the image.
+    // Calling the resolved bin skips corepack entirely and removes a network
+    // dependency from process start.
+    (/node_modules\/\.bin\/(tsx|node)/.test(cmd) && /src\/index\.ts/.test(cmd));
   assert.ok(
     referencesWorkerSource,
     `CMD must reference apps/worker/src/index.ts or dist/index.js; got: ${cmd}`,
