@@ -302,3 +302,103 @@ The first run failed, on exactly the two things it was built to catch:
   checkout — precisely the failure mode predicted in the audit. Those two
   assertions now skip when the directory is absent, since per-machine agent
   scratch state is not a build input.
+
+---
+
+# Supabase project — setup and hardening
+
+Project `zhoqmywalkiujmozcjws`, **ap-south-1 (Mumbai)**, Postgres 17.6, Pro plan.
+
+## Region: caught before it cost anything
+
+The project was first created in `ap-northeast-2` (**Seoul**). Measured from the
+same host:
+
+| Region | TCP latency to pooler |
+|---|---|
+| Seoul (`ap-northeast-2`) | **139 ms** |
+| Mumbai (`ap-south-1`) | **16 ms** |
+
+~9x, i.e. ~123 ms added to every database round trip. This app issues ~8 queries
+per authenticated page render, ~15 on the dashboard and 20 concurrent on
+`/admin/gates`, and the planned deployment target is AWS Mumbai — so every query
+would have crossed Mumbai -> Seoul -> Mumbai for users in Ladakh.
+
+Supabase cannot change a project's region after creation. The project was
+recreated in Mumbai while it still had 0 tables. Confirmed after the move:
+
+```
+CONNECTED in 129 ms
+round-trip latency: 9, 10, 11, 11, 11, 12 ms  (median 11ms)   [was ~135ms]
+```
+
+## Schema applied from scratch
+
+```
+public tables      : 47
+drizzle migrations : 23
+_post applied      : 1
+SM-1 triggers      : audit_log_no_delete, audit_log_no_update
+enums              : 10
+foreign keys       : 64
+```
+
+First clean application of the full schema to a hosted database. Note this would
+NOT have worked before this session: migration 0000 aborted on any empty database
+with `42P07 relation "users_email_unique" already exists` (B15).
+
+## Every table was readable by anyone on the internet
+
+Immediately after the schema landed, using the **anon key — which is public by
+design and ships in every browser bundle**:
+
+```
+GET /rest/v1/users?select=*      -> 200
+GET /rest/v1/learners?select=*   -> 200
+GET /rest/v1/audit_log?select=*  -> 200
+GET /rest/v1/section_gates       -> 200
+```
+
+Tables were empty, so nothing leaked. With one teacher onboarded that is every
+account email, the full staff roster, the entire audit trail, section-gate
+password hashes, and — via `learners` — children's names, ages and guardian
+details: the exact table SM-9 exists to protect.
+
+Cause: PostgREST exposes the `public` schema, Supabase grants `anon` /
+`authenticated` by default, and drizzle tables carry no RLS.
+
+**Closed in two layers**, because either alone is one dashboard click from being
+undone:
+
+| Layer | Mechanism | Verified |
+|---|---|---|
+| SQL (`_post/002`) | REVOKE grants + schema USAGE, strip default privileges, enable RLS with no policies | `401 / 42501` on all tables |
+| Gateway | `public` removed from exposed schemas | `404 / PGRST205 "Could not find the table 'graphql_public.users'"` |
+
+Confirmed unaffected afterwards: the app still reads all 47 tables over the
+direct connection (it never used PostgREST), and SM-1 still rejects UPDATE and
+DELETE on `audit_log` — proven by a probe row that is now permanently in the
+table because the trigger blocks its deletion.
+
+`_post/001` also turned out to be a partial no-op on Supabase: it revokes from a
+role named `gml`, which does not exist there, so SM-1's privilege layer rested
+entirely on the triggers. `_post/002` names `anon` / `authenticated` /
+`service_role` explicitly.
+
+## Auth configuration
+
+| Setting | State |
+|---|---|
+| JWT signing keys | **ES256 / EC** (verified at `/auth/v1/.well-known/jwks.json`) — tokens verify locally, no per-request call to Supabase |
+| `disable_signup` | **true** — was `false`, i.e. public signup was open to the internet |
+| Minimum password length | raised from 6 |
+| Leaked-password protection | enabled |
+
+## Still outstanding
+
+- **Custom SMTP.** Supabase refuses to deliver mail to addresses outside the
+  project team without it, so no teacher can be invited. Needs a verified sender
+  domain, which has DNS lead time.
+- **Storage buckets are anonymously listable** (`GET /storage/v1/bucket` -> `200 []`).
+  Harmless with zero buckets; to be locked down via RLS on `storage.buckets` when
+  the buckets are created.
