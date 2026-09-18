@@ -45,7 +45,13 @@ export const users = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "date" }),
   },
-  (t) => [uniqueIndex("users_email_unique").on(t.email)],
+  // NOTE: no explicit uniqueIndex on `email`. `.unique()` on the column above
+  // already emits `CONSTRAINT users_email_unique UNIQUE(email)`, and Postgres
+  // implements a unique constraint AS a unique index of the same name. Declaring
+  // both made drizzle-kit generate a CREATE UNIQUE INDEX with a name the
+  // constraint had already taken, so migration 0000 aborted with
+  // `42P07 relation "users_email_unique" already exists` on every fresh
+  // database. See docs/verification.md (B15).
 );
 
 // ── password_reset_tokens ──────────────────────────────────────────────────────

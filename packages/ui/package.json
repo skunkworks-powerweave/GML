@@ -2,5 +2,5 @@
   "name": "@gml/ui",
   "version": "0.0.0",
   "private": true,
-  "description": "shadcn re-exports + shared UI primitives (lands progressively from spec 012)."
+  "description": "EMPTY PLACEHOLDER. Declared in spec 012 for shadcn re-exports; no source was ever added and nothing imports @gml/ui. Kept only because both Dockerfiles COPY its package.json. Delete it (and those COPY lines) in the deploy-assets phase."
 }

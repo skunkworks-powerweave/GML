@@ -5,7 +5,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { videoSubmissions, files, users as usersTable } from "@gml/db/schema";
+import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { signMediaToken } from "@/lib/video/signed-url";

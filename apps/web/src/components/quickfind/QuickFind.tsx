@@ -24,7 +24,7 @@
 // API gate is the right place to add it — never trust the client to redact.
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 
 // Mirror of the QuickFindResult type exported by the API route. Kept inline so
@@ -135,22 +135,48 @@ function writeRecents(userId: string, recents: QuickFindResult[]): void {
   }
 }
 
+/** Never-changing subscription for the client-only `mounted` snapshot below. */
+const NOOP_SUBSCRIBE = (): (() => void) => () => {};
+
 export default function QuickFind({ userId }: QuickFindProps): React.ReactElement | null {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QuickFindResult[]>([]);
-  const [recents, setRecents] = useState<QuickFindResult[]>([]);
+  // Lazy initialiser rather than a mount effect. Reading localStorage here is
+  // safe because this component renders nothing until `open`, so the server and
+  // first client render agree (both null) and there is no hydration mismatch.
+  const [recents, setRecents] = useState<QuickFindResult[]>(() =>
+    typeof window === "undefined" ? [] : readRecents(userId),
+  );
   const [activeIdx, setActiveIdx] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [mounted, setMounted] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Mount flag so the createPortal call only runs in the browser (avoids the
-  // "document is not defined" SSR error).
-  useEffect(() => {
-    setMounted(true);
+  // Client-only flag for the createPortal call (document is undefined on the
+  // server). useSyncExternalStore returns the server snapshot (false) during
+  // SSR and the client snapshot (true) from the first browser render, with no
+  // setState-in-effect and therefore no cascading re-render.
+  const mounted = useSyncExternalStore(
+    NOOP_SUBSCRIBE,
+    () => true,
+    () => false,
+  );
+
+  // Open/close are user actions, so their side effects belong here rather than
+  // in an effect keyed on `open`.
+  const openPanel = useCallback(() => {
+    // Re-read recents on every open: a sibling tab may have written to the
+    // same localStorage key since this component mounted.
     setRecents(readRecents(userId));
+    setOpen(true);
   }, [userId]);
+
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    setQuery("");
+    setResults([]);
+    setActiveIdx(0);
+  }, []);
 
   // Global Cmd+K / Ctrl+K → toggle; Esc → close.
   useEffect(() => {
@@ -161,11 +187,12 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
       const mod = event.metaKey || event.ctrlKey;
       if (mod && (k === "k" || k === "K")) {
         event.preventDefault();
-        setOpen((o) => !o);
+        if (open) closePanel();
+        else openPanel();
         return;
       }
       if (k === "Escape") {
-        setOpen(false);
+        closePanel();
       }
     }
 
@@ -173,35 +200,37 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, []);
+  }, [open, openPanel, closePanel]);
 
-  // Reset query when the modal closes so the next open starts fresh.
+  // Focus the input after the panel paints. This effect only schedules a
+  // timeout -- the state transitions that used to live here (clearing the
+  // query on close, reloading recents on open) now happen in openPanel /
+  // closePanel, because they are consequences of a user action rather than of
+  // rendering. Driving them from an effect meant every open and close cost an
+  // extra render pass (react-hooks/set-state-in-effect).
   useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setResults([]);
-      setActiveIdx(0);
-      return;
-    }
-    // Refocus the input on open and reload the recents (a sibling tab may
-    // have written to the same localStorage key).
-    setRecents(readRecents(userId));
+    if (!open) return;
     const id = window.setTimeout(() => inputRef.current?.focus(), 30);
     return () => window.clearTimeout(id);
-  }, [open, userId]);
+  }, [open]);
 
   // Debounced fetch.
   useEffect(() => {
     if (!open) return;
     const q = query.trim();
-    if (q.length < MIN_QUERY) {
-      setResults([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
+    // Below the minimum length there is nothing to fetch and nothing to clear:
+    // `list` already falls back to `recents` whenever `showRecents` is true, so
+    // stale `results` are unreachable, and the loading indicator below is gated
+    // on `!showRecents`. Clearing them here was writing state in an effect to
+    // produce a value that is simply derived (react-hooks/set-state-in-effect).
+    if (q.length < MIN_QUERY) return;
     const ctrl = new AbortController();
     const timer = window.setTimeout(async () => {
+      // Flipped here rather than synchronously in the effect body. Previously
+      // the spinner appeared on the first keystroke and stayed up for the whole
+      // debounce window with no request in flight; now it tracks the actual
+      // fetch. (Also resolves react-hooks/set-state-in-effect.)
+      setLoading(true);
       try {
         const res = await fetch(
           `/api/quickfind?q=${encodeURIComponent(q)}`,
@@ -235,10 +264,10 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
     [showRecents, recents, results],
   );
 
-  // Clamp activeIdx whenever the list shape changes.
-  useEffect(() => {
-    if (activeIdx > list.length - 1) setActiveIdx(0);
-  }, [list, activeIdx]);
+  // Derived, not stored. Clamping in an effect meant a render with an
+  // out-of-range index always painted first, then a second render corrected it.
+  // Computing it during render makes the out-of-range state unrepresentable.
+  const safeIdx = list.length === 0 ? 0 : Math.min(activeIdx, list.length - 1);
 
   const handleSelect = useCallback(
     (item: QuickFindResult) => {
@@ -247,20 +276,20 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
         .slice(0, RECENTS_CAP);
       setRecents(next);
       writeRecents(userId, next);
-      setOpen(false);
+      closePanel();
     },
-    [recents, userId],
+    [recents, userId, closePanel],
   );
 
   function onInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveIdx((i) => Math.min(list.length - 1, i + 1));
+      setActiveIdx(Math.min(list.length - 1, safeIdx + 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIdx((i) => Math.max(0, i - 1));
+      setActiveIdx(Math.max(0, safeIdx - 1));
     } else if (event.key === "Enter") {
-      const item = list[activeIdx];
+      const item = list[safeIdx];
       if (item) {
         event.preventDefault();
         handleSelect(item);
@@ -284,7 +313,7 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
       role="dialog"
       aria-modal="true"
       aria-label="Quick find"
-      onClick={() => setOpen(false)}
+      onClick={closePanel}
       style={{
         position: "fixed",
         inset: 0,
@@ -358,11 +387,11 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
               <ResultList
                 heading="Recently viewed"
                 items={recents}
-                activeIdx={activeIdx}
+                activeIdx={safeIdx}
                 onSelect={handleSelect}
               />
             )
-          ) : loading && results.length === 0 ? (
+          ) : loading && !showRecents && results.length === 0 ? (
             <EmptyHint primary="Searching…" secondary={`Query: "${query.trim()}"`} />
           ) : results.length === 0 ? (
             <EmptyHint
@@ -373,7 +402,7 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
             <ResultList
               heading={`Results · ${results.length}`}
               items={results}
-              activeIdx={activeIdx}
+              activeIdx={safeIdx}
               onSelect={handleSelect}
             />
           )}

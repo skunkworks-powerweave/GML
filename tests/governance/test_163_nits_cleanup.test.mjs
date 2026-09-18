@@ -13,7 +13,7 @@
 //        replaced with the matching log.* call; logger imported
 //        from ./log.js.
 //
-//   3. apps/web/src/middleware.ts (EDITED)
+//   3. apps/web/src/proxy.ts (EDITED)
 //      — stale "once the auditing middleware lands in spec 010"
 //        TODO removed; up-to-date Spec 163 note in its place.
 //
@@ -41,7 +41,7 @@ const read = (p) => readFileSync(resolve(root, p), "utf8");
 
 const LOG_PATH = "apps/worker/src/log.ts";
 const WORKER_INDEX_PATH = "apps/worker/src/index.ts";
-const MIDDLEWARE_PATH = "apps/web/src/middleware.ts";
+const MIDDLEWARE_PATH = "apps/web/src/proxy.ts";
 const RATE_LIMIT_PATH = "apps/web/src/lib/rate-limit.ts";
 const RETENTION_PATH = "packages/db/src/scripts/retention.ts";
 const TOPBAR_PATH = "apps/web/src/components/nav/Topbar.tsx";
@@ -168,23 +168,23 @@ test("spec 163 — apps/worker/src/index.ts carries an inline Spec 163 reference
 
 // ---------- (3) Middleware stale TODO removed ----------
 
-test("spec 163 — apps/web/src/middleware.ts no longer contains the stale spec-010 TODO", () => {
+test("spec 163 — apps/web/src/proxy.ts no longer contains the stale spec-010 TODO", () => {
   const src = read(MIDDLEWARE_PATH);
   // The pre-fix phrase. Pin its ABSENCE so a future contributor
   // can't accidentally revert the cleanup by rebasing over an old
   // copy of the file.
   assert.ok(
     !/once the auditing middleware lands in spec 010/.test(src),
-    "apps/web/src/middleware.ts must not contain the stale `once the auditing middleware lands in spec 010` TODO — spec 010 shipped long ago, the comment was misleading",
+    "apps/web/src/proxy.ts must not contain the stale `once the auditing middleware lands in spec 010` TODO — spec 010 shipped long ago, the comment was misleading",
   );
 });
 
-test("spec 163 — apps/web/src/middleware.ts carries a Spec 163 reference", () => {
+test("spec 163 — apps/web/src/proxy.ts carries a Spec 163 reference", () => {
   const src = read(MIDDLEWARE_PATH);
   assert.match(
     src,
     /Spec 163/,
-    "apps/web/src/middleware.ts must carry a `Spec 163` reference near the audit-log reminder so the cleanup is self-documenting",
+    "apps/web/src/proxy.ts must carry a `Spec 163` reference near the audit-log reminder so the cleanup is self-documenting",
   );
 });
 

@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
-const MW_PATH = "apps/web/src/middleware.ts";
+const MW_PATH = "apps/web/src/proxy.ts";
 const SPEC_DIR = "specs/150-middleware-401-vs-403";
 
 // ---------- Spec-kit + plan.md contract ----------

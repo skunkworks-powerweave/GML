@@ -43,7 +43,7 @@
 //   Sort + bulk delete are role-gated identically to the existing single-row
 //   delete (entity.mutateRoles via mutateRolesFor in actions.ts).
 
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { and, asc, desc, eq, ilike, type SQL } from "drizzle-orm";
 import { z } from "zod";

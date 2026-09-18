@@ -26,6 +26,6 @@ test("apps/web/src/lib/gates.ts has getActiveGrant", () => {
 });
 
 test("middleware enforces gated prefixes", () => {
-  const src = read("apps/web/src/middleware.ts");
+  const src = read("apps/web/src/proxy.ts");
   assert.match(src, /gate|gated/i);
 });

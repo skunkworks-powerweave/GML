@@ -77,7 +77,7 @@ test("spec 165 — workflow is structurally parseable as YAML (key markers prese
   // these assertions catch the diff.
   assert.match(
     src,
-    /^name:\s*test-and-build/m,
+    /^name:\s*(?:ci|test-and-build)/m,
     "workflow must declare `name: test-and-build` at the top level so the PR check UI shows a self-documenting label",
   );
   assert.match(
@@ -101,14 +101,19 @@ test("spec 165 — workflow is structurally parseable as YAML (key markers prese
 
 test("spec 165 — workflow triggers on both push (main) and pull_request", () => {
   const src = read(WORKFLOW_PATH);
-  // The `push:` trigger with the main branch. Pin both segments so
-  // a future contributor can't accidentally drop the branch filter
-  // (which would make the workflow run on every push to every
-  // branch — wasting CI minutes) or remove the trigger entirely.
+  // The `push:` trigger must carry a branch filter (without one the workflow
+  // runs on every push to every branch) and that filter must include `main`.
+  //
+  // The list is no longer pinned to exactly `[main]`. The repository's branch is
+  // `master` while this workflow only ever listed `main`, so the trigger could
+  // never fire -- combined with there being no git remote at all, this workflow
+  // had never executed once. The filter now names both, and this assertion
+  // allows additional branches so fixing that cannot fail the gate.
+  assert.match(src, /on:\s*\n\s*push:/, "workflow must trigger on `push:`");
   assert.match(
     src,
-    /push:\s*\n\s*branches:\s*\[\s*main\s*\]/,
-    "workflow must trigger on `push:` with `branches: [main]` so merges to main are gated",
+    /branches:\s*\[[^\]]*\bmain\b[^\]]*\]/,
+    "workflow `push:` must filter branches and include `main`",
   );
   // The `pull_request:` trigger. No branch filter is required —
   // pull_request implicitly covers all branches.
@@ -193,13 +198,15 @@ test("spec 165 — workflow runs pnpm test, pnpm build, and pnpm -r typecheck", 
 
 test("spec 165 — workflow runs pnpm test:smoke leniently (|| true)", () => {
   const src = read(WORKFLOW_PATH);
-  // The `|| true` keeps the gate lenient when the Docker stack is
-  // unreachable on the runner. The smoke tests themselves already
-  // test.skip on connection refusal per spec 003, but `|| true` is
-  // belt-and-suspenders for a runner with no Docker at all.
+  // Previously this required `pnpm test:smoke || true`. The mask has been
+  // dropped deliberately: the smoke suite already test.skip()s on connection
+  // refusal and `node --test` exits 0 when every test skips, so `|| true` never
+  // protected against the unreachable-stack case it was written for. All it
+  // could actually do was swallow a real failure once the suite runs against a
+  // live stack. Assert the step exists; do not require it to be un-failable.
   assert.match(
     src,
-    /pnpm\s+test:smoke\s*\|\|\s*true/,
+    /pnpm\s+test:smoke/,
     "workflow must run `pnpm test:smoke || true` — the smoke suite is opportunistic and shouldn't fail the gate when the Docker stack is unreachable on the runner",
   );
 });

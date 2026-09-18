@@ -2,7 +2,7 @@
 // SM-9 enforcement: every server-side read of `learners` writes an audit_log row.
 // See apps/web/src/app/admin/data/[entity]/page.tsx for the audit hook.
 
-import { boolean, check, index, integer, pgTable, smallint, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, check, index, pgTable, smallint, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { classes } from "./classes";
 import { schools } from "./geography";

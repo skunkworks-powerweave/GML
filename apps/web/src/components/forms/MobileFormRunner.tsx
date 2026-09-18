@@ -223,7 +223,16 @@ function BigRadio({
   // Vertical stack with full-width 44px-min touch targets — one large radio
   // per option. Hidden native input keeps keyboard / screen-reader semantics.
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    // role="radiogroup" is where aria-required legitimately belongs. It was
+    // previously set on each <input type="radio">, whose implicit `radio` role
+    // does not support the attribute, so assistive tech ignored it and the
+    // "this answer is required" information never reached a screen-reader user.
+    <div
+      role="radiogroup"
+      aria-required={field.required ? "true" : undefined}
+      aria-label={field.label}
+      style={{ display: "grid", gap: 10 }}
+    >
       {normalizeOptions(field.options).map((o) => {
         const checked = value === o.value;
         return (
@@ -250,7 +259,6 @@ function BigRadio({
               value={o.value}
               checked={checked}
               onChange={() => onChange(o.value)}
-              aria-required={field.required ? "true" : undefined}
               style={{ width: 20, height: 20 }}
             />
             <span>{o.label}</span>
@@ -447,7 +455,6 @@ export function MobileFormRunner({
   // (spec 074) only ever passes `action`; preview surfaces only ever pass
   // `onSubmit`; wiring both would double-submit. Caught in dev only.
   if (process.env.NODE_ENV !== "production" && action && onSubmit) {
-    // eslint-disable-next-line no-console
     console.error(
       "[MobileFormRunner] Both `action` and `onSubmit` were provided. " +
         "Use `action` for server-action submits (forms-runner) or `onSubmit` " +
@@ -468,7 +475,14 @@ export function MobileFormRunner({
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const valuesRef = useRef(values);
-  valuesRef.current = values;
+  // Assigned in an effect, never in the render body. Writing to a ref during
+  // render is a render-phase side effect (react-hooks/refs) and is unsafe
+  // under StrictMode's double render and concurrent features. No dep array
+  // means this runs after every commit, preserving the "always latest"
+  // contract. Safe because valuesRef is read only inside the debounced async saveDraft call.
+  useEffect(() => {
+    valuesRef.current = values;
+  });
   const formRef = useRef<HTMLFormElement | null>(null);
 
   const autosaveEnabled = useMemo(
@@ -681,7 +695,7 @@ export function MobileFormRunner({
           Review your answers
         </h2>
         <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
-          Tap "Edit" on any row to go back. Press Submit when ready — your
+          Tap &ldquo;Edit&rdquo; on any row to go back. Press Submit when ready — your
           responses will be sealed into the record.
         </p>
         {fields.map((f, i) => {

@@ -1,0 +1,47 @@
+# Docker reads .dockerignore from the BUILD CONTEXT ROOT. This file previously
+# lived at docker/.dockerignore, where Docker never looks, so it was inert:
+# every build shipped a ~735 MB context and `COPY . .` overwrote the image's
+# correctly-installed Linux dependencies with the host's (Windows, pnpm
+# symlink) node_modules tree, plus .env, .git and a stale .next.
+#
+# Keep in sync with the COPY steps in docker/*.Dockerfile.
+
+# Dependencies — installed inside the image, never copied in.
+**/node_modules
+
+# Build output — regenerated in the builder stage.
+**/.next
+**/dist
+**/*.tsbuildinfo
+
+# VCS + CI + agent harness
+.git
+.gitignore
+.gitattributes
+.github
+.claude
+
+# Secrets. Never in an image layer.
+.env
+.env.*
+!.env.example
+
+# Local/runtime state and docs that no build step reads.
+workspace
+specs
+docs
+tests
+.docker-volumes
+coverage
+.nyc_output
+*.log
+README*.md
+CLAUDE.md
+AGENTS.md
+Makefile
+
+# NOTE: deliberately NOT ignored ->
+#   packages/db/src/migrations/**  (the migrate image needs the .sql files and
+#                                   meta/_journal.json as real files on disk)
+#   apps/web/public/**             (served by the standalone server)
+#   docker/**                      (Caddyfile is bind-mounted, but keep the dir)

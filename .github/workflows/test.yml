@@ -1,68 +1,106 @@
-# Spec 165 — CI/CD pipeline (Workflow Run 16 audit closure).
+# CI gate for GML LMS.
 #
-# Single-job gate that runs on every push to main and on every
-# pull_request (any branch). The job exists so a regression in tests,
-# build, or typecheck cannot land silently — Workflow Run 16's audit
-# flagged the absence of CI as a BLOCKER because spec 001-163 shipped
-# 1423 governance tests with NO automated gate enforcing them.
-#
-# The gate runs:
-#   1. pnpm install --frozen-lockfile  (reproducible install)
-#   2. pnpm test                       (1423 governance assertions)
-#   3. pnpm build                      (Next.js + worker build sanity)
-#   4. pnpm -r typecheck               (tsc --noEmit per workspace)
-#   5. pnpm test:smoke || true         (integration smokes — skip if
-#                                       Docker stack unreachable; the
-#                                       test runner already test.skips
-#                                       on connection refusal, but the
-#                                       `|| true` keeps the gate lenient
-#                                       for clean PRs that don't boot
-#                                       the stack on the runner.)
-#
-# DATABASE_URL is set to a placeholder so packages/db/src/client.ts
-# loads its build-safe singleton without crashing during `pnpm build`.
-# The client has a build-time fallback per spec 143, but explicit is
-# better than implicit on a CI runner.
-name: test-and-build
+# History worth knowing: this workflow previously triggered on `push: branches:
+# [main]` while the repository's branch is `master`, and the repo has no git
+# remote at all -- so it had never executed even once. It also ran
+# `pnpm -r typecheck` at a time when only `packages/db` defined a `typecheck`
+# script, meaning the application itself was never type-checked, and it never
+# ran lint. Both are fixed below.
+name: ci
 
 on:
   push:
-    branches: [main]
+    # `master` is the current branch; `main` is here so a rename does not
+    # silently disable CI again. Remove whichever one you do not keep.
+    branches: [main, master]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test-and-build:
+  static:
+    name: lint · typecheck · build · governance
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgres://gml:postgres@localhost:5432/gml_lms_test
-
+      # packages/db/src/client.ts builds a pg Pool at import time. Give it a URL
+      # it will never dial so `next build` cannot fail on a missing env var.
+      DATABASE_URL: postgres://build:build@127.0.0.1:5432/build
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        # Version pinned to the packageManager field in package.json
-        # (pnpm@10.33.4 at the time of Spec 165). pnpm/action-setup
-        # auto-detects this field when no `version:` input is given.
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4        # version comes from packageManager
 
-      - name: Setup Node 22
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "pnpm"
+          cache: pnpm
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
-      - name: Run governance tests
-        run: pnpm test
+      # Lint was absent from CI entirely. It now covers apps/web, apps/worker
+      # and packages/db (eslint was configured in the latter two but never
+      # installed, so `pnpm lint` failed on a missing binary).
+      - name: Lint
+        run: pnpm lint
 
-      - name: Build all workspaces
-        run: pnpm build
-
-      - name: Typecheck all workspaces
+      # Covers apps/web, apps/worker, packages/db and packages/shared. Before
+      # the scripts were added this silently checked one package out of five,
+      # which is how a BullMQ 5 type error sat in the worker undetected.
+      - name: Typecheck
         run: pnpm -r typecheck
 
-      - name: Smoke tests (lenient — skips when stack unreachable)
-        run: pnpm test:smoke || true
+      - name: Build
+        run: pnpm build
+
+      - name: Governance tests
+        run: pnpm test
+
+      # Runs without `|| true`. The mask was unnecessary -- the smoke suite
+      # already test.skip()s itself when the app is unreachable, and
+      # `node --test` exits 0 when everything skips. All `|| true` added was the
+      # ability to swallow a genuine failure once the suite becomes real.
+      - name: Integration smoke (skips when no stack is reachable)
+        run: pnpm test:smoke
+
+  images:
+    name: container images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # Building the images in CI is what catches the class of defect that
+      # produced a worker container with no source code in it: a Dockerfile can
+      # only be verified by building it. Load, don't push -- no registry
+      # credentials are needed for a correctness gate.
+      - name: Build app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/app.Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/worker.Dockerfile
+          push: false
+          load: true
+          tags: gml-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Asserts the worker image actually contains its entrypoint. The shipped
+      # worker.Dockerfile had no `COPY . .`, so the image held only package
+      # manifests and the container crash-looped forever behind
+      # `restart: unless-stopped` with no healthcheck to reveal it.
+      - name: Worker image contains its entrypoint
+        run: |
+          docker run --rm --entrypoint sh gml-worker:ci -c \
+            'test -f /app/apps/worker/src/index.ts || test -f /app/dist/index.js' \
+          || { echo "::error::worker image has no entrypoint source"; exit 1; }

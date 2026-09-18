@@ -84,7 +84,10 @@ export default async function AdminGatesPage() {
         .orderBy(desc(sectionGates.version))
         .limit(1);
 
-      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      // Window computed by the database, not the app process: this is compared
+      // against DB timestamps, so using now() removes any app/DB clock skew and
+      // keeps an impure clock read out of the render path.
+      const cutoff = sql`now() - interval '30 days'`;
 
       const [{ activeGrants }] = await db
         .select({ activeGrants: sql<number>`count(*)::int` })

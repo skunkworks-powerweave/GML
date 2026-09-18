@@ -2,7 +2,7 @@
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { eq } from "drizzle-orm";
+import { eq, getTableColumns, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { rttSubjects, rttModules, rttSessions, rttReadings, terms, phases } from "@gml/db/schema";
 
@@ -16,7 +16,18 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
   const [phase] = term ? await db.select().from(phases).where(eq(phases.id, term.phaseId)).limit(1) : [null];
 
   const modules = await db.select().from(rttModules).where(eq(rttModules.rttSubjectId, id)).orderBy(rttModules.sequence);
-  const sessions = await db.select().from(rttSessions).where(eq(rttSessions.rttSubjectId, id)).orderBy(rttSessions.sequence);
+  // isUpcoming is computed by Postgres, not the app process. Doing it in SQL
+  // uses the same clock the scheduled_at timestamps were written against (no
+  // app/DB skew), gives every row one consistent "now", and keeps an impure
+  // clock read out of the render path entirely.
+  const sessions = await db
+    .select({
+      ...getTableColumns(rttSessions),
+      isUpcoming: sql<boolean>`(${rttSessions.scheduledAt} IS NULL OR ${rttSessions.scheduledAt} > now())`,
+    })
+    .from(rttSessions)
+    .where(eq(rttSessions.rttSubjectId, id))
+    .orderBy(rttSessions.sequence);
   const readings = await db.select().from(rttReadings).where(eq(rttReadings.rttSubjectId, id)).orderBy(rttReadings.sequence);
 
   // Spec 119 — wire the JSX-prototype "Resume" CTA to the first module by
@@ -152,8 +163,7 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     // action column shows "Join"; for past sessions "Watch".
                     // Both render as <Link href=…> so they have real handlers.
                     const sessionHref = `/repo/session/${s.id}`;
-                    const isUpcoming =
-                      !s.scheduledAt || new Date(s.scheduledAt).getTime() > Date.now();
+                    const isUpcoming = s.isUpcoming;
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>

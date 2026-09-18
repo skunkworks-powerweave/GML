@@ -520,7 +520,7 @@ function HumanHelpCard({
     >
       <div style={{ fontWeight: 600, fontSize: 13 }}>Stuck? Talk to a person.</div>
       <div style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
-        We're in your time-zone, Mon–Sat. Pick whichever is easiest right now.
+        We&rsquo;re in your time-zone, Mon–Sat. Pick whichever is easiest right now.
       </div>
       <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
         {/* Spec 169 — when assertEnv() rejected GML_HELPDESK_PHONE the

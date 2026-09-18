@@ -8,7 +8,7 @@ const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
 test("middleware.ts exists and uses Auth.js auth() + route matcher", () => {
-  const src = read("apps/web/src/middleware.ts");
+  const src = read("apps/web/src/proxy.ts");
   assert.match(src, /export\s+default\s+auth\(/, "must export default auth(handler) — Auth.js v5 pattern");
   assert.match(src, /matcher/, "must declare matcher config");
 });

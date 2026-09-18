@@ -6,11 +6,11 @@
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import { NextIntlClientProvider } from "next-intl";
-import { loadMessages, normalizeLocale, LOCALE_FONT_FAMILY } from "@/i18n/config";
+import { loadMessages, normalizeLocale, LOCALE_COOKIE, LOCALE_FONT_FAMILY } from "@/i18n/config";
 
 export default async function LoginLayout({ children }: { children: ReactNode }) {
   const cookieJar = await cookies();
-  const cookieLocale = cookieJar.get("gml-locale")?.value;
+  const cookieLocale = cookieJar.get(LOCALE_COOKIE)?.value;
   const locale = normalizeLocale(cookieLocale);
   const messages = loadMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];

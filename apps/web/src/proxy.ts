@@ -72,6 +72,20 @@ function matchGate(pathname: string): { slug: string } | undefined {
   );
 }
 
+// Next 16 renamed the `middleware` file convention to `proxy`. The rename is not
+// cosmetic here: `proxy` runs on the NODE.JS runtime (and that is not
+// configurable -- setting `runtime` throws), whereas `middleware` defaulted to
+// the Edge runtime.
+//
+// That matters because this file imports `auth` from "@/auth", which pulls in
+// DrizzleAdapter -> pg -> the Node `stream` module. Under Edge that threw at
+// REQUEST time, in the production image, on every matched route:
+//
+//     Error: The edge runtime does not support Node.js 'stream' module.
+//
+// `next build` reported success, so the entire authorization layer -- role
+// policies, section gates, the login redirect -- was dead in production and
+// nothing said so. See docs/verification.md (B11).
 export default auth((req) => {
   const { nextUrl, cookies: reqCookies } = req as unknown as NextRequest;
   const session = (req as unknown as { auth?: { user?: { role?: string } } }).auth;

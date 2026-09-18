@@ -42,7 +42,7 @@
 
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
 import { auth } from "@/auth";

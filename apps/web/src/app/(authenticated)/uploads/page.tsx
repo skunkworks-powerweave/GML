@@ -47,17 +47,6 @@ const STATE_CHIP: Record<string, string> = {
   reviewed: "chip-indigo",
 };
 
-// Background-soft tokens kept for the governance test idiom (STATE_BG must appear).
-// Used as a tooltip-color fallback in the deva-stamped row chips below.
-const STATE_BG: Record<string, string> = {
-  ready: "var(--lichen-soft)",
-  transcoding: "var(--saffron-soft)",
-  queued: "var(--paper-2)",
-  received: "var(--paper-2)",
-  failed: "var(--rust-soft)",
-  review_pending: "var(--saffron-soft)",
-  reviewed: "var(--indigo-soft)",
-};
 
 const SOURCE_LABEL: Record<string, string> = {
   whatsapp: "WhatsApp",

@@ -95,5 +95,4 @@ ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY
 CREATE INDEX "audit_log_user_created_idx" ON "audit_log" USING btree ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "audit_log_entity_idx" ON "audit_log" USING btree ("entity_type","entity_id");--> statement-breakpoint
 CREATE INDEX "audit_log_action_created_idx" ON "audit_log" USING btree ("action","created_at");--> statement-breakpoint
-CREATE INDEX "section_gate_grants_user_slug_idx" ON "section_gate_grants" USING btree ("user_id","gate_slug","expires_at");--> statement-breakpoint
-CREATE UNIQUE INDEX "users_email_unique" ON "users" USING btree ("email");
+CREATE INDEX "section_gate_grants_user_slug_idx" ON "section_gate_grants" USING btree ("user_id","gate_slug","expires_at");

@@ -270,7 +270,16 @@ function Radio({
   onChange: (v: string) => void;
 }) {
   return (
-    <div style={{ display: "grid", gap: 6 }}>
+    // role="radiogroup" is where aria-required legitimately belongs. It was
+    // previously set on each <input type="radio">, whose implicit `radio` role
+    // does not support the attribute, so assistive tech ignored it and the
+    // "this answer is required" information never reached a screen-reader user.
+    <div
+      role="radiogroup"
+      aria-required={field.required ? "true" : undefined}
+      aria-label={field.label}
+      style={{ display: "grid", gap: 6 }}
+    >
       {normalizeOptions(field.options).map((o) =>{
         const checked = value === o.value;
         return (
@@ -294,7 +303,6 @@ function Radio({
               value={o.value}
               checked={checked}
               onChange={() => onChange(o.value)}
-              aria-required={field.required ? "true" : undefined}
             />
             <span>{o.label}</span>
           </label>
@@ -493,10 +501,22 @@ export function FormRenderer({
   // Autosave bookkeeping
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
-  const [, forceTick] = useState(0);
+  // A live clock for the "Saved Ns ago" label. This used to be a discarded
+  // tick counter (`const [, forceTick] = useState(0)`), which re-rendered this
+  // 802-line form once a second while the label it existed to update never
+  // changed -- savedIndicator's useMemo did not depend on the tick. Holding the
+  // timestamp in state fixes the label AND keeps Date.now() out of render.
+  const [nowMs, setNowMs] = useState<number | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const valuesRef = useRef(values);
-  valuesRef.current = values;
+  // Assigned in an effect, never in the render body. Writing to a ref during
+  // render is a render-phase side effect (react-hooks/refs) and is unsafe
+  // under StrictMode's double render and concurrent features. No dep array
+  // means this runs after every commit, preserving the "always latest"
+  // contract. Safe because valuesRef is read only inside the debounced async saveDraft call.
+  useEffect(() => {
+    valuesRef.current = values;
+  });
 
   const autosaveEnabled = useMemo(
     () => Boolean(draftKey && (draftKey.templateId || draftKey.observationCycleId)),
@@ -521,12 +541,14 @@ export function FormRenderer({
     debounceRef.current = setTimeout(flushSave, AUTOSAVE_DEBOUNCE_MS);
   }, [autosaveEnabled, flushSave]);
 
-  // "Saved Ns ago" needs a live ticker.
+  // "Saved Ns ago" needs a live ticker. Only run it once there is actually a
+  // save to count from -- previously it ticked from mount, burning a render per
+  // second on a low-bandwidth target while displaying nothing.
   useEffect(() => {
-    if (!autosaveEnabled) return;
-    const t = setInterval(() => forceTick((x) => x + 1), 1000);
+    if (!autosaveEnabled || lastSavedAt === null) return;
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [autosaveEnabled]);
+  }, [autosaveEnabled, lastSavedAt]);
 
   // Flush any pending save on unmount.
   useEffect(() => {
@@ -626,10 +648,10 @@ export function FormRenderer({
     if (saveState === "error") return "Save failed — retrying…";
     if (saveState === "pending") return "Saving…";
     if (lastSavedAt === null) return "Not saved yet";
-    const seconds = Math.max(0, Math.floor((Date.now() - lastSavedAt) / 1000));
+    const seconds = Math.max(0, Math.floor(((nowMs ?? lastSavedAt) - lastSavedAt) / 1000));
     if (seconds < 1) return "Saved just now";
     return `Saved ${seconds}s ago`;
-  }, [autosaveEnabled, lastSavedAt, saveState]);
+  }, [autosaveEnabled, lastSavedAt, saveState, nowMs]);
 
   return (
     <form

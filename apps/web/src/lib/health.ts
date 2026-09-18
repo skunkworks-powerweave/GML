@@ -17,22 +17,29 @@ export type MigrationsResult = {
 export async function pingDb(): Promise<PingResult> {
   const host = process.env.POSTGRES_HOST;
   if (!host) return { ok: false, detail: "POSTGRES_HOST not set" };
+  const { Pool } = await import("pg");
+  const pool = new Pool({
+    host,
+    port: Number(process.env.POSTGRES_PORT ?? 5432),
+    database: process.env.POSTGRES_DB,
+    user: process.env.POSTGRES_USER,
+    password: process.env.POSTGRES_PASSWORD,
+    connectionTimeoutMillis: 2000,
+    max: 1,
+  });
   try {
-    const { Pool } = await import("pg");
-    const pool = new Pool({
-      host,
-      port: Number(process.env.POSTGRES_PORT ?? 5432),
-      database: process.env.POSTGRES_DB,
-      user: process.env.POSTGRES_USER,
-      password: process.env.POSTGRES_PASSWORD,
-      connectionTimeoutMillis: 2000,
-      max: 1,
-    });
     await pool.query("SELECT 1");
-    await pool.end();
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  } finally {
+    // `finally`, not the happy path only. Previously pool.end() ran solely after
+    // a successful query, so every FAILED probe leaked a pg.Pool and its
+    // reconnect timers. With a 30s healthcheck interval against a flapping
+    // database that accumulates sockets until the process dies -- i.e. the
+    // health check itself became the outage. pingMigrations() already had this
+    // right; pingDb did not.
+    await pool.end().catch(() => undefined);
   }
 }
 

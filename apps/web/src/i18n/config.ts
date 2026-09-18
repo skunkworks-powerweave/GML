@@ -26,6 +26,16 @@ export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: Locale = "en";
 
+/**
+ * Name of the cookie carrying the UI locale.
+ *
+ * `user_prefs.uiLanguage` remains the source of truth; this cookie is the
+ * read path for code that cannot hit the database -- notably the next-intl
+ * request config, which runs on every server render. It was previously a bare
+ * "gml-locale" string literal repeated across four files.
+ */
+export const LOCALE_COOKIE = "gml-locale";
+
 /** Pretty labels for the language picker; rendered in their own scripts. */
 export const LOCALE_LABELS: Record<Locale, { label: string; native: string; script: string }> = {
   en: { label: "English", native: "English", script: "EN" },

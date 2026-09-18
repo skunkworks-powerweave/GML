@@ -164,17 +164,6 @@ export default async function WhatsappIngestLogPage({
     }
   }
 
-  // Build filter form query strings so the empty-state link and form
-  // round-trip preserves the other filters.
-  const filterParams = (overrides: Record<string, string | undefined>) => {
-    const qs = new URLSearchParams();
-    const merged = { parsing: sp.parsing, from: sp.from, to: sp.to, ...overrides };
-    for (const [k, v] of Object.entries(merged)) {
-      if (v) qs.set(k, v);
-    }
-    const s = qs.toString();
-    return s ? `?${s}` : "";
-  };
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">

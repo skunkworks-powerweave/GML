@@ -4,7 +4,7 @@
 // framing) at the navigation layer.
 
 import Link from "next/link";
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { quizzes, quizQuestions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";

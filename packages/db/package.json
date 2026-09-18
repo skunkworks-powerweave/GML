@@ -17,7 +17,8 @@
     "retention": "tsx src/scripts/retention.ts",
     "seed:all": "tsx src/scripts/seed_all.ts",
     "studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -32,6 +33,7 @@
     "@typescript-eslint/parser": "^8.18.0",
     "dotenv": "^16.4.7",
     "drizzle-kit": "^0.30.1",
+    "eslint": "^9",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

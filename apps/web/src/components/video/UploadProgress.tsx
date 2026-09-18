@@ -6,7 +6,7 @@
 // Wires to /api/uploads/tus (tusd handler, spec 038). For the WhatsApp PRIMARY
 // path teachers don't see this — they upload from their phone's WhatsApp.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 type UploadProgressProps = {
   contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly" | "classroom_session" | "generic";
@@ -40,7 +40,10 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const id = `${Date.now()}-${file.name}`;
+    // crypto.randomUUID() rather than Date.now(): two files chosen in the same
+    // millisecond previously collided on this key, and it keeps an impure clock
+    // read out of the component body.
+    const id = `${crypto.randomUUID()}-${file.name}`;
     setUploads((prev) => [
       { id, filename: file.name, bytes: 0, bytesTotal: file.size, status: "uploading" },
       ...prev,

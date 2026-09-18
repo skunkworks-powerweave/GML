@@ -29,7 +29,7 @@
 // at help.jsx line 524). We accept this on mobile — the FTUX is a desktop
 // pedagogical layer; mobile users see the tour caption but no spotlight.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Role = "super_admin" | "programme_admin" | "mentor" | "observer" | "teacher";
 
@@ -147,7 +147,10 @@ type FTUXTourProps = {
 type Rect = { left: number; top: number; width: number; height: number };
 
 export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
-  const steps = FTUX_TOURS[role] ?? [];
+  // Memoised on `role`. The `?? []` fallback allocated a fresh array on every
+  // render, so the effect below saw a new dependency each time and re-ran
+  // continuously for any role without a configured tour.
+  const steps = useMemo(() => FTUX_TOURS[role] ?? [], [role]);
   const [dismissed, setDismissed] = useState<boolean>(Boolean(ftuxSeenAt));
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);

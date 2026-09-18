@@ -40,7 +40,6 @@ const CANONICAL_FIELD_KINDS = [
   "likert",
   "rating",
 ] as const;
-type CanonicalFieldKind = (typeof CANONICAL_FIELD_KINDS)[number];
 
 function assertCanonicalFieldKinds(forms: { kind: string; audience: string; version: string; schema: { fields: { kind: string; name: string }[] } }[]): typeof forms {
   const valid = new Set<string>(CANONICAL_FIELD_KINDS);

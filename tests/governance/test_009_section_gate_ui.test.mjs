@@ -20,6 +20,6 @@ test("gate/[slug]/actions.ts has verifyGate server action", () => {
 });
 
 test("middleware also accepts cookie marker for gate", () => {
-  const src = read("apps/web/src/middleware.ts");
+  const src = read("apps/web/src/proxy.ts");
   assert.match(src, /gml-gate-|cookie/i, "middleware must consult cookie for gate state");
 });

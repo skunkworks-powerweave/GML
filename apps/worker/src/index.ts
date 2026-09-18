@@ -115,7 +115,12 @@ retentionQueue
   .add(
     "deleteOldNotifications",
     {},
-    { repeat: { cron: "0 3 * * *" }, jobId: "retention:nightly" },
+    // BullMQ 5 renamed RepeatOptions.cron -> pattern. The old name was a type
+    // error that survived because this package was never typechecked (it runs
+    // via tsx, which strips types without checking them). A back-compat shim in
+    // repeat.js aliased it at runtime, so the job did schedule -- the bug was
+    // invisible in both directions.
+    { repeat: { pattern: "0 3 * * *" }, jobId: "retention:nightly" },
   )
   .then(() => {
     log.info("retention nightly schedule registered", { cron: "0 3 * * *" });

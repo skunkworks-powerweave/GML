@@ -34,7 +34,7 @@
 // SSR-safe — the hook references `window` / `document` only inside the
 // `useEffect`, so it can be imported into a server bundle without exploding.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 export const DEFAULT_THRESHOLD_PX = 80;
@@ -83,8 +83,15 @@ export function useSwipe<T extends HTMLElement = HTMLDivElement>(
   // and risk dropping in-flight gestures.
   const leftRef = useRef(onSwipeLeft);
   const rightRef = useRef(onSwipeRight);
-  leftRef.current = onSwipeLeft;
-  rightRef.current = onSwipeRight;
+  // Assigned in an effect, never in the render body. Writing to a ref during
+  // render is a render-phase side effect (react-hooks/refs) and is unsafe
+  // under StrictMode's double render and concurrent features. No dep array
+  // means this runs after every commit, preserving the "always latest"
+  // contract. Safe because both refs are read only from the pointer listeners below.
+  useEffect(() => {
+    leftRef.current = onSwipeLeft;
+    rightRef.current = onSwipeRight;
+  });
 
   const threshold = options?.threshold ?? DEFAULT_THRESHOLD_PX;
   const maxVertical = options?.maxVertical ?? DEFAULT_MAX_VERTICAL_PX;

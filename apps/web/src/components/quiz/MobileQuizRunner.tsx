@@ -99,10 +99,17 @@ export function MobileQuizRunner({
   // change. submittedRef is the idempotency guard that prevents a race
   // between a 0-second tick and a manual Submit click.
   const selectedRef = useRef(selected);
-  selectedRef.current = selected;
   const questionsRef = useRef(questions);
-  questionsRef.current = questions;
   const submittedRef = useRef(false);
+  // Assigned in an effect, never in the render body. Writing to a ref during
+  // render is a render-phase side effect (react-hooks/refs) and is unsafe
+  // under StrictMode's double render and concurrent features. No dep array
+  // means this runs after every commit, preserving the "always latest"
+  // contract. Safe because both refs are read only inside the countdown interval callback.
+  useEffect(() => {
+    selectedRef.current = selected;
+    questionsRef.current = questions;
+  });
 
   // Spec 159 — countdown effect. Empty dep array (timer mounts once and
   // tears down on unmount). Same shape as the desktop runner so the two

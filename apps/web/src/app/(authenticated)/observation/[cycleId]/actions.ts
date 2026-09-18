@@ -54,7 +54,6 @@ import { redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
-import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 

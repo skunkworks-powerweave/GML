@@ -114,6 +114,29 @@ services:
     networks:
       - lms_net
 
+  migrate:
+    # role: one-shot schema gate. Applies drizzle migrations + _post/*.sql, then
+    # exits 0. `app` and `worker` block on it completing successfully, so the
+    # stack can never come up against an unmigrated database -- which is exactly
+    # what happened before (health reported migrations 0-of-22 applied, and every
+    # authenticated page threw). See docs/verification.md (B13).
+    #
+    # Safe to run on every `up`: both ledgers make it a no-op once current.
+    # If it exits non-zero, `app` never starts and the PREVIOUS app container
+    # keeps serving -- that is the intended rollback posture.
+    build:
+      context: .
+      dockerfile: docker/migrate.Dockerfile
+    restart: "no"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: postgres://${POSTGRES_USER:-gml}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gml_lms}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - lms_net
+
   app:
     # role: Next.js web + API + Server Actions (the LMS UI)
     build:
@@ -148,6 +171,8 @@ services:
       SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:?SUPER_ADMIN_EMAIL must be set}
       SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:?SUPER_ADMIN_INITIAL_PASSWORD must be set}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -157,11 +182,18 @@ services:
     networks:
       - lms_net
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:3000/api/health || exit 1"]
+      # See docker/app.Dockerfile: node:22-slim has no wget and no curl, so the
+      # previous check could never pass and the container sat `unhealthy`
+      # forever (docs/verification.md B14).
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
   worker:
     # role: BullMQ consumer for ffmpeg transcoding + WhatsApp media ingest (real entry in spec 024)
@@ -178,6 +210,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

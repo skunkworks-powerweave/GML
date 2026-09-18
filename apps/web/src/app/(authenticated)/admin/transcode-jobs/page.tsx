@@ -30,7 +30,7 @@
 // (transcode.retry_requested / transcode.dropped) used elsewhere.
 
 import Link from "next/link";
-import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions } from "@gml/db/schema";
 import { transcodeQueue } from "@gml/worker/queues";
@@ -159,8 +159,8 @@ export default async function TranscodeJobsAdminPage({
   } else if (filter === "queued") {
     conds.push(eq(transcodeJobs.status, "queued"));
   } else if (filter === "recent") {
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    conds.push(gte(transcodeJobs.createdAt, twentyFourHoursAgo));
+    // DB clock, not app clock -- compared against a DB timestamp column.
+    conds.push(sql`${transcodeJobs.createdAt} >= now() - interval '24 hours'`);
   }
 
   // Single round-trip join: transcode_jobs joins to its parent

@@ -59,9 +59,19 @@ test("Next.js standalone output configured", () => {
   assert.match(cfg, /output:\s*['"]standalone['"]/, "next.config.ts must set output: 'standalone'");
 });
 
-test(".dockerignore covers heavy dirs", () => {
-  const ig = readText("docker/.dockerignore");
-  for (const p of ["node_modules", ".next", "workspace", ".git"]) {
+test(".dockerignore is at the build-context root and covers heavy dirs", () => {
+  // This assertion used to read "docker/.dockerignore" -- and so codified the
+  // bug. Docker reads .dockerignore from the BUILD CONTEXT ROOT (both compose
+  // services use `context: .`), never from the Dockerfile's directory. The file
+  // therefore had no effect: the build context was ~735 MB and `COPY . .`
+  // layered the host's node_modules over the image's Linux install. Asserting
+  // the wrong path is what let that survive 171 specs.
+  assert.ok(
+    !existsSync(resolve(root, "docker/.dockerignore")),
+    "docker/.dockerignore must NOT exist -- Docker does not read it there",
+  );
+  const ig = readText(".dockerignore");
+  for (const p of ["node_modules", "\.next", "workspace", "\.git", "\.env"]) {
     assert.match(ig, new RegExp(p), `.dockerignore must include ${p}`);
   }
 });

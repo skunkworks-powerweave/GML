@@ -7,6 +7,8 @@
 // `keys` metadata array per spec 024).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SignOutButton } from "@/components/nav/SignOutButton";
+import { signOutAction } from "./actions";
 
 export type Density = "dense" | "regular" | "loose";
 export type FontScale = "regular" | "large" | "xlarge";
@@ -229,9 +231,24 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
           <ReplayTourButton />
         </KvRow>
         <KvRow label="Sign out">
-          <a href="/api/auth/signout" style={{ color: "var(--rust)", fontSize: 12, textDecoration: "none" }}>
-            End this session →
-          </a>
+          <form action={signOutAction}>
+            {/* Same submit path as the Topbar, so the QuickFind-recents wipe
+                in SignOutButton runs here too. Previously this surface used a
+                bare <a href="/api/auth/signout">, which skipped that cleanup
+                and left the previous user's recents on the device. */}
+            <SignOutButton
+              style={{
+                color: "var(--rust)",
+                fontSize: 12,
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              End this session →
+            </SignOutButton>
+          </form>
         </KvRow>
       </SectionCard>
     </>

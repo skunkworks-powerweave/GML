@@ -308,12 +308,19 @@ test("Spec 121: QuickFind.tsx persists recents to localStorage keyed by user id"
 
 test("Spec 121: QuickFind.tsx closes on background click (overlay onClick)", () => {
   const src = read(COMPONENT);
-  // The outer overlay receives onClick={() => setOpen(false)}; the inner card
-  // stops propagation. Both halves must be present.
+  // The outer overlay must be bound to a close handler; the inner card stops
+  // propagation. Both halves must be present.
+  //
+  // This previously asserted the literal string `onClick={() => setOpen(false)}`.
+  // That broke when the inline arrow was replaced by the `closePanel` callback --
+  // a strictly better version that also clears the query, results and active
+  // index instead of leaving them for an effect to reset on the next render.
+  // The behaviour was preserved and improved; only the spelling changed. Match
+  // the binding, not one way of writing it.
   assert.match(
     src,
-    /onClick=\{\s*\(\)\s*=>\s*setOpen\(\s*false\s*\)\s*\}/,
-    "QuickFind.tsx outer overlay must close on click",
+    /onClick=\{\s*(?:closePanel|\(\)\s*=>\s*(?:closePanel\(\)|setOpen\(\s*false\s*\)))\s*\}/,
+    "QuickFind.tsx outer overlay must be bound to a close handler",
   );
   assert.match(
     src,

@@ -8,6 +8,7 @@ import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { LOCALE_COOKIE } from "@/i18n/config";
 
 const PrefsSchema = z.object({
   density: z.enum(["dense", "regular", "loose"]).optional(),
@@ -71,5 +72,27 @@ export async function PUT(req: Request) {
     metadata: { keys: Object.keys(patch) },
   });
 
-  return NextResponse.json({ ok: true });
+  const res = NextResponse.json({ ok: true });
+
+  // Mirror the locale into the `gml-locale` cookie. user_prefs.uiLanguage stays
+  // the source of truth, but the next-intl request config (src/i18n/request.ts)
+  // runs on every server render and cannot afford a DB round-trip, so it reads
+  // this cookie instead. Without the mirror, changing the language would update
+  // the database while every server-rendered string kept the previous locale.
+  // A route handler is the right place for this: Server Components cannot write
+  // cookies.
+  if (patch.uiLanguage) {
+    res.cookies.set(LOCALE_COOKIE, patch.uiLanguage, {
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365,
+      sameSite: "lax",
+      // Deliberately readable by JS: the pre-auth picker in
+      // login/language-picker.tsx sets the same cookie from the client, and a
+      // display language is not a secret.
+      httpOnly: false,
+      secure: process.env.NODE_ENV === "production",
+    });
+  }
+
+  return res;
 }

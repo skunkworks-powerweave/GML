@@ -60,14 +60,18 @@ test("069 — hosts the <UploadProgress /> tray with contextType=generic", () =>
   assert.match(src, /<UploadProgress\s+contextType="generic"\s*\/>/);
 });
 
-test("069 — table shows the six prototype columns + reuses STATE_LABEL/STATE_BG idiom", () => {
+test("069 — table shows the six prototype columns + reuses the STATE_LABEL idiom", () => {
   const src = read(PAGE);
   for (const header of ["File", "Source", "Linked to", "Size", "State", "Date"]) {
     assert.ok(src.includes(`"${header}"`), `column header ${header} must appear`);
   }
   // Status pill maps mirror /videos (spec 067).
   assert.match(src, /STATE_LABEL/);
-  assert.match(src, /STATE_BG/);
+  // NOTE: a /STATE_BG/ assertion used to live here. The constant it matched was
+  // dead code -- its own comment said it was "kept for the governance test
+  // idiom" while claiming a use it did not have. The regex passed for months
+  // against an unused symbol. Asserting the rendered state labels below is the
+  // part that actually describes the page.
   // Source pill map.
   assert.match(src, /SOURCE_LABEL/);
   // Empty state copy.

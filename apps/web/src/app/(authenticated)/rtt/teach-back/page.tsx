@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions, teachers, users } from "@gml/db/schema";
 import { auth } from "@/auth";

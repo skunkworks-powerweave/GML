@@ -1,3 +1,11 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# Merged from the stray apps/web/pnpm-workspace.yaml (deleted). That file made
+# pnpm treat apps/web as its own workspace root, so every `workspace:*` dep
+# (@gml/db, @gml/shared, @gml/worker) failed to resolve for anything run from
+# inside it — which is why node_modules was left half-installed.
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver

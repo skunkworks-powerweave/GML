@@ -202,7 +202,10 @@ export async function main() {
     lastMeetingAt: new Date(Date.now() - i * 86400000 * 7),
     conceptNote: i === 0 ? "Focus on phonics and reading aloud routines." : null,
   }));
-  const pairingsInsert = await db
+  // The insert must still run; only the unused binding is dropped. The
+  // .returning() clause is kept so the statement shape (and its cost) is
+  // unchanged if a caller later needs the ids back.
+  await db
     .insert(schema.mentorPairings)
     .values(pairingsValues)
     .returning({ id: schema.mentorPairings.id, teacherId: schema.mentorPairings.teacherId });
