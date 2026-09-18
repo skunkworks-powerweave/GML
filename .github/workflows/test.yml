@@ -95,12 +95,38 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Asserts the worker image actually contains its entrypoint. The shipped
-      # worker.Dockerfile had no `COPY . .`, so the image held only package
-      # manifests and the container crash-looped forever behind
-      # `restart: unless-stopped` with no healthcheck to reveal it.
-      - name: Worker image contains its entrypoint
+      # Actually START the worker and require it to reach its own startup log.
+      #
+      # A file-existence check is too weak, and the first version of this step
+      # proved it twice over: it hardcoded /app while the image builds at /repo
+      # (so it failed on a correct image), and it could not have caught three of
+      # the four defects that made this container unrunnable. Those were:
+      # no source in the image at all; corepack missing from the runner stage;
+      # `pnpm exec` re-entering corepack and dying with EACCES as the
+      # unprivileged worker user; and `dotenv` imported but never declared,
+      # which resolved via monorepo hoisting and failed in a clean image.
+      #
+      # Reaching the `online {...concurrency...}` line proves every import
+      # resolved and the module body executed. The container then fails to
+      # connect to the throwaway Redis/Postgres addresses below, which is
+      # expected and ignored -- connectivity is not what this gate is for.
+      - name: Worker image starts and resolves its entrypoint
         run: |
-          docker run --rm --entrypoint sh gml-worker:ci -c \
-            'test -f /app/apps/worker/src/index.ts || test -f /app/dist/index.js' \
-          || { echo "::error::worker image has no entrypoint source"; exit 1; }
+          set -o pipefail
+          out=$(timeout 60 docker run --rm \
+            -e NODE_ENV=production \
+            -e DATABASE_URL=postgres://u:p@127.0.0.1:5432/db \
+            -e REDIS_URL=redis://127.0.0.1:6379 \
+            gml-worker:ci 2>&1 | head -40 || true)
+          echo "$out"
+          echo "$out" | grep -q 'concurrency' || {
+            echo "::error::worker image never reached its startup log — it cannot run"
+            exit 1
+          }
+
+      # ffmpeg is the entire purpose of this image; a worker that starts but
+      # cannot transcode is no more useful than one that crash-loops.
+      - name: Worker image has ffmpeg
+        run: |
+          docker run --rm --entrypoint sh gml-worker:ci -c 'ffmpeg -version' >/dev/null \
+          || { echo "::error::ffmpeg missing from worker image"; exit 1; }
