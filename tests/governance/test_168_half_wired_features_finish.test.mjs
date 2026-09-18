@@ -187,7 +187,7 @@ test("spec 168 — admin home surfaces programmeName + academicYear from system_
 
 // ---------- (B) /login/forgot SMTP-aware UX ----------
 
-test("spec 168 — /login/forgot is a server component reading SMTP_HOST", () => {
+test("spec 168 — /login/forgot is a server component reading the email flag", () => {
   const src = read(FORGOT_PAGE);
   // Server component contract: no "use client" directive at the top.
   assert.ok(
@@ -196,8 +196,8 @@ test("spec 168 — /login/forgot is a server component reading SMTP_HOST", () =>
   );
   assert.match(
     src,
-    /process\.env\.SMTP_HOST/,
-    `${FORGOT_PAGE} must read process.env.SMTP_HOST at render time so the page can decide whether to surface the banner or the form`,
+    /authEmailEnabled\(\)/,
+    `${FORGOT_PAGE} must resolve email availability at render time. The signal moved from SMTP_HOST to AUTH_EMAIL_ENABLED because under Supabase the relay is configured in the dashboard, so the app's own SMTP_HOST is unset on deployments where email works perfectly and set on ones where it does not`,
   );
   assert.match(
     src,

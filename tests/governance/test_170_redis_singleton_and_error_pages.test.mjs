@@ -238,68 +238,56 @@ test("spec 170 — forbidden/page.tsx is a Server Component reading searchParams
   );
 });
 
-test("spec 170 — forbidden/page.tsx renders all four copy variants", () => {
+test("spec 170 — forbidden/page.tsx renders a distinct variant per reason", () => {
   const src = read(FORBIDDEN_PATH);
-  // Each of the four reason values must appear as a string literal
-  // somewhere in the source (as a branch in the resolveReason switch
-  // or the if/else chain).
-  for (const reason of ["locked", "smtp_unconfigured", "session_expired"]) {
+
+  // The `locked` variant is gone with the lockout that produced it (see
+  // test_161 for why that machinery was a denial-of-service tool). It is
+  // replaced by `rate_limited`, which is what Supabase Auth actually returns
+  // when it throttles sign-in attempts -- a limit applied to the SOURCE of the
+  // attempts rather than to the victim's account, so no stranger can trigger it
+  // on someone else's behalf. `smtp_unconfigured` became `email_unavailable`
+  // for the same reason the flag moved: SMTP is Supabase's concern now.
+  for (const reason of ["rate_limited", "email_unavailable", "session_expired"]) {
     assert.match(
       src,
       new RegExp(`["']${reason}["']`),
-      `forbidden/page.tsx must branch on the "${reason}" reason value so the variant copy renders`,
+      `forbidden/page.tsx must branch on the "${reason}" reason value`,
     );
   }
-  // The four copy fragments — each pinned so a future contributor
-  // can't accidentally collapse two variants into one shared message.
-  assert.match(
-    src,
-    /temporarily locked due to too many failed login attempts/,
-    "forbidden/page.tsx locked variant must include the 'temporarily locked due to too many failed login attempts' phrase",
+  assert.ok(
+    !/["']locked["']/.test(src),
+    "the `locked` variant must not return -- there is no account lockout to report",
   );
-  assert.match(
-    src,
-    /Email-based actions/,
-    "forbidden/page.tsx smtp_unconfigured variant must include the 'Email-based actions' phrase",
+
+  // Each variant keeps its own copy, so a future contributor cannot collapse
+  // two of them into one shared message and lose the distinction that made
+  // this page worth building.
+  assert.match(src, /Too many sign-in attempts/, "rate_limited copy");
+  assert.match(src, /Email-based actions/, "email_unavailable copy");
+  assert.match(src, /Your session has ended/, "session_expired copy");
+});
+
+test("spec 170 — forbidden/page.tsx does no session lookup", () => {
+  // Comment-stripped: the file explains at length what was removed, naming the
+  // very identifiers asserted against.
+  const src = read(FORBIDDEN_PATH)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  // It used to call auth() solely to read session.user.locked_until and format
+  // a "try again in N minutes" hint. The column is gone, and with it the reason
+  // to query anything from a page that is by definition rendered to people who
+  // have just failed an authorization check.
+  assert.ok(
+    !/locked_until/.test(src),
+    "forbidden/page.tsx must not reference locked_until -- the column no longer exists",
   );
-  assert.match(
-    src,
-    /Your session has ended/,
-    "forbidden/page.tsx session_expired variant must include the 'Your session has ended' phrase",
-  );
-  assert.match(
-    src,
-    /You don't have permission to view this page/,
-    "forbidden/page.tsx default variant must include the 'You don't have permission to view this page' phrase",
+  assert.ok(
+    !/await\s+auth\(\)/.test(src),
+    "forbidden/page.tsx must not call auth() -- it is a passive rendering surface",
   );
 });
 
-test("spec 170 — forbidden/page.tsx reads session.user.locked_until for the locked variant", () => {
-  const src = read(FORBIDDEN_PATH);
-  // The auth() call — load-bearing for the locked variant's "try
-  // again in N minutes" computation. Future contributors removing
-  // this would silently downgrade the locked variant to always say
-  // "1 hour" — the test fails to keep them honest.
-  assert.match(
-    src,
-    /(?:await\s+)?auth\(\)/,
-    "forbidden/page.tsx must call `auth()` so the locked variant can read session.user.locked_until and format a concrete time-remaining hint",
-  );
-  // The locked_until field — pinning the exact column name so a
-  // future rename trips the test.
-  assert.match(
-    src,
-    /locked_until/,
-    "forbidden/page.tsx must reference `locked_until` (the column name from spec 161) when computing time-remaining for the locked variant",
-  );
-  // The fallback string — pinned so the variant never just renders
-  // "undefined" or "" when the session doesn't carry the column.
-  assert.match(
-    src,
-    /["']1 hour["']/,
-    "forbidden/page.tsx must fall back to '1 hour' when locked_until is absent (spec 161's default lockout duration is 1 hour)",
-  );
-});
 
 test("spec 170 — forbidden/page.tsx carries data-testid and data-reason for governance / e2e pinning", () => {
   const src = read(FORBIDDEN_PATH);
@@ -317,86 +305,40 @@ test("spec 170 — forbidden/page.tsx carries data-testid and data-reason for go
 
 // ---------- (5) auth.ts AccountLockedError ----------
 
-test("spec 170 — auth.ts declares AccountLockedError extending CredentialsSignin", () => {
-  const src = read(AUTH_PATH);
-  // The class declaration with the contracted code.
-  assert.match(
-    src,
-    /class\s+AccountLockedError\s+extends\s+CredentialsSignin/,
-    "auth.ts must declare `class AccountLockedError extends CredentialsSignin` so the locked-account path is distinguishable from generic bad-creds failures",
-  );
-  assert.match(
-    src,
-    /code\s*=\s*["']account_locked["']/,
-    "auth.ts AccountLockedError must set `code = \"account_locked\"` so the loginAction can detect this specific failure case via err.code",
-  );
-  // The import of CredentialsSignin from next-auth — load-bearing
-  // for the subclass to exist.
-  assert.match(
-    src,
-    /import\s+[^;]*CredentialsSignin[^;]*from\s+["']next-auth["']/,
-    "auth.ts must import `CredentialsSignin` from \"next-auth\" so the AccountLockedError can extend it",
+test("spec 170 — auth.ts declares no bespoke sign-in error class", () => {
+  const code = read(AUTH_PATH)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.ok(
+    !/AccountLockedError|CredentialsSignin/.test(code),
+    "auth.ts must not declare a distinct locked-account error. It was an " +
+      "ACCOUNT-EXISTENCE ORACLE: a caller who saw it learned that the address " +
+      "was registered, which for an organisation with predictable addresses is " +
+      "a staff roster. Sign-in failures are now one indistinguishable string.",
   );
 });
 
-test("spec 170 — auth.ts throws AccountLockedError on the lockout path (not return null)", () => {
-  const src = read(AUTH_PATH);
-  // The throw site — pinning the literal `throw new AccountLockedError()`
-  // so a future contributor can't accidentally revert to `return null`.
-  assert.match(
-    src,
-    /throw\s+new\s+AccountLockedError\(\)/,
-    "auth.ts must `throw new AccountLockedError()` on the locked-account branch so the loginAction can catch the distinct code and redirect to /forbidden?reason=locked",
-  );
-  // The spec 161 audit row MUST still fire before the throw — pinning
-  // the relative order so a future refactor doesn't swap them.
-  const lockedSection = src.match(
-    /lockedUntil\s*>\s*new\s+Date\(\)[\s\S]+?throw\s+new\s+AccountLockedError\(\)/,
-  );
-  assert.ok(
-    lockedSection,
-    "auth.ts must keep the spec 161 audit row firing BEFORE the throw (search for the section from the lockedUntil check through the throw)",
-  );
-  assert.match(
-    lockedSection[0],
-    /"auth\.account\.locked_attempt"/,
-    "auth.ts's locked-attempt audit row must still fire before the throw — pinning the order so SM-1 coverage is preserved on this code path",
-  );
-});
 
 // ---------- (6) loginAction catches and redirects ----------
 
-test("spec 170 — loginAction catches account_locked and redirects to /forbidden?reason=locked", () => {
+test("spec 170 — loginAction surfaces one generic credential failure", () => {
   const src = read(LOGIN_ACTIONS_PATH);
-  // The redirect import is required (the action used to just return
-  // an error state; now it has a control-flow redirect for the locked
-  // case).
   assert.match(
     src,
     /import\s*\{\s*redirect\s*\}\s*from\s*["']next\/navigation["']/,
-    "loginAction must import `redirect` from \"next/navigation\" so the locked-case bounce works",
+    "loginAction still redirects on success",
   );
-  // The code-level detection — load-bearing pattern.
+  assert.ok(
+    !/account_locked/.test(src),
+    "loginAction must not branch on a locked-account code",
+  );
   assert.match(
     src,
-    /code\s*===\s*["']account_locked["']/,
-    "loginAction must detect `code === \"account_locked\"` on the caught AuthError to identify the locked-account failure case",
-  );
-  // The redirect target — pinned literal so a future typo (e.g.
-  // /forbidden?reason=lock or /403?reason=locked) breaks the test.
-  assert.match(
-    src,
-    /redirect\(\s*["']\/forbidden\?reason=locked["']\s*\)/,
-    "loginAction must `redirect(\"/forbidden?reason=locked\")` on the account_locked branch so the user lands on the variant page with the right copy",
-  );
-  // The generic-error fallback must STILL be present for the
-  // bad-creds / rate-limit-deny paths — preserving spec 141 contract.
-  assert.match(
-    src,
-    /["']Invalid email or password["']/,
-    "loginAction must keep the generic 'Invalid email or password' error for non-locked AuthError causes (spec 141 fail-closed contract preserved)",
+    /safeNext\(/,
+    "loginAction must validate its redirect target -- ?from= is attacker-supplied",
   );
 });
+
 
 // ---------- No-regression / hygiene ----------
 

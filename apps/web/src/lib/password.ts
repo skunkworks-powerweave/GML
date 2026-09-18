@@ -1,34 +1,16 @@
-import bcrypt from "bcryptjs";
-
-// Spec 167 — single source of truth for the bcrypt cost across apps/web.
+// Shared bcrypt cost.
 //
-// Pre-167 every route that hashed a secret hardcoded the literal `10`:
-//   - apps/web/src/lib/password.ts          (user passwords)
-//   - apps/web/src/app/api/admin/gates/[slug]/rotate/route.ts (gate hash)
-//   - apps/web/src/app/api/auth/forgot-password/route.ts      (reset token)
-//   - apps/web/src/app/api/auth/reset-password/route.ts       (new password)
-//   - packages/db/src/scripts/seed.ts                          (super_admin bootstrap)
+// USER PASSWORDS ARE NO LONGER HASHED HERE. `hashPassword` and `verifyPassword`
+// are gone along with `users.password_hash`: credentials live in Supabase's
+// auth.users and are verified by GoTrue. Keeping local helpers around would
+// invite someone to reintroduce a second, unauthoritative credential store.
 //
-// That's five literal `10`s that have to march in lockstep. Bumping the cost
-// (e.g. to 12 once production hardware allows) without missing a call site is
-// the kind of refactor that benefits enormously from a single exported const.
+// What remains is the SECTION GATE password -- a shared, rotatable, per-section
+// secret that is not a user credential and has no Supabase equivalent. It is
+// hashed by api/admin/gates/[slug]/rotate and compared by gate/[slug]/actions.
 //
-// `BCRYPT_COST` is the canonical value. seed.ts lives in `packages/db` and
-// can't import from `apps/web`, so it carries an inline comment pointing at
-// this file as the source of truth — the spec-167 governance test verifies
-// the comment is present so a future cost bump in this file forces a paired
-// edit in seed.ts (or the test fails and the contributor sees the drift).
+// One exported constant, so a future cost bump is a one-line change rather than
+// a hunt for literal 10s. packages/db/src/scripts/seed.ts also hashes a gate
+// password and cannot import across the workspace boundary, so it duplicates
+// the value with a comment pointing here; the governance test pins both.
 export const BCRYPT_COST = 10;
-
-export async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, BCRYPT_COST);
-}
-
-export async function verifyPassword(plain: string, hash: string | null | undefined): Promise<boolean> {
-  if (!hash) return false;
-  try {
-    return await bcrypt.compare(plain, hash);
-  } catch {
-    return false;
-  }
-}

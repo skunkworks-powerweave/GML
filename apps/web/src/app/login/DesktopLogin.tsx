@@ -21,10 +21,11 @@ import { useActionState, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { loginAction, type LoginState } from "./actions";
+import type { LoginShellProps } from "./shell-props";
 import { EmailLinkForm } from "./email-link-form";
 import { LoginLanguagePicker } from "./language-picker";
 
-export function DesktopLogin() {
+export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
     loginAction,
     {},
@@ -169,9 +170,12 @@ export function DesktopLogin() {
             Use the credentials your programme administrator gave you, or request a sign-in link by email.
           </p>
 
+          {/* The magic-link tab only exists when outbound email does. On a
+              deployment with no SMTP relay configured in Supabase, offering it
+              would send the user to a form whose success message is a lie. */}
           <div
             style={{
-              display: "flex",
+              display: emailEnabled ? "flex" : "none",
               gap: 12,
               borderBottom: "1px solid var(--line)",
               marginBottom: 16,
@@ -197,8 +201,11 @@ export function DesktopLogin() {
             ))}
           </div>
 
-          {mode === "password" ? (
+          {mode === "password" || !emailEnabled ? (
             <form action={formAction} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* proxy.ts captured the page the user actually wanted; carry it
+                  through the POST so loginAction can send them back there. */}
+              <input type="hidden" name="from" value={from} />
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>Email</span>
                 <input

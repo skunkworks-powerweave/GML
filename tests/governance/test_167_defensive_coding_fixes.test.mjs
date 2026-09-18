@@ -122,11 +122,17 @@ test("spec 167 — lib/password.ts exports BCRYPT_COST = 10", () => {
     /export\s+const\s+BCRYPT_COST\s*=\s*10\s*;/,
     "apps/web/src/lib/password.ts must `export const BCRYPT_COST = 10;` as the single source of truth for the bcrypt cost across apps/web",
   );
-  // hashPassword must consume the const, not a re-introduced literal.
-  assert.match(
-    src,
-    /bcrypt\.hash\([^,]+,\s*BCRYPT_COST\)/,
-    "apps/web/src/lib/password.ts hashPassword must use `bcrypt.hash(plain, BCRYPT_COST)` so the export is the only place the cost is defined",
+  // hashPassword / verifyPassword are gone with users.password_hash -- GoTrue
+  // verifies credentials now. The const survives because the SECTION GATE
+  // password is a shared rotatable secret with no Supabase equivalent, and it
+  // is still hashed locally.
+  assert.ok(
+    !/hashPassword|verifyPassword/.test(
+      src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"),
+    ),
+    "apps/web/src/lib/password.ts must not hash or verify USER passwords -- a " +
+      "second credential store would drift from auth.users and could be checked " +
+      "against without Supabase's rate limiting",
   );
 });
 
@@ -144,39 +150,7 @@ test("spec 167 — gates/[slug]/rotate route imports BCRYPT_COST and uses it in 
   );
 });
 
-test("spec 167 — forgot-password route imports BCRYPT_COST and uses it in bcrypt.hash", () => {
-  const src = read(FORGOT_ROUTE);
-  assert.match(
-    src,
-    /import\s*\{\s*BCRYPT_COST\s*\}\s*from\s*["']@\/lib\/password["']/,
-    "forgot-password/route.ts must `import { BCRYPT_COST } from \"@/lib/password\"` so the local literal is removed",
-  );
-  // The local `const BCRYPT_COST = 10;` declaration must be gone — it
-  // would shadow the import otherwise.
-  assert.ok(
-    !/^\s*const\s+BCRYPT_COST\s*=\s*10\s*;/m.test(src),
-    "forgot-password/route.ts must not declare a local `const BCRYPT_COST = 10;` — the value comes from the @/lib/password import",
-  );
-  assert.match(
-    src,
-    /bcrypt\.hash\([^,]+,\s*BCRYPT_COST\)/,
-    "forgot-password/route.ts must call `bcrypt.hash(plaintextToken, BCRYPT_COST)` for the reset-token hash",
-  );
-});
 
-test("spec 167 — reset-password route imports BCRYPT_COST", () => {
-  const src = read(RESET_ROUTE);
-  // The reset-password route hashes the new password via the shared
-  // hashPassword helper (which already uses BCRYPT_COST internally), so
-  // the BCRYPT_COST import here is documentary: it records the cost in
-  // the audit metadata so an investigator can see which bcrypt cost the
-  // hash was generated at.
-  assert.match(
-    src,
-    /import\s*\{[^}]*BCRYPT_COST[^}]*\}\s*from\s*["']@\/lib\/password["']/,
-    "reset-password/route.ts must import `BCRYPT_COST` from @/lib/password so the audit metadata records the cost used",
-  );
-});
 
 // ---------- (C) High-stakes recordAudit boolean capture ----------
 
@@ -225,33 +199,7 @@ test("spec 167 — audit/export route captures recordAudit boolean", () => {
   );
 });
 
-test("spec 167 — forgot-password route captures recordAudit boolean for the matched-email path", () => {
-  const src = read(FORGOT_ROUTE);
-  assert.match(
-    src,
-    /const\s+auditOk\s*=\s*await\s+recordAudit\s*\(/,
-    "forgot-password/route.ts must capture the recordAudit boolean on the matched-email path (the only audit row proving the reset link was issued)",
-  );
-  assert.match(
-    src,
-    /noteAuditDegraded\s*\(\s*["'`]\/api\/auth\/forgot-password["'`]/,
-    "forgot-password/route.ts must call `noteAuditDegraded(\"/api/auth/forgot-password\")` on the false-return branch",
-  );
-});
 
-test("spec 167 — reset-password route captures recordAudit boolean for the success path", () => {
-  const src = read(RESET_ROUTE);
-  assert.match(
-    src,
-    /const\s+auditOk\s*=\s*await\s+recordAudit\s*\(/,
-    "reset-password/route.ts must capture the recordAudit boolean on the success path — password resets are auth-mutating events whose audit miss is forensically severe",
-  );
-  assert.match(
-    src,
-    /noteAuditDegraded\s*\(\s*["'`]\/api\/auth\/reset-password["'`]/,
-    "reset-password/route.ts must call `noteAuditDegraded(\"/api/auth/reset-password\")` on the false-return branch",
-  );
-});
 
 // ---------- (D) audit.ts exports ----------
 
@@ -321,7 +269,9 @@ test("spec 167 — no new dependencies were introduced (no logging or counter li
 test("spec 167 — high-stakes routes still import recordAudit (the captured-boolean is a strict superset of the prior shape)", () => {
   // Belt-and-suspenders: pin that the underlying recordAudit import
   // wasn't accidentally dropped while the call shape was upgraded.
-  for (const path of [ROTATE_ROUTE, LEARNERS_EXPORT_ROUTE, AUDIT_EXPORT_ROUTE, FORGOT_ROUTE, RESET_ROUTE]) {
+  // FORGOT_ROUTE and RESET_ROUTE are absent: both endpoints were deleted with
+  // the hand-rolled reset flow. Supabase's recovery flow audits centrally.
+  for (const path of [ROTATE_ROUTE, LEARNERS_EXPORT_ROUTE, AUDIT_EXPORT_ROUTE]) {
     const src = read(path);
     assert.match(
       src,

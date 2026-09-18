@@ -25,6 +25,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { loginAction, type LoginState } from "./actions";
+import type { LoginShellProps } from "./shell-props";
 import { EmailLinkForm } from "./email-link-form";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
@@ -35,7 +36,7 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
 // element below applies `minHeight: 44` via this const).
 const TOUCH_TARGET = 44; // minHeight: 44 — Apple HIG / Material Design floor
 
-export function MobileLogin() {
+export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
     loginAction,
     {},
@@ -150,11 +151,12 @@ export function MobileLogin() {
           flexDirection: "column",
         }}
       >
-        {/* Mode toggle — Password | Magic link. */}
+        {/* Mode toggle — Password | Magic link. Hidden when outbound email is
+            not configured; see DesktopLogin for the reasoning. */}
         <div
           data-testid="mobile-mode-toggle"
           style={{
-            display: "grid",
+            display: emailEnabled ? "grid" : "none",
             gridTemplateColumns: "1fr 1fr",
             gap: 4,
             background: "var(--paper-2)",
@@ -186,11 +188,12 @@ export function MobileLogin() {
           ))}
         </div>
 
-        {mode === "password" ? (
+        {mode === "password" || !emailEnabled ? (
           <form
             action={formAction}
             style={{ display: "flex", flexDirection: "column", gap: 14 }}
           >
+            <input type="hidden" name="from" value={from} />
             <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <span
                 style={{

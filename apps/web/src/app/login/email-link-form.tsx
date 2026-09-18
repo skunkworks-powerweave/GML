@@ -1,50 +1,35 @@
 "use client";
 
-// Magic-link sign-in form. Only used when SMTP is configured (server skips the
-// Nodemailer provider otherwise). Posts to Auth.js's built-in /api/auth/signin/email.
+// Magic-link sign-in. Rendered only when AUTH_EMAIL_ENABLED is true -- the
+// login page decides, so this component never has to guess whether a relay
+// exists. See lib/auth-email.ts.
+//
+// It used to POST directly to Auth.js's built-in /api/auth/signin/email, which
+// is gone; it now goes through a server action so `shouldCreateUser: false`
+// is applied server-side where a caller cannot drop it.
 
-import { useState } from "react";
+import { useActionState } from "react";
+import { sendMagicLinkAction, type EmailActionState } from "./email-actions";
 
 export function EmailLinkForm() {
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, formAction, pending] = useActionState<EmailActionState | undefined, FormData>(
+    sendMagicLinkAction,
+    undefined,
+  );
 
-  async function onSubmit(formData: FormData) {
-    setError(null);
-    const email = String(formData.get("email") ?? "");
-    if (!email) {
-      setError("Please enter your email.");
-      return;
-    }
-    const res = await fetch("/api/auth/signin/email", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        email,
-        callbackUrl: "/dashboard",
-      }),
-    });
-    if (res.ok || res.redirected) setSubmitted(true);
-    else setError("Could not send link — try again later.");
-  }
-
-  if (submitted) {
+  if (state?.ok) {
     return (
-      <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-        Check your inbox for a sign-in link (it expires in 10 minutes).
+      <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status">
+        {state.message}
       </p>
     );
   }
 
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        void onSubmit(new FormData(e.currentTarget));
-      }}
-      className="flex flex-col gap-3 border-t border-neutral-200 pt-4"
-    >
-      <p className="text-xs uppercase tracking-wide text-neutral-500">Or sign in with an email link</p>
+    <form action={formAction} className="flex flex-col gap-3 border-t border-neutral-200 pt-4">
+      <p className="text-xs uppercase tracking-wide text-neutral-500">
+        Or sign in with an email link
+      </p>
       <label className="flex flex-col gap-1 text-sm">
         <span>Email</span>
         <input
@@ -55,16 +40,17 @@ export function EmailLinkForm() {
           className="rounded-md border border-neutral-300 px-3 py-2 focus:border-neutral-900 focus:outline-none"
         />
       </label>
-      {error ? (
+      {state?.error ? (
         <p className="text-sm text-red-600" role="alert">
-          {error}
+          {state.error}
         </p>
       ) : null}
       <button
         type="submit"
-        className="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm hover:bg-neutral-50"
+        disabled={pending}
+        className="rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:opacity-60"
       >
-        Email me a sign-in link
+        {pending ? "Sending…" : "Email me a sign-in link"}
       </button>
     </form>
   );

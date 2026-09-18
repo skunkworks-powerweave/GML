@@ -43,26 +43,61 @@ test("spec 103: seed.ts references both SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIA
   assert.match(src, /process\.env\.SUPER_ADMIN_INITIAL_PASSWORD/);
 });
 
-test("spec 103: seed.ts uses 'super_admin' role and inserts a users-shaped object", () => {
+test("spec 103: the bootstrap creates the credential in Supabase Auth first", () => {
   const src = read(SEED_PATH);
-  // The role literal must appear as a string value (not just a comment).
-  assert.match(src, /role:\s*["']super_admin["']/);
-  // Must insert into the users schema table.
-  assert.match(src, /\.insert\s*\(\s*schema\.users\s*\)/);
+
+  // This can no longer be a single INSERT. The credential lives in auth.users,
+  // the profile lives in public.users, and the uuid must be the SAME on both
+  // sides -- 19 foreign keys point at public.users(id) and none are
+  // ON UPDATE CASCADE, so generating an id here would orphan every audit row,
+  // form draft, quiz attempt and video submission the account ever produced.
+  // auth.users is written first and its id is adopted, never the reverse.
+  assert.match(
+    src,
+    /auth\.admin\.createUser\(/,
+    "the super-admin credential must be minted through the Supabase admin API",
+  );
+  assert.match(
+    src,
+    /email_confirm:\s*true/,
+    "email_confirm: true is not optional — without it GoTrue treats the address " +
+      "as unverified and refuses password sign-in, so the account exists, looks " +
+      "correct in the dashboard, and simply does not work",
+  );
+  assert.match(src, /'super_admin'|"super_admin"/, "the profile must be promoted to super_admin");
 });
 
-test("spec 103: seed.ts handles existing-user case (SELECT-then-INSERT and/or onConflict)", () => {
+test("spec 103: the bootstrap promotes the trigger-created profile rather than racing it", () => {
   const src = read(SEED_PATH);
-  // Defence-in-depth: at least one of these idempotency mechanisms must be present.
-  // We assert BOTH because spec.md mandates SELECT-then-INSERT plus onConflict.
-  const hasOnConflict = /onConflictDoNothing/.test(src);
-  const hasSelectThenInsert =
-    /\.select\([\s\S]*?\)\.from\s*\(\s*schema\.users\s*\)[\s\S]*?\.where\s*\(\s*eq\s*\(\s*schema\.users\.email/.test(
-      src,
-    );
+  // on_auth_user_created writes the profile as an INACTIVE teacher the instant
+  // the auth row lands. The bootstrap's job is to promote that row, so the
+  // write has to tolerate its existence.
+  assert.match(
+    src,
+    /ON\s+CONFLICT\s*\(\s*id\s*\)\s*DO\s+UPDATE/i,
+    "the profile write must be an upsert on id — the trigger has already " +
+      "inserted the row by the time this runs",
+  );
+  assert.match(
+    src,
+    /active\s*=\s*true/i,
+    "promotion must activate the profile, or the access-token hook refuses to " +
+      "mint a token and nobody can sign in",
+  );
+});
+
+test("spec 103: the bootstrap is idempotent and never rotates a live password", () => {
+  const src = read(SEED_PATH);
+  assert.match(
+    src,
+    /FROM\s+auth\.users\s+WHERE\s+lower\(email\)/i,
+    "an existing auth user must be detected before createUser is attempted, so " +
+      "re-running the seed is a no-op rather than an error",
+  );
   assert.ok(
-    hasOnConflict || hasSelectThenInsert,
-    "seed.ts must handle the existing-user case via onConflictDoNothing OR a SELECT-then-INSERT existence check",
+    !/updateUserById|admin\.updateUser/.test(src),
+    "re-running the seed must not reset the password of a live account — " +
+      "rotation is a deliberate admin action, not a deploy side effect",
   );
 });
 

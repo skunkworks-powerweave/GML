@@ -11,6 +11,7 @@ import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
+import { createClient } from "@supabase/supabase-js";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { eq, sql } from "drizzle-orm";
@@ -270,6 +271,12 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
     const fromEnv = process.env[envKey];
     const password = fromEnv ?? randomBytes(12).toString("base64url").slice(0, 16);
 
+    // Spec 167 — cost 10 mirrors BCRYPT_COST in apps/web/src/lib/password.ts,
+    // the single source of truth for the bcrypt cost across the LMS. seed.ts
+    // lives in packages/db and cannot import from apps/web (that would invert
+    // the dependency direction), so the value is duplicated here with this
+    // paired comment as the contract. The governance test pins both literals -
+    // a future cost bump that misses one side fails the test.
     await db.insert(schema.sectionGates).values({
       slug,
       passwordHash: await bcrypt.hash(password, 10),
@@ -289,15 +296,35 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
   }
 }
 
-// ── Spec 103 — Super admin bootstrap ──────────────────────────────────────────
-// Idempotent: env-gated + onConflictDoNothing on the unique email constraint.
-// - Skips silently when SUPER_ADMIN_EMAIL or SUPER_ADMIN_INITIAL_PASSWORD is not set
-//   (e.g. CI test runs, ephemeral dev DBs).
-// - Skips silently when a user with that email already exists, regardless of role.
-// - On success, prints "✓ super_admin user created: <email>" so the operator can
-//   correlate the deployment log line with the SQL row they'll see in audit_log.
+// ── Super admin bootstrap ─────────────────────────────────────────────────────
+//
+// Creates the first usable account. Since identity moved to Supabase Auth this
+// can no longer be a single INSERT: the credential lives in auth.users, the
+// profile lives in public.users, and the uuid must be the SAME on both sides
+// because 19 foreign keys point at public.users(id) and none of them are
+// ON UPDATE CASCADE. So auth.users is written first and its id is adopted --
+// never the other way round.
+//
+// Sequence:
+//   1. auth.admin.createUser() mints the auth record and its uuid.
+//   2. The on_auth_user_created trigger fires and writes the profile, as every
+//      account-creation path does: role='teacher', active=FALSE.
+//   3. This function promotes that profile to super_admin and activates it.
+//
+// Step 3 is the ONLY place in the codebase that grants super_admin without an
+// existing super_admin, which is why it is gated on an environment variable
+// that only whoever runs the deploy can set.
+//
+// email_confirm: true is not optional. Without it GoTrue treats the address as
+// unverified and refuses password sign-in -- the account would exist, look
+// correct in the dashboard, and simply not work.
+//
+// Idempotent in all four states: no auth user + no profile, auth user but no
+// profile (possible if the trigger was added later), profile but wrong role,
+// and fully-provisioned. Re-running never rotates the password of a live
+// account -- that is an explicit admin action, not a deploy side effect.
 async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
-  const email = process.env.SUPER_ADMIN_EMAIL;
+  const email = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
 
   if (!email || !password) {
@@ -305,41 +332,64 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
     return;
   }
 
-  // Existence check (SELECT-then-INSERT) — a friendlier log line than catching
-  // onConflict silently, and lets us short-circuit the bcrypt cost when not needed.
-  const existing = await db
-    .select({ id: schema.users.id })
-    .from(schema.users)
-    .where(eq(schema.users.email, email))
-    .limit(1);
-
-  if (existing.length > 0) {
-    console.log(`[seed] exists — skipping super_admin bootstrap for ${email}`);
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SECRET_KEY?.trim();
+  if (!supabaseUrl || !serviceKey) {
+    console.error(
+      "[seed] ✗ super_admin bootstrap FAILED — NEXT_PUBLIC_SUPABASE_URL and " +
+        "SUPABASE_SECRET_KEY are required to create an account. " +
+        "Nobody can sign in until this runs.",
+    );
     return;
   }
 
-  // Spec 167 — cost 10 mirrors `BCRYPT_COST` in
-  // apps/web/src/lib/password.ts (single source of truth for the bcrypt cost
-  // across the LMS). seed.ts can't import from apps/web (the seed runs from
-  // packages/db and reaches across the workspace boundary would be a
-  // dependency-direction inversion), so the value is duplicated here with
-  // this paired comment as the contract. The spec-167 governance test pins
-  // both literals — a future cost bump that misses one side fails the test.
-  const passwordHash = await bcrypt.hash(password, 10);
+  // Look the auth record up through the database rather than the admin API:
+  // the seed connects as a role that can read auth.users, and doing it here
+  // covers the "auth user exists but profile does not" case that a createUser
+  // call would just bounce off with 'already registered'.
+  const found = await db.execute(
+    sql`SELECT id FROM auth.users WHERE lower(email) = ${email} LIMIT 1`,
+  );
+  const existingRows = (found as unknown as { rows?: Array<{ id: string }> }).rows ?? [];
+  let userId = existingRows[0]?.id ?? null;
 
-  await db
-    .insert(schema.users)
-    .values({
+  if (userId) {
+    console.log(`[seed] auth user already exists for ${email} — password left unchanged`);
+  } else {
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data, error } = await admin.auth.admin.createUser({
       email,
-      passwordHash,
-      role: "super_admin",
-      defaultLocale: "en",
-      name: "Super Admin",
-      active: true,
-    })
-    .onConflictDoNothing({ target: schema.users.email });
+      password,
+      email_confirm: true,
+      user_metadata: { name: "Super Admin" },
+    });
+    if (error || !data?.user) {
+      console.error(`[seed] ✗ super_admin bootstrap FAILED — ${error?.message ?? "no user returned"}`);
+      return;
+    }
+    userId = data.user.id;
+    console.log(`[seed] ✓ auth user created: ${email}`);
+  }
 
-  console.log(`[seed] ✓ super_admin user created: ${email}`);
+  // Promote. The trigger has already written the profile as an inactive
+  // teacher; this is the deliberate act that makes it an administrator.
+  //
+  // The INSERT arm covers the case where no profile exists -- an auth user
+  // predating the trigger. Without it the bootstrap would report success on an
+  // account that still cannot obtain a token.
+  await db.execute(sql`
+    INSERT INTO public.users (id, email, name, role, active, default_locale)
+    VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
+    ON CONFLICT (id) DO UPDATE
+      SET role = 'super_admin',
+          active = true,
+          deleted_at = NULL,
+          updated_at = now()
+  `);
+
+  console.log(`[seed] ✓ super_admin profile ready: ${email}`);
 }
 
 // Spec 143 — bootstrapSystemSettings() was removed here. The single source of truth

@@ -29,16 +29,30 @@ test("schema/enums.ts exports roleEnum with 5 roles", () => {
   }
 });
 
-test("schema/identity.ts has Auth.js v5 tables", () => {
+test("schema/identity.ts declares users as a Supabase-keyed profile table", () => {
   const src = read("packages/db/src/schema/identity.ts");
-  for (const t of ["users", "accounts", "verificationTokens"]) {
-    assert.match(src, new RegExp(`export const ${t}`), `${t} must be exported`);
+  assert.match(src, /export const users\b/, "users must be exported");
+
+  // The Auth.js adapter tables are gone. accounts / auth_sessions /
+  // verification_tokens were already INERT under `session: { strategy: "jwt" }`
+  // -- the adapter wrote to them and nothing ever read them back -- and
+  // password_reset_tokens backed a flow that bcrypt-scanned every live token on
+  // an unthrottled endpoint. All four are dropped by _post/003.
+  for (const gone of ["accounts", "authSessions", "verificationTokens", "passwordResetTokens"]) {
+    assert.ok(
+      !new RegExp(`export const ${gone}\b`).test(src),
+      `${gone} must not be exported — Supabase Auth owns identity now`,
+    );
   }
-  // v2 (spec 017): the Auth.js session table is exported as either `sessions` (v1) or
-  // `authSessions` (v2 — bare `sessions` name freed for the classroom-sessions module).
-  assert.ok(
-    /export const (sessions|authSessions)\b/.test(src),
-    "Auth.js session table must be exported as `sessions` or `authSessions`",
+
+  // No .defaultRandom() on the primary key. 19 foreign keys point at
+  // public.users(id) and none are ON UPDATE CASCADE, so the uuid has to be
+  // adopted from auth.users rather than generated here; generating one would
+  // orphan the profile from the auth record it mirrors.
+  assert.match(
+    src,
+    /id:\s*uuid\("id"\)\.primaryKey\(\)\s*,/,
+    "users.id must have no default — the id comes from auth.users (see _post/003)",
   );
 });
 

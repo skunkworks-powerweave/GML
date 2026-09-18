@@ -64,53 +64,59 @@ test("spec 141 — recordAudit accepts optional userId + ipOverride overrides", 
   assert.match(src, /input\.ipOverride/);
 });
 
-test("spec 141 — auth.ts imports recordAudit and defines maskIp", () => {
+test("spec 141 — auth.ts no longer hand-rolls sign-in throttling", () => {
   const src = read(AUTH_PATH);
-  assert.match(src, /import\s*\{\s*recordAudit\s*\}\s*from\s*"@\/lib\/audit"/);
-  // maskIp helper exists for IP redaction in the audit row.
-  assert.match(src, /function\s+maskIp\(/);
-  // Drops the last IPv4 octet and the last IPv6 hextet.
-  assert.match(src, /\.xxx/);
-  assert.match(src, /:xxxx/);
-});
 
-test("spec 141 — auth.ts rate-limit Redis-down branch FAILS CLOSED (returns null) and audits", () => {
-  const src = read(AUTH_PATH);
-  // The new SEVERE audit row exists with the documented action name.
-  assert.match(src, /action:\s*"auth\.rate_limit\.redis_down"/);
-  assert.match(src, /severity:\s*"SEVERE"/);
-  // The metadata captures method + masked IP.
-  assert.match(src, /method:\s*"credentials"/);
-  assert.match(src, /ipMasked:\s*maskIp\(/);
-  // The old fail-open comment is gone — no resurrection by a future
-  // well-meaning refactor without going through this gate.
+  // Spec 141's concern was that a Redis fault on the LOGIN path must fail
+  // closed. That path is gone: Supabase Auth throttles sign-in centrally, so
+  // there is no local limiter on the credential check to fail open OR closed,
+  // and no bespoke audit row for its outage.
+  //
+  // This matters beyond tidiness. The old limiter could not fail closed as
+  // designed: getRedis() set maxRetriesPerRequest: null with no commandTimeout
+  // and the default offline queue, so with Redis down the command QUEUED
+  // FOREVER, rateLimit() never resolved, the documented fail-closed catch was
+  // unreachable, and every login request hung.
   const code = stripComments(src);
-  assert.doesNotMatch(
-    code,
-    /don't lock everyone out/,
-    "the fail-open rationale comment must be replaced",
+  assert.ok(
+    !/rateLimit\(/.test(code),
+    "auth.ts must not call the local rate limiter — sign-in throttling is " +
+      "Supabase's, and the local limiter's own failure mode was an indefinite hang",
+  );
+  assert.ok(
+    !/recordAudit\(/.test(code),
+    "auth.ts must not write audit rows — it is now a pure session reader with " +
+      "no side effects, called on every render",
   );
 });
 
-test("spec 141 — auth.ts never includes plaintext password in audit metadata", () => {
+test("spec 141 — sign-in failures are indistinguishable to the caller", () => {
   const src = read(AUTH_PATH);
-  const metadataBlocks = src.match(/metadata:\s*\{[\s\S]*?\}/g) ?? [];
-  assert.ok(metadataBlocks.length > 0, "expected at least one metadata block");
-  for (const block of metadataBlocks) {
-    assert.doesNotMatch(
-      block,
-      /\bpassword\b/,
-      `auth.ts audit metadata must not contain a plaintext password reference: ${block}`,
-    );
-    assert.doesNotMatch(
-      block,
-      /\bplaintext\b/,
-      `auth.ts audit metadata must not contain a plaintext field: ${block}`,
-    );
-    assert.doesNotMatch(
-      block,
-      /passwordHash/,
-      `auth.ts audit metadata must not include the password hash: ${block}`,
+  // No account-existence oracle. Whether the address is unknown or the password
+  // is wrong, the caller gets one string. The single exception is the
+  // hook-refused case, which is safe: reaching it requires already holding the
+  // correct password.
+  assert.match(
+    src,
+    /return \{ error: "Incorrect email or password\." \};/,
+    "the generic credential failure must be a single shared string",
+  );
+});
+
+test("spec 141 — the remaining rateLimit callers still fail CLOSED", () => {
+  // The property spec 141 established is preserved where a local limiter is
+  // still the control: the section gate, and the outbound-email actions.
+  for (const [path, label] of [
+    [GATE_PATH, "gate verification"],
+    ["apps/web/src/app/login/email-actions.ts", "email send"],
+  ]) {
+    const src = read(path);
+    assert.match(src, /rateLimit\(/, `${label} must be rate limited`);
+    assert.match(
+      src,
+      /catch[\s\S]{0,400}?(return false|SERVICE_UNAVAILABLE|ok:\s*false)/,
+      `${label} must deny on limiter failure, not allow — an attacker who can ` +
+        `partition the limiter would otherwise unlock unbounded attempts`,
     );
   }
 });

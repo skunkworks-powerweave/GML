@@ -2,7 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
-import type { Session } from "next-auth";
+import type { Session } from "@/auth";
 
 /**
  * Authorization guard for ROUTE HANDLERS.

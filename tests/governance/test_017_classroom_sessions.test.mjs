@@ -47,15 +47,20 @@ test("classroom sessions migration exists (0006) with CREATE TABLE sessions", ()
   assert.match(sql, /REFERENCES "public"\."teachers"/);
 });
 
-test("identity schema renamed sessions export to authSessions", () => {
+test("identity.ts leaves the bare `sessions` table name to the curriculum module", () => {
   const src = readFileSync(resolve(root, "packages/db/src/schema/identity.ts"), "utf8");
-  assert.match(src, /export const authSessions\b/);
-  assert.match(src, /pgTable\("auth_sessions"/);
-  assert.ok(!/export const sessions\b/.test(src), "old `sessions` export must be removed from identity.ts");
+  // Spec 017 freed the name by renaming Auth.js's table to auth_sessions. The
+  // move to Supabase Auth then deleted that table outright, which frees the
+  // name permanently. What this test protects is the invariant, not the
+  // mechanism: identity must not claim `sessions`.
+  assert.ok(
+    !/export const sessions\b/.test(src),
+    "identity.ts must not export `sessions` — that name belongs to the " +
+      "classroom-sessions module",
+  );
+  assert.ok(
+    !/pgTable\("auth_sessions"/.test(src),
+    "auth_sessions is dropped by _post/003; Supabase owns session storage",
+  );
 });
 
-test("auth.ts adapter points at authSessions", () => {
-  const src = readFileSync(resolve(root, "apps/web/src/auth.ts"), "utf8");
-  assert.match(src, /authSessions\b/);
-  assert.match(src, /sessionsTable:\s*authSessions/);
-});

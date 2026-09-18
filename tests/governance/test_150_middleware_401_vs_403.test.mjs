@@ -76,8 +76,12 @@ test("spec 150 — middleware.ts declares two separate auth-failure branches in 
   // The no-session branch must exist as its own `if` block.
   assert.match(
     src,
-    /if\s*\(\s*!\s*session\?\.\s*user\s*\)/,
-    "middleware.ts must declare `if (!session?.user)` as a standalone branch (the 401-equivalent path)",
+    /if\s*\(\s*!signedIn\s*\|\|\s*!isRoleName\(role\)\s*\)/,
+    "proxy.ts must declare the unauthenticated branch as its own `if`. The test "
+      + "was `!session?.user`; it is now `!signedIn || !isRoleName(role)`, which is "
+      + "STRICTLY STRONGER: a token that verifies but carries no usable role claim "
+      + "(the shape produced when the access-token hook is not registered) is "
+      + "treated as signed-out rather than as a user with an unknown role.",
   );
   // The insufficient-role branch must exist as its own `if` block.
   assert.match(
@@ -90,7 +94,7 @@ test("spec 150 — middleware.ts declares two separate auth-failure branches in 
   // short-circuit into a 403 rewrite (the audit finding). We measure
   // the position of the GUARD CONDITIONS themselves (the `if (...)`
   // headers), not the `hasAnyRole` import line which precedes both.
-  const sessionIdx = src.indexOf("if (!session?.user)");
+  const sessionIdx = src.indexOf("if (!signedIn || !isRoleName(role))");
   // The role-check branch begins with `if (policy.roles && !hasAnyRole`.
   const roleIdx = src.indexOf("if (policy.roles && !hasAnyRole");
   assert.ok(
@@ -112,7 +116,7 @@ test("spec 150 — no-session branch redirects to /login with both `from` and `n
   // login page, not the protected path with a login body.
   assert.match(
     src,
-    /if\s*\(\s*!\s*session\?\.\s*user\s*\)\s*\{[\s\S]{0,500}NextResponse\.redirect\(/,
+    /if\s*\(\s*!signedIn[\s\S]{0,600}NextResponse\.redirect\(/,
     "the no-session branch must call NextResponse.redirect (not rewrite)",
   );
   // The redirect URL must include a `from` query param — spec-150's
@@ -149,7 +153,7 @@ test("spec 150 — insufficient-role branch rewrites to /forbidden with explicit
   // can see exactly which route was denied).
   assert.match(
     src,
-    /if\s*\(\s*policy\.roles\s*&&\s*!\s*hasAnyRole\([\s\S]{0,200}\)\s*\)\s*\{[\s\S]{0,400}NextResponse\.rewrite\(/,
+    /if\s*\(\s*policy\.roles\s*&&\s*!hasAnyRole\([\s\S]{0,300}NextResponse\.rewrite\(/,
     "the insufficient-role branch must call NextResponse.rewrite (preserves the URL bar) — NOT redirect",
   );
   // The CRITICAL spec-150 fix: the rewrite call must pass
@@ -176,10 +180,10 @@ test("spec 150 — the legacy `NextResponse.rewrite(url)` shape (no status overr
   // The simplest enforcement is to scan for any `url.pathname = "/forbidden"`
   // immediately preceding a rewrite, and assert the rewrite has the
   // status object.
-  const forbiddenAssignIdx = src.indexOf('url.pathname = "/forbidden"');
+  const forbiddenAssignIdx = src.indexOf('target.pathname = "/forbidden"');
   assert.ok(
     forbiddenAssignIdx > 0,
-    "middleware.ts must still assign `url.pathname = \"/forbidden\"` for the role-failure path",
+    "proxy.ts must still route the role-failure path to /forbidden",
   );
   // From that assignment, the NEXT NextResponse.rewrite call within
   // the next 200 chars must include the status object.
@@ -193,23 +197,27 @@ test("spec 150 — the legacy `NextResponse.rewrite(url)` shape (no status overr
 
 // ---------- middleware.ts — matcher config unchanged (no-scope-creep guard) ----------
 
-test("spec 150 — middleware matcher config still covers all the protected prefixes", () => {
+test("spec 150 — every prefix spec 007 protected is still covered, by POLICIES", () => {
   const src = read(MW_PATH);
-  // The matcher list should be unchanged from spec 007 — spec 150 is
-  // a response-shape fix, not a scope expansion. If a future
-  // contributor inadvertently drops a matcher entry (e.g. /admin/*)
-  // while editing the file, this test catches it.
+
+  // The matcher used to BE the list of protected prefixes. It no longer is: it
+  // is a catch-all, because its first responsibility is persisting a rotated
+  // session cookie on every page, not selecting which pages to guard. The
+  // policy list took over the guarding, so the no-scope-creep check moved with
+  // it. Losing a prefix here would be exactly as bad as losing a matcher entry
+  // was, which is why the assertion survives the rewrite.
   for (const prefix of [
-    "/dashboard/:path*",
-    "/admin/:path*",
-    "/observation/:path*",
-    "/rtt/:path*",
-    "/mentorship/:path*",
-    "/gate/:path*",
+    "/dashboard",
+    "/admin",
+    "/observation",
+    "/rtt",
+    "/mentorship",
+    "/gate",
   ]) {
     assert.ok(
-      src.includes(prefix),
-      `middleware matcher must still include "${prefix}" — spec 150 does not change the matched paths`,
+      src.includes(`prefix: "${prefix}"`),
+      `POLICIES must still cover "${prefix}" — it was protected before the ` +
+        `matcher became a catch-all and must not have been dropped in the move`,
     );
   }
 });
