@@ -113,11 +113,28 @@ test("FR-109-D: the object mirror runs remote-to-remote, and `mc` is gone", () =
   // Both endpoints are now declared as rclone remotes through the environment
   // rather than inline in argv, because an argv is readable from /proc for the
   // hours a mirror of that size runs.
+  // The endpoint is resolved into $S3_ENDPOINT first -- taken from
+  // SUPABASE_S3_ENDPOINT when set, and otherwise DERIVED from
+  // NEXT_PUBLIC_SUPABASE_URL, because the dashboard shows a region far more
+  // prominently than an endpoint and the endpoint is a fixed function of the
+  // project ref. The old assertion pinned the raw variable, so it forbade the
+  // derivation.
   assert.match(
     src,
-    /RCLONE_CONFIG_SUPASRC_ENDPOINT="\$\{SUPABASE_S3_ENDPOINT\}"/,
-    "the source must be the Supabase S3 endpoint",
+    /RCLONE_CONFIG_SUPASRC_ENDPOINT="\$\{S3_ENDPOINT\}"/,
+    "the source endpoint must come from the resolved S3_ENDPOINT",
   );
+  assert.match(
+    src,
+    /storage\.supabase\.co\/storage\/v1\/s3/,
+    "it must be able to derive the Storage S3 endpoint from the project URL",
+  );
+  // Both spellings of the credentials, because Supabase's dashboard prints
+  // "Access key ID" / "Secret access key" and that is what operators write.
+  // Demanding only the short names meant the mirror was silently SKIPPED while
+  // the warning claimed the variables were unset.
+  assert.match(src, /SUPABASE_S3_ACCESS_KEY_ID:-\$\{SUPABASE_S3_ACCESS_KEY/, "accept the dashboard access-key name");
+  assert.match(src, /SUPABASE_S3_SECRET_ACCESS_KEY:-\$\{SUPABASE_S3_SECRET_KEY/, "accept the dashboard secret name");
   assert.match(
     src,
     /rclone copy[\s\S]{0,200}?"SUPASRC:\$\{bucket\}"[\s\S]{0,200}?"DRDEST:/,
