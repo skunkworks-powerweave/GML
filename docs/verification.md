@@ -527,12 +527,133 @@ Stated plainly rather than left ambiguous.
   with no Dockerfile involved, so it is this host's network, not the Dockerfile.
   CI builds it and gates on it reaching its startup log and on ffmpeg/ffprobe
   being present.
-- **Caddy cannot bind port 80 here** (Windows reserved port range), so the CSP
-  and Permissions-Policy headers are unexercised. The smoke suite checks them
-  when present rather than passing silently.
+- **Caddy cannot bind port 80 here** (Windows reserved port range), so the
+  headers Caddy adds — HSTS in particular — remain unexercised.
+
+  This is no longer true of the CSP, and that turned out to matter: see
+  "The CSP was broken, and this is how we know" below. The policy now comes
+  from the application, so it is exercised on every request to the app
+  container and the smoke suite asserts it directly rather than skipping.
 - **A real video has not been transcoded end to end.** That needs the worker
   image, which needs a host that can reach Debian's mirrors.
 - **The WhatsApp ingest path has not been exercised with a real Meta delivery.**
   The signature refusal is verified; a genuine signed payload is not.
 - **The EC2 deploy has not been performed.** `scripts/deploy.sh` is written and
   syntax-checked; it has not been run on a clean instance.
+
+---
+
+# QA pass — full-journey validation
+
+Run after the work above, against the built image and a live Supabase project.
+Every claim here was produced by executing something; where a check could not
+be run, it is listed under "Still not verified" rather than described as passing.
+
+## The CSP was broken, and this is how we know
+
+The Caddyfile served `script-src 'self'` with no nonce, and carried a comment
+asserting that "a production Next build needs neither [unsafe-inline nor
+unsafe-eval]" — with an instruction to verify it in a browser. That
+verification had never happened, because Caddy cannot bind :80 on this machine.
+
+Measured against the built image, on `/login`:
+
+    total <script> tags                 18
+    inline, with a body, no src          6      <- the RSC flight payload
+    carrying a nonce                     0
+
+`script-src 'self'` does not permit inline script. All six would have been
+blocked by every browser, React would never have hydrated, and the application
+would have been a static shell behind TLS. The assertion in the Caddyfile was
+wrong, and a governance test was pinning it.
+
+After moving the policy into `proxy.ts` with a per-request nonce, the same
+measurement:
+
+    inline scripts                       6
+    carrying the response header's nonce 6
+    nonce identical across 3 requests     no  (SsRdqZZi / VfZmlNGN / cxEgbdbD)
+
+`/` was also being prerendered despite calling `auth()`: the build runs without
+Supabase credentials, so `auth()` returned before touching `cookies()`, Next saw
+no dynamic API and froze the signed-out shell into `index.html`. A signed-in
+user landing on `/` was told to sign in. After `force-dynamic`, the only
+remaining prerendered documents are Next's own `_not-found` and `_global-error`
+shells.
+
+## Direct-to-Storage upload could not have worked either
+
+`lib/supabase/browser.ts` read `NEXT_PUBLIC_*` in a `"use client"` module. Next
+inlines those at BUILD time, and `app.Dockerfile` builds with only
+`DATABASE_URL` set. Probed in a browser against the built image:
+
+    {"processExists":false,"urlVisible":false,"keyVisible":false,"refInPageHtml":false}
+
+So `startResumableUpload` would have called
+`onError("Uploads are not configured on this deployment.")` on a deployment that
+was configured correctly. The config now rides back on `beginUploadAction`'s
+response, read server-side at request time. Confirmed in the rebuilt image:
+
+    client chunks referencing NEXT_PUBLIC_SUPABASE   none
+    server sees NEXT_PUBLIC_SUPABASE_URL at runtime  true
+
+The image therefore stays portable — build args would have pinned it to one
+project.
+
+## Gates run
+
+    pnpm -r typecheck          4/4 workspaces clean
+    pnpm lint                  clean (one suppression, in global-error.tsx,
+                               with its reason in the file)
+    pnpm build                 succeeds with DATABASE_URL set; fails loudly
+                               without it, which is the intended behaviour
+    pnpm test                  1562/1562
+    pnpm test:behaviour        21/21 against a real Postgres, 0 skipped
+    smoke, in-container        10/10 against the built image
+    docker compose build app   succeeds
+    /api/health                ok:true, db:true, storage:true, 28/28 migrations
+
+The smoke suite's security-header test previously skipped itself whenever no CSP
+was present, which it used as a proxy for "not behind Caddy". That hid a real
+gap: nothing reaching the app directly carried `nosniff`, `Referrer-Policy` or
+`Permissions-Policy` at all. The app now sets its own baseline and the test
+asserts the nonce and its freshness across two live requests.
+
+## Governance tests that were re-pointed, and why
+
+Twenty-three assertions failed against these fixes. Every one was pinning the
+broken behaviour. None was deleted or weakened; several were made stricter,
+because the old assertion was the reason the defect survived:
+
+| Test | Pinned | Now |
+|---|---|---|
+| `test_140` | that a seed DECLARED a field mapping | that it APPLIES it |
+| `test_069` | the literal `+91 90600 22013` | the env value; no literal number |
+| `test_132`/`135` | that `WHATSAPP_PHONE_NUMBER_ID` is a fallback | that it is never one |
+| `test_109`, `test_phase9_10` | `rclone sync` | `rclone copy`; `sync` forbidden |
+| `test_phase9_10` | `script-src 'self'` in Caddy | that Caddy sets NO CSP |
+| `test_047` | a link to a route that has never existed | the route that answers |
+| `test_046` | `href={`/repo/${b.id}`}` with no override | the override the learners row needs |
+| `test_158`, `test_168` | eight verbatim copies of `escapeIlike` | one shared copy, plus quickfind |
+| `test_074` | an inbox filter the inbox does not implement | that it is not advertised |
+| `test_122` | env var names in a file that no longer reads them | both sides of the indirection |
+| `test_156` | the arrow-expression shape of a handler | the behaviour it was proxying for |
+| smoke | `script-src 'self'`, skipping when absent | nonce present, fresh per request |
+
+## Still not verified
+
+Unchanged from above, and none of it became verifiable in this pass:
+
+- The worker image does not build on this machine (`apt-get` cannot reach
+  deb.debian.org — reproduced in a plain `node:22-slim`), so no real transcode
+  has been run end to end.
+- Caddy cannot bind :80 here, so HSTS and the TLS path are unexercised. The
+  Caddyfile is `caddy validate`-clean, including the new `:2021` health
+  listener.
+- No real Meta webhook delivery. The unsigned-POST refusal is verified; a
+  genuinely signed payload is not.
+- The EC2 deploy has not been performed.
+- **Supabase → Authentication → Sessions → Access token (JWT) expiry is still
+  3600s.** 900s is recommended: the access-token lifetime is the window in which
+  a deactivated user keeps working, because revocation happens at the next mint.
+  This is a dashboard setting with no SQL equivalent and it is outstanding.

@@ -279,7 +279,12 @@ under `$BACKUP_S3_BUCKET/storage/`.
 1. Stop the app: `docker compose stop app worker`
 2. Restore the dump into a fresh Supabase project (or a new database on the
    existing one) with `pg_restore --no-owner --no-acl`.
-3. Restore objects: `rclone sync` the S3 mirror back into the Storage buckets.
+3. Restore objects: `rclone copy` the S3 mirror back into the Storage buckets.
+   Use `copy`, not `sync` — `sync` would delete anything in the destination
+   that is absent from the mirror, which during a partial recovery means
+   deleting the objects you still had. (`backup.sh` uses `copy` for the same
+   reason in the other direction: a deletion inside Supabase must never
+   propagate into the DR bucket.)
 4. Re-run the two dashboard steps in §2.2 — **hooks and settings are not in the
    dump.**
 5. Point `DATABASE_URL` and the Supabase keys at the restored project, redeploy.
