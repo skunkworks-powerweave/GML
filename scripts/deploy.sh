@@ -29,8 +29,27 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Health is checked THROUGH CADDY, because that is the only thing listening.
-# Uses the app's own container health as the primary signal and the HTTP probe
-# as confirmation that the proxy path works end to end.
+# Two signals: the app container's own healthcheck, and an HTTP probe that must
+# actually reach the application and read ok:true out of its body.
+#
+# THE PROBE USED TO BE INERT. It was:
+#
+#     HEALTH_URL=http://127.0.0.1/api/health
+#     until curl -fsS -o /dev/null "$HEALTH_URL"; do ...
+#
+# Caddy answers plaintext with a 308 redirect to HTTPS, and `curl -f` only
+# fails on 4xx and 5xx -- a 3xx exits 0. So the loop succeeded the moment CADDY
+# came up, with an empty body, having never contacted the app. Measured:
+#
+#     $ curl -fsS -o /dev/null http://127.0.0.1/api/health ; echo $?
+#     0                        # http_code=308, body empty
+#
+# A deploy with a crash-looping app, an unreachable database or failed
+# migrations would have reported "healthy after 3s" and gone on to seed. The
+# gate whose entire purpose is to catch that was the thing that could not.
+#
+# The comment above it also claimed the container healthcheck was the primary
+# signal. No part of the script read it. Both are fixed below.
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-3}"
@@ -100,13 +119,36 @@ fi
 log "migrations applied"
 
 # ── 3. Health ────────────────────────────────────────────────────────────────
+# The app container's own healthcheck verdict: healthy | unhealthy | starting.
+app_container_health() {
+  docker compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null     | awk '$1=="app"{print $2}' | head -1
+}
+
+# Reaches the APPLICATION and reads its verdict, rather than whatever the proxy
+# says first.
+#
+#   -L  follow Caddy's 308 to HTTPS. Without it curl stops at the redirect and
+#       exits 0 -- the defect described above.
+#   -k  the redirect lands on https://127.0.0.1 while the certificate is issued
+#       for $DOMAIN, so the name will not match from the box itself. Certificate
+#       validity is not what this check is for; scripts/verify-tls-local.sh and
+#       any browser cover that. What is being checked here is the application.
+#   grep the body, because /api/health answers 503 with ok:false when the
+#       database, storage or migrations are not right, and a status code alone
+#       would not distinguish "app is up" from "app is up and working".
+app_http_healthy() {
+  curl -fsSLk -m 10 "${HEALTH_URL}" 2>/dev/null | grep -q '"ok":true'
+}
+
 log "waiting for health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
 elapsed=0
-until curl -fsS -o /dev/null "${HEALTH_URL}"; do
+until app_http_healthy; do
   if [ "${elapsed}" -ge "${HEALTH_TIMEOUT_SECONDS}" ]; then
     echo "[deploy] not healthy after ${HEALTH_TIMEOUT_SECONDS}s." >&2
     echo "[deploy] /api/health returns 503 until db, storage AND migrations all pass." >&2
-    curl -s "${HEALTH_URL}" || true
+    echo "[deploy] app container health: $(app_container_health)" >&2
+    echo "[deploy] last /api/health body:" >&2
+    curl -sLk -m 10 "${HEALTH_URL}" || true
     echo >&2
     docker compose logs --no-color --tail 40 app >&2
     exit 1
@@ -114,7 +156,7 @@ until curl -fsS -o /dev/null "${HEALTH_URL}"; do
   sleep "${HEALTH_INTERVAL_SECONDS}"
   elapsed=$((elapsed + HEALTH_INTERVAL_SECONDS))
 done
-log "healthy after ${elapsed}s"
+log "healthy after ${elapsed}s (app container: $(app_container_health))"
 
 # ── 4. Seed ──────────────────────────────────────────────────────────────────
 # Run in the MIGRATE image, which has pnpm, tsx and packages/db. The app image
