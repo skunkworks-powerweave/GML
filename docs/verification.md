@@ -640,20 +640,49 @@ because the old assertion was the reason the defect survived:
 | `test_156` | the arrow-expression shape of a handler | the behaviour it was proxying for |
 | smoke | `script-src 'self'`, skipping when absent | nonce present, fresh per request |
 
+## Since closed
+
+Every item this section listed as unverified has since been closed except the
+EC2 deploy. Left here with the evidence rather than deleted, because "we never
+checked" and "we checked and it works" are different states and the difference
+is the point of this file.
+
+- **The worker image and a real transcode.** The apt failure was never Debian
+  or DNS: it is a corporate antivirus proxy on the development host returning
+  `499 Request has been forbidden by antivirus` for every `.deb` over HTTP, and
+  intercepting HTTPS with an untrusted CA. `docker/worker.local-test.Dockerfile`
+  takes ffmpeg from a static image instead, and a real 6 s video went through
+  the full path against the live project: `ready — 1 segments, 520 KiB, 6s,
+  640x360`, with `duration_sec`, `width`, `height`, `poster_key` and
+  `verified_at` all populated for the first time.
+- **Playback.** Verified against the real objects, not fixtures: the stored
+  playlist carries bare relative segment names, server-side rewriting turns them
+  into signed absolute URLs, and an anonymous GET of one returns 200 with
+  532,604 bytes of `video/mp2t` while an unsigned GET of the same object is
+  refused with 400.
+- **The Caddy TLS path.** `DOMAIN=localhost` makes Caddy issue from its internal
+  CA, so no ACME and no public domain are needed. `scripts/verify-tls-local.sh`
+  passes 12/12, including full chain validation with no `-k`, HSTS present over
+  HTTPS and absent on the plaintext 308, and — the one that matters — exactly
+  one CSP header surviving the proxy hop with its nonce matching the nonce on
+  the rendered script tags in the same response.
+- **A genuinely signed Meta webhook.** Signing one locally needs nothing from
+  Meta: a valid signature is accepted (200) and six near misses are refused
+  (401), including a tampered body and a same-length wrong hex digest, which is
+  what exercises `timingSafeEqual` rather than the length short-circuit.
+- **Access token lifetime.** Now 900s. `verify-auth.mjs` reports
+  `PASS access-token lifetime — 900s`; it previously emitted a NOTE at 3600s.
+
 ## Still not verified
 
-Unchanged from above, and none of it became verifiable in this pass:
-
-- The worker image does not build on this machine (`apt-get` cannot reach
-  deb.debian.org — reproduced in a plain `node:22-slim`), so no real transcode
-  has been run end to end.
-- Caddy cannot bind :80 here, so HSTS and the TLS path are unexercised. The
-  Caddyfile is `caddy validate`-clean, including the new `:2021` health
-  listener.
-- No real Meta webhook delivery. The unsigned-POST refusal is verified; a
-  genuinely signed payload is not.
-- The EC2 deploy has not been performed.
-- **Supabase → Authentication → Sessions → Access token (JWT) expiry is still
-  3600s.** 900s is recommended: the access-token lifetime is the window in which
-  a deactivated user keeps working, because revocation happens at the next mint.
-  This is a dashboard setting with no SQL equivalent and it is outstanding.
+- **The EC2 deploy has not been performed.** `scripts/preflight.sh`,
+  `deploy.sh` and `rollback.sh` are written and syntax-checked, and the
+  rollback tag mechanics are proven locally with two real images — but no
+  deploy has been run on a clean instance.
+- **Public certificate issuance.** Everything Caddy does once it holds a
+  certificate is exercised above; obtaining one from Let's Encrypt needs a real
+  domain and inbound :80 from the internet.
+- **Meta actually calling us, and the Graph API media download.** The accept
+  path is verified as far as it can go without a live token: an accepted
+  delivery audits `whatsapp.message.received` with attribution intact and then
+  fails cleanly at `whatsapp.media.url_failed`, leaving no orphan row.
