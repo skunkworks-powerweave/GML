@@ -23,6 +23,7 @@
 // never has to filter on the client. If a future spec exposes learners, the
 // API gate is the right place to add it — never trust the client to redact.
 
+import { QUICKFIND_OPEN_EVENT } from "./events";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -196,9 +197,21 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
       }
     }
 
+    // An event any component can dispatch to open the panel. QuickFind is
+    // mounted once in the authenticated layout, so a button elsewhere in the
+    // tree -- particularly one inside an async Server Component, which cannot
+    // carry an onClick at all -- has no other way to reach it. /repo's "Find a
+    // record" button was exactly that: a bare <button type="button"> with no
+    // handler, which did nothing when clicked.
+    function onOpenRequest(): void {
+      if (!open) openPanel();
+    }
+
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener(QUICKFIND_OPEN_EVENT, onOpenRequest);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener(QUICKFIND_OPEN_EVENT, onOpenRequest);
     };
   }, [open, openPanel, closePanel]);
 

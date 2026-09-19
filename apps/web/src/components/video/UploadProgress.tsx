@@ -21,6 +21,7 @@
 
 import { useRef, useState } from "react";
 import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
+import { useRouter } from "next/navigation";
 import { startResumableUpload, type UploadHandle } from "@/lib/video/tus-upload";
 
 type UploadProgressProps = {
@@ -49,6 +50,7 @@ type UploadState = {
 export function UploadProgress({ contextType, contextId, onComplete }: UploadProgressProps) {
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const router = useRouter();
 
   function pickFile() {
     inputRef.current?.click();
@@ -100,7 +102,13 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
       // lib/supabase/browser.ts.
       supabase: reservation.supabase,
       onProgress: (bytes, bytesTotal) => updateUpload(id, { bytes, bytesTotal }),
-      onError: (message) => updateUpload(id, { status: "failed", errorMessage: message }),
+      onError: (message) => {
+        updateUpload(id, { status: "failed", errorMessage: message });
+        // A failed upload can still have written a reserved row that the
+        // reconciler will later mark failed; refresh so the table agrees with
+        // the tray rather than showing a phantom pending upload.
+        router.refresh();
+      },
       onSuccess: () => {
         updateUpload(id, { bytes: file.size, bytesTotal: file.size, status: "transcoding" });
         // 3. Tell the server. It verifies the object against the reserved size
@@ -112,6 +120,12 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
             updateUpload(id, { status: "failed", errorMessage: res.error });
             return;
           }
+          // The server now has the row. Re-render the Server Components on this
+          // page so the "My recent uploads" table below the tray actually shows
+          // it: without this the tray said "transcoding" while the table three
+          // inches underneath still read "no uploads yet", and the only way to
+          // see the upload you had just watched complete was a manual reload.
+          router.refresh();
           onComplete?.(reservation.submissionId);
         });
       },

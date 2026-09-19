@@ -240,3 +240,53 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
     { id: "audit", label: "Audit", icon: "shield", href: "/admin/audit", gate: "admin" },
   ],
 };
+
+/**
+ * Which nav entry does this pathname belong to?
+ *
+ * Both shells accept an active-item id, both forward it to their nav
+ * components, and NO CALLER HAS EVER SUPPLIED ONE -- so `isActive` was false
+ * for every item on every page and nothing was ever highlighted. On a product
+ * whose nav spans three sections and eleven entries, "where am I" was
+ * unanswerable from the chrome.
+ *
+ * Longest-prefix wins, which is what makes nested routes resolve correctly:
+ * /repo/schools must match the `repo-schools` entry and not the `repo` one
+ * that also prefixes it. A bare "/" href would prefix everything, so it is
+ * excluded from prefix matching and only ever matches exactly.
+ */
+export function activeNavIdFor(
+  role: RoleName,
+  pathname: string | null | undefined,
+): string | undefined {
+  if (!pathname) return undefined;
+  const path = pathname.split("?")[0] ?? pathname;
+
+  let best: { id: string; len: number } | undefined;
+  for (const section of NAV_BY_ROLE[role] ?? []) {
+    for (const item of section.items) {
+      const href = item.href;
+      const matches =
+        href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
+      if (matches && (!best || href.length > best.len)) best = { id: item.id, len: href.length };
+    }
+  }
+  return best?.id;
+}
+
+/** The same resolution for the mobile bottom tabs, which use their own ids. */
+export function activeTabIdFor(
+  role: RoleName,
+  pathname: string | null | undefined,
+): string | undefined {
+  if (!pathname) return undefined;
+  const path = pathname.split("?")[0] ?? pathname;
+
+  let best: { id: string; len: number } | undefined;
+  for (const tab of TABS_BY_ROLE[role] ?? TABS_BY_ROLE.teacher) {
+    const href = tab.href;
+    const matches = href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
+    if (matches && (!best || href.length > best.len)) best = { id: tab.id, len: href.length };
+  }
+  return best?.id;
+}

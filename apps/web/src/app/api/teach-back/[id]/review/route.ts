@@ -7,8 +7,18 @@
 // stray observation/mentor-meeting submission id can't be reviewed through
 // this surface), and audit the action under SM-1.
 //
+// RESPONSE SHAPE IS CONTENT-NEGOTIATED, and that is the point of this note.
+// The caller is a NATIVE <form method="POST">, which NAVIGATES to whatever this
+// route returns. Answering JSON meant the reviewer was thrown off the queue
+// onto a blank page reading {"ok":true}, with no way back except the browser's
+// back button and no indication the review had been recorded -- on a surface
+// whose whole purpose is working through a list. A browser form post (Accept
+// includes text/html) now gets a 303 back to the queue; anything else, such as
+// fetch() or a script, still gets the documented JSON.
+//
 // Method matrix:
-//   POST                 → 200 {ok:true}        success path
+//   POST (Accept: text/html)  → 303 → /rtt/teach-back?reviewed=<id>
+//   POST (otherwise)          → 200 {ok:true}        success path
 //   POST (no session)    → 401 {error:"unauthenticated"}
 //   POST (wrong role)    → 403 {error:"forbidden"}
 //   POST (unknown id)    → 404 {error:"not_found"}  (zero rows updated)
@@ -34,8 +44,19 @@ export const dynamic = "force-dynamic";
 
 const ALLOWED_ROLES = ["super_admin", "programme_admin", "mentor", "observer"] as const;
 
+/**
+ * Did a browser navigation send this, rather than a script?
+ *
+ * A native form post asks for text/html; fetch() defaults to a bare or
+ * wildcard Accept. Wildcard is treated as a script so the documented JSON
+ * contract still holds for API callers.
+ */
+function wantsHtml(request: Request): boolean {
+  return (request.headers.get("accept") ?? "").includes("text/html");
+}
+
 export async function POST(
-  _req: Request,
+  request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
@@ -78,6 +99,15 @@ export async function POST(
     entityType: "video_submission",
     entityId: id,
   });
+
+  // 303 specifically: it turns the browser's follow-up into a GET, so a
+  // refresh on the queue does not re-submit the review.
+  if (wantsHtml(request)) {
+    return NextResponse.redirect(
+      new URL(`/rtt/teach-back?reviewed=${encodeURIComponent(id)}`, request.url),
+      { status: 303 },
+    );
+  }
 
   return NextResponse.json({ ok: true }, { status: 200 });
 }

@@ -2,6 +2,7 @@
 // shell (desktop sidebar or mobile bottom tabs) based on device detection.
 // Routes outside this group (e.g. /login, /gate/[slug]) render without chrome.
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { eq } from "drizzle-orm";
@@ -29,6 +30,7 @@ import {
   loadQueueDepth,
 } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
+import { activeNavIdFor, activeTabIdFor } from "@/config/nav";
 
 // Spec 088 — every authenticated route renders the AntiDownloadGuard alongside
 // the shell. The guard is a 'use client' island that attaches global keydown
@@ -101,12 +103,18 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   // The SMTP_FROM fallback that used to sit on `email` is GONE. Outbound email
   // moved to Supabase, so SMTP_FROM is set nowhere in this application's
   // environment and the fallback could never be satisfied -- it read as a
-  // working default while always resolving to null. WHATSAPP_PHONE_NUMBER_ID
-  // is kept because compose does still pass it.
+  // working default while always resolving to null.
+  //
+  // The WHATSAPP_PHONE_NUMBER_ID fallback is gone for a different reason: it
+  // was never a phone number. It is Meta's opaque account identifier for the
+  // Cloud API -- fifteen digits, which is why it survived every "is this
+  // numeric" check -- and rendering it into a wa.me link sent anyone who
+  // clicked the helpdesk contact to an account that does not exist. Compose
+  // still passes the variable because the WEBHOOK needs it; the UI must not
+  // treat it as dialable.
   const envSummary = assertEnv();
   const helpdeskContact = {
-    whatsappPhone:
-      envSummary.helpdeskPhone.value ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+    whatsappPhone: envSummary.helpdeskPhone.value ?? null,
     email: envSummary.helpdeskEmail.value ?? null,
   };
 
@@ -120,8 +128,22 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
     loadQueueDepth(),
   ]);
 
+  // WHICH NAV ITEM IS CURRENT.
+  //
+  // Both shells have always accepted an active-item id and forwarded it to
+  // Sidebar / BottomTabs, and no caller ever supplied one -- so `isActive` was
+  // false for every item on every page and nothing in the chrome ever showed
+  // where the user was. A layout cannot read the URL, which is why it was never
+  // wired; proxy.ts now sets x-pathname on every request, so it can.
+  const pathname = (await headers()).get("x-pathname");
+
   const content = device === "mobile" ? (
-    <MobileShell user={user} navCounts={navCounts} unreadCount={unreadCount}>
+    <MobileShell
+      user={user}
+      navCounts={navCounts}
+      unreadCount={unreadCount}
+      activeTab={activeTabIdFor(user.role, pathname)}
+    >
       {children}
     </MobileShell>
   ) : (
@@ -131,6 +153,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       unreadCount={unreadCount}
       queueDepth={queueDepth}
       locale={locale}
+      activeNavId={activeNavIdFor(user.role, pathname)}
     >
       {children}
     </DesktopShell>

@@ -25,12 +25,21 @@
 // matches the prototype and so a future spec that re-enables 720p only
 // needs to flip the disabled flag.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type HlsPlayerProps = {
   /** Pre-signed master playlist URL — /api/media/<token>. Refresh from server before expiry. */
   src: string;
-  /** Refresh fn called when the token nears expiry. Server returns a new signed URL. */
+  /**
+   * Called when playback fails in a way that a freshly-signed playlist would
+   * fix. OPTIONAL, AND IT DEFAULTS TO SOMETHING THAT WORKS -- the only call
+   * site never passed one, so every expiry was terminal: a mentor who paused a
+   * 40-minute lesson video and came back found a dead player and the message
+   * "Playback error: networkError". `src` already points at
+   * /api/media/playlist/<id>, which re-signs every segment on each request, so
+   * the default simply re-requests it past the browser cache. A page can still
+   * override this, but it can no longer forget it.
+   */
   onRefresh?: () => Promise<string>;
   /** Watermark text (e.g. "Dr. Anjali Bhatt · 2026-05-20 16:48"). Required for SM-4 compliance. */
   watermark: string;
@@ -47,8 +56,21 @@ const SPEED_PRESETS = [1, 1.25, 1.5, 2] as const;
 
 export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Where the viewer was when the stream died. A refresh swaps the source,
+  // which resets currentTime to 0, so without this a re-sign at minute 38 of a
+  // 40-minute lesson silently restarted it from the beginning -- worse, on a
+  // Ladakh connection, than the error it replaced.
+  const resumeAtRef = useRef<number>(0);
   const hlsRef = useRef<{ destroy: () => void; currentLevel?: number } | null>(null);
   const [currentSrc, setCurrentSrc] = useState(src);
+
+  // Re-request the same server route, past the HTTP cache. The route mints new
+  // signed segment URLs on every call, so this is a re-sign.
+  const refreshSrc = useCallback(async (): Promise<string> => {
+    if (onRefresh) return onRefresh();
+    const base = src.split("#")[0]!;
+    return `${base}${base.includes("?") ? "&" : "?"}r=${Date.now()}`;
+  }, [onRefresh, src]);
   const [error, setError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRateState] = useState<number>(1);
   const [quality, setQuality] = useState<"auto" | "480p">("auto");
@@ -59,9 +81,41 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
 
     let hlsInstance: { destroy: () => void; currentLevel?: number } | undefined;
 
+    // Restore the position a refresh interrupted. Fires once per source load;
+    // resumeAtRef is cleared so an ordinary replay is not hijacked.
+    const onLoaded = () => {
+      if (resumeAtRef.current > 0) {
+        video.currentTime = resumeAtRef.current;
+        resumeAtRef.current = 0;
+        void video.play().catch(() => undefined);
+      }
+    };
+    video.addEventListener("loadedmetadata", onLoaded);
+
     const isNative = video.canPlayType("application/vnd.apple.mpegurl") !== "";
     if (isNative) {
+      // SAFARI AND iOS. This branch had no error handling and no cleanup at
+      // all: a failed or expired playlist left a silent black player with no
+      // message and no retry, while the hls.js branch beside it recovered. iOS
+      // is a primary target here -- field mentors watch on phones -- so the
+      // platform that plays HLS natively was the one with no recovery path.
+      const onNativeError = async () => {
+        try {
+          resumeAtRef.current = video.currentTime || resumeAtRef.current;
+          const next = await refreshSrc();
+          video.src = next;
+          video.load();
+        } catch {
+          setError("Playback failed. Refresh the page.");
+        }
+      };
+      video.addEventListener("error", onNativeError);
       video.src = currentSrc;
+
+      return () => {
+        video.removeEventListener("error", onNativeError);
+        video.removeEventListener("loadedmetadata", onLoaded);
+      };
     } else {
       // Lazy-load hls.js so it doesn't bloat first paint.
       let cancelled = false;
@@ -85,16 +139,18 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           hls.attachMedia(video);
           hls.on(Hls.Events.ERROR, async (_e, data) => {
             if (!data.fatal) return;
-            // Signed URL likely expired — try refresh once
-            if (onRefresh) {
-              try {
-                const next = await onRefresh();
-                setCurrentSrc(next);
-              } catch {
-                setError("Playback failed. Refresh the page.");
-              }
-            } else {
-              setError(`Playback error: ${data.type}`);
+            // A media error is recoverable in place and must NOT cost a
+            // re-sign round trip -- hls.js can rebuild its buffer itself.
+            if (data.type === "mediaError") {
+              hls.recoverMediaError();
+              return;
+            }
+            // Anything else fatal is most likely an expired segment URL.
+            try {
+              resumeAtRef.current = video.currentTime || resumeAtRef.current;
+              setCurrentSrc(await refreshSrc());
+            } catch {
+              setError("Playback failed. Refresh the page.");
             }
           });
           hlsInstance = hls;
@@ -106,11 +162,12 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
 
       return () => {
         cancelled = true;
+        video.removeEventListener("loadedmetadata", onLoaded);
         hlsInstance?.destroy();
         hlsRef.current = null;
       };
     }
-  }, [currentSrc, onRefresh]);
+  }, [currentSrc, refreshSrc]);
 
   // Apply playbackRate every time it changes. hls.js + native HLS both
   // honour the property without re-loading the stream.

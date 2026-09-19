@@ -351,7 +351,10 @@ export default async function RepoSchoolDetailPage({
               </KVRow>
               <KVRow label="Learners">
                 <Link
-                  href={`/repo/school/${school.id}/learners`}
+                  // /repo/school/<id>/learners has never existed -- the only learners
+                  // sub-route is under /repo/class/<id>. /repo/students already takes a
+                  // ?school= filter, which is exactly this view.
+                  href={`/repo/students?school=${school.id}`}
                   style={{
                     fontSize: 12,
                     color: "var(--indigo)",
