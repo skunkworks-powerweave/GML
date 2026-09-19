@@ -67,6 +67,18 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
     UserActionState | undefined,
     FormData
   >(setActiveAction, undefined);
+  /**
+   * Which of this row's three forms was submitted last.
+   *
+   * The feedback line used to render `roleState ?? activeState ?? pwState`, and
+   * `??` returns the first NON-NULL -- so the moment a role change had run
+   * once, roleState was permanently set and the deactivate and set-password
+   * forms on the same row could never show anything again. Not just their
+   * confirmations: their ERRORS. A failed password change displayed the stale
+   * "Role updated" message from earlier, which reads as success.
+   */
+  const [lastSubmitted, setLastSubmitted] = useState<"role" | "active" | "pw" | null>(null);
+
   const [pwState, pwForm, pwPending] = useActionState<UserActionState | undefined, FormData>(
     setPasswordAction,
     undefined,
@@ -124,7 +136,13 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
 
       {canManage ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <form action={roleForm} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <form
+            action={(fd: FormData) => {
+              setLastSubmitted("role");
+              roleForm(fd);
+            }}
+            style={{ display: "flex", gap: 6, alignItems: "center" }}
+          >
             <input type="hidden" name="userId" value={user.id} />
             <select name="role" defaultValue={user.role} style={control}>
               {assignable.map((r) => (
@@ -138,7 +156,12 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
             </button>
           </form>
 
-          <form action={activeForm}>
+          <form
+            action={(fd: FormData) => {
+              setLastSubmitted("active");
+              activeForm(fd);
+            }}
+          >
             <input type="hidden" name="userId" value={user.id} />
             <input type="hidden" name="active" value={user.active ? "false" : "true"} />
             <button
@@ -167,7 +190,13 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
       )}
 
       {showPw && canManage ? (
-        <form action={pwForm} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <form
+          action={(fd: FormData) => {
+            setLastSubmitted("pw");
+            pwForm(fd);
+          }}
+          style={{ display: "flex", gap: 6, alignItems: "center" }}
+        >
           <input type="hidden" name="userId" value={user.id} />
           <input
             name="password"
@@ -187,7 +216,19 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
         </form>
       ) : null}
 
-      <Feedback state={roleState ?? activeState ?? pwState} />
+      {/* The state of the form the user ACTUALLY last submitted -- see
+          lastSubmitted above for why `??` was wrong here. */}
+      <Feedback
+        state={
+          lastSubmitted === "role"
+            ? roleState
+            : lastSubmitted === "active"
+              ? activeState
+              : lastSubmitted === "pw"
+                ? pwState
+                : undefined
+        }
+      />
     </div>
   );
 }

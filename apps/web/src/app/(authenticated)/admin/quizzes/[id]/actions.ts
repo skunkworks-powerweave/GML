@@ -4,7 +4,7 @@
 // `saveQuizSchema` validates incoming JSON shape, replaces the quiz_questions
 // rows in a transaction, and updates quiz metadata. Audits `quiz.schema.update`.
 
-import { eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { db } from "@gml/db";
 import { quizzes, quizQuestions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -150,19 +150,56 @@ export async function saveQuizSchema(
 
   await db.transaction(async (tx) => {
     await tx.update(quizzes).set(updateSet).where(eq(quizzes.id, quizId));
-    // Replace-all questions strategy: simpler than diffing, fine at v1 scale.
-    await tx.delete(quizQuestions).where(eq(quizQuestions.quizId, quizId));
-    if (incoming.length > 0) {
-      await tx.insert(quizQuestions).values(
-        incoming.map((q, i) => ({
-          quizId,
-          sequence: i + 1,
-          prompt: q.prompt.trim(),
-          options: q.options.map((o) => String(o)),
-          correctIndex: q.correctIndex,
-          explanation: q.explanation ?? null,
-        })),
-      );
+
+    // UPDATE IN PLACE BY SEQUENCE. NOT delete-all-then-insert.
+    //
+    // The previous "replace-all questions strategy: simpler than diffing, fine
+    // at v1 scale" was not fine at any scale, because the rows it discarded
+    // were still referenced. Every quiz_submissions.answers blob stores a
+    // questionId, and a delete-and-reinsert mints fresh UUIDs for every
+    // question -- so saving ANY edit, even a typo fix in the title, silently
+    // orphaned the answers of every attempt ever submitted against that quiz.
+    // The learner's score stays correct (it is stored), but the per-question
+    // review can no longer resolve what was asked.
+    //
+    // Keying on `sequence` keeps the row -- and therefore the id -- stable for
+    // questions that still exist at the same position. Only genuinely new
+    // positions are inserted and only genuinely removed tail positions are
+    // deleted.
+    //
+    // HONEST LIMIT: reordering questions still repoints history, because
+    // sequence is then the wrong identity. Fixing that properly means
+    // versioning a quiz so past attempts keep the questions they were actually
+    // asked, which is a schema change and a larger piece of work than this.
+    // What this removes is the case where an unrelated edit destroys history.
+    const existing = await tx
+      .select({ id: quizQuestions.id, sequence: quizQuestions.sequence })
+      .from(quizQuestions)
+      .where(eq(quizQuestions.quizId, quizId));
+    const idBySequence = new Map(existing.map((r) => [r.sequence, r.id]));
+
+    for (let i = 0; i < incoming.length; i++) {
+      const q = incoming[i]!;
+      const sequence = i + 1;
+      const values = {
+        prompt: q.prompt.trim(),
+        options: q.options.map((o) => String(o)),
+        correctIndex: q.correctIndex,
+        explanation: q.explanation ?? null,
+      };
+      const existingId = idBySequence.get(sequence);
+      if (existingId) {
+        await tx.update(quizQuestions).set(values).where(eq(quizQuestions.id, existingId));
+      } else {
+        await tx.insert(quizQuestions).values({ quizId, sequence, ...values });
+      }
+    }
+
+    // Questions removed from the end of the quiz.
+    if (existing.length > incoming.length) {
+      await tx
+        .delete(quizQuestions)
+        .where(and(eq(quizQuestions.quizId, quizId), gt(quizQuestions.sequence, incoming.length)));
     }
   });
 

@@ -196,6 +196,29 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
  * Mobile bottom tabs. Match `mobile-shell.jsx::TABS_BY_ROLE`.
  * Max 5 tabs per role. `inbox` becomes `audit` for super_admin.
  */
+/**
+ * Give every role a link to its own settings page.
+ *
+ * `/settings` appeared in NAV_BY_ROLE for super_admin ONLY, so a
+ * programme_admin, mentor, observer or teacher had no link to it anywhere in
+ * the application. That page is where the interface language is chosen -- in a
+ * programme that ships en/hi/bo -- and where the self-service password change
+ * lives, so four of the five roles could reach neither except by typing the URL.
+ *
+ * Appended here rather than added to five separate arrays so a role added later
+ * cannot be forgotten: whatever sections a role declares, it ends up with this
+ * one.
+ */
+for (const role of Object.keys(NAV_BY_ROLE) as RoleName[]) {
+  const sections = NAV_BY_ROLE[role];
+  const hasSettings = sections.some((sec) => sec.items.some((i) => i.href === "/settings"));
+  if (hasSettings) continue;
+  sections.push({
+    section: "Your account",
+    items: [{ id: "settings", label: "Settings", icon: "settings", href: "/settings" }],
+  });
+}
+
 export type MobileTab = {
   id: string;
   label: string;

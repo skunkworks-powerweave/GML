@@ -45,6 +45,11 @@ const NOTIFICATION_CATEGORIES = [
   "meeting.scheduled",
   "meeting.cancelled",
   "digest.weekly",
+  // Must stay in step with NOTIFICATION_CATEGORIES in the system-settings
+  // page: this zod enum is what the API accepts, and a key the page offers but
+  // the route rejects would fail the save with a validation error. This is the
+  // only kind the application actually writes (see the helpdesk ticket route).
+  "helpdesk.ticket",
 ] as const;
 
 // Allowed video qualities. Only 480p ships today (SM-4); the rest are intentionally

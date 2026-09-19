@@ -12,6 +12,7 @@
 // SM-1 + spec 021 convention.
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
@@ -40,13 +41,28 @@ function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
  * Coerce raw FormData values into shapes Zod can validate.
  * Spec 114: extracted so create + update share identical coercion.
  */
-function coerceFormData(formData: FormData, fields: readonly string[]): Record<string, unknown> {
+function coerceFormData(
+  formData: FormData,
+  fields: readonly string[],
+  // On UPDATE, an empty string is the user CLEARING a field and must reach the
+  // database as null. On CREATE it is just an untouched input, and forwarding
+  // null would override a column default, so it is still skipped there.
+  //
+  // Skipping it on update meant "delete the contents of an optional column and
+  // press Save" silently kept the old value while the UI reported "Row
+  // updated." -- the operator was told the write succeeded and shown the stale
+  // value, with no way to tell the difference from a display bug.
+  opts: { emptyMeansNull?: boolean } = {},
+): Record<string, unknown> {
   const raw: Record<string, unknown> = {};
   for (const field of fields) {
     const value = formData.get(field);
     if (value === null) continue;
     if (typeof value === "string") {
-      if (value === "") continue;
+      if (value === "") {
+        if (opts.emptyMeansNull) raw[field] = null;
+        continue;
+      }
       if (value === "true") raw[field] = true;
       else if (value === "false") raw[field] = false;
       else raw[field] = value;
@@ -141,7 +157,7 @@ export async function updateRowAction(
   const entity = getEntityOrThrow(slug);
   await requireRole(mutateRolesFor(entity));
 
-  const raw = coerceFormData(formData, entity.formFields);
+  const raw = coerceFormData(formData, entity.formFields, { emptyMeansNull: true });
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
@@ -206,12 +222,43 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
     },
   );
 
+  // THE OPERATOR HAS TO BE TOLD. A delete blocked by a foreign key -- which is
+  // the NORMAL outcome when a row is referenced, and the most common failure on
+  // this surface -- used to be swallowed into console.error, after which the
+  // page revalidated and re-rendered the row still sitting there. From the
+  // operator's side the button simply did nothing, twice, three times, with no
+  // message on screen and the explanation only in a container log they have no
+  // reason to read.
+  let deleteError: string | null = null;
   try {
     await audited();
   } catch (err) {
     console.error("[admin.row.delete] failed", err);
+    deleteError = describeDbError(err);
   }
   revalidatePath(`/admin/data/${slug}`);
+  if (deleteError) {
+    redirect(`/admin/data/${slug}?error=${encodeURIComponent(deleteError)}`);
+  }
+}
+
+/**
+ * Turn a driver error into one sentence an administrator can act on.
+ *
+ * Deliberately narrow: only the codes with a genuinely useful explanation are
+ * translated, and everything else gets a generic line. The raw driver text is
+ * never shown -- it carries table names, constraint names and connection
+ * detail, and this page is reachable by programme_admin as well as super_admin.
+ */
+function describeDbError(err: unknown): string {
+  const code = (err as { code?: string } | null)?.code;
+  if (code === "23503") {
+    return "still_referenced";
+  }
+  if (code === "23505") {
+    return "duplicate";
+  }
+  return "delete_failed";
 }
 
 /**
@@ -255,8 +302,12 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
       deletedCount = rowIds.length;
     });
   } catch (err) {
+    // Same reasoning as deleteRowAction: an atomic bulk delete that rolls back
+    // because ONE of the selected rows is referenced looked identical to a
+    // successful one, except that all N rows were still on screen afterwards.
     console.error("[admin.row.bulk_delete] transaction failed", err);
-    return;
+    revalidatePath(`/admin/data/${slug}`);
+    redirect(`/admin/data/${slug}?error=${encodeURIComponent(describeDbError(err))}`);
   }
 
   // Commit-then-audit. The audit row lands only on a successful commit —

@@ -40,6 +40,13 @@ const NOTIFICATION_CATEGORIES: Array<{ key: string; label: string; hint: string 
   { key: "meeting.scheduled", label: "Meeting scheduled", hint: "Mentor + teacher receive calendar entry" },
   { key: "meeting.cancelled", label: "Meeting cancelled", hint: "Both parties notified of cancellations" },
   { key: "digest.weekly", label: "Weekly digest", hint: "Friday roll-up across all activities" },
+  // THE ONLY KIND ANYTHING IN THE APPLICATION ACTUALLY WRITES.
+  // Its absence from this catalogue was not cosmetic: loadUnreadNotifications
+  // filters unread rows with `inArray(kind, notificationsEnabled)`, and this
+  // list defines what can ever be in that array -- so the one kind that exists
+  // could never match. The topbar bell read 0 permanently while the inbox held
+  // unread help requests, which is precisely the case the bell exists for.
+  { key: "helpdesk.ticket", label: "Help request", hint: "Programme admin notified when a user submits the help form" },
 ];
 
 // Same enums the route enforces — duplicated here for the zod parse on the action side.
@@ -145,7 +152,14 @@ export default async function SystemSettingsPage() {
     academicYear: "2026-27",
     videoDefaultQuality: "480p" as const,
     videoMaxUploadMb: 500,
-    notificationsEnabled: ["cycle.assigned", "video.transcoded", "meeting.scheduled"],
+    // helpdesk.ticket is on by default because it is the only kind the
+    // application emits; omitting it would leave the bell at zero out of the box.
+    notificationsEnabled: [
+      "cycle.assigned",
+      "video.transcoded",
+      "meeting.scheduled",
+      "helpdesk.ticket",
+    ],
     backupRetentionDays: 14,
     updatedAt: null,
   };

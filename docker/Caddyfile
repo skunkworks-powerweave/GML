@@ -12,6 +12,25 @@
 	# a cron job or a renewal script.
 }
 
+# CONTAINER HEALTH LISTENER.
+#
+# On its own port, with no host matcher, because the site block below matches on
+# Host. The compose healthcheck used to probe http://127.0.0.1:80, whose Host
+# header is "127.0.0.1" -- which matches no site, so Caddy answered 404 and
+# `wget --spider` treated that as failure. The proxy reported `unhealthy`
+# permanently while serving every real request correctly, which is worse than
+# having no healthcheck: it trains an operator to ignore the one signal that
+# would tell them the proxy is genuinely down.
+#
+# Port 2021, not 80: port 80 redirects to HTTPS, so a probe there would chase a
+# certificate the container cannot validate against itself.
+#
+# Not published in compose, so it is reachable only from inside the container.
+:2021 {
+	respond /healthz "ok" 200
+	respond 404
+}
+
 {$DOMAIN:localhost} {
 	encode gzip zstd
 

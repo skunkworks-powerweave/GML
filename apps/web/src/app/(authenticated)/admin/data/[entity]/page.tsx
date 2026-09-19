@@ -202,12 +202,36 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const filters = extractFilters(sp);
   const columnsByKey = new Map(entity.displayColumns.map((c) => [c.key, c]));
   const tableColumns = entity.table as unknown as Record<string, unknown>;
+  // UNWRAP BEFORE READING THE SHAPE.
+  //
+  // `_def.shape` exists on a ZodObject and on nothing else. Three entities --
+  // resources, sessions and subjects -- declare their schema as
+  // `z.object({...}).refine(...)`, which produces a ZodEffects WRAPPING the
+  // object, so `_def.shape` was undefined, `formShape` fell back to `{}`, and
+  // every column filter on those three entities hit the "unknown column type"
+  // branch and was silently discarded. The filter box accepted input, the URL
+  // changed, the audit row recorded the intent -- and the grid returned the
+  // unfiltered table. Exactly the entities whose tables are largest.
+  //
+  // `.refine()` can nest, so this unwraps to a fixed point rather than one
+  // level. ZodDefault / ZodOptional are handled for the same reason.
   const formShape = (() => {
-    const defShape = (entity.formSchema._def as unknown as {
-      shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny>;
-    }).shape;
-    const raw = typeof defShape === "function" ? defShape() : defShape;
-    return (raw ?? {}) as Record<string, z.ZodTypeAny>;
+    let schema: z.ZodTypeAny = entity.formSchema as unknown as z.ZodTypeAny;
+    for (let depth = 0; depth < 10; depth++) {
+      const def = schema._def as unknown as {
+        shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny>;
+        schema?: z.ZodTypeAny;
+        innerType?: z.ZodTypeAny;
+      };
+      if (def.shape) {
+        const raw = typeof def.shape === "function" ? def.shape() : def.shape;
+        return (raw ?? {}) as Record<string, z.ZodTypeAny>;
+      }
+      const inner = def.schema ?? def.innerType;
+      if (!inner) break;
+      schema = inner;
+    }
+    return {} as Record<string, z.ZodTypeAny>;
   })();
   const whereClauses: SQL[] = [];
   const appliedFilters: Record<string, string> = {};
@@ -343,8 +367,31 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     .map((r) => (r.id != null ? String(r.id) : ""))
     .filter(Boolean);
 
+  // Failures from deleteRowAction / bulkDeleteAction, which used to be
+  // swallowed into console.error while the page revalidated and re-rendered
+  // the undeleted row -- so the button looked broken rather than refused.
+  const rawError = typeof sp.error === "string" ? sp.error : undefined;
+  const GRID_ERRORS: Record<string, string> = {
+    still_referenced:
+      "That row can't be deleted because other records still reference it. Remove or reassign those first.",
+    duplicate: "That change conflicts with an existing row.",
+    delete_failed: "That delete could not be completed. Nothing was changed.",
+  };
+  const gridError = rawError
+    ? (GRID_ERRORS[rawError] ?? "That action could not be completed.")
+    : null;
+
   return (
     <main className="mx-auto max-w-6xl p-6">
+      {gridError ? (
+        <div
+          role="alert"
+          data-testid="grid-error"
+          className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
+        >
+          {gridError}
+        </div>
+      ) : null}
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <p className="text-xs uppercase tracking-wide text-neutral-500">

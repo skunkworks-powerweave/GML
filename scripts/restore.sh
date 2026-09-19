@@ -103,8 +103,16 @@ psql "${DRILL_HOST}" -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DRILL_DB};
 # database only; the object mirror is a separate concern and claiming otherwise
 # is how a green gate certifies a capability nobody has tested.
 mkdir -p "${REPO_ROOT}/workspace"
+#
+# The key is `ranAt`, NOT `at`. check-restore-drill.mjs -- the SM-5 deploy gate
+# -- reads `parsed.ranAt`, and this script wrote `at`. The key was read and
+# never written, so the gate saw `new Date(undefined ?? 0)` = 1970 and computed
+# an age of twenty thousand days: a drill that had just run successfully still
+# failed the gate. `at` is kept alongside it so anything already parsing the
+# old name keeps working.
 cat > "${STAMP_FILE}" <<JSON
 {
+  "ranAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "source": "$(basename "${LATEST}")",
   "backup_age_days": ${age_days},
