@@ -116,14 +116,29 @@ export default async function VideoLibraryPage({
   // This has to be a WHERE clause rather than a post-fetch filter: the status
   // counts below aggregate over the same predicate, so filtering in JS would
   // still leak the totals.
+  //
+  // `scopeConds` is the part of the predicate BOTH queries must share. Keeping
+  // it as its own array is the fix for a leak that survived the original
+  // visibility work: the paragraph above was written, the row query was
+  // corrected, and then the GROUP BY below was left with no predicate at all --
+  // so a teacher was shown the row count of the entire programme's library
+  // while being served none of it. The comment described the right design and
+  // the code did not implement it, which is the failure mode a shared array
+  // makes structurally impossible.
+  const scopeConds: SQL[] = [];
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
   const visibility = await videoVisibilityFilter(actor);
-  if (visibility) conds.push(visibility);
+  if (visibility) scopeConds.push(visibility);
 
+  // The source filter narrows BOTH: with ?source=whatsapp the chips should
+  // count WhatsApp videos. The STATUS filter deliberately does not -- the chips
+  // are per-status, so scoping them by the selected status would make every
+  // chip but one read zero.
+  if (sourceFilter) scopeConds.push(eq(videoSubmissions.source, sourceFilter as VideoSource));
+
+  conds.push(...scopeConds);
   if (filter) conds.push(eq(videoSubmissions.status, filter as VideoStatus));
-  if (sourceFilter)
-    conds.push(eq(videoSubmissions.source, sourceFilter as VideoSource));
 
   const rows = await db
     .select({
@@ -141,14 +156,19 @@ export default async function VideoLibraryPage({
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(100);
 
-  // Per-status counts as a single GROUP BY so the chips stay accurate
-  // even when filtering by source.
+  // Per-status counts as a single GROUP BY, over the SAME visibility scope as
+  // the rows above. Without `scopeConds` here this aggregate ran unfiltered, so
+  // the chips reported totals for the whole programme -- including mentorship
+  // recordings and mentee quarterly videos -- to a teacher who could open none
+  // of them. A count is not a lesser disclosure than a row: "47 mentor
+  // meetings" is exactly the fact the visibility scope exists to withhold.
   const statusCountRows = await db
     .select({
       status: videoSubmissions.status,
       n: sql<number>`count(*)::int`.as("n"),
     })
     .from(videoSubmissions)
+    .where(scopeConds.length === 0 ? undefined : and(...scopeConds))
     .groupBy(videoSubmissions.status);
   const totalVideos = statusCountRows.reduce((acc, r) => acc + r.n, 0);
   const countByStatus = (v: string) =>
