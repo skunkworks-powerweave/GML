@@ -246,10 +246,23 @@ test("spec 108: README-IT.md preserves the manual docker-compose commands as fal
     "README-IT.md must label a manual-fallback section",
   );
   assert.match(src, /docker compose up -d/, "README-IT.md fallback must keep 'docker compose up -d'");
+
+  // INVERTED. This required the README to document
+  //     docker compose exec app pnpm --filter @gml/db migrate
+  // as the manual fallback — the exact command scripts/deploy.sh was rewritten
+  // to eliminate, because the app image is a Next.js standalone build with no
+  // pnpm, no tsx and no packages/db in it.
+  //
+  // The assertion did not merely tolerate a broken instruction; it REQUIRED
+  // one. As written, the README could never drop the string, so a governance
+  // test was actively holding a guaranteed-failing command in the operator
+  // runbook.
+  //
+  // The working fallback runs in the MIGRATE image, which has all three.
   assert.match(
     src,
-    /docker compose exec[^\n]*pnpm[^\n]*migrate/,
-    "README-IT.md fallback must keep the docker compose exec migrate command",
+    /docker compose run[^\n]*migrate/,
+    "the manual fallback must run migrations in the migrate image, not the app container",
   );
 });
 

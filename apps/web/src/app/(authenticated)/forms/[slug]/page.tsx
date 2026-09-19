@@ -33,6 +33,7 @@ import {
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
+import { validateResponses, audienceAllows, type FormField } from "@/lib/forms/validate";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -254,6 +255,35 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     } else {
       responses[cleanKey] = [String(existing), typeof value === "string" ? value : String(value)];
     }
+  }
+
+  // ── SERVER-SIDE VALIDATION ─────────────────────────────────────────────────
+  //
+  // Until now the only check on the answers was the field-NAME filter above:
+  // `required`, `min`, `max`, `options` and `kind` were declared in the schema,
+  // rendered by the client, and consulted by no server code. A submission with
+  // every field blank persisted. So did a radio value outside its options, a
+  // number outside its range, and an unbounded string.
+  //
+  // The client's `required` and `min` attributes are a convenience for the
+  // person filling the form in. They are removable in devtools and absent
+  // entirely from a direct POST to this server action, which is a URL.
+  const audience = String(form.audience);
+  if (!audienceAllows(session.user.role, audience)) {
+    // The GET path already checked this. A server action is a SEPARATE entry
+    // point, and posting to it directly skipped the gate.
+    redirect(`/forms/${slug}?error=wrong_audience`);
+  }
+
+  const errors = validateResponses((schema.fields ?? []) as FormField[], responses);
+  if (errors.length > 0) {
+    const summary = errors
+      .slice(0, 3)
+      .map((e) => e.message)
+      .join(" ");
+    redirect(
+      `/forms/${slug}?error=invalid&detail=${encodeURIComponent(summary)}`,
+    );
   }
 
   // Spec 130 — persist the context block alongside the user-supplied answers.

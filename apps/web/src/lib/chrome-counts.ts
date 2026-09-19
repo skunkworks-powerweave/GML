@@ -309,7 +309,21 @@ export function applyNavCounts<TSection extends { section: string; items: readon
       const next = NAV_BADGE_MAP[item.id];
       if (!next) return rawItem;
       const value = next(counts);
-      if (value == null) return rawItem;
+      // NO FALLBACK TO A STATIC COUNT.
+      //
+      // loadNavCounts() returns {} on a database error, so every resolver then
+      // returned undefined and this line handed back `rawItem` -- carrying the
+      // hardcoded literals that used to sit in nav.ts. During an outage a
+      // mentor's sidebar confidently reported "5 mentees / 6 observation
+      // cycles / 3 pending review": numbers that were never real, presented
+      // identically to ones that were.
+      //
+      // A badge is a count of something. If we do not know the count, there is
+      // no honest badge to render, so the item renders without one.
+      if (value == null) {
+        const { count: _dropped, ...withoutCount } = item;
+        return withoutCount;
+      }
       return { ...item, count: value };
     }),
   })) as TSection[];

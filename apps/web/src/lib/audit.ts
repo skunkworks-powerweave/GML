@@ -68,6 +68,38 @@ export function __resetAuditDegradedCountForTests(): void {
  * silently. Existing `void recordAudit(...)` callers stay correct — they
  * just discard the new boolean.
  */
+/**
+ * Reduce an IP to its network prefix.
+ *
+ * IPv4 keeps the first three octets (the /24); IPv6 keeps the first four
+ * hextets (the /64, the standard end-site allocation boundary). That is enough
+ * to tell "this came from many places" from "this came from one", and not
+ * enough to identify a household.
+ *
+ *   203.0.113.42      -> 203.0.113.x
+ *   2001:db8:1::abcd  -> 2001:db8:1:0:x
+ */
+export function maskIp(ip: string | undefined): string | undefined {
+  if (!ip || ip === "unknown") return ip;
+  if (ip.includes(":")) {
+    // Expand the :: shorthand before slicing, or 2001:db8::1 and
+    // 2001:db8:0:0:0:0:0:1 would mask to different prefixes.
+    const [head, tail] = ip.split("::", 2);
+    let parts: string[];
+    if (tail === undefined) {
+      parts = head!.split(":");
+    } else {
+      const h = head ? head.split(":") : [];
+      const t = tail ? tail.split(":") : [];
+      parts = [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+    }
+    return parts.slice(0, 4).join(":") + ":x";
+  }
+  const octets = ip.split(".");
+  if (octets.length === 4) return octets.slice(0, 3).join(".") + ".x";
+  return "masked";
+}
+
 export async function recordAudit(input: AuditInput): Promise<boolean> {
   try {
     let userId = input.userId;
@@ -97,6 +129,20 @@ export async function recordAudit(input: AuditInput): Promise<boolean> {
     } catch {
       // No request headers (e.g. background job) — proceed without them.
     }
+
+    // MASK BEFORE WRITING. Migration 0020 documented audit_log.ip as holding
+    // "the MASKED requesting IP (last octet stripped, same shape as audit.ip —
+    // see auth.ts maskIp)". BOTH halves of that were false: audit.ip held the
+    // RAW address, and `maskIp` did not exist anywhere in the codebase. The
+    // masking was described in a migration comment, cited by other comments,
+    // and implemented by nothing.
+    //
+    // It matters because this column is read by every administrator through
+    // /admin/audit. A raw address plus a timestamp is a per-user location
+    // history of staff and, through the learner surfaces, of visits to
+    // particular schools. The masked form still distinguishes "many sources"
+    // from "one source", which is what an investigation actually needs.
+    ip = maskIp(ip);
     await db.insert(auditLog).values({
       userId,
       action: input.action,
@@ -248,9 +294,16 @@ export function withAudit<TArgs extends unknown[], TResult>(
       void recordAudit(meta);
       return result;
     } catch (err) {
+      // A DISTINCT ACTION NAME, not the success one with an `error` key bolted
+      // into metadata. The previous shape wrote the failure under
+      // `admin.row.delete` — the same action as a real deletion — differing
+      // only by a field buried in a JSON blob. So the append-only forensic log
+      // recorded deletions that never happened, and an operator scanning the
+      // action column could not tell them apart.
       void recordAudit({
         ...meta,
-        metadata: { ...(meta.metadata ?? {}), error: String(err) },
+        action: `${meta.action}.failed`,
+        metadata: { ...(meta.metadata ?? {}), error: String(err).slice(0, 500) },
       });
       throw err;
     }

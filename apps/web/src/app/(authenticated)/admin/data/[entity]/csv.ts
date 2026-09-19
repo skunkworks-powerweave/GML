@@ -23,6 +23,15 @@ function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
  * Export entity rows as CSV. Returns a Response with text/csv body suitable
  * for a download link. SM-9: learners.bulk_export is recorded by the caller route.
  */
+/**
+ * Row ceiling for a CSV download.
+ *
+ * 50,000 rows of the widest entity here is a few tens of megabytes -- large,
+ * but survivable in one request. Beyond that the answer is a paginated export
+ * or a direct database query, not a bigger number.
+ */
+export const EXPORT_ROW_LIMIT = 50_000;
+
 export async function exportCsv(slug: string): Promise<Response> {
   const entity = getEntityOrThrow(slug);
   await requireRole(entity.readRoles);
@@ -34,8 +43,24 @@ export async function exportCsv(slug: string): Promise<Response> {
     await requireRole(["super_admin"]);
   }
 
-  // Read all rows (no pagination — CSV export consumes the full table).
-  const rows = (await db.select().from(entity.table as never)) as Record<string, unknown>[];
+  // BOUNDED. This read the entire table with no LIMIT and then materialised the
+  // whole CSV as a second copy in heap. On `learners` -- the largest table and
+  // the one carrying children's names, ages and guardian details -- that is two
+  // full copies of the most sensitive data in the system resident at once, on a
+  // box sized for 8 GiB total, triggered by one click from any administrator.
+  //
+  // The cap is not a limitation of the export so much as an admission that a
+  // browser download is the wrong shape for an unbounded table. A truncated
+  // export is dangerous in a different way -- someone analyses it believing it
+  // is complete -- so the response says so explicitly in a header AND in a
+  // final CSV row, because whoever opens the file in Excel will not see headers.
+  const rows = (await db
+    .select()
+    .from(entity.table as never)
+    .limit(EXPORT_ROW_LIMIT + 1)) as Record<string, unknown>[];
+
+  const truncated = rows.length > EXPORT_ROW_LIMIT;
+  if (truncated) rows.length = EXPORT_ROW_LIMIT;
 
   // Use the entity's displayColumns ordering for headers.
   const headers = entity.displayColumns.map((c) => c.key);
@@ -51,6 +76,16 @@ export async function exportCsv(slug: string): Promise<Response> {
     return out;
   });
 
+  if (truncated) {
+    // A row inside the file itself. A header is invisible to anyone who opens
+    // the download in a spreadsheet, which is everyone.
+    const marker: Record<string, string> = {};
+    for (const k of headers) marker[k] = "";
+    marker[headers[0] ?? "id"] =
+      `*** TRUNCATED at ${EXPORT_ROW_LIMIT} rows — this export is INCOMPLETE ***`;
+    data.push(marker);
+  }
+
   const csv = Papa.unparse({ fields: headers, data });
   const filename = `${entity.slug}-${new Date().toISOString().slice(0, 10)}.csv`;
 
@@ -58,7 +93,7 @@ export async function exportCsv(slug: string): Promise<Response> {
   const audited = withAudit(async () => {}, {
     action: `${entity.slug}.bulk_export`,
     entityType: entity.slug,
-    metadata: { rowCount: rows.length, filename },
+    metadata: { rowCount: rows.length, filename, truncated },
   });
   void audited();
 
@@ -67,6 +102,9 @@ export async function exportCsv(slug: string): Promise<Response> {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}"`,
+      // For any programmatic caller. The in-file marker row is for the human
+      // who opens it in a spreadsheet and never sees a header.
+      ...(truncated ? { "X-Export-Truncated": String(EXPORT_ROW_LIMIT) } : {}),
     },
   });
 }

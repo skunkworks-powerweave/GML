@@ -299,12 +299,23 @@ test("spec 171 — README-IT.md documents administrator-set passwords, not the d
 
 // ---------- README-IT.md — env table extension ----------
 
-test("spec 171 — README-IT.md env table includes the six new keys", () => {
+// RE-POINTED. The property is unchanged and still matters: an operator copying
+// this table into Ansible or Salt must see the whole env surface. One entry had
+// to move, though — MINIO_BUCKET named the bucket for video originals and HLS
+// renditions on a MinIO that no longer exists in this stack, and nothing reads
+// the variable. Leaving it pinned would have kept a dead key in an operator doc
+// forever. It is replaced here by the keys that actually gate the deployment:
+// the Supabase credentials the stack refuses to start without, and
+// AUTH_EMAIL_ENABLED, which decides what the password-reset page does.
+test("spec 171 — README-IT.md env table covers the keys an operator must set", () => {
   const src = read(README_PATH);
   for (const key of [
+    "DATABASE_URL",
+    "SUPABASE_SECRET_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "AUTH_EMAIL_ENABLED",
     "WORKER_CONCURRENCY",
     "TZ",
-    "MINIO_BUCKET",
     "GML_WHATSAPP_NUMBER",
     "GML_HELPDESK_PHONE",
     "GML_HELPDESK_EMAIL",
@@ -315,6 +326,15 @@ test("spec 171 — README-IT.md env table includes the six new keys", () => {
       `README-IT.md env table must include the ${key} key so an operator copying it into Ansible / Salt sees the full env surface`,
     );
   }
+
+  // Dead keys are worse than missing ones: an operator who sets MINIO_BUCKET
+  // believes they have configured object storage, and nothing tells them
+  // otherwise until a video fails to play.
+  assert.ok(
+    !/\bMINIO_[A-Z_]+\b/.test(src),
+    "README-IT.md must not list MinIO variables — no service reads them and no MinIO runs " +
+      "in this stack",
+  );
 });
 
 // ---------- docs/audit-actions.md — taxonomy size ----------
@@ -390,42 +410,109 @@ test("spec 171 — specs/113 quickstart references /login/forgot and /admin/tran
   );
 });
 
-// ---------- tests/integration/smoke.test.mjs — fetch-count ----------
+// ---------- tests/integration/smoke.test.mjs — coverage and failure mode ----------
 
-test("spec 171 — tests/integration/smoke.test.mjs has at least 12 fetch calls (was 8 pre-run-16)", () => {
-  const src = read(SMOKE_PATH);
-  // Count the `fetch(BASE + ` invocations. The spec-111 baseline
-  // was 8; spec 171 adds 4 new probes for the post-audit-closure
-  // admin surfaces and the password-reset entry point. Pin the
-  // count to >= 12 so a future contributor can't silently remove
-  // any of the new probes.
-  const matches = src.match(/fetch\(\s*BASE\s*\+\s*/g) ?? [];
+/**
+ * Strip comments so an absence assertion cannot be defeated by the comment that
+ * explains the absence. Only FULL-LINE `//` comments are removed: a trailing
+ * strip would also cut `"http://localhost:3000"` in half at the `//`, which is
+ * the sort of thing that makes a governance test quietly stop testing anything.
+ */
+const code = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+
+// INVERTED. This used to count `fetch(BASE + ...)` call sites and require at
+// least 12 — an 8-probe spec-111 baseline plus 4 added for run 16. The suite
+// has been rewritten and no longer spells its probes that way: it routes
+// everything through one `get(path)` helper that applies a bounded timeout,
+// because a hung probe is a failed probe and the old call sites had no timeout
+// at all.
+//
+// Counting call sites was never the point; counting COVERAGE was. So this now
+// counts distinct paths the suite actually probes, which is the property the
+// original number was a proxy for, and it no longer breaks when somebody
+// factors the fetch call into a helper.
+test("spec 171 — the post-deploy smoke suite probes the real surface", () => {
+  const src = code(read(SMOKE_PATH));
+
+  const paths = [...new Set((src.match(/"\/[^"\s]*"/g) ?? []).map((s) => s.slice(1, -1)))];
   assert.ok(
-    matches.length >= 12,
-    `tests/integration/smoke.test.mjs must contain at least 12 fetch(BASE + ...) calls (found ${matches.length}); the run-16 docs refresh adds 4 new probes on top of the spec-111 baseline of 8`,
+    paths.length >= 12,
+    `tests/integration/smoke.test.mjs must probe at least 12 distinct paths (found ` +
+      `${paths.length}: ${paths.join(", ")}). A post-deploy check that touches one or two ` +
+      `endpoints tells you the process is listening, not that the deployment works.`,
   );
-});
 
-test("spec 171 — smoke test new probes follow the skipIfUnreachable pattern", () => {
-  const src = read(SMOKE_PATH);
-  // Each new probe must call skipIfUnreachable(t) so CI without a
-  // running stack stays green by skipping. If a contributor adds
-  // a probe without the skip-guard, the entire integration suite
-  // breaks on dev hosts.
-  for (const probeName of ["smoke 9", "smoke 10", "smoke 11", "smoke 12"]) {
-    assert.match(
-      src,
-      new RegExp(`["']${probeName}\\b`),
-      `tests/integration/smoke.test.mjs must define the \`${probeName}\` test case`,
+  // The load-bearing ones, named. A deploy that passes smoke without having
+  // exercised these has not been checked in any useful sense.
+  for (const path of ["/api/health", "/login", "/dashboard", "/api/webhooks/whatsapp"]) {
+    assert.ok(
+      paths.includes(path),
+      `the smoke suite must probe ${path}`,
     );
   }
-  // Pin the load-bearing helper name so a future refactor that
-  // renames it has to update both the source AND this governance
-  // test, surfacing the dependency.
+});
+
+// INVERTED, and this is the important one. The old assertion required four
+// probes named "smoke 9".."smoke 12" and a helper called skipIfUnreachable(t),
+// whose entire job was to SKIP the suite when the application could not be
+// reached. CI then ran the suite with `|| true` on top of that.
+//
+// `node --test` exits 0 when everything skips. The suite was therefore
+// structurally incapable of failing: it reported green whether the deployment
+// worked or not, and it did so for its entire life. That is precisely the
+// defect this governance directory has one layer up — assertions that cannot
+// observe the thing they claim to protect.
+//
+// The suite now FAILS when it cannot reach the target, and scripts/deploy.sh
+// runs it (step 6) against the deployment it has just made, where a full stack
+// genuinely exists. CI's executable coverage moved to `pnpm test:behaviour`,
+// which runs against a real Postgres service container and does not need a
+// booted application. Its old assertions were substantively wrong as well: it
+// probed Auth.js endpoints that no longer exist and asserted a /api/health
+// shape carrying `redis` and `minio` keys that went with the services.
+//
+// So: pin the absence of the skip path, and pin the loud failure that replaced
+// it. Re-adding a skip guard to make a red suite green must fail here.
+test("spec 171 — the smoke suite fails when unreachable instead of skipping", () => {
+  const src = code(read(SMOKE_PATH));
+
+  for (const token of ["skipIfUnreachable", ".skip(", "skip:", "t.skip"]) {
+    assert.ok(
+      !src.includes(token),
+      `tests/integration/smoke.test.mjs must not contain \`${token}\` — a suite that skips ` +
+        `itself when the app is unreachable exits 0 and reports green on a deployment that ` +
+        `never came up. That is the exact failure this file was rewritten to end.`,
+    );
+  }
+
   assert.match(
     src,
-    /function\s+assertAuthGated\s*\(/,
-    "tests/integration/smoke.test.mjs must define the assertAuthGated() helper so the redirect-or-403 contract is centralised",
+    /assert\.fail\(/,
+    "the unreachable case must be a hard failure — assert.fail(), not a skip and not a return",
+  );
+  assert.match(
+    src,
+    /test\("the deployment is reachable"/,
+    "the reachability check must be the first test and must be a test, so its failure is " +
+      "attributable rather than showing up as ten confusing downstream errors",
+  );
+
+  // The health-shape regression the rewrite closed, pinned so it cannot come
+  // back: `redis` and `minio` were removed from the response AND from the `ok`
+  // AND-chain, and the endpoint now answers 503 rather than 200-with-ok:false.
+  assert.match(
+    src,
+    /for\s*\(const gone of \["redis", "minio"\]\)/,
+    "the smoke suite must assert /api/health does NOT report `redis` or `minio` — a probe " +
+      "for a service that no longer exists would report false forever and pin the endpoint " +
+      "at 503, taking the container healthcheck and the deploy readiness wait down with it",
+  );
+  assert.match(
+    src,
+    /body\.ok \? 200 : 503/,
+    "the smoke suite must assert the status code matches the body — /api/health used to " +
+      "return 200 with ok:false, so every probe that reads only the status code was decorative",
   );
 });
 

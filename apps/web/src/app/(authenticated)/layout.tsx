@@ -12,6 +12,7 @@ import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
 import { assertEnv } from "@/lib/env";
 import { DesktopShell, MobileShell } from "@/components/shells";
+import { DeviceSync } from "@/components/DeviceSync";
 import AntiDownloadGuard from "@/components/AntiDownloadGuard";
 import { FTUXTour } from "@/components/ftux/FTUXTour";
 import { HelpPanel } from "@/components/help/HelpPanel";
@@ -137,6 +138,12 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 
   return (
     <NextIntlClientProvider locale={locale} messages={messages}>
+      {/* Writes the gml-device cookie and watches the viewport, so shell
+          selection follows the actual width rather than only the User-Agent.
+          The hook behind it had zero call sites, which meant a desktop browser
+          narrowed to phone width kept a shell whose column widths are inline
+          styles and cannot respond. Renders nothing. */}
+      <DeviceSync initial={device} />
       <AntiDownloadGuard />
       <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />
       <QuickFind userId={user.id} />

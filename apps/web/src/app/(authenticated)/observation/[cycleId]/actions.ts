@@ -52,7 +52,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -100,6 +100,77 @@ async function transitionCycleStatus(
     redirect(`/observation/${cycleId}?error=invalid_transition`);
   }
   return updated[0].code;
+}
+
+// ---------------------------------------------------------------------------
+// submitFormAndTransition — the form row and the status flip, ATOMICALLY.
+//
+// All three submit actions used to INSERT the observation_forms row and THEN
+// call transitionCycleStatus(). When the transition was rejected — a stale tab,
+// a double submit, two reviewers acting at once — the redirect threw and the
+// caller got `?error=invalid_transition`, but the INSERT HAD ALREADY
+// COMMITTED. So a cycle could hold a "pre-observation form" while still sitting
+// in `nominated`, and the UI reported that nothing had been recorded.
+//
+// That is the worst shape for this particular data: observation forms are
+// programme evidence about a named teacher, and a form attached to a cycle that
+// never reached the corresponding state is a record nobody can account for.
+//
+// Ordering the two inside one transaction fixes it in both directions: the
+// guarded UPDATE runs first, so a failed precondition means no row is written
+// at all, and a failure in the insert rolls the status back.
+// ---------------------------------------------------------------------------
+
+async function submitFormAndTransition(opts: {
+  cycleId: string;
+  kind: "pre" | "observer" | "post";
+  responses: Record<string, unknown>;
+  userId: string;
+  from: CycleStatus;
+  to: CycleStatus;
+}): Promise<string> {
+  let code: string | null = null;
+  try {
+    code = await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(observationCycles)
+        .set({ status: opts.to, updatedAt: new Date() })
+        .where(
+          and(
+            eq(observationCycles.id, opts.cycleId),
+            eq(observationCycles.status, opts.from),
+          ),
+        )
+        .returning({ code: observationCycles.code });
+
+      // Rolls back the transaction. The redirect happens OUTSIDE it, below:
+      // redirect() throws a Next control-flow signal, and throwing that through
+      // a transaction callback conflates "the precondition failed" with "the
+      // database errored".
+      if (updated.length === 0) return null;
+
+      await tx
+        .insert(observationForms)
+        .values({
+          cycleId: opts.cycleId,
+          kind: opts.kind,
+          schemaVersion: "1",
+          responses: opts.responses,
+          submittedByUserId: opts.userId,
+        })
+        .onConflictDoNothing();
+
+      return updated[0]!.code;
+    });
+  } catch (err) {
+    console.error("[observation] submit transaction failed", err);
+    redirect(`/observation/${opts.cycleId}?error=submit_failed`);
+  }
+
+  if (code === null) {
+    redirect(`/observation/${opts.cycleId}?error=invalid_transition`);
+  }
+  return code;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,18 +226,14 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
 
   const responses = collectResponses(formData);
 
-  await db
-    .insert(observationForms)
-    .values({
-      cycleId,
-      kind: "pre",
-      schemaVersion: "1",
-      responses,
-      submittedByUserId: userId,
-    })
-    .onConflictDoNothing();
-
-  const code = await transitionCycleStatus(cycleId, "nominated", "pre_submitted");
+  const code = await submitFormAndTransition({
+    cycleId,
+    kind: "pre",
+    responses,
+    userId,
+    from: "nominated",
+    to: "pre_submitted",
+  });
 
   void recordAudit({
     action: "observation.pre_form.submitted",
@@ -206,18 +273,14 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
 
   const responses = collectResponses(formData);
 
-  await db
-    .insert(observationForms)
-    .values({
-      cycleId,
-      kind: "observer",
-      schemaVersion: "1",
-      responses,
-      submittedByUserId: userId,
-    })
-    .onConflictDoNothing();
-
-  const code = await transitionCycleStatus(cycleId, "pre_submitted", "observed");
+  const code = await submitFormAndTransition({
+    cycleId,
+    kind: "observer",
+    responses,
+    userId,
+    from: "pre_submitted",
+    to: "observed",
+  });
 
   void recordAudit({
     action: "observation.observer_form.submitted",
@@ -258,18 +321,14 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
 
   const responses = collectResponses(formData);
 
-  await db
-    .insert(observationForms)
-    .values({
-      cycleId,
-      kind: "post",
-      schemaVersion: "1",
-      responses,
-      submittedByUserId: userId,
-    })
-    .onConflictDoNothing();
-
-  const code = await transitionCycleStatus(cycleId, "observed", "post_submitted");
+  const code = await submitFormAndTransition({
+    cycleId,
+    kind: "post",
+    responses,
+    userId,
+    from: "observed",
+    to: "post_submitted",
+  });
 
   void recordAudit({
     action: "observation.post_form.submitted",
@@ -363,9 +422,31 @@ export async function addNoteAction(formData: FormData): Promise<void> {
     redirect(`/observation/${cycleId}?error=empty_note`);
   }
 
+  // APPEND, do not overwrite.
+  //
+  // The action is called addNoteAction, the button says "Add note", and it
+  // replaced the entire remark with the new text. So the second note silently
+  // destroyed the first — on a field that carries an observer's written
+  // judgement about a named teacher's lesson, in an append-only-audited module
+  // whose whole point is a durable record.
+  //
+  // Done in SQL rather than read-modify-write so two observers adding notes at
+  // the same moment cannot lose one to a lost update.
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const entry = `[${stamp} UTC] ${note}`;
+
   const updated = await db
     .update(observationCycles)
-    .set({ remark: note, updatedAt: new Date() })
+    .set({
+      remark: sql`CASE
+        WHEN ${observationCycles.remark} IS NULL OR btrim(${observationCycles.remark}) = ''
+        THEN ${entry}
+        ELSE ${observationCycles.remark} || E'
+
+' || ${entry}
+      END`,
+      updatedAt: new Date(),
+    })
     .where(eq(observationCycles.id, cycleId))
     .returning({ code: observationCycles.code });
 

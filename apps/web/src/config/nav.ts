@@ -115,9 +115,9 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My work",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "mentorship", label: "My mentees", icon: "users", href: "/mentorship", gate: "mentorship", count: 5 },
-        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation", count: 6 },
-        { id: "videos", label: "Pending review", icon: "video", href: "/videos", count: 3 },
+        { id: "mentorship", label: "My mentees", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "videos", label: "Pending review", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -145,7 +145,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My work",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation", count: 3 },
+        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation" },
         { id: "videos", label: "Video library", icon: "video", href: "/videos" },
       ],
     },
@@ -168,7 +168,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
         { id: "rtt", label: "My phase", icon: "mountain", href: "/rtt" },
-        { id: "observation", label: "My observations", icon: "eye", href: "/observation", count: 2 },
+        { id: "observation", label: "My observations", icon: "eye", href: "/observation" },
         { id: "uploads", label: "My uploads", icon: "upload", href: "/uploads" },
       ],
     },

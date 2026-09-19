@@ -18,9 +18,21 @@ export default async function AuditViewer({
   const page = Math.max(0, Number(sp.page ?? 0));
 
   // Lightweight join — pull last N events, optionally filtered by action / user_id.
+  //
+  // `?user=` is bound against a uuid column. Anything that is not a uuid makes
+  // Postgres raise 22P02 (invalid input syntax for type uuid), which surfaces
+  // as a 500 on the audit page — so a typo, or a pasted email address, or a
+  // truncated id took down the surface an administrator goes to when something
+  // has gone wrong. Validated here and ignored if malformed: an unparseable
+  // filter is a filter that matches nothing, not an error page.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const userFilter = sp.user && UUID_RE.test(sp.user) ? sp.user : null;
+  const userFilterRejected = Boolean(sp.user) && userFilter === null;
+
   const filters: ReturnType<typeof sql>[] = [];
   if (sp.action) filters.push(sql`${auditLog.action} = ${sp.action}`);
-  if (sp.user) filters.push(sql`${auditLog.userId} = ${sp.user}`);
+  if (userFilter) filters.push(sql`${auditLog.userId} = ${userFilter}`);
   const whereClause =
     filters.length === 0
       ? sql`true`
@@ -64,6 +76,17 @@ export default async function AuditViewer({
           Append-only record of every protected view, edit, upload, and gate event.
         </p>
       </header>
+
+      {userFilterRejected ? (
+        <p
+          role="status"
+          data-testid="audit-user-filter-rejected"
+          className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"
+        >
+          The user filter was ignored — <code>{sp.user}</code> is not a user id.
+          Copy the id from the User column below.
+        </p>
+      ) : null}
 
       <form method="get" className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white p-4 text-sm">
         <label className="flex flex-col gap-1">

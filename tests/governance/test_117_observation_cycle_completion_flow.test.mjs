@@ -86,15 +86,52 @@ test("spec 117 — all transitions go through a guarded UPDATE with status in WH
   assert.match(src, /updated\.length\s*===\s*0/);
 });
 
-test("spec 117 — pre/post/observer inserts route through observation_forms with the right kind", () => {
+test("spec 117 — the form insert and the status flip are ATOMIC", () => {
   const src = read(ACTIONS_PATH);
-  assert.match(src, /db\s*\.\s*insert\(observationForms\)/);
-  assert.match(src, /kind:\s*"pre"/);
-  assert.match(src, /kind:\s*"post"/);
-  assert.match(src, /kind:\s*"observer"/);
-  // Each form insert chains .onConflictDoNothing for idempotence on (cycleId, kind).
-  const conflictMatches = src.match(/\.onConflictDoNothing\(\)/g) ?? [];
-  assert.ok(conflictMatches.length >= 3, `.onConflictDoNothing must guard each form insert (got ${conflictMatches.length})`);
+
+  // INVERTED. This required three separate `db.insert(observationForms)` calls
+  // with three `.onConflictDoNothing()` chains — the shape that had the insert
+  // COMMIT BEFORE the guarded transition ran. When the transition was rejected
+  // (a stale tab, a double submit, two reviewers at once) the redirect threw
+  // and the user was told nothing had been recorded, but the form row was
+  // already there. A cycle could hold a pre-observation form while still
+  // sitting in `nominated`.
+  //
+  // That is the worst shape for this data specifically: observation forms are
+  // programme evidence about a named teacher, and a form attached to a cycle
+  // that never reached the matching state is a record nobody can account for.
+  //
+  // All three now route through one helper that runs the guarded UPDATE FIRST
+  // and the insert second, inside a transaction — so a failed precondition
+  // writes nothing, and a failed insert rolls the status back.
+  assert.match(
+    src,
+    /async function submitFormAndTransition\(/,
+    "the three submits must share one atomic helper",
+  );
+  assert.match(
+    src,
+    /db\.transaction\(async \(tx\) =>/,
+    "the update and the insert must be in one transaction",
+  );
+
+  // Ordering inside the helper is the whole point: the guarded UPDATE has to
+  // come first, so the insert is never reached on a rejected transition.
+  const helper = src.slice(src.indexOf("async function submitFormAndTransition("));
+  const updateAt = helper.indexOf(".update(observationCycles)");
+  const insertAt = helper.indexOf(".insert(observationForms)");
+  assert.ok(updateAt > 0 && insertAt > 0, "the helper must do both");
+  assert.ok(
+    updateAt < insertAt,
+    "the guarded UPDATE must precede the insert — otherwise a rejected " +
+      "transition still persists a form row",
+  );
+
+  // All three kinds still go through it.
+  for (const kind of ["pre", "post", "observer"]) {
+    assert.match(src, new RegExp(`kind: "${kind}"`), `${kind} form must still be submitted`);
+  }
+  assert.match(src, /\.onConflictDoNothing\(\)/, "the insert stays idempotent on (cycleId, kind)");
 });
 
 test("spec 117 — each action calls recordAudit with the correct dotted action name", () => {
@@ -127,7 +164,25 @@ test("spec 117 — addNoteAction persists into observation_cycles.remark and rej
   const body = m[0];
   // Sets the remark column on the cycle.
   assert.match(body, /\.update\(observationCycles\)/);
-  assert.match(body, /remark:\s*note/);
+
+  // INVERTED. This required `remark: note` — a plain assignment, which REPLACED
+  // the entire remark with the new text. The action is called addNoteAction and
+  // the button says "Add note"; the second note silently destroyed the first,
+  // on a field carrying an observer's written judgement about a named teacher's
+  // lesson, in a module whose whole point is a durable record.
+  //
+  // Appending is done in SQL rather than read-modify-write, so two observers
+  // adding notes at the same moment cannot lose one to a lost update.
+  assert.ok(
+    !/remark:\s*note/.test(body),
+    "remark must not be overwritten with the new note",
+  );
+  assert.match(
+    body,
+    /remark:\s*sql`CASE/,
+    "the note must be APPENDED, in SQL, so concurrent notes cannot clobber each other",
+  );
+  assert.match(body, /\|\|/, "the append must concatenate onto the existing remark");
   // Empty-note guard → redirect with ?error=empty_note.
   assert.match(body, /empty_note/);
   // Audit hook fires the dotted action name.
