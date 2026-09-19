@@ -62,6 +62,14 @@ COPY --chown=worker:worker packages/shared ./packages/shared
 COPY --from=deps --chown=worker:worker /repo/node_modules                 ./node_modules
 COPY --from=deps --chown=worker:worker /repo/apps/worker/node_modules     ./apps/worker/node_modules
 COPY --from=deps --chown=worker:worker /repo/packages/db/node_modules     ./packages/db/node_modules
+# packages/shared's SOURCE is copied above, and it declares runtime
+# dependencies of its own (zod among them) -- so without its node_modules the
+# import resolves the file and then fails on the first dependency inside it.
+# Verified in the built image: `require.resolve("zod")` threw
+# MODULE_NOT_FOUND. It had not bitten yet only because the transcode path
+# happens to touch the one shared module with no dependencies; any future
+# import of a zod-using shared module would crash the worker at startup.
+COPY --from=deps --chown=worker:worker /repo/packages/shared/node_modules ./packages/shared/node_modules
 
 USER worker
 WORKDIR /repo/apps/worker

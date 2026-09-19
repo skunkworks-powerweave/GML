@@ -90,6 +90,7 @@ COPY --chown=worker:worker packages/shared ./packages/shared
 COPY --from=deps --chown=worker:worker /repo/node_modules                 ./node_modules
 COPY --from=deps --chown=worker:worker /repo/apps/worker/node_modules     ./apps/worker/node_modules
 COPY --from=deps --chown=worker:worker /repo/packages/db/node_modules     ./packages/db/node_modules
+COPY --from=deps --chown=worker:worker /repo/packages/shared/node_modules ./packages/shared/node_modules
 
 USER worker
 WORKDIR /repo/apps/worker

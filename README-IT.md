@@ -41,7 +41,7 @@ container went, that is the answer, at the source.
 #    README-deploy.md 2.2. Nobody can sign in until the first one is done.
 
 # 2. Pull the release onto the instance
-git clone <repo> gml-lms && cd gml-lms/lms-app
+git clone <repo> gml-lms && cd gml-lms   # the repo root IS the app root
 
 # 3. Configure
 cp .env.example .env && chmod 600 .env
@@ -188,8 +188,8 @@ that cannot be re-made, and if we do not mirror them, nobody does. That is what
 `scripts/backup.sh` is for.
 
 ```cron
-0 2 * * *  cd /home/ubuntu/gml-lms/lms-app && ./scripts/backup.sh  >> /var/lib/gml/backup.log 2>&1
-0 4 * * 0  cd /home/ubuntu/gml-lms/lms-app && ./scripts/restore.sh >> /var/lib/gml/drill.log  2>&1
+0 2 * * *  cd /home/ubuntu/gml-lms && ./scripts/backup.sh  >> /var/lib/gml/backup.log 2>&1
+0 4 * * 0  cd /home/ubuntu/gml-lms && ./scripts/restore.sh >> /var/lib/gml/drill.log  2>&1
 ```
 
 `scripts/restore.sh` is the drill: it restores the newest dump into a throwaway

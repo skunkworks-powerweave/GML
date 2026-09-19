@@ -90,7 +90,7 @@ When you attach SMTP: set `AUTH_EMAIL_ENABLED=true` and redeploy. No code change
 | Data volume | 100 GiB gp3 mounted at `/var/lib/gml` (ffmpeg scratch + local dumps) |
 | Region | `ap-south-1` |
 | Security group in | 80, 443 from `0.0.0.0/0`; 22 from your admin range **only** |
-| Security group out | 443 (Supabase, Let's Encrypt, Meta) |
+| Security group out | 443 (Supabase, Let's Encrypt, Meta) **and 80** — `docker/worker.Dockerfile` installs ffmpeg with apt, and `node:22-slim`'s Debian sources are `http://deb.debian.org` on port 80. With 443 only, the worker image fails to build on the first deploy. |
 | DNS | An A record for `DOMAIN` pointing at the Elastic IP, **before** first deploy — Caddy needs it to obtain a certificate |
 
 **Why not a plain burstable instance.** Sizing is driven by ffmpeg, not by
@@ -109,7 +109,7 @@ bursts — that is what a queue is for.
 ```bash
 # On the instance, as a user in the docker group
 sudo mkdir -p /var/lib/gml && sudo chown "$USER" /var/lib/gml
-git clone <repo> gml-lms && cd gml-lms/lms-app
+git clone <repo> gml-lms && cd gml-lms   # the repo root IS the app root
 
 cp .env.example .env
 chmod 600 .env
@@ -255,8 +255,8 @@ sudo apt-get install -y postgresql-client-16 rclone awscli
 #              SUPABASE_S3_SECRET_KEY, BACKUP_S3_BUCKET, AWS_REGION
 
 crontab -e
-# 0 2 * * *  cd /home/ubuntu/gml-lms/lms-app && ./scripts/backup.sh >> /var/lib/gml/backup.log 2>&1
-# 0 4 * * 0  cd /home/ubuntu/gml-lms/lms-app && ./scripts/restore.sh >> /var/lib/gml/drill.log 2>&1
+# 0 2 * * *  cd /home/ubuntu/gml-lms && ./scripts/backup.sh >> /var/lib/gml/backup.log 2>&1
+# 0 4 * * 0  cd /home/ubuntu/gml-lms && ./scripts/restore.sh >> /var/lib/gml/drill.log 2>&1
 ```
 
 If the Storage credentials are absent, `backup.sh` **warns loudly on stderr and
