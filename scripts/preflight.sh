@@ -45,12 +45,33 @@ ok ".env exists"
 
 # Mode 0600: this file holds the service-role key, which bypasses RLS entirely
 # and can create, ban and delete accounts.
-mode="$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || echo unknown)"
-if [ "$mode" = "600" ]; then
-  ok ".env is mode 600"
-else
-  no ".env is mode 600 (found $mode)" "chmod 600 .env"
-fi
+#
+# POSIX MODE IS MEANINGLESS UNDER GIT BASH / MSYS, so do not report a verdict
+# there. It synthesises a mode from NTFS that does not reflect the actual ACL:
+# a file correctly locked down with
+#
+#     icacls .env /inheritance:r /grant:r "%USERNAME%:F" ...
+#
+# still reports 644, so this check produced a confident FAIL for a file that
+# was already private, and would equally report 600 for one that was not.
+# A check that cannot distinguish the two states must say so rather than guess.
+# On the EC2 box -- which is where this script is meant to run -- stat is
+# authoritative and the verdict below is real.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    nb ".env permissions NOT checked (POSIX mode is not meaningful on Windows)"
+    nb "  Windows:  icacls .env /inheritance:r /grant:r \"%USERNAME%:F\" /grant:r \"SYSTEM:F\" /grant:r \"Administrators:F\""
+    nb "  Verify:   (Get-Acl .env).Access   -- BUILTIN\\Users must not appear"
+    ;;
+  *)
+    mode="$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || echo unknown)"
+    if [ "$mode" = "600" ]; then
+      ok ".env is mode 600"
+    else
+      no ".env is mode 600 (found $mode)" "chmod 600 .env"
+    fi
+    ;;
+esac
 
 set -a
 # shellcheck disable=SC1091
