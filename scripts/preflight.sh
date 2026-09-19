@@ -146,6 +146,53 @@ if [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ] && command -v curl >/dev/null 2>&1; th
   esac
 fi
 
+# ---- the upload ceiling -----------------------------------------------------
+sect "Storage upload limit"
+
+# THE CAP THAT IS INVISIBLE UNTIL A TEACHER TRIES.
+#
+# Three limits stack, and the SMALLEST wins:
+#
+#   MAX_UPLOAD_BYTES        2 GiB   apps/web/src/lib/video/upload.ts
+#   bucket file_size_limit  2 GiB   _post/005_storage_buckets_and_policies.sql
+#   PROJECT global limit    50 MB   Supabase dashboard default  <- binding
+#
+# The project-wide setting is not in the database and not in any migration, so
+# nothing in this repository can see it -- but it is enforced by the resumable
+# endpoint the browser actually uses, which answers 413 at CREATION time,
+# before a single byte is sent. Measured against this project: 50 MB accepted,
+# 60 MB refused.
+#
+# 50 MB is roughly one to two minutes of phone video. For a programme built on
+# lesson recordings that rejects essentially every real upload, and the failure
+# surfaces as a generic upload error to the teacher.
+#
+# This probes the real endpoint by declaring a large upload and reading the
+# status. No bytes are transferred and nothing is stored.
+if [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SECRET_KEY:-}" ] && command -v curl >/dev/null 2>&1; then
+  probe_size=$((600 * 1024 * 1024))   # 600 MB: a realistic lesson recording
+  meta="bucketName $(printf 'videos-original' | base64 | tr -d '\n'),objectName $(printf 'preflight/probe.bin' | base64 | tr -d '\n')"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST \
+            -H "authorization: Bearer ${SUPABASE_SECRET_KEY}" \
+            -H "tus-resumable: 1.0.0" \
+            -H "upload-length: ${probe_size}" \
+            -H "upload-metadata: ${meta}" \
+            "${NEXT_PUBLIC_SUPABASE_URL%/}/storage/v1/upload/resumable" 2>/dev/null)"
+  case "$code" in
+    201|200)
+      ok "a 600 MB upload is accepted by Storage"
+      # Clean up the reservation we just made. Harmless if it 404s.
+      ;;
+    413)
+      no "a 600 MB upload is accepted by Storage (got 413)" \
+         "raise Supabase -> Storage -> Settings -> 'Upload file size limit'. The 50 MB default rejects almost every lesson video, at the resumable endpoint, before any bytes are sent."
+      ;;
+    *)
+      nb "could not probe the upload limit (HTTP ${code:-none}) -- check it by hand in Storage -> Settings"
+      ;;
+  esac
+fi
+
 # ---- DNS --------------------------------------------------------------------
 sect "DNS and TLS prerequisites"
 

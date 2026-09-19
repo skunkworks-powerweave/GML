@@ -107,24 +107,56 @@ export async function getObject(
 }
 
 /**
- * Stream an object rather than buffering it.
+ * Stream an object. ACTUALLY stream it.
  *
- * The media proxy and the transcoder both used to pull whole files into memory
- * -- `arrayBuffer()` on an inbound WhatsApp video inside a request handler, and
- * `transformToByteArray()` on the source in the worker. On a 2 GB source that
- * is 2 GB of heap in a container sized for far less.
+ * ── WHY NOT supabase.storage.download() ─────────────────────────────────────
+ *
+ * That is what this function used to call, and it defeats the entire purpose:
+ * `download()` resolves to a **Blob**, which means the whole object has
+ * already been read into memory before there is anything to call `.stream()`
+ * on. The returned stream is a stream over a fully-materialised buffer, so the
+ * peak stays the full object size.
+ *
+ * The docstring said the opposite. The transcoder's own comment says "Source
+ * to disk, streamed" (apps/worker/src/transcode.ts) while piping from that
+ * Blob, so a 2 GB upload -- MAX_UPLOAD_BYTES is exactly that -- meant 2 GB of
+ * worker heap before one byte reached the scratch disk. Node's default old-space
+ * ceiling is well under that on a 2 vCPU box, so the worker would be OOM-killed
+ * by the container rather than failing the job cleanly, and the job would be
+ * retried by the lease reaper and killed again.
+ *
+ * A signed URL plus fetch() gives a genuine network stream: undici exposes the
+ * response body as a ReadableStream that yields chunks as they arrive, so the
+ * peak is one chunk rather than one file.
+ *
+ * The signed URL is short-lived and never leaves this process -- it exists only
+ * to turn a private object into something fetch() can open.
  */
 export async function getObjectStream(
   supabase: SupabaseClient,
   bucket: BucketName,
   key: string,
 ): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; size: number }> {
-  const { data, error } = await supabase.storage.from(bucket).download(key);
-  if (error || !data) throw new Error(`download ${bucket}/${key}: ${error?.message ?? "no data"}`);
+  // Long enough for a large transfer on a slow link, short enough that a URL
+  // captured from a log is not useful for long.
+  const { data: signed, error: signError } = await supabase.storage
+    .from(bucket)
+    .createSignedUrl(key, 3600);
+  if (signError || !signed?.signedUrl) {
+    throw new Error(`sign ${bucket}/${key}: ${signError?.message ?? "no url"}`);
+  }
+
+  const res = await fetch(signed.signedUrl);
+  if (!res.ok || !res.body) {
+    throw new Error(`download ${bucket}/${key}: HTTP ${res.status}`);
+  }
+
   return {
-    body: data.stream() as ReadableStream<Uint8Array>,
-    contentType: data.type || "application/octet-stream",
-    size: data.size,
+    body: res.body as ReadableStream<Uint8Array>,
+    contentType: res.headers.get("content-type") || "application/octet-stream",
+    // Absent on a chunked response. Callers treat 0 as "unknown" -- the
+    // transcoder stats the file on disk afterwards rather than trusting this.
+    size: Number(res.headers.get("content-length") ?? 0),
   };
 }
 
