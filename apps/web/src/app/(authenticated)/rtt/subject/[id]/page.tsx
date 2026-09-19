@@ -2,9 +2,17 @@
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { eq, getTableColumns, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { rttSubjects, rttModules, rttSessions, rttReadings, terms, phases } from "@gml/db/schema";
+import {
+  rttSubjects,
+  rttModules,
+  rttSessions,
+  rttReadings,
+  terms,
+  phases,
+  quizzes,
+} from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +37,22 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
     .where(eq(rttSessions.rttSubjectId, id))
     .orderBy(rttSessions.sequence);
   const readings = await db.select().from(rttReadings).where(eq(rttReadings.rttSubjectId, id)).orderBy(rttReadings.sequence);
+
+  // DO THE ASSESSMENT QUIZZES EXIST?
+  //
+  // The two links below were hardcoded to /quizzes/mid-unit and
+  // /quizzes/endline. The runner calls notFound() for a slug with no active
+  // quiz, so on a programme that has not created them -- which is every new
+  // deployment, since nothing seeds quizzes -- "Start" was a 404 on every
+  // subject page in the product. A missing quiz is a normal state, not an
+  // error, so it now reads as "not published yet" instead of pretending to be
+  // a working link.
+  const assessmentSlugs = ["mid-unit", "endline"];
+  const publishedQuizzes = await db
+    .select({ slug: quizzes.slug })
+    .from(quizzes)
+    .where(and(inArray(quizzes.slug, assessmentSlugs), eq(quizzes.active, true)));
+  const hasQuiz = new Set(publishedQuizzes.map((q) => q.slug));
 
   // Spec 119 — wire the JSX-prototype "Resume" CTA to the first module by
   // sequence (anchor jump on this same page). When no modules exist, the
@@ -162,30 +186,26 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     // still upcoming (scheduledAt in the future or null) the
                     // action column shows "Join"; for past sessions "Watch".
                     // Both render as <Link href=…> so they have real handlers.
-                    const sessionHref = `/repo/session/${s.id}`;
+                    // NO LINK. `s.id` is an rtt_sessions id, and
+                    // /repo/session/[id] looks up the CLASSROOM sessions table
+                    // -- a different table entirely -- so every one of these
+                    // rows 404'd. rtt_sessions has no detail page; the calendar
+                    // at /rtt/online/synchronous is where these are listed.
                     const isUpcoming = s.isUpcoming;
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>
-                          <Link
-                            href={sessionHref}
-                            style={{ color: "var(--ink)", textDecoration: "none" }}
-                          >
-                            {s.scheduledAt
-                              ? new Date(s.scheduledAt).toLocaleString("en-IN", {
-                                  dateStyle: "medium",
-                                  timeStyle: "short",
-                                })
-                              : <span className="empty-dash">unscheduled</span>}
-                          </Link>
+                          {s.scheduledAt ? (
+                            new Date(s.scheduledAt).toLocaleString("en-IN", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })
+                          ) : (
+                            <span className="empty-dash">unscheduled</span>
+                          )}
                         </td>
                         <td>
-                          <Link
-                            href={sessionHref}
-                            style={{ color: "var(--ink)", textDecoration: "none" }}
-                          >
-                            {s.title}
-                          </Link>
+                          {s.title}
                         </td>
                         <td>
                           {s.type ? (
@@ -198,13 +218,21 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                           {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
                         </td>
                         <td>
-                          <Link
-                            href={sessionHref}
-                            className="btn btn-sm"
-                            style={{ textDecoration: "none" }}
-                          >
-                            {isUpcoming ? "Join" : "Watch"}
-                          </Link>
+                          {s.linkOrRecording ? (
+                            <a
+                              href={s.linkOrRecording}
+                              className="btn btn-sm"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ textDecoration: "none" }}
+                            >
+                              {isUpcoming ? "Join" : "Watch"}
+                            </a>
+                          ) : (
+                            <span className="chip" title="No meeting link or recording recorded for this session">
+                              {isUpcoming ? "No link yet" : "No recording"}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -326,13 +354,19 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                 }}
               >
                 <span>Mid-unit check</span>
-                <Link
-                  href={`/quizzes/mid-unit?subjectId=${id}`}
-                  className="btn btn-sm btn-primary"
-                  style={{ textDecoration: "none" }}
-                >
-                  Start
-                </Link>
+                {hasQuiz.has("mid-unit") ? (
+                  <Link
+                    href={`/quizzes/mid-unit?subjectId=${id}`}
+                    className="btn btn-sm btn-primary"
+                    style={{ textDecoration: "none" }}
+                  >
+                    Start
+                  </Link>
+                ) : (
+                  <span className="chip" title="No active quiz with the address mid-unit">
+                    Not published yet
+                  </span>
+                )}
               </div>
               <div
                 style={{

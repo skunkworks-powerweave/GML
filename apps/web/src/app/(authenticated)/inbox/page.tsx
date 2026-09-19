@@ -8,6 +8,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { notifications } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { notificationKindFilter } from "@/lib/notification-kinds";
 
 export const dynamic = "force-dynamic";
 
@@ -102,10 +103,15 @@ export default async function InboxPage({
 
   // Unread-first, then most recent. Mirrors the (user_id, read_at, created_at) index from spec 025.
   // Drizzle's asc().nullsFirst() is not stable across pg-core minors — sql literal is the documented path.
+  // The same kind filter the topbar bell applies. Without it the two disagreed:
+  // the bell counted only enabled kinds, the page listed everything, so the
+  // badge and the list it links to could show different numbers. See
+  // lib/notification-kinds.ts for why this lives in one place now.
+  const kindFilter = await notificationKindFilter();
   const whereClause =
     filter === "unread"
-      ? and(eq(notifications.userId, userId), isNull(notifications.readAt))
-      : eq(notifications.userId, userId);
+      ? and(eq(notifications.userId, userId), isNull(notifications.readAt), kindFilter)
+      : and(eq(notifications.userId, userId), kindFilter);
 
   const rows: Row[] = await db
     .select({

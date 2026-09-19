@@ -111,9 +111,24 @@ export default async function AdminIndexPage() {
               href="/admin/forms"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Forms &amp; quizzes</div>
+              <div className="text-sm font-medium">Feedback forms</div>
               <div className="text-xs text-neutral-500">
-                Feedback form and quiz templates
+                Form templates and their schemas
+              </div>
+            </Link>
+          </li>
+          {/* Quizzes had NO link anywhere in the product. The only reference to
+              /admin/quizzes was from its own [id] page, which cannot be reached
+              with zero quizzes -- so the surface existed and was unreachable
+              except by typing the URL. */}
+          <li>
+            <Link
+              href="/admin/quizzes"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">Quizzes</div>
+              <div className="text-xs text-neutral-500">
+                Create a quiz and write its questions
               </div>
             </Link>
           </li>

@@ -20,6 +20,7 @@ import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
+import { NetworkStatus } from "./NetworkStatus";
 import { Icon } from "./Icon";
 
 type SidebarProps = {
@@ -218,30 +219,12 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
         );
       })}
 
-      {/* Network status — cosmetic per v2 plan (no PWA / offline queue) */}
-      <div
-        style={{
-          marginTop: "auto",
-          padding: "8px 8px 4px",
-          fontSize: 11,
-          color: "var(--ink-3)",
-          borderTop: "1px solid var(--line)",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 999,
-            background: "var(--lichen)",
-            display: "inline-block",
-          }}
-        />
-        {tStatus("online")}
-      </div>
+      {/* Network status -- a real probe, not a green dot. See NetworkStatus.tsx. */}
+      <NetworkStatus
+        labelOnline={tStatus("online")}
+        labelOffline={tStatus("offline")}
+        labelChecking={tStatus("checking")}
+      />
     </aside>
   );
 }

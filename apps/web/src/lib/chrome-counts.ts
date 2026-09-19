@@ -31,7 +31,7 @@ import {
 } from "@gml/db/schema";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { transcodeQueueDepth } from "@/lib/queue";
-import { getSystemSettings } from "./system-settings";
+import { notificationKindFilter } from "./notification-kinds";
 
 /**
  * Per-role badge counts. Each role gets only the counts that map to nav
@@ -200,40 +200,29 @@ export const loadNavCounts = cache(async function loadNavCounts(
  * badge. Capped at 100 by the renderer (which renders "99+" past that)
  * but we return the raw number so callers can decide their own ceiling.
  *
- * Spec 168 — the count is filtered by `system_settings.notificationsEnabled`
- * (a jsonb array of kind strings). A bell badge for a category the admin
- * has disabled is misleading — the user would see "5 unread" but no rows
- * would surface in the inbox panel since the worker stopped emitting that
- * kind. We filter by the enabled set so the badge matches the inbox content.
- * If the system_settings row is missing (pre-bootstrap deployment) or the
- * loader throws, we fall back to counting every unread row — the previous
- * spec-128 behaviour — so the bell never silently goes dark.
+ * Spec 168 — the count is filtered by the enabled notification kinds. That filter used to
+ * be written out here, and the comment claimed it made "the badge match the
+ * inbox content" -- which it did not, because /inbox applied no filter at all.
+ * The two surfaces could and did answer the same question differently. Both
+ * now call `notificationKindFilter()`; see lib/notification-kinds.ts.
+ *
+ * A missing settings row or an unreachable DB yields `undefined` and so counts
+ * every unread row, rather than going dark on a database blip.
  */
 export const loadUnreadNotifications = cache(async function loadUnreadNotifications(
   userId: string,
 ): Promise<number> {
   try {
-    const settings = await getSystemSettings();
-    const enabledKinds = settings?.notificationsEnabled ?? null;
-
-    const conds: ReturnType<typeof and>[] = [
-      eq(notifications.userId, userId),
-      isNull(notifications.readAt),
-    ];
-    // Empty array means "the admin has disabled every category" → zero
-    // unread by definition. We surface that explicitly so the count
-    // doesn't accidentally fall through to the unfiltered branch.
-    if (enabledKinds !== null && enabledKinds.length === 0) {
-      return 0;
-    }
-    if (enabledKinds !== null && enabledKinds.length > 0) {
-      conds.push(inArray(notifications.kind, enabledKinds));
-    }
-
     const [row] = await db
       .select({ c: sql<number>`count(*)::int` })
       .from(notifications)
-      .where(and(...conds));
+      .where(
+        and(
+          eq(notifications.userId, userId),
+          isNull(notifications.readAt),
+          await notificationKindFilter(),
+        ),
+      );
     return row?.c ?? 0;
   } catch (err) {
     console.error("[chrome-counts] loadUnreadNotifications failed", err);

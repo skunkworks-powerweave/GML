@@ -150,6 +150,21 @@ async function submitFormAndTransition(opts: {
       // database errored".
       if (updated.length === 0) return null;
 
+      // UPSERT. `.onConflictDoNothing()` was silent DATA LOSS.
+      //
+      // observation_forms has a unique index on (cycle_id, kind)
+      // -- observation_forms_cycle_kind_uq -- so re-submitting a form for a
+      // cycle that already has one of that kind hit the conflict and the row
+      // was DROPPED. The status UPDATE above is in the same transaction and
+      // committed regardless, so the cycle advanced a stage while everything
+      // the user had typed disappeared. No error, no warning: the page came
+      // back showing the OLD submission and a NEW status.
+      //
+      // Re-submission is a legitimate act -- an observer correcting a form
+      // before sign-off is the obvious case -- so the right semantic is that
+      // the latest submission wins. submitted_at and submitted_by are
+      // refreshed with it, otherwise the record would attribute the new
+      // answers to whoever happened to submit first.
       await tx
         .insert(observationForms)
         .values({
@@ -159,7 +174,14 @@ async function submitFormAndTransition(opts: {
           responses: opts.responses,
           submittedByUserId: opts.userId,
         })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+          target: [observationForms.cycleId, observationForms.kind],
+          set: {
+            responses: opts.responses,
+            submittedByUserId: opts.userId,
+            submittedAt: new Date(),
+          },
+        });
 
       return updated[0]!.code;
     });

@@ -148,9 +148,27 @@ function readSchema(form: FeedbackForm): FormSchemaShape {
 // shipped schema; the gate carries an explicit branch for it so the runner
 // stays open if a future migration adds it (or if a partially-typed form
 // somehow lands with `audience: undefined`).
+// ADMINS ARE ADMITTED, because the submit path already admits them and the two
+// halves disagreeing is the bug.
+//
+// The READ gate listed only the audience's own role, so a programme_admin or
+// super_admin opening any form was redirected to /forbidden and an audit row
+// was written accusing them of a denied access. The SUBMIT path has always
+// taken the opposite view -- audienceAllows() in lib/forms/validate.ts returns
+// true for both admin roles, and assertCanAccessPairing() returns early for
+// them -- so the same account was allowed to POST a form it was forbidden to
+// GET.
+//
+// It also made the whole runner untestable by the only account that exists on
+// a fresh deployment, and made the quarter strip on /mentorship/[pairingId]
+// look broken: every link on it led straight to /forbidden.
+//
+// Admins reading a form is the correct behaviour anyway -- they administer the
+// catalogue and answer questions about it.
+const ADMIN_ROLES: RoleName[] = ["programme_admin", "super_admin"];
 const AUDIENCE_ALLOWED_ROLES: Record<string, RoleName[] | "any"> = {
-  mentor: ["mentor"],
-  mentee: ["teacher"],
+  mentor: ["mentor", ...ADMIN_ROLES],
+  mentee: ["teacher", ...ADMIN_ROLES],
   programme: "any",
 };
 

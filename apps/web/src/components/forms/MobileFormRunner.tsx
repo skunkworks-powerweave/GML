@@ -47,6 +47,24 @@ import {
   type FormSchema,
 } from "./FormRenderer";
 
+/**
+ * A scale answer as a number, or null when genuinely unanswered.
+ *
+ * Handles both shapes the same value arrives in: a number from an autosaved
+ * draft (JSON preserves it) and a string from a previously SUBMITTED response
+ * (FormData stringifies everything). Anything non-numeric, including "" and
+ * null, is unanswered.
+ */
+function coerceScaleValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+
 // Same prop shape as FormRenderer (spec 072) so the page server component
 // can swap one for the other based on the device cookie.
 //
@@ -340,7 +358,22 @@ function BigLikert({
   // Vertical stack of 5 large radio rows. Each row is 44px+ tall so a thumb
   // can hit it reliably; the matching scale-number lives in the rendered label.
   const labels = field.likertLabels ?? DEFAULT_LIKERT;
-  const current = typeof value === "number" ? value : null;
+  // Accept a STRING too. Prior answers come back as strings.
+  //
+  // A submitted response is read out of FormData and stored in
+  // feedback_responses.responses as "4", not 4. Gating on
+  // `typeof value === "number"` therefore treated every previously-saved
+  // likert and rating answer as unanswered: reopening a completed form showed
+  // every scale blank, and -- worse -- the mirrored hidden input emitted "",
+  // so pressing Submit without re-clicking each scale silently dropped answers
+  // the user could see they had already given. Client-side validation passed
+  // them (the raw string "4" is non-empty), so the first sign of trouble was
+  // the server rejecting the whole form as incomplete.
+  //
+  // Drafts were unaffected, because those round-trip through JSON and keep
+  // their numbers -- which is why this only bit on the re-open-after-submit
+  // path.
+  const current = coerceScaleValue(value);
   return (
     <div data-testid="mobile-likert" style={{ display: "grid", gap: 10 }}>
       {labels.map((lbl, i) => {
@@ -407,7 +440,8 @@ function BigRating({
   // the 44px floor) so the user can pick a rating with their thumb without
   // mis-hitting the neighbour.
   const max = field.starsMax ?? 5;
-  const current = typeof value === "number" ? value : 0;
+  // Same string-vs-number problem as Likert above.
+  const current = coerceScaleValue(value) ?? 0;
   return (
     <div
       data-testid="mobile-rating"

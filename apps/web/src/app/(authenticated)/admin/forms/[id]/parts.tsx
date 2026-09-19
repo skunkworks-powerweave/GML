@@ -300,9 +300,28 @@ function SchemaRenderer({ schema }: { schema: unknown }) {
     description?: unknown;
     sections?: unknown;
   };
-  const sections = Array.isArray(obj.sections) ? obj.sections : null;
+  // ACCEPT `fields` AS WELL AS `sections`, because `fields` is the shape every
+  // schema in this product actually uses.
+  //
+  // This required a top-level `sections` array and fell back to a code block
+  // otherwise -- so the "Preview" panel NEVER rendered a form for any of the
+  // ten seeded schemas, and showed the same JSON as the editor beside it. An
+  // administrator checking their edit saw JSON next to JSON.
+  //
+  // A flat `fields` list is one unnamed section, so it is normalised here
+  // rather than by rewriting ten schemas. The item keys line up already:
+  // `label`, `kind` and `options` are common to both, and `name` is what
+  // `fields` calls `id`.
+  const flatFields = Array.isArray((obj as { fields?: unknown }).fields)
+    ? ((obj as { fields?: unknown[] }).fields as unknown[])
+    : null;
+  const sections = Array.isArray(obj.sections)
+    ? obj.sections
+    : flatFields
+      ? [{ title: undefined, items: flatFields.map(normaliseField) }]
+      : null;
   if (!sections) {
-    // No sections array — show the JSON as code.
+    // Neither shape — show the JSON as code.
     return <CodeBlock value={schema} />;
   }
 
@@ -319,6 +338,13 @@ function SchemaRenderer({ schema }: { schema: unknown }) {
       ))}
     </div>
   );
+}
+
+/** A `fields` entry in the key shape SectionBlock's item renderer reads. */
+function normaliseField(f: unknown): unknown {
+  if (!f || typeof f !== "object") return f;
+  const r = f as Record<string, unknown>;
+  return { ...r, id: r.id ?? r.name };
 }
 
 function SectionBlock({ section, index }: { section: unknown; index: number }) {

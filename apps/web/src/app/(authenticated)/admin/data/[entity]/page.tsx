@@ -50,11 +50,13 @@ import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
+import { ImportCsv } from "./import-csv";
 import {
   BulkDeleteToolbar,
   BulkRowCheckbox,
@@ -194,6 +196,14 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const canExport =
     !(entity.piiAudited && entity.slug === "learners") ||
     session.user.role === "super_admin";
+
+  // Same reasoning as canExport, in the other direction: readRoles gets you
+  // onto this page, mutateRoles is what the import endpoint enforces. Rendering
+  // "Import CSV" to an observer who can only read the grid would offer an
+  // action that answers 403.
+  // Mirrors the endpoint's own fallback exactly (mutateRoles ?? readRoles);
+  // if these two ever disagree the button lies about what will happen.
+  const canImport = hasAnyRole(session.user.role, entity.mutateRoles ?? entity.readRoles);
 
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
@@ -410,8 +420,15 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
           </p>
           <h1 className="text-2xl font-semibold">{entity.label}</h1>
         </div>
-        <div className="flex items-center gap-3 text-xs text-neutral-500">
+        <div className="relative flex items-center gap-3 text-xs text-neutral-500">
           <span>Page {pageNum} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>
+          {canImport ? (
+            <ImportCsv
+              entitySlug={slug}
+              entityLabel={entity.label}
+              acceptedColumns={[...entity.formFields]}
+            />
+          ) : null}
           {canExport ? (
             <a
               href={`/api/admin/data/${slug}/export`}

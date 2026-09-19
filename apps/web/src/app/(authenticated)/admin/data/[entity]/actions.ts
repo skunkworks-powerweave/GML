@@ -12,6 +12,8 @@
 // SM-1 + spec 021 convention.
 
 import { revalidatePath } from "next/cache";
+import type { z } from "zod";
+import { unwrapShape, fieldKind, coerceFieldValue } from "@/admin/zod-shape";
 import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -44,6 +46,12 @@ function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
 function coerceFormData(
   formData: FormData,
   fields: readonly string[],
+  // The schema's field map, so each value can be turned back into the TYPE the
+  // schema expects. Without it every value stays a string, and an array field
+  // is rejected with "Expected array, received string" -- which made mentors,
+  // course-outlines and resources impossible to edit at all, including saving a
+  // row without changing anything.
+  shape: Record<string, z.ZodTypeAny>,
   // On UPDATE, an empty string is the user CLEARING a field and must reach the
   // database as null. On CREATE it is just an untouched input, and forwarding
   // null would override a column default, so it is still skipped there.
@@ -59,8 +67,17 @@ function coerceFormData(
     const value = formData.get(field);
     if (value === null) continue;
     if (typeof value === "string") {
+      const kind = fieldKind(shape[field]);
       if (value === "") {
-        if (opts.emptyMeansNull) raw[field] = null;
+        // An empty ARRAY box means an empty list, which is a real value -- not
+        // "leave this column alone" and not null. `.default([])` cannot cover
+        // this: a default only fires on undefined.
+        if (kind === "array") raw[field] = [];
+        else if (opts.emptyMeansNull) raw[field] = null;
+        continue;
+      }
+      if (kind === "array" || kind === "number") {
+        raw[field] = coerceFieldValue(kind, value);
         continue;
       }
       if (value === "true") raw[field] = true;
@@ -110,7 +127,7 @@ export async function createRowAction(
   const entity = getEntityOrThrow(slug);
   await requireRole(mutateRolesFor(entity));
 
-  const raw = coerceFormData(formData, entity.formFields);
+  const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema));
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
@@ -157,7 +174,9 @@ export async function updateRowAction(
   const entity = getEntityOrThrow(slug);
   await requireRole(mutateRolesFor(entity));
 
-  const raw = coerceFormData(formData, entity.formFields, { emptyMeansNull: true });
+  const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema), {
+    emptyMeansNull: true,
+  });
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);

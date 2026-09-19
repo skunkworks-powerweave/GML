@@ -17,9 +17,9 @@
 import "dotenv/config";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
-import { feedbackForms } from "../schema/mentorship.js";
+import { feedbackForms, feedbackResponses } from "../schema/mentorship.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -51,13 +51,37 @@ const CANONICAL_FIELD_KINDS = [
   "rating",
 ] as const;
 
+// Kinds whose renderer draws one control PER OPTION. A field of one of these
+// kinds with no options renders as literally nothing.
+const OPTION_BEARING_KINDS = new Set(["select", "radio", "checkbox"]);
+
 const MISC_KIND_TO_CANONICAL: Record<FieldKind, (typeof CANONICAL_FIELD_KINDS)[number]> = {
-  boolean: "checkbox",
+  // A SINGLE yes/no is a radio pair, not a checkbox.
+  //
+  // It used to map to "checkbox" alongside "boolean-group", and that was wrong
+  // in a way no type could catch: the two kinds have different SHAPES. A
+  // boolean-group carries its own options; a plain boolean carries none. The
+  // checkbox renderer draws one box per option, and `normalizeOptions(undefined)`
+  // is `[]`, so `morning_routine_observed` and `library_accessible` rendered as
+  // an empty gap -- no control, no label, nothing to click. Both are
+  // `required: true`, so the school-visit checklist could never be submitted by
+  // anyone. Two of its nine questions were invisible and it was permanently
+  // stuck at "please complete the required fields".
+  //
+  // Yes/No as a radio gives a visible, answerable control; the stored value
+  // stays the literal "Yes"/"No" string, which is what validate.ts checks
+  // against the options list.
+  boolean: "radio",
   "boolean-group": "checkbox",
   rating: "rating",
   textarea: "textarea",
   "single-choice": "radio",
   text: "text",
+};
+
+/** The options a mapped field must end up with, when its source kind supplies none. */
+const SYNTHESISED_OPTIONS: Partial<Record<FieldKind, string[]>> = {
+  boolean: ["Yes", "No"],
 };
 
 /**
@@ -94,13 +118,28 @@ function toCanonicalFields(rows: SeedRow[]): CanonicalSeedRow[] {
         allValid = false;
         break;
       }
+      const options = field.options ?? SYNTHESISED_OPTIONS[field.kind];
+
+      // The check the ORIGINAL guard should have been: not "does this kind map"
+      // but "is the mapped field renderable". An option-bearing kind with no
+      // options draws zero controls, and if it is also required the whole form
+      // becomes unsubmittable -- silently, because nothing is on screen to
+      // point at. Refuse the row rather than seed a dead form.
+      if (OPTION_BEARING_KINDS.has(kind) && (!options || options.length === 0)) {
+        console.warn(
+          `[seed-forms-misc] WARN - dropping row (label=${row.label}): field "${field.id}" maps to "${kind}", which renders one control per option, but has none. It would render as an empty gap.`,
+        );
+        allValid = false;
+        break;
+      }
+
       mappedFields.push({
         name: field.id,
         kind,
         label: field.label,
         hindiLabel: field.hindiLabel,
         required: field.required,
-        options: field.options,
+        options,
         min: field.min,
         max: field.max,
         helpText: field.helpText,
@@ -299,6 +338,7 @@ export async function main(): Promise<void> {
 
   let inserted = 0;
   let skipped = 0;
+  let repaired = 0;
 
   try {
     console.log(`[seed-forms-misc] starting${DRY_RUN ? " (DRY_RUN)" : ""}…`);
@@ -317,10 +357,63 @@ export async function main(): Promise<void> {
         .limit(1);
 
       if (existing.length > 0) {
+        // REPAIR-ON-DRIFT.
+        //
+        // A plain skip is right for a form an administrator may have edited,
+        // and wrong for one this script seeded WRONG. The school-visit
+        // checklist shipped with two required fields mapped to a kind that
+        // renders one control per option and had no options, so they drew
+        // nothing at all and the form could not be submitted by anyone. Fixing
+        // the mapping above does not help a row that is already in the
+        // database, and nobody can repair a field they cannot see.
+        //
+        // So: if the stored schema differs from what this file would seed
+        // today, and NOBODY HAS ANSWERED THE FORM, rewrite it. The
+        // no-responses guard is what keeps this safe -- a form in use is left
+        // alone and reported, because replacing its schema would orphan the
+        // answers already keyed against the old field names.
+        const id = existing[0].id;
+        const [{ stored } = { stored: null }] = await db
+          .select({ stored: feedbackForms.schema })
+          .from(feedbackForms)
+          .where(eq(feedbackForms.id, id))
+          .limit(1);
+
+        if (JSON.stringify(stored) === JSON.stringify(row.schema)) {
+          console.log(
+            `[seed-forms-misc] SKIP  ${row.label} — already present and current (id=${id}, version=${row.version})`,
+          );
+          skipped++;
+          continue;
+        }
+
+        const [{ answers } = { answers: 0 }] = await db
+          .select({ answers: sql<number>`count(*)::int` })
+          .from(feedbackResponses)
+          .where(eq(feedbackResponses.formId, id));
+
+        if (answers > 0) {
+          console.warn(
+            `[seed-forms-misc] KEEP  ${row.label} — stored schema differs from this seed, but ${answers} response(s) exist (id=${id}). Left untouched; migrate it by hand or publish a new version.`,
+          );
+          skipped++;
+          continue;
+        }
+
+        if (DRY_RUN) {
+          console.log(`[seed-forms-misc] WOULD REPAIR  ${row.label} (id=${id}) — schema drifted, 0 responses`);
+          repaired++;
+          continue;
+        }
+
+        await db
+          .update(feedbackForms)
+          .set({ schema: row.schema })
+          .where(eq(feedbackForms.id, id));
         console.log(
-          `[seed-forms-misc] SKIP  ${row.label} — already present (id=${existing[0].id}, version=${row.version})`,
+          `[seed-forms-misc] REPAIR  ${row.label} — stored schema replaced (id=${id}, 0 responses)`,
         );
-        skipped++;
+        repaired++;
         continue;
       }
 
@@ -351,7 +444,7 @@ export async function main(): Promise<void> {
     }
 
     console.log(
-      `[seed-forms-misc] DONE — inserted=${inserted}, skipped=${skipped}${DRY_RUN ? " (dry-run; no writes)" : ""}.`,
+      `[seed-forms-misc] DONE — inserted=${inserted}, repaired=${repaired}, skipped=${skipped}${DRY_RUN ? " (dry-run; no writes)" : ""}.`,
     );
   } catch (err) {
     console.error("[seed-forms-misc] failed:", err);

@@ -72,12 +72,17 @@ export default async function AdminFormsIndexPage() {
               them. Editing a schema bumps the version and is recorded in the audit log.
             </p>
           </div>
-          <span
+          {/* Was a dead "New-form UI lands in spec 080" chip. The quiz
+              registry had no link from anywhere in the product, so this is
+              also the way in to it. */}
+          <Link
+            href="/admin/quizzes"
             className="chip"
-            title="Creating new forms is gated to direct seed/SQL in v1."
+            style={{ textDecoration: "none" }}
+            title="Switch to the quiz registry"
           >
-            New-form UI lands in spec 080
-          </span>
+            Quizzes →
+          </Link>
         </div>
       </div>
 

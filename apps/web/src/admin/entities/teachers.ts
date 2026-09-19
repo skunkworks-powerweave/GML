@@ -14,7 +14,8 @@ export const teachersEntity: AdminEntity = {
     { key: "schoolId", label: "School" },
     { key: "phone", label: "Phone" },
     { key: "subjectSpecialism", label: "Subject" },
-    { key: "joinedPhase", label: "Phase" },
+    { key: "joinedPhase", label: "Joined at" },
+    { key: "currentPhaseId", label: "Current phase" },
     { key: "active", label: "Active" },
   ],
   formSchema: z.object({
@@ -43,8 +44,31 @@ export const teachersEntity: AdminEntity = {
     phone: z.string().max(32).optional().nullable(),
     subjectSpecialism: z.string().max(80).optional().nullable(),
     joinedPhase: z.string().max(16).optional().nullable(),
+    // WHERE THE TEACHER IS NOW, as opposed to `joinedPhase`, which is where
+    // they started. Two different questions; the admin only ever offered the
+    // first one, so this column had no way to be set from any screen and was
+    // NULL for every teacher in the database.
+    //
+    // That is what made /repo/teachers' phase filter useless: it filters on
+    // this column, so every phase in its dropdown returned an empty table. An
+    // empty result reads as "nobody is in Phase 2" rather than "this was never
+    // filled in", which is how it went unnoticed.
+    //
+    // A uuid rather than a picker, matching schoolId and userId; copy the id
+    // from /admin/data/phases. Nullable -- a teacher on the roster who has not
+    // started a phase yet is a real state.
+    currentPhaseId: z.string().uuid().optional().nullable(),
     active: z.boolean().default(true),
   }),
-  formFields: ["fullName", "schoolId", "phone", "subjectSpecialism", "joinedPhase", "active", "userId"],
+  formFields: [
+    "fullName",
+    "schoolId",
+    "phone",
+    "subjectSpecialism",
+    "joinedPhase",
+    "currentPhaseId",
+    "active",
+    "userId",
+  ],
   describeRow: (r) => `teacher:${r.fullName ?? r.id}`,
 };

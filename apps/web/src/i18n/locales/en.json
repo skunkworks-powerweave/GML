@@ -74,7 +74,9 @@
     "failed": "Failed",
     "ready": "Ready",
     "online": "Online · synced",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "offline": "Offline — not saving",
+    "checking": "Checking…"
   },
   "gate": {
     "title": "Section gate",

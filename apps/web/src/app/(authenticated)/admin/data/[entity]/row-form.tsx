@@ -8,7 +8,7 @@
 // and input inference are shared — only the action + submit label differ.
 
 import { useActionState } from "react";
-import { z } from "zod";
+import { unwrapShape, fieldKind, toInputValue } from "@/admin/zod-shape";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import {
   createRowAction,
@@ -24,34 +24,6 @@ type Props = {
   /** Existing row values, prefilled into the form inputs in edit mode. */
   initialValues?: Record<string, unknown>;
 };
-
-function inferInputType(
-  zodType: z.ZodTypeAny,
-): "text" | "number" | "checkbox" | "textarea" {
-  let inner: z.ZodTypeAny = zodType;
-  const peek = (z: z.ZodTypeAny) =>
-    z as unknown as { _def?: { innerType?: z.ZodTypeAny; typeName?: string } };
-  while (peek(inner)._def?.innerType) inner = peek(inner)._def!.innerType!;
-  const name = peek(inner)._def?.typeName as string | undefined;
-  if (name === "ZodNumber") return "number";
-  if (name === "ZodBoolean") return "checkbox";
-  return "text";
-}
-
-/** Stringify a prefilled value safely for an HTML input's `defaultValue`. */
-function toInputValue(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  if (typeof v === "object") {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return String(v);
-    }
-  }
-  return String(v);
-}
 
 export function RowForm({
   entitySlug,
@@ -77,13 +49,11 @@ export function RowForm({
     );
   }
 
-  // Pull the Zod object's shape so we can iterate fields.
-  const formDef = entity.formSchema._def as unknown as {
-    shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny>;
-  };
-  const rawShape =
-    typeof formDef.shape === "function" ? formDef.shape() : formDef.shape;
-  const shape = (rawShape ?? {}) as Record<string, z.ZodTypeAny>;
+  // unwrapShape, not a bare `_def.shape`: three entities wrap their schema in
+  // .refine(), and reading _def.shape directly returned {} for them -- which is
+  // why `active` rendered as a free text box on subjects, resources and
+  // sessions instead of a true/false control.
+  const shape = unwrapShape(entity.formSchema);
 
   const submitLabel = isEdit ? "Save changes" : "Add row";
   const pendingLabel = isEdit ? "Saving…" : "Adding…";
@@ -100,19 +70,23 @@ export function RowForm({
         <input type="hidden" name="rowId" value={rowId} />
       ) : null}
       {entity.formFields.map((field) => {
-        const fieldSchema = shape[field];
-        const inputType = fieldSchema ? inferInputType(fieldSchema) : "text";
+        const kind = fieldKind(shape[field]);
         // Priority: prior failed-submit echo → initial row value → "".
         const echo = state?.fields?.[field];
         const initial =
           echo !== undefined && echo !== ""
             ? echo
-            : toInputValue(initialValues?.[field]);
+            : toInputValue(kind, initialValues?.[field]);
         const fieldError = state?.fieldErrors?.[field];
         return (
           <label key={field} className="flex flex-col gap-1 text-xs">
             <span className="font-medium text-neutral-700">{field}</span>
-            {inputType === "checkbox" ? (
+            {kind === "array" ? (
+              <span className="text-[10px] text-neutral-500">
+                Separate items with commas.
+              </span>
+            ) : null}
+            {kind === "boolean" ? (
               <select
                 name={field}
                 defaultValue={initial || "true"}
@@ -124,7 +98,7 @@ export function RowForm({
             ) : (
               <input
                 name={field}
-                type={inputType === "number" ? "number" : "text"}
+                type={kind === "number" ? "number" : "text"}
                 defaultValue={initial}
                 aria-invalid={fieldError ? "true" : undefined}
                 className={`rounded-md border ${

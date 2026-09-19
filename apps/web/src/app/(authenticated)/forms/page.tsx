@@ -111,6 +111,7 @@ export default async function FormsIndexPage() {
     session.user.id,
     role,
   );
+  const isAdmin = role === "programme_admin" || role === "super_admin";
 
   return (
     <main style={{ padding: "24px 28px", maxWidth: 820 }}>
@@ -153,10 +154,25 @@ export default async function FormsIndexPage() {
             return (
               <li key={f.id}>
                 <Link
+                  // Admins get the form itself, not /inbox.
+                  //
+                  // The "/inbox" fallback was written for someone with several
+                  // pairings, who has to pick one -- but pairingsFor() also
+                  // returns no pairing for an administrator, who is party to
+                  // none, so EVERY link on this page sent an admin to the
+                  // notifications feed. And /inbox has no feedback-form card
+                  // (ENTITY_HREF has no feedback_form entry), so the catalogue
+                  // was a dead end for the only account a fresh deployment has.
+                  //
+                  // Without a pairingId the runner renders read-only in effect:
+                  // submitting says so plainly, which is the right answer for
+                  // an administrator reviewing the catalogue.
                   href={
                     solePairingId
                       ? `/forms/${slug}?pairingId=${encodeURIComponent(solePairingId)}`
-                      : "/inbox"
+                      : isAdmin
+                        ? `/forms/${slug}`
+                        : "/inbox"
                   }
                   data-testid="form-link"
                   style={{

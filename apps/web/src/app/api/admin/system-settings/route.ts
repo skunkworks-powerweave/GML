@@ -32,25 +32,12 @@ import { systemSettings, SYSTEM_SETTINGS_ID } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
+import { NOTIFICATION_KEYS } from "@/lib/notification-kinds";
 
 export const dynamic = "force-dynamic";
 
-// Notification category catalog — keep in sync with /admin/system-settings page UI
-// and with the recordAudit prefixes documented in docs/audit-actions.md.
-const NOTIFICATION_CATEGORIES = [
-  "cycle.assigned",
-  "cycle.complete",
-  "video.transcoded",
-  "video.review_pending",
-  "meeting.scheduled",
-  "meeting.cancelled",
-  "digest.weekly",
-  // Must stay in step with NOTIFICATION_CATEGORIES in the system-settings
-  // page: this zod enum is what the API accepts, and a key the page offers but
-  // the route rejects would fail the save with a validation error. This is the
-  // only kind the application actually writes (see the helpdesk ticket route).
-  "helpdesk.ticket",
-] as const;
+// Catalogue and keys come from lib/notification-kinds.ts — one list, so the
+// page cannot offer a key this route rejects.
 
 // Allowed video qualities. Only 480p ships today (SM-4); the rest are intentionally
 // rejected at the zod layer so a future drive-by edit can't quietly accept them
@@ -67,7 +54,7 @@ const SystemSettingsPatchSchema = z.object({
     .optional(),
   videoDefaultQuality: z.enum(VIDEO_QUALITIES).optional(),
   videoMaxUploadMb: z.number().int().min(10).max(2000).optional(),
-  notificationsEnabled: z.array(z.enum(NOTIFICATION_CATEGORIES)).optional(),
+  notificationsEnabled: z.array(z.enum(NOTIFICATION_KEYS)).optional(),
   backupRetentionDays: z.number().int().min(7).max(365).optional(),
 });
 

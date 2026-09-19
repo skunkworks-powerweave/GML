@@ -15,6 +15,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearDraft, saveDraft, type DraftKey } from "@/lib/form-draft";
 
+/**
+ * A scale answer as a number, or null when genuinely unanswered.
+ *
+ * Handles both shapes the same value arrives in: a number from an autosaved
+ * draft (JSON preserves it) and a string from a previously SUBMITTED response
+ * (FormData stringifies everything). Anything non-numeric, including "" and
+ * null, is unanswered.
+ */
+function coerceScaleValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+
 // ---------- Schema types ----------
 
 export type FieldKind =
@@ -383,7 +401,22 @@ function Likert({
   onChange: (v: number) => void;
 }) {
   const labels = field.likertLabels ?? DEFAULT_LIKERT;
-  const current = typeof value === "number" ? value : null;
+  // Accept a STRING too. Prior answers come back as strings.
+  //
+  // A submitted response is read out of FormData and stored in
+  // feedback_responses.responses as "4", not 4. Gating on
+  // `typeof value === "number"` therefore treated every previously-saved
+  // likert and rating answer as unanswered: reopening a completed form showed
+  // every scale blank, and -- worse -- the mirrored hidden input emitted "",
+  // so pressing Submit without re-clicking each scale silently dropped answers
+  // the user could see they had already given. Client-side validation passed
+  // them (the raw string "4" is non-empty), so the first sign of trouble was
+  // the server rejecting the whole form as incomplete.
+  //
+  // Drafts were unaffected, because those round-trip through JSON and keep
+  // their numbers -- which is why this only bit on the re-open-after-submit
+  // path.
+  const current = coerceScaleValue(value);
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
       {/* THE VALUE HAS TO LEAVE THE PAGE.
@@ -434,7 +467,8 @@ function Rating({
   onChange: (v: number) => void;
 }) {
   const max = field.starsMax ?? 5;
-  const current = typeof value === "number" ? value : 0;
+  // Same string-vs-number problem as Likert above.
+  const current = coerceScaleValue(value) ?? 0;
   const verdict = [
     "Not yet rated",
     "Emerging",

@@ -14,7 +14,7 @@ import bcrypt from "bcryptjs";
 import { createClient } from "@supabase/supabase-js";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import * as schema from "../schema/index.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
@@ -176,6 +176,34 @@ export async function main() {
     ])
     .returning({ id: schema.phases.id, label: schema.phases.label });
   const phaseByLabel = Object.fromEntries(phaseInsert.map((p) => [p.label, p.id]));
+
+  // Now that phases have ids, give every teacher a CURRENT phase.
+  //
+  // The teachers block above says "with hindi_name + current_phase" and then
+  // never set it, because phases are created after teachers and there was no
+  // id to point at. `current_phase_id` therefore stayed NULL for every teacher
+  // ever seeded -- and /repo/teachers filters on exactly that column, so
+  // picking any phase from its dropdown returned an empty table. A filter that
+  // is always empty reads as "no teachers in Phase 2", not as "this column was
+  // never populated", which is why it survived.
+  //
+  // Seeded current := joined. They are genuinely different things (where a
+  // teacher STARTED vs where they are NOW) and only coincide at the beginning,
+  // which is what a fresh seed represents. Progression is then recorded by
+  // editing the teacher in /admin/data/teachers.
+  for (const t of teachersData) {
+    const phaseId = phaseByLabel[t.joinedPhase];
+    if (!phaseId) continue;
+    await db
+      .update(schema.teachers)
+      .set({ currentPhaseId: phaseId })
+      .where(
+        and(
+          eq(schema.teachers.fullName, t.fullName),
+          isNull(schema.teachers.currentPhaseId),
+        ),
+      );
+  }
 
   const termsInsert = await db
     .insert(schema.terms)
