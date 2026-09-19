@@ -18,19 +18,25 @@ export const teachersEntity: AdminEntity = {
     { key: "active", label: "Active" },
   ],
   formSchema: z.object({
-    // LINK TO A LOGIN ACCOUNT. This was not editable anywhere in the product.
+    // LINK TO A LOGIN ACCOUNT -- REPAIRABLE, not just settable once.
     //
-    // lib/authz.ts resolves a signed-in teacher through teachers.user_id
-    // (teacherIdFor), and that is what cycleVisibilityFilter and
-    // assertCanAccessCycle are built on. With the column null -- which it was
-    // for all 10 teachers in the live database -- a teacher who logs in
-    // resolves to no teacher row, so the visibility filter denies everything
-    // and she sees an empty programme. WhatsApp attribution goes through the
-    // same link.
+    // /admin/users already links one at account-creation time: its form offers
+    // a dropdown of unlinked teachers and mentors, and createUserAction writes
+    // teachers.user_id / mentors.user_id (admin/users/actions.ts:180-181).
+    // That is the normal path and it works.
     //
-    // It is a uuid field rather than a picker, matching schoolId. Copy the id
-    // from /admin/users. Nullable, because a teacher on the roster who has not
-    // been given an account yet is a legitimate state.
+    // What did not exist was any way to CHANGE it afterwards. That line was
+    // the only write to the column in the whole codebase, so a link skipped at
+    // creation, or pointed at the wrong person, could not be corrected from any
+    // screen -- and the consequence is not subtle. lib/authz.ts resolves a
+    // signed-in teacher through teachers.user_id (teacherIdFor), which is what
+    // cycleVisibilityFilter and assertCanAccessCycle are built on, so an
+    // unlinked teacher sees an empty programme and 404s on the cycle that is
+    // about her. WhatsApp attribution rides on the same column.
+    //
+    // A uuid field rather than a picker, matching schoolId. Copy the id from
+    // /admin/users. Nullable, because somebody on the roster who has not been
+    // given an account yet is a legitimate state.
     userId: z.string().uuid().optional().nullable(),
     fullName: z.string().min(2).max(160),
     schoolId: z.string().uuid(),
