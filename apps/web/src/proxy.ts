@@ -148,6 +148,31 @@ function buildCsp(nonce: string): string {
   ].join("; ");
 }
 
+/**
+ * The baseline security headers, set by the APPLICATION.
+ *
+ * Caddy sets these too, and that is fine -- its `header` directive replaces
+ * rather than appends, so there is no duplication. The reason they are here as
+ * well is that the application should not depend on its reverse proxy for its
+ * own baseline: anything that reaches the app directly (a misconfigured
+ * security group, a future load balancer, a developer running the container
+ * without Caddy, the health checker) got no protection at all. Defence in
+ * depth costs three header writes per request.
+ *
+ * The CSP genuinely cannot live in Caddy -- see buildCsp -- so these travel
+ * with it.
+ */
+function applySecurityHeaders(res: NextResponse, csp: string): NextResponse {
+  res.headers.set("content-security-policy", csp);
+  res.headers.set("x-content-type-options", "nosniff");
+  res.headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  res.headers.set(
+    "permissions-policy",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+  );
+  return res;
+}
+
 /** 128 bits of randomness, base64. Must be unpredictable and per-request. */
 function makeNonce(): string {
   const bytes = new Uint8Array(16);
@@ -169,7 +194,7 @@ function carryCookies(from: NextResponse, to: NextResponse): NextResponse {
   // without this it would be served with no policy at all -- and a 403 is
   // exactly the kind of response an attacker is looking at.
   const csp = from.headers.get("content-security-policy");
-  if (csp) to.headers.set("content-security-policy", csp);
+  if (csp) applySecurityHeaders(to, csp);
   return to;
 }
 
@@ -195,7 +220,7 @@ export default async function proxy(request: NextRequest) {
     // whatever deep link the user actually followed.
     headers.set("x-pathname", request.nextUrl.pathname + request.nextUrl.search);
     const res = NextResponse.next({ request: { headers } });
-    res.headers.set("content-security-policy", csp);
+    applySecurityHeaders(res, csp);
     return res;
   };
 
