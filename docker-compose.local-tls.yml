@@ -34,10 +34,14 @@
 #
 # ── USE ──────────────────────────────────────────────────────────────────────
 #
-#   DOMAIN=localhost docker compose \
-#     -f docker-compose.yml -f docker-compose.local-tls.yml up -d caddy
-#
+#   docker compose -f docker-compose.yml -f docker-compose.local-tls.yml up -d caddy
 #   curl -kIs https://localhost:9443/login | grep -i strict-transport
+#
+# No `DOMAIN=localhost` prefix, and no line continuations. DOMAIN already lives
+# in .env, which Compose reads by itself. The prefix form is bash-only anyway:
+# PowerShell parses `DOMAIN=localhost docker ...` as a command NAME and fails
+# with "The term 'DOMAIN=localhost' is not recognized". To override it for one
+# run in PowerShell it is `$env:DOMAIN = "localhost"` on its own line first.
 #
 # The certificate is self-signed by Caddy's local CA, so `curl -k` (or trusting
 # that CA) is expected. A cert warning here says nothing about production.

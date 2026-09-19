@@ -3,13 +3,20 @@
 # Combine with docker-compose.local-tls.yml, which publishes Caddy on ports the
 # host can actually bind:
 #
-#   DOMAIN=localhost docker compose \
-#     -f docker-compose.yml \
-#     -f docker-compose.local-tls.yml \
-#     -f docker-compose.local-test.yml \
-#     up -d
+#   cd D:/GML/lms-app
+#   docker compose -f docker-compose.yml -f docker-compose.local-tls.yml -f docker-compose.local-test.yml up -d
 #
 #   then open https://localhost:9443
+#
+# One line on purpose: backslash continuations are a bash thing and PowerShell
+# would need backticks instead, so a wrapped example only works in one shell.
+#
+# No `DOMAIN=localhost` prefix. DOMAIN already lives in .env, which Compose
+# reads by itself -- and the prefix form is bash-only: PowerShell parses
+# `DOMAIN=localhost docker ...` as a command NAME and fails with
+# "The term 'DOMAIN=localhost' is not recognized". If you ever do need to
+# override it for one run, PowerShell spells that `$env:DOMAIN = "localhost"`
+# on its own line first.
 #
 # ── WHY THE WORKER NEEDS AN OVERRIDE HERE ────────────────────────────────────
 #
