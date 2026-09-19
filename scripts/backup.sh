@@ -33,7 +33,7 @@ cd "$(dirname "$0")/.."
 BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/gml/backups}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DB_DIR="${BACKUP_ROOT}/db"
-KEEP_DAILY="${KEEP_DAILY:-14}"
+KEEP_DAILY="${KEEP_DAILY:-14}"   # mirrors /admin/system-settings -> Backup retention
 
 log() { echo "[backup] $(date -Iseconds) — $*"; }
 fail() { echo "[backup] ERROR: $*" >&2; exit 1; }

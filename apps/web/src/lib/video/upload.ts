@@ -39,6 +39,7 @@ import { db } from "@gml/db";
 import { files, videoSubmissions } from "@gml/db/schema";
 import { BUCKETS, uploadKey } from "@gml/shared/storage/buckets";
 import { storage } from "@/lib/video/storage";
+import { getSystemSettings } from "@/lib/system-settings";
 
 export type UploadContextType =
   | "observation_cycle"
@@ -48,7 +49,20 @@ export type UploadContextType =
   | "classroom_session"
   | "generic";
 
-/** 2 GiB, matching the bucket's server-side file_size_limit in _post/005. */
+/**
+ * Hard ceiling, matching the bucket's own file_size_limit in _post/005.
+ *
+ * The EFFECTIVE limit is the programme setting `videoMaxUploadMb`, which is
+ * lower by default (500 MB) and editable at /admin/system-settings. That
+ * setting had UI, an API route, validation and an audit trail, and was READ BY
+ * NOTHING -- an administrator could change it and nothing anywhere behaved
+ * differently. This is the code that makes it real.
+ *
+ * Both bounds exist on purpose: the setting is what the programme has decided,
+ * and this constant is what Storage will physically accept, so a mis-set
+ * setting cannot ask for something the bucket would reject after the user has
+ * already uploaded it.
+ */
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
@@ -106,8 +120,18 @@ export async function beginUpload(opts: {
   if (!Number.isFinite(opts.sizeBytes) || opts.sizeBytes <= 0) {
     return { error: "That file looks empty." };
   }
-  if (opts.sizeBytes > MAX_UPLOAD_BYTES) {
-    return { error: "That file is larger than 2 GB. Send it over WhatsApp instead." };
+  // The programme's configured cap, bounded by what the bucket will accept.
+  const settings = await getSystemSettings().catch(() => null);
+  const configuredBytes = settings?.videoMaxUploadMb
+    ? settings.videoMaxUploadMb * 1024 * 1024
+    : MAX_UPLOAD_BYTES;
+  const effectiveMax = Math.min(configuredBytes, MAX_UPLOAD_BYTES);
+
+  if (opts.sizeBytes > effectiveMax) {
+    const mb = Math.floor(effectiveMax / (1024 * 1024));
+    return {
+      error: `That file is larger than the ${mb} MB limit. Send it over WhatsApp instead.`,
+    };
   }
 
   const uploadId = randomUUID();

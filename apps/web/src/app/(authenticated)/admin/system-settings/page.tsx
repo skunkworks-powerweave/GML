@@ -275,8 +275,13 @@ export default async function SystemSettingsPage() {
             />
           </label>
           <p className="text-xs text-neutral-500">
-            scripts/backup.sh prunes daily dumps older than this many days.
-            Weekly Sunday snapshots persist independently for 4 weeks.
+            <strong>Recorded here, enforced on the host.</strong> scripts/backup.sh
+            runs as a cron job outside the application and reads{" "}
+            <code>KEEP_DAILY</code> from <code>.env</code>; it cannot query this
+            database at the time it prunes. Changing this value records the
+            programme&rsquo;s intent — ask IT to set <code>KEEP_DAILY</code> to
+            match. Said plainly because this field previously implied it
+            controlled the retention directly, and it never has.
           </p>
         </section>
 
