@@ -1,60 +1,54 @@
-// Redis sliding-window rate limit.
-// Key shape: rl:<bucket>:<id>. Stores ZADD timestamps; checks count in window.
-//
-// Spec 163 — Workflow Run 15 audit-closure NIT: document the fail-closed
-// contract at the top of this module so future callers can rely on it.
-//
+import "server-only";
+
 /**
  * # Rate limit — FAIL-CLOSED contract
  *
- * `rateLimit()` deliberately FAILS CLOSED: if Redis is unavailable
- * (no `REDIS_URL` env, connection refused, command timeout, MULTI
- * exec returning null), the function THROWS rather than returning
- * `{ ok: true }`. Callers MUST treat the throw as "request denied"
- * rather than "request allowed":
+ * `rateLimit()` FAILS CLOSED: if the counter cannot be read or written it
+ * THROWS rather than returning `{ ok: true }`. Callers MUST treat the throw as
+ * "request denied":
  *
  *   try {
  *     const r = await rateLimit({ bucket, id, limit, windowMs });
  *     if (!r.ok) return new Response("rate limited", { status: 429 });
- *   } catch (err) {
- *     // Redis down → deny rather than fall through to the handler.
- *     // This is the explicit spec 141 fail-closed contract.
+ *   } catch {
  *     return new Response("rate limiter unavailable", { status: 503 });
  *   }
  *
- * The fail-closed shape was chosen (spec 141 — auth-fail-closed-and-
- * gate-audit) because the alternative (fail-open: treat a Redis
- * outage as "everyone gets through") would let an attacker take down
- * Redis to bypass per-IP login rate limits. Fail-closed degrades the
- * UX (legitimate users get 503 during a Redis outage) but preserves
- * the security boundary.
+ * Fail-open would let an attacker take down the limiter to bypass per-IP login
+ * throttling, so the outage degrades UX rather than the security boundary. If a
+ * particular endpoint genuinely prefers fail-open, it wraps this call in its own
+ * try/catch and chooses that explicitly -- see api/helpdesk/tickets, which does.
  *
- * Concretely the throws come from:
- *   - The shared `getRedis()` client on connection refused, ECONNRESET,
- *     command timeout, or AUTH failure (the underlying ioredis surface).
- *     If `REDIS_URL` is unset, `getRedis()` falls back to the in-network
- *     default `redis://redis:6379`; with no redis on that host the first
- *     command throws ECONNREFUSED, which is still fail-closed.
- *   - The explicit `throw new Error("rate-limit: multi exec returned
- *     null")` below when the MULTI pipeline returns null (a defensive
- *     check; in practice this only happens if ioredis is in a broken
- *     state).
+ * ── WHY THIS MOVED OFF REDIS ─────────────────────────────────────────────────
  *
- * If your handler needs a DIFFERENT failure mode (e.g. you'd rather
- * allow the request through on Redis outage because the endpoint is
- * non-security-sensitive), wrap the call in your OWN try/catch and
- * pick the open behaviour explicitly — don't change the default here.
+ * The contract above was written, documented at length, and UNREACHABLE. The
+ * shared ioredis client was built with `maxRetriesPerRequest: null`, no
+ * `commandTimeout`, and the offline queue left at its default of enabled. With
+ * Redis down, commands did not reject -- they queued indefinitely. So
+ * `rateLimit()` never settled, the `catch` that was supposed to deny never ran,
+ * and every login request HUNG until the browser gave up. A limiter whose
+ * failure mode is to hang the endpoint it protects is a denial of service with
+ * extra steps, and it was the documented fail-closed path that hid it.
+ *
+ * Postgres removes the failure mode rather than fixing it: the counter now
+ * lives in the same database the request already needs, on the same pool, with
+ * the same 5-second connection timeout. If it is unreachable the query rejects
+ * promptly and the catch runs -- and if the database really is down, the
+ * handler had nothing to serve anyway.
+ *
+ * ── FIXED WINDOW, NOT SLIDING ────────────────────────────────────────────────
+ *
+ * The Redis version kept a sorted set of timestamps. This keeps a count and a
+ * window start, which is less precise: at a window boundary a caller can get
+ * 2x the limit across two adjacent windows. For "5 attempts per 15 minutes"
+ * that worst case is 10 attempts in 15 minutes, which is not the difference
+ * between safe and unsafe. It buys a single atomic statement with no
+ * read-modify-write race -- the Redis version counted inside a MULTI and added
+ * outside it, so it was racy anyway.
  */
 
-// Spec 170 — Workflow Run 16 post-audit hardening. The web app now
-// shares a single ioredis instance across all direct-redis call sites
-// via `getRedis()` from ./redis. This module previously constructed
-// its own `new Redis(url, ...)` client, which meant two TCP connections
-// to redis (one here, one in health.ts) and divergent failure-mode
-// defaults. The singleton consolidates both: see ./redis for the full
-// rationale. Behaviour is otherwise identical — the FAIL-CLOSED
-// contract documented below is preserved.
-import { getRedis } from "./redis";
+import { sql } from "drizzle-orm";
+import { db } from "@gml/db";
 
 export type RateLimitOptions = {
   bucket: string;
@@ -69,45 +63,65 @@ export type RateLimitResult = {
   retryAfterMs: number;
 };
 
-/**
- * Fixed-windowed sliding rate limit using Redis ZSET.
- * Each call: prune entries older than windowMs, count, add current ts if under limit.
- */
 export async function rateLimit({
   bucket,
   id,
   limit,
   windowMs,
 }: RateLimitOptions): Promise<RateLimitResult> {
-  const r = getRedis();
-  const key = `rl:${bucket}:${id}`;
-  const now = Date.now();
-  const cutoff = now - windowMs;
+  const key = `${bucket}:${id}`.slice(0, 256);
+  const windowSeconds = Math.max(1, Math.round(windowMs / 1000));
 
-  const multi = r.multi();
-  multi.zremrangebyscore(key, 0, cutoff);
-  multi.zcard(key);
-  const results = await multi.exec();
-  if (!results) throw new Error("rate-limit: multi exec returned null");
-  const count = Number(results[1]?.[1] ?? 0);
+  // ONE statement, atomic. The upsert either starts a fresh window (when the
+  // stored one has aged out) or increments the live one. Two concurrent
+  // requests serialise on the primary key rather than both reading the same
+  // count and both deciding they are under the limit.
+  const res = await db.execute(sql`
+    INSERT INTO rate_limits (key, window_start, count)
+    VALUES (${key}, now(), 1)
+    ON CONFLICT (key) DO UPDATE
+      SET count = CASE
+            WHEN rate_limits.window_start < now() - make_interval(secs => ${windowSeconds})
+            THEN 1
+            ELSE rate_limits.count + 1
+          END,
+          window_start = CASE
+            WHEN rate_limits.window_start < now() - make_interval(secs => ${windowSeconds})
+            THEN now()
+            ELSE rate_limits.window_start
+          END
+    RETURNING count, extract(epoch from (window_start + make_interval(secs => ${windowSeconds}) - now())) AS retry_after_s
+  `);
 
-  if (count >= limit) {
-    // find oldest entry to compute retry-after
-    const oldest = await r.zrange(key, 0, 0, "WITHSCORES");
-    const oldestTs = oldest.length >= 2 ? Number(oldest[1]) : now;
-    return {
-      ok: false,
-      remaining: 0,
-      retryAfterMs: Math.max(0, oldestTs + windowMs - now),
-    };
+  const rows = (res as unknown as { rows: { count: number; retry_after_s: string }[] }).rows ?? [];
+  const row = rows[0];
+  // A RETURNING that yields nothing means the statement did not do what it
+  // claims to. Throwing here is the fail-closed contract, not a defensive
+  // flourish: silently returning ok:true would be the exact fail-open shape
+  // this module exists to avoid.
+  if (!row) throw new Error("rate-limit: upsert returned no row");
+
+  const count = Number(row.count);
+  const retryAfterMs = Math.max(0, Math.round(Number(row.retry_after_s) * 1000));
+
+  if (count > limit) {
+    return { ok: false, remaining: 0, retryAfterMs };
   }
+  return { ok: true, remaining: Math.max(0, limit - count), retryAfterMs: 0 };
+}
 
-  // record this attempt
-  await r.zadd(key, now, `${now}-${Math.random().toString(36).slice(2)}`);
-  await r.pexpire(key, windowMs);
-  return {
-    ok: true,
-    remaining: limit - count - 1,
-    retryAfterMs: 0,
-  };
+/**
+ * Drop counters whose window has long passed.
+ *
+ * Called from the nightly retention job. Without it the table grows by one row
+ * per distinct caller forever, and the sweep gets slowest exactly when the
+ * system is under the load that created the rows.
+ */
+export async function pruneRateLimits(olderThanHours = 24): Promise<number> {
+  const res = await db.execute(sql`
+    DELETE FROM rate_limits
+     WHERE window_start < now() - make_interval(hours => ${olderThanHours})
+    RETURNING key
+  `);
+  return ((res as unknown as { rows: unknown[] }).rows ?? []).length;
 }

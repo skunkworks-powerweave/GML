@@ -1,0 +1,16 @@
+-- Drop transcode_jobs.bull_job_id.
+--
+-- The column held a BullMQ job id. BullMQ is gone, replaced by the `jobs`
+-- table, so nothing can write it -- but it survived the migration with THREE
+-- readers still selecting it, and one of them (the DLQ drop action) put it into
+-- an audit row. The result was an append-only forensic record carrying a field
+-- that is guaranteed NULL forever, which is worse than no field: a reader in a
+-- year's time cannot tell "we did not capture this" from "there was nothing to
+-- capture".
+--
+-- The transport identifier that replaces it is jobs.id, and it is deliberately
+-- NOT copied onto transcode_jobs. The two tables are kept separate on purpose:
+-- `transcode_jobs` is the per-attempt DOMAIN ledger that /admin/transcode-jobs
+-- renders, `jobs` is the transport. Reintroducing a pointer from one to the
+-- other is how they got conflated the first time.
+ALTER TABLE "transcode_jobs" DROP COLUMN IF EXISTS "bull_job_id";

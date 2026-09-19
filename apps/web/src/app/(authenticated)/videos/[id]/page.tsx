@@ -1,7 +1,6 @@
 // /videos/[id] — HLS player page with signed URL + watermark.
 
 import Link from "next/link";
-import { headers } from "next/headers";
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
 import { redirect } from "next/navigation";
@@ -15,7 +14,6 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
-  const userId = session.user.id;
 
   // OWNERSHIP GATE. This was the single highest-severity IDOR in the app: the
   // page called auth(), selected the video by id with NO ownership predicate,
@@ -32,9 +30,6 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
   const video = await assertCanAccessVideo(actor, id);
-
-  const hdr = await headers();
-  const ip = hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ?? hdr.get("x-real-ip") ?? "unknown";
 
   // Audit the view
   void recordAudit({

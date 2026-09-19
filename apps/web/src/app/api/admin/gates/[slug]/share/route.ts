@@ -16,7 +16,7 @@
 // What it does NOT do (out of scope for v1):
 //   - Actually call the WhatsApp Cloud API. The /api/webhooks/whatsapp surface
 //     (spec 043) is RECV-only; SEND-side is gated by spec 105's WhatsApp
-//     BullMQ enqueue, which is for video-receipt acknowledgement and not
+//     queue enqueue, which is for video-receipt acknowledgement and not
 //     gate-password distribution. A future spec can add a `wa-send` queue
 //     and a `gate.password.share_sent` audit row; today the audit row is
 //     `share_initiated` (admin opened the deep link, may or may not have

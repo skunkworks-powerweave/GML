@@ -1,132 +1,281 @@
-// @gml/worker — BullMQ consumer.
-// Reads jobs from the `transcode` queue and runs ffmpeg → HLS 480p, then
-// uploads segments to MinIO and updates video_submissions to status='ready'.
+// @gml/worker — Postgres queue consumer.
 //
-// Also operates the `retention` queue (spec 107 — Tier D1):
-//   a daily scheduled repeat job at cron '0 3 * * *' (server-local) that
-//   calls deleteOldNotifications() from @gml/db to purge notifications older
-//   than 90 days (SM-8). The fixed jobId 'retention:nightly' keeps the
-//   schedule unique across worker restarts.
+// Polls `jobs` for runnable work, runs it, heartbeats a lease while it does,
+// and requeues anything a dead worker left behind. Also runs the two scheduled
+// sweeps (retention, upload reconciliation) on a plain interval.
 //
-// Runs in the `worker` container of docker-compose. Single replica is fine;
-// concurrency is set via env.
+// ── WHY NOT BULLMQ / REDIS ───────────────────────────────────────────────────
 //
-// Spec 163 — Workflow Run 15 audit-closure NIT: all log emissions go
-// through the `log` helper in ./log.ts so output is consistently tagged
-// and timestamped (the audit flagged the ad-hoc console.log / warn /
-// error scatter as a maintenance hazard). See ./log.ts for format.
+// Redis was one of eight services expected to run on a single box in Leh, for a
+// workload under 100 jobs/day. Removing it removes a service, a volume, a
+// healthcheck, a dependency in two package manifests and — via
+// `"@gml/worker": "workspace:*"` in apps/web — the reason the entire worker
+// tree was being pulled into the web application's container image.
+//
+// It also removes the failure mode described at length in lib/rate-limit.ts:
+// the shared ioredis client queued commands indefinitely when Redis was down
+// instead of rejecting, so the documented fail-closed path was unreachable and
+// login requests hung.
+//
+// ── WHAT REPLACED WHAT ───────────────────────────────────────────────────────
+//
+//   BullMQ Worker            -> claim() with FOR UPDATE SKIP LOCKED
+//   stalled-job detection    -> lease + heartbeat + reapExpiredLeases()
+//   attempts/backoff         -> fail() (same exponential-from-5s cadence)
+//   removeOnComplete/Fail    -> pruneFinished()
+//   repeat: { pattern }      -> a setInterval in this file
+//
+// That last one is worth a word. The cron registration was `repeat: { cron }`
+// until the job queue 5 renamed the option to `pattern`; the old name was a TYPE ERROR
+// that survived undetected because this package ran through tsx, which strips
+// types without checking them, and a back-compat shim aliased it at runtime.
+// The bug was invisible in both directions. An interval in ordinary code that
+// the typechecker reads has no equivalent hiding place.
 
 import "dotenv/config";
-import { Worker } from "bullmq";
-import IORedis from "ioredis";
+import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
+import { db } from "@gml/db";
+import {
+  claim,
+  enqueue,
+  fail,
+  heartbeat,
+  pruneFinished,
+  reapExpiredLeases,
+  succeed,
+  HEARTBEAT_SECONDS,
+  LEASE_SECONDS,
+  type ClaimedJob,
+} from "@gml/db/queue";
 import { deleteOldNotifications } from "@gml/db/scripts/retention";
 import { transcode480p } from "./transcode.js";
-import { transcodeQueue, retentionQueue, type TranscodeJobInput } from "./queues.js";
+import { reconcileStalledUploads } from "./reconcile-uploads.js";
 import { log } from "./log.js";
 
-// Re-export queue producers so existing `@gml/worker` consumers keep working.
-export { transcodeQueue, retentionQueue, type TranscodeJobInput };
+export type TranscodeJobInput = {
+  videoSubmissionId: string;
+  fileId: string;
+  bucket: string;
+  objectKey: string;
+};
 
-const REDIS_URL = process.env.REDIS_URL ?? "redis://redis:6379";
-
-// Spec 151 — Worker hardening: clamp WORKER_CONCURRENCY into [1, 16].
-// Pre-fix the env was parsed without bounds so:
-//   - WORKER_CONCURRENCY=0   disabled the worker entirely (jobs piled up
-//                            forever in Redis with no consumer),
-//   - WORKER_CONCURRENCY=NaN parsed as NaN → BullMQ rejected the Worker,
-//   - WORKER_CONCURRENCY=999 spawned 999 concurrent ffmpeg processes and
-//                            OOM-killed the container.
-// The clamp uses `|| 2` after parseInt so a non-numeric env (e.g. "foo")
-// falls back to 2 instead of NaN, then Math.max(1, ...) excludes 0, and
-// Math.min(..., 16) caps the upper bound at a sane ceiling for a single
-// worker container running on a 4-vCPU VPS.
+// Clamp WORKER_CONCURRENCY into [1, 16].
+//
+// Unbounded, this had three distinct failure modes: 0 disabled the worker
+// entirely so jobs piled up with no consumer, a non-numeric value parsed to NaN
+// and the worker refused to start, and a large value spawned that many
+// concurrent ffmpeg processes and OOM-killed the container.
+//
+// The DEPLOYED value should be 1, not the 2 the docs used to suggest: one
+// ffmpeg at `-preset veryfast` saturates both vCPUs of the target instance, and
+// a second starves the web tier it shares the box with. Queue depth absorbs
+// bursts — that is what a queue is for.
 const CONCURRENCY = Math.max(
   1,
-  Math.min(parseInt(process.env.WORKER_CONCURRENCY ?? "2", 10) || 2, 16),
+  Math.min(Number.parseInt(process.env.WORKER_CONCURRENCY ?? "1", 10) || 1, 16),
 );
 
-// Worker-side connection (separate from the producer one in queues.ts so
-// consumers and producers can be scaled / observed independently).
-const connection = new IORedis(REDIS_URL, {
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false,
-});
+/** Idle sleep between empty polls. */
+const POLL_IDLE_MS = 2000;
 
-const worker = new Worker<TranscodeJobInput>(
-  "transcode",
-  async (job) => {
-    log.info("picking transcode job", { id: job.id, data: job.data });
-    await transcode480p(job.data);
-    return { ok: true };
-  },
-  {
-    connection,
-    concurrency: CONCURRENCY,
-  },
-);
+const WORKER_ID = `${process.env.HOSTNAME ?? "worker"}-${randomUUID().slice(0, 8)}`;
 
-worker.on("completed", (job) => {
-  log.info("transcode job completed", { id: job.id });
-});
-worker.on("failed", (job, err) => {
-  log.error("transcode job failed", { id: job?.id, err: String(err) });
-});
+let shuttingDown = false;
+const inFlight = new Set<Promise<void>>();
 
-// Spec 107 — Tier D1: SM-8 retention worker. Concurrency 1 since this is a
-// nightly maintenance job; we never want two runs racing each other.
-const retentionWorker = new Worker(
-  "retention",
-  async (job) => {
-    if (job.name === "deleteOldNotifications") {
-      const deleted = await deleteOldNotifications();
-      return { deleted };
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Run one claimed job, holding its lease open for as long as it takes. */
+async function runJob(job: ClaimedJob): Promise<void> {
+  const hb = setInterval(() => {
+    void heartbeat(db, job.id, LEASE_SECONDS).catch((err) =>
+      log.warn("heartbeat failed", { job: job.id, err: String(err) }),
+    );
+  }, HEARTBEAT_SECONDS * 1000);
+  // Do not hold the event loop open just for the heartbeat.
+  hb.unref?.();
+
+  try {
+    switch (job.name) {
+      case "transcode":
+        await transcode480p(job.payload as unknown as TranscodeJobInput);
+        break;
+      case "deleteOldNotifications": {
+        const n = await deleteOldNotifications();
+        log.info("retention: notifications purged", { count: n });
+        break;
+      }
+      default:
+        throw new Error(`unknown job name: ${job.name}`);
     }
-    log.warn("retention: unknown job name", { name: job.name });
-    return { skipped: true };
-  },
-  {
-    connection,
-    concurrency: 1,
-  },
-);
+    await succeed(db, job.id);
+    log.info("job succeeded", { id: job.id, name: job.name, attempt: job.attempts });
+  } catch (err) {
+    const { willRetry } = await fail(db, job.id, String(err), job.attempts, job.maxAttempts);
+    log.error("job failed", {
+      id: job.id,
+      name: job.name,
+      attempt: job.attempts,
+      willRetry,
+      err: String(err).slice(0, 500),
+    });
+  } finally {
+    clearInterval(hb);
+  }
+}
 
-retentionWorker.on("completed", (job, result) => {
-  log.info("retention job completed", { id: job.id, result });
-});
-retentionWorker.on("failed", (job, err) => {
-  log.error("retention job failed", { id: job?.id, err: String(err) });
-});
+/**
+ * One consumer loop.
+ *
+ * `queue` is a parameter because the QueueName union has always had two members
+ * and only one had a consumer -- anything enqueued onto "retention" would have
+ * sat there forever with nothing claiming it. A type that invites you to write
+ * a job nobody will run is worse than no type.
+ */
+async function consumer(queue: "transcode" | "retention", slot: number): Promise<void> {
+  while (!shuttingDown) {
+    let job: ClaimedJob | null = null;
+    try {
+      job = await claim(db, queue, `${WORKER_ID}#${queue}#${slot}`);
+    } catch (err) {
+      log.error("claim failed", { err: String(err) });
+      await sleep(POLL_IDLE_MS * 5);
+      continue;
+    }
+    if (!job) {
+      await sleep(POLL_IDLE_MS);
+      continue;
+    }
+    const p = runJob(job);
+    inFlight.add(p);
+    try {
+      await p;
+    } finally {
+      inFlight.delete(p);
+    }
+  }
+}
 
-// Register the nightly repeat job. BullMQ deduplicates by jobId, so it's safe
-// to call this on every worker boot — the schedule persists in Redis. Cron
-// '0 3 * * *' = 03:00 every day (server-local timezone).
-//
-// Spec 151 — Worker hardening: cron timezone semantics.
-// Cron evaluates in the server-local TZ. Production servers (the Ladakh
-// VPS plus the dev compose stack) use UTC, so 03:00 UTC = 08:30 IST (the
-// quietest window of the day for the Ladakh mentors who are the primary
-// users — they typically check their classroom devices first thing in
-// the morning IST, and 08:30 IST puts the maintenance burst safely
-// behind the working day for everyone else). If a deployment ever ships
-// to a non-UTC host, set the `TZ` env on the worker container (e.g.
-// `TZ=Asia/Kolkata`) to make this implicit dependency explicit; BullMQ
-// reads the process timezone via node's Intl APIs at job-creation time.
-retentionQueue
-  .add(
-    "deleteOldNotifications",
-    {},
-    // BullMQ 5 renamed RepeatOptions.cron -> pattern. The old name was a type
-    // error that survived because this package was never typechecked (it runs
-    // via tsx, which strips types without checking them). A back-compat shim in
-    // repeat.js aliased it at runtime, so the job did schedule -- the bug was
-    // invisible in both directions.
-    { repeat: { pattern: "0 3 * * *" }, jobId: "retention:nightly" },
-  )
-  .then(() => {
-    log.info("retention nightly schedule registered", { cron: "0 3 * * *" });
-  })
-  .catch((err) => {
-    log.error("retention nightly schedule registration failed", { err: String(err) });
+/**
+ * Periodic housekeeping.
+ *
+ * The reaper is the important one: it is what turns a hard-killed worker from
+ * "these videos never transcode" into "these videos transcode a bit later".
+ */
+async function housekeeping(): Promise<void> {
+  try {
+    const reaped = await reapExpiredLeases(db);
+    if (reaped > 0) log.warn("requeued jobs with expired leases", { count: reaped });
+    const pruned = await pruneFinished(db);
+    if (pruned > 0) log.info("pruned finished jobs", { count: pruned });
+    // Backstop for direct uploads whose completion call never arrived.
+    await reconcileStalledUploads();
+  } catch (err) {
+    log.error("housekeeping failed", { err: String(err) });
+  }
+}
+
+/** Hour (UTC) the nightly retention sweep should run. */
+const RETENTION_HOUR_UTC = 3;
+
+/**
+ * The nightly retention sweep, enqueued rather than run inline.
+ *
+ * Going through the queue means it inherits leases, retries and the DLQ view,
+ * and -- because the dedupe key is the calendar date -- every worker replica
+ * can run this check without the job running more than once per day. (A fixed
+ * jobId, which is what the job queue used, is unique FOREVER, so day two would collide
+ * with day one; scoping to the date is what makes "once per day" actually hold.)
+ *
+ * THE HOUR IS CHECKED, not just the date. Enqueuing on the first tick after
+ * date rollover would silently move the sweep from the 03:00 UTC that spec 107
+ * committed to, to roughly midnight UTC -- which is 05:30 IST, inside the
+ * morning window when Ladakh mentors are actually checking their devices. The
+ * whole point of 03:00 UTC (08:30 IST) was to sit behind that.
+ */
+async function scheduleDailyWork(): Promise<void> {
+  const now = new Date();
+  if (now.getUTCHours() < RETENTION_HOUR_UTC) return;
+
+  const today = now.toISOString().slice(0, 10);
+  try {
+    await enqueue(db, {
+      queue: "retention",
+      name: "deleteOldNotifications",
+      payload: {},
+      dedupeKey: `retention:${today}`,
+      maxAttempts: 2,
+    });
+  } catch (err) {
+    log.error("could not schedule retention", { err: String(err) });
+  }
+}
+
+async function main(): Promise<void> {
+  log.info("online", {
+    worker: WORKER_ID,
+    concurrency: CONCURRENCY,
+    transport: "postgres",
   });
 
-log.info("online", { redis: REDIS_URL, concurrency: CONCURRENCY });
+  const timers = [
+    setInterval(() => void housekeeping(), 60_000),
+    // Checked hourly; the dedupe key makes it idempotent, so the exact tick
+    // does not matter and a restart cannot double-run it.
+    setInterval(() => void scheduleDailyWork(), 60 * 60_000),
+  ];
+  for (const t of timers) t.unref?.();
+
+  void housekeeping();
+  void scheduleDailyWork();
+
+  // SIGTERM handling. Without it `docker compose stop` SIGKILLed the container
+  // mid-ffmpeg, leaving a job claimed and a half-written output; recovery then
+  // depended entirely on the reaper. Draining means the common case — a deploy
+  // — finishes its work instead.
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info("shutting down", { signal, inFlight: inFlight.size });
+    for (const t of timers) clearInterval(t);
+    const deadline = setTimeout(() => {
+      log.warn("drain timed out; exiting anyway");
+      process.exit(1);
+    }, 30_000);
+    deadline.unref?.();
+    void Promise.allSettled([...inFlight]).then(() => {
+      log.info("drained");
+      process.exit(0);
+    });
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
+  // An unhandled rejection used to take the process down with no log line, so a
+  // crash-looping worker looked identical to one that had never started.
+  process.on("unhandledRejection", (reason) => {
+    log.error("unhandled rejection", { reason: String(reason).slice(0, 500) });
+  });
+
+  await Promise.all([
+    // Transcode gets the configured concurrency; retention is housekeeping and
+    // needs exactly one runner.
+    ...Array.from({ length: CONCURRENCY }, (_, i) => consumer("transcode", i)),
+    consumer("retention", 0),
+  ]);
+}
+
+// Only start when this file IS the process entrypoint. apps/web no longer
+// imports @gml/worker, but the package still exports this module, and a
+// top-level `void main()` meant any future import would silently boot a polling
+// worker inside the importing process -- including inside a Next.js server.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  void main();
+}

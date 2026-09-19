@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { pingDb, pingMigrations, pingMinio, pingRedis } from "@/lib/health";
+import { pingDb, pingMigrations, pingStorage } from "@/lib/health";
 
 // Disable Next.js caching for this route — health must reflect current state.
 export const dynamic = "force-dynamic";
@@ -30,14 +30,17 @@ export async function HEAD(): Promise<Response> {
  * run outside production) to include them.
  */
 export async function GET(): Promise<Response> {
-  const [db, redis, minio, migrations] = await Promise.all([
+  const [db, storage, migrations] = await Promise.all([
     pingDb(),
-    pingRedis(),
-    pingMinio(),
+    pingStorage(),
     pingMigrations(),
   ]);
 
-  const ok = db.ok && redis.ok && minio.ok && migrations.ok;
+  // `redis` and `minio` are gone from this AND, not merely from the response
+  // body. A probe for a service that no longer exists would report false
+  // forever, pinning /api/health at 503 and taking the container HEALTHCHECK
+  // and the deploy readiness wait down with it.
+  const ok = db.ok && storage.ok && migrations.ok;
   const verbose =
     process.env.HEALTH_DEBUG === "1" || process.env.NODE_ENV !== "production";
 
@@ -46,14 +49,13 @@ export async function GET(): Promise<Response> {
       ok,
       app: true,
       db: db.ok,
-      redis: redis.ok,
-      minio: minio.ok,
+      storage: storage.ok,
       migrations: migrations.ok,
       // Always safe to expose: a bare count tells an operator "the schema is not
       // applied" without revealing anything about the deployment's internals.
       migrationsApplied: migrations.applied ?? null,
       migrationsExpected: migrations.expected ?? null,
-      ...(verbose ? { details: { db, redis, minio, migrations } } : {}),
+      ...(verbose ? { details: { db, storage, migrations } } : {}),
       ts: new Date().toISOString(),
     },
     {

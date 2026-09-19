@@ -157,12 +157,42 @@ test("spec 163 — apps/worker/src/index.ts imports the logger from ./log.js", (
   );
 });
 
-test("spec 163 — apps/worker/src/index.ts carries an inline Spec 163 reference", () => {
+test("spec 163 — the worker logs through log.* at every severity, not just at import", () => {
+  // INVERTED. This required the literal string "Spec 163" somewhere in
+  // apps/worker/src/index.ts, on the convention that a fix should point a
+  // future reader at the spec that explains it.
+  //
+  // The file has since been rewritten end to end -- BullMQ out, a Postgres
+  // claim/lease loop in -- and the marker did not survive. Restoring it would
+  // be worse than leaving it out: specs/163-nits-cleanup describes replacing
+  // six console calls in a BullMQ worker, and a reader sent there from the
+  // current file would be reading about a program that no longer exists. A
+  // citation that outlives the thing it cites costs the next person a trip and
+  // gives them a wrong mental model at the end of it.
+  //
+  // What spec 163 actually bought is the logger, and that IS still enforceable
+  // against the rewritten file. Two assertions above already pin the negative
+  // (zero console calls) and the wiring (the ./log.js import). Neither catches
+  // the case that would quietly undo the migration during a rewrite: importing
+  // the logger, using log.info for the happy path, and letting failures go
+  // nowhere at all. Structured output only pays off if the failures are in it,
+  // so this pins that all three severities are actually used.
   const src = read(WORKER_INDEX_PATH);
+  for (const level of ["info", "warn", "error"]) {
+    assert.match(
+      src,
+      new RegExp(`\\blog\\.${level}\\(`),
+      `apps/worker/src/index.ts must emit log.${level}(...) -- a logger that only ` +
+        `carries the happy path leaves an operator with no record of the failures`,
+    );
+  }
+  // The specific one worth naming: an unhandled rejection used to take the
+  // process down with no line at all, so a crash-looping worker and a worker
+  // that never started looked identical from outside.
   assert.match(
     src,
-    /Spec 163/,
-    "apps/worker/src/index.ts must carry an inline `Spec 163` comment so the logger migration is self-documenting",
+    /process\.on\(\s*"unhandledRejection"[\s\S]{0,200}?log\.error\(/,
+    "an unhandled rejection must be logged before it can kill the process silently",
   );
 });
 

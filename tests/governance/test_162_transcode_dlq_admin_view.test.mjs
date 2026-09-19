@@ -18,6 +18,17 @@
 //      System-section link to /admin/transcode-jobs.
 //
 // Plus the five spec-kit files under specs/162-transcode-dlq-admin-view/.
+//
+// PARTIALLY INVERTED. The surface, its role gate, its filters, its audit rows
+// and the retry/drop semantics are all unchanged. Three assertions pinned the
+// BullMQ side of the page -- getJobCounts for the live-depth strip, and
+// transcodeQueue.add in the retry action -- and BullMQ is gone, replaced by a
+// `jobs` table in the same Postgres database as the transcode_jobs ledger this
+// page renders. Each of those three now pins the Postgres equivalent, and the
+// reasoning is inline at each one. The two tables stay deliberately separate:
+// transcode_jobs is the per-attempt DOMAIN record, jobs is the TRANSPORT.
+// Conflating them is what left `bull_job_id` on transcode_jobs as a column four
+// files read and nothing ever wrote.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -122,28 +133,74 @@ test("spec 162 — page queries transcode_jobs joined to video_submissions", () 
   );
 });
 
-test("spec 162 — page renders BullMQ live depth via getJobCounts", () => {
+test("spec 162 — page renders live queue depth from Postgres, not from BullMQ", () => {
+  // INVERTED. This required `transcodeQueue.getJobCounts(...)` imported from
+  // "@gml/worker/queues", plus the four BullMQ state names as string literals.
+  //
+  // What spec 162 was actually buying survives whole: an operator opening the
+  // DLQ page sees the LIVE queue alongside the historical transcode_jobs table,
+  // so they can tell "the queue is backed up" from "the queue is empty and
+  // these rows are stale". The old header comment beside this code explains why
+  // both views were needed -- the DB and Redis could drift, and "a Redis flush
+  // left rows in the DB with no live queue entry" was a real triage scenario.
+  //
+  // That drift was itself a symptom. Two independent stores each held half the
+  // truth about a job, neither could be joined to the other, and reconciling
+  // them was the operator's problem. With the queue in the same database as the
+  // ledger, the depth is a GROUP BY and the divergence class is gone. The two
+  // TABLES remain deliberately distinct -- `transcode_jobs` is the per-attempt
+  // domain ledger this page renders, `jobs` is the transport -- but they are
+  // now consistent by construction rather than by luck.
   const src = read(PAGE_PATH);
   assert.match(
     src,
-    /from\s+"@gml\/worker\/queues"/,
-    "page must import transcodeQueue from @gml/worker/queues",
+    /import\s*\{\s*transcodeQueueDepthOrNull\s*\}\s*from\s*"@\/lib\/queue"/,
+    "page must import transcodeQueueDepthOrNull from @/lib/queue",
   );
-  assert.match(
-    src,
-    /transcodeQueue\.getJobCounts\(/,
-    "page must call transcodeQueue.getJobCounts to surface live depth",
-  );
-  // The depth must cover at least the four states the spec calls out.
-  assert.match(src, /"waiting"/, "depth strip must read the 'waiting' state");
-  assert.match(src, /"active"/, "depth strip must read the 'active' state");
-  assert.match(src, /"failed"/, "depth strip must read the 'failed' (DLQ) state");
-  assert.match(src, /"delayed"/, "depth strip must read the 'delayed' state");
-  // try/catch ensures Redis-down doesn't break the page.
   assert.match(
     src,
     /loadDlqDepth/,
-    "page must lift the getJobCounts call into a named helper for the try/catch wrap",
+    "page must lift the depth read into a named helper so the failure path stays in one place",
+  );
+  // ...and specifically the OrNull variant. The topbar chip swallows errors and
+  // shows zeros because it is decoration; this page must not, because zeros
+  // here are a claim ("nothing is queued") an operator will act on. The
+  // distinction is the reason two helpers exist.
+  assert.match(
+    src,
+    /await\s+transcodeQueueDepthOrNull\(\)/,
+    "the admin view must use the variant that can report 'unavailable' rather than zero",
+  );
+  assert.match(
+    src,
+    /if\s*\(!counts\)\s*return null/,
+    "an unavailable depth must propagate as null so the page can render its banner",
+  );
+
+  // The strip's vocabulary is preserved, as a mapping from the new statuses.
+  assert.match(src, /waiting:\s*counts\.queued/, "'waiting' must map to queued");
+  assert.match(src, /active:\s*counts\.running/, "'active' must map to running");
+  assert.match(
+    src,
+    /failed:\s*counts\.dead/,
+    "'failed' must map to `dead` -- exhausted attempts, i.e. the jobs that need a person",
+  );
+  // 'delayed' was BullMQ's name for a job waiting out its backoff. There is no
+  // such state now: a retry is a queued row with run_at in the future, already
+  // counted as waiting. Pinned at zero rather than removed so the strip's shape
+  // stays stable, and so this comment survives next to the reason.
+  assert.match(
+    src,
+    /delayed:\s*0/,
+    "'delayed' has no successor state -- a backed-off retry is simply a queued job with a future run_at",
+  );
+
+  const stripped = read(PAGE_PATH)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.ok(
+    !/getJobCounts|@gml\/worker/.test(stripped),
+    "the page must not reach into the worker package or call getJobCounts",
   );
 });
 
@@ -274,23 +331,52 @@ test("spec 162 — actions.ts exports both Retry + Drop with the correct shape",
 });
 
 test("spec 162 — retryTranscodeJobAction re-enqueues with the webhook payload shape", () => {
+  // INVERTED on the transport and on one payload field.
+  //
+  // The transport: `transcodeQueue.add` from "@gml/worker/queues" becomes
+  // `enqueueTranscode` from "@/lib/queue". Same guarantee as before -- the
+  // operator's Retry produces a job indistinguishable from the one the webhook
+  // produces, so it exercises the same code path rather than a special one.
+  //
+  // The field: `source: row.source` is gone. The worker used it to pick a
+  // `-c copy` stream-copy shortcut for WhatsApp video; that failed outright on
+  // non-Annex-B H.264 or non-AAC audio from arbitrary phone cameras, and when
+  // it worked it preserved a multi-megabit stream on the low-bandwidth path.
+  // Every source is re-encoded now, so a retry must not be able to carry a flag
+  // that would make it behave differently from a first attempt.
+  //
+  // A NOTE ON WHY RETRY STILL WORKS AT ALL. enqueueTranscode dedupes on
+  // `submission:<id>`, and a plain unique index on that key would make this
+  // button dead forever after the first attempt. The index is PARTIAL --
+  // `WHERE dedupe_key IS NOT NULL AND status IN ('queued','running')` -- so a
+  // duplicate while a job is pending is absorbed and a deliberate re-run after
+  // it finishes is allowed. This is the same mistake, avoided, that the plain
+  // INSERT against files_bucket_objectkey_uq made: that one turned transcode
+  // attempts 2 and 3 into failures by construction.
   const src = read(ACTIONS_PATH);
   assert.match(
     src,
-    /from\s+"@gml\/worker\/queues"/,
-    "actions.ts must import transcodeQueue from @gml/worker/queues",
+    /import\s*\{\s*enqueueTranscode\s*\}\s*from\s*"@\/lib\/queue"/,
+    "actions.ts must import enqueueTranscode from @/lib/queue",
   );
+  const call = src.match(/enqueueTranscode\(\s*\{([\s\S]*?)\}\s*\)/);
+  assert.ok(call, "retry action must call enqueueTranscode({ ... }) to re-enqueue the re-encode");
+  const payload = call[1];
+  for (const field of ["videoSubmissionId", "fileId", "bucket", "objectKey"]) {
+    assert.match(payload, new RegExp(`\\b${field}\\s*[:,}]`), `payload must include ${field}`);
+  }
+  assert.ok(
+    !/\bsource\b/.test(payload),
+    "the retry payload must not carry the submission's source -- a retry must be " +
+      "byte-for-byte the same job a first attempt would have been",
+  );
+  // The provenance still belongs on the audit row, which records what an
+  // operator did rather than instructing the worker.
   assert.match(
     src,
-    /transcodeQueue\.add\(/,
-    "retry action must call transcodeQueue.add to enqueue the re-encode",
+    /source:\s*row\.source/,
+    "the audit metadata must still record the submission's source for traceability",
   );
-  // All five payload fields must appear (same shape as the webhook).
-  assert.match(src, /videoSubmissionId:/, "transcodeQueue payload must include videoSubmissionId");
-  assert.match(src, /fileId:/, "transcodeQueue payload must include fileId");
-  assert.match(src, /bucket:/, "transcodeQueue payload must include bucket");
-  assert.match(src, /objectKey:/, "transcodeQueue payload must include objectKey");
-  assert.match(src, /source:\s*row\.source/, "transcodeQueue payload must carry the parent submission's source");
 });
 
 test("spec 162 — retryTranscodeJobAction audits transcode.retry_requested", () => {
@@ -320,14 +406,15 @@ test("spec 162 — dropTranscodeJobAction marks status='dropped' and audits", ()
     /action:\s*"transcode\.dropped"/,
     "drop action must use the dotted audit verb 'transcode.dropped'",
   );
-  // The drop action MUST NOT call transcodeQueue.add — that's the
-  // load-bearing semantic difference vs retry. We assert the substring
-  // appears at most ONCE in the file (in retry, not in drop).
-  const enqueueMatches = src.match(/transcodeQueue\.add\(/g) ?? [];
+  // The drop action MUST NOT enqueue — that is the load-bearing semantic
+  // difference vs retry, and it is why the count, not merely the presence, is
+  // asserted. Unchanged in intent; only the name of the enqueue call moved,
+  // from `transcodeQueue.add(` to `enqueueTranscode(`.
+  const enqueueMatches = src.match(/enqueueTranscode\(/g) ?? [];
   assert.equal(
     enqueueMatches.length,
     1,
-    "transcodeQueue.add must be called exactly once (in retry) — drop must NOT re-enqueue",
+    "enqueueTranscode must be called exactly once (in retry) — drop must NOT re-enqueue",
   );
 });
 

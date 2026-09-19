@@ -141,22 +141,59 @@ test("spec 128 — chrome-counts.ts queries the right tables", () => {
   );
 });
 
-test("spec 128 — chrome-counts.ts wires the BullMQ queue from @gml/worker/queues", () => {
+test("spec 128 — chrome-counts.ts reads queue depth from Postgres via @/lib/queue", () => {
+  // INVERTED. This required `import { transcodeQueue } from "@gml/worker/queues"`
+  // and a `transcodeQueue.getJobCounts("waiting", "active", "failed")` call.
+  //
+  // What that assertion really pinned was the topbar chip showing three real
+  // numbers instead of the JSX prototype's hardcoded ones, and that is intact.
+  // What went is the transport: `getJobCounts` was a Redis round-trip issued
+  // from the layout on EVERY authenticated render, over the same ioredis client
+  // configured with `maxRetriesPerRequest: null` and no `commandTimeout` -- so
+  // with Redis down, the call did not fail, it hung, and it hung inside the
+  // chrome of every page. The depth is now one GROUP BY against the `jobs`
+  // table on the pool the request already holds.
+  //
+  // The three state names survive as the chip's vocabulary, but they are now a
+  // MAPPING rather than a query argument, because the underlying statuses are
+  // Postgres's, not BullMQ's: queued -> waiting, running -> active, and
+  // dead -> failed. That last one is the one worth reading carefully. BullMQ's
+  // 'failed' meant "the last attempt threw", including attempts that will be
+  // retried; 'dead' means "the attempt budget is spent and a human is needed".
+  // The chip is a call to action, so the narrower meaning is the right one.
   const src = read(COUNTS);
   assert.match(
     src,
-    /from\s+"@gml\/worker\/queues"/,
-    "loadQueueDepth must import transcodeQueue from @gml/worker/queues",
+    /import\s*\{\s*transcodeQueueDepth\s*\}\s*from\s*"@\/lib\/queue"/,
+    "loadQueueDepth must import transcodeQueueDepth from @/lib/queue",
   );
   assert.match(
     src,
-    /transcodeQueue\.getJobCounts\(/,
-    "loadQueueDepth must call transcodeQueue.getJobCounts to get state-keyed depth",
+    /await\s+transcodeQueueDepth\(\)/,
+    "loadQueueDepth must call transcodeQueueDepth()",
   );
-  // All three states must be requested — the topbar chip splits them out.
-  assert.match(src, /"waiting"/, "getJobCounts call must include 'waiting'");
-  assert.match(src, /"active"/, "getJobCounts call must include 'active'");
-  assert.match(src, /"failed"/, "getJobCounts call must include 'failed'");
+  assert.match(
+    src,
+    /waiting:\s*counts\.queued/,
+    "the chip's 'waiting' must map to the queued status",
+  );
+  assert.match(
+    src,
+    /active:\s*counts\.running/,
+    "the chip's 'active' must map to the running status",
+  );
+  assert.match(
+    src,
+    /failed:\s*counts\.dead/,
+    "the chip's 'failed' must map to `dead`, not to every errored attempt -- a job " +
+      "with retries left is not something an operator needs to be told about",
+  );
+  // No BullMQ vocabulary may survive in executable code.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.ok(
+    !/getJobCounts|@gml\/worker/.test(code),
+    "chrome-counts.ts must not reach into the worker package or call getJobCounts",
+  );
 });
 
 test("spec 128 — chrome-counts.ts exports the helper formatters and types", () => {

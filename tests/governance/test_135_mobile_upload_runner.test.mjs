@@ -154,23 +154,62 @@ test("spec 135 — MobileUploadRunner.tsx respects safe-area-inset for notch dev
   );
 });
 
-test("spec 135 — MobileUploadRunner.tsx uses tus-js-client on /api/uploads/tus", () => {
+test("spec 135 — MobileUploadRunner shares one upload implementation with the desktop tray", () => {
+  // INVERTED, all three assertions.
+  //
+  // The intent was right and is preserved: the mobile runner must not have its
+  // own upload pipeline, because a second pipeline is a second set of bugs on
+  // the path that matters most on a Ladakh connection. The original expressed
+  // that as "use the same endpoint, the same lazy import and the same chunk
+  // size as UploadProgress" -- three separate copies that had to agree.
+  //
+  // They did not agree. Both components carried their own tus wiring with
+  // different chunk sizes, and BOTH were wrong: 5 MB is neither the tus default
+  // nor a value Supabase's resumable endpoint accepts, which requires exactly
+  // 6 MiB. That is the failure mode of pinning duplication instead of removing
+  // it.
+  //
+  // Neither endpoint survived either. /api/uploads/tus proxied to a tusd
+  // sidecar via TUSD_INTERNAL_URL, which was set in no compose file and no
+  // .env, so every branch of the route returned 501 -- nothing was ever
+  // uploaded through it, on either component, for the whole life of this test.
+  // Bytes now go browser -> Supabase Storage directly, and the chunk size
+  // arrives from the server with the reservation rather than being restated by
+  // each caller.
   const src = read(RUNNER_PATH);
-  // Same endpoint and metadata pattern as UploadProgress (spec 045 / 038).
   assert.match(
     src,
-    /import\("tus-js-client"\)/,
-    "MobileUploadRunner must lazy-import tus-js-client (same pattern as UploadProgress)",
+    /import\s*\{\s*startResumableUpload\s*\}\s*from\s*"@\/lib\/video\/tus-upload"/,
+    "MobileUploadRunner must use the shared upload implementation, not its own tus wiring",
+  );
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.ok(
+    !/import\("tus-js-client"\)/.test(code),
+    "MobileUploadRunner must not import tus-js-client itself -- one implementation, shared",
+  );
+  assert.ok(
+    !/\/api\/uploads\/tus/.test(code),
+    "the tusd proxy endpoint is gone; it returned 501 on every branch and uploaded nothing",
+  );
+  assert.ok(
+    !/chunkSize\s*:/.test(code),
+    "the chunk size must not be restated here -- it is server-issued with the reservation, " +
+      "because the two hand-maintained copies disagreed and were both invalid for the endpoint",
+  );
+  // The reservation-then-verify bracket is what makes a direct-to-Storage
+  // upload safe, and the runner must go through both halves of it rather than
+  // uploading and assuming.
+  assert.match(
+    src,
+    /beginUploadAction/,
+    "the runner must reserve through beginUploadAction -- contextId is attacker-chosen " +
+      "and is authorised server-side before anything is written",
   );
   assert.match(
     src,
-    /endpoint:\s*"\/api\/uploads\/tus"/,
-    "MobileUploadRunner must POST to the existing /api/uploads/tus endpoint",
-  );
-  assert.match(
-    src,
-    /chunkSize:\s*5\s*\*\s*1024\s*\*\s*1024/,
-    "MobileUploadRunner must use the same 5 MB chunk size as UploadProgress",
+    /completeUploadAction/,
+    "the runner must confirm through completeUploadAction, which verifies the object " +
+      "landed at the reserved size before the transcode is queued",
   );
 });
 

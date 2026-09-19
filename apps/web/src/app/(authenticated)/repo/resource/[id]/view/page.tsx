@@ -17,7 +17,6 @@
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources } from "@gml/db/schema";
@@ -34,7 +33,6 @@ export default async function RepoResourceViewPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
-  const userId = session.user.id;
 
   const { id } = await params;
 
@@ -46,11 +44,6 @@ export default async function RepoResourceViewPage({
   if (!res) notFound();
   if (!res.fileKey) notFound();
 
-  const hdr = await headers();
-  const ip =
-    hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    hdr.get("x-real-ip") ??
-    "unknown";
 
   // SM-9 audit — every PDF view is recorded with user + entity + IP.
   // piiAudited=false because resources themselves don't carry learner PII;

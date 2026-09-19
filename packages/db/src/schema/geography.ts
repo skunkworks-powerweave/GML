@@ -56,7 +56,11 @@ export const teachers = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
-  (t) => [index("teachers_school_idx").on(t.schoolId)],
+  (t) => [
+    index("teachers_school_idx").on(t.schoolId),
+    // Resolved whenever a signed-in user is mapped to their teacher record.
+    index("teachers_user_idx").on(t.userId),
+  ],
 );
 
 export type District = typeof districts.$inferSelect;

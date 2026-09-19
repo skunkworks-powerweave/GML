@@ -5,7 +5,7 @@
 // backend queries:
 //   1. Nav count badges (NAV_BY_ROLE `count: 5` etc) → real per-role queries.
 //   2. Topbar bell badge → real notifications.read_at IS NULL count.
-//   3. Topbar queue indicator → real BullMQ getJobCounts() depth.
+//   3. Topbar queue indicator → real the job queue getJobCounts() depth.
 //
 // Each loader is wrapped in `React.cache(...)` so a single layout render that
 // passes the counts into both the Sidebar and the BottomTabs (mobile) or any
@@ -30,7 +30,7 @@ import {
   notifications,
 } from "@gml/db/schema";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { transcodeQueue } from "@gml/worker/queues";
+import { transcodeQueueDepth } from "@/lib/queue";
 import { getSystemSettings } from "./system-settings";
 
 /**
@@ -242,10 +242,10 @@ export const loadUnreadNotifications = cache(async function loadUnreadNotificati
 });
 
 /**
- * Per-request cached BullMQ queue depth. Drives the topbar queue indicator.
+ * Per-request cached transcode queue depth. Drives the topbar queue indicator.
  * Returns the raw counts; the renderer formats them. Hidden when all zero.
  *
- * `getJobCounts` opens an ioredis connection lazily; the producer-side
+ * `getJobCounts` opens an the queue client connection lazily; the producer-side
  * connection in apps/worker/src/queues.ts is `lazyConnect: true` so this is
  * safe to call from a server component on every request.
  */
@@ -257,21 +257,19 @@ export type QueueDepth = {
 
 export const loadQueueDepth = cache(async function loadQueueDepth(): Promise<QueueDepth> {
   try {
-    const counts = await transcodeQueue.getJobCounts("waiting", "active", "failed");
-    return {
-      active: counts.active ?? 0,
-      waiting: counts.waiting ?? 0,
-      failed: counts.failed ?? 0,
-    };
+    const counts = await transcodeQueueDepth();
+    return { active: counts.running, waiting: counts.queued, failed: counts.dead };
   } catch (err) {
-    // Redis unreachable / queue not initialised → render nothing.
+    // Render nothing rather than a wrong number. The chip is decoration; the
+    // admin DLQ view is where an operator goes for the real state, and it
+    // distinguishes "unavailable" from zero.
     console.error("[chrome-counts] loadQueueDepth failed", err);
     return { active: 0, waiting: 0, failed: 0 };
   }
 });
 
 /**
- * Format the BullMQ counts into the topbar chip label. Returns null when
+ * Format the the job queue counts into the topbar chip label. Returns null when
  * every count is zero — the renderer hides the chip in that case.
  */
 export function formatQueueLabel(counts: QueueDepth): string | null {

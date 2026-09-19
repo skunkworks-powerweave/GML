@@ -102,6 +102,8 @@ export const videoSubmissions = pgTable(
   },
   (t) => [
     index("video_submissions_context_idx").on(t.contextType, t.contextId),
+    // NOT NULL FK joined by the DLQ view and by upload completion.
+    index("video_submissions_file_idx").on(t.fileId),
     index("video_submissions_submitter_idx").on(t.submittedByUserId, t.createdAt),
     index("video_submissions_status_idx").on(t.status, t.createdAt),
     // Spec 144 — partial unique index for WhatsApp idempotency. Only enforced
@@ -132,7 +134,6 @@ export const transcodeJobs = pgTable(
     videoSubmissionId: uuid("video_submission_id")
       .notNull()
       .references(() => videoSubmissions.id, { onDelete: "cascade" }),
-    bullJobId: varchar("bull_job_id", { length: 128 }),
     profile: varchar("profile", { length: 8 }).notNull(), // 480p (720p dropped)
     status: varchar("status", { length: 16 }).notNull().default("queued"),
     startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }),

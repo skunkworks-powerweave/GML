@@ -156,21 +156,45 @@ test("spec 156 — UploadProgress declares errorMessage on UploadState", () => {
   );
 });
 
-test("spec 156 — UploadProgress both tus-load-failed paths populate the literal WhatsApp PRIMARY message", () => {
+test("spec 156 — the tus-load-failed path still tells the user to fall back to WhatsApp", () => {
+  // INVERTED. This required the literal WhatsApp-fallback string to appear at
+  // least TWICE inside UploadProgress.tsx -- once for the `else` branch when
+  // the dynamic import resolved to nothing, once for the outer `catch`.
+  //
+  // Counting occurrences was a proxy for "every failure path says something
+  // actionable", and it was the right instinct at the time: the component owned
+  // its own copy of the tus wiring, so the two arms could and did drift. The
+  // duplication is gone. UploadProgress and MobileUploadRunner now share one
+  // implementation in @/lib/video/tus-upload -- they previously had separate
+  // copies with separately-wrong chunk sizes -- and that module has a single
+  // try/catch around a single import, so there is exactly one place for the
+  // message to live and nothing left to keep in sync.
+  //
+  // Asserting ">= 2" against the new code would force a contributor to
+  // duplicate a string to satisfy a test, which is the opposite of what the
+  // original was protecting. So this pins the message where it now is, and
+  // pins that UploadProgress surfaces it rather than swallowing it.
+  const shared = read("apps/web/src/lib/video/tus-upload.ts");
+  assert.match(
+    shared,
+    /"Upload library unavailable\. Please send the video over WhatsApp instead\."/,
+    "the tus-import failure must still name WhatsApp as the fallback -- on a corrupted " +
+      "bundle or an offline-cached page a field mentor needs to be told what to do next, " +
+      "not shown a row that silently failed",
+  );
+  // It must be routed out through onError, not logged and dropped. That is the
+  // property the original's occurrence-count was really enforcing.
+  assert.match(
+    shared,
+    /catch\s*\{[\s\S]{0,400}?opts\.onError\("Upload library unavailable/,
+    "the failed import must call back through onError so the caller can render it",
+  );
   const src = read(UPLOAD_PATH);
-  // The literal message string — pinning so a future contributor can't
-  // silently soften "WhatsApp PRIMARY" (the load-bearing fallback path
-  // for low-bandwidth Ladakh field mentors, specs 036-045) into a
-  // weaker phrase.
-  const messageRegex =
-    /"Upload library unavailable\. Please try the WhatsApp PRIMARY path instead\."/g;
-  const matches = src.match(messageRegex) ?? [];
-  // Expect at least TWO occurrences — one for the `else` branch (when
-  // `tus` is null) and one for the outer `catch` arm. Both paths must
-  // surface the same message.
-  assert.ok(
-    matches.length >= 2,
-    `UploadProgress must reference the literal "Upload library unavailable. Please try the WhatsApp PRIMARY path instead." message at least twice (else branch + outer catch); found ${matches.length}`,
+  assert.match(
+    src,
+    /onError:\s*\(message\)\s*=>\s*updateUpload\([^)]*\{\s*status:\s*"failed",\s*errorMessage:\s*message\s*\}\)/,
+    "UploadProgress must put the shared module's message onto the failed row -- the " +
+      "assertions below then pin that the row actually renders it",
   );
 });
 

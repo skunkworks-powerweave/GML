@@ -1,7 +1,19 @@
 // Named reading materials accessible from the repository. Many-to-many with
 // curriculum subjects (one resource can span multiple subjects).
 
-import { boolean, check, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { subjects } from "./subjects";
 
@@ -39,7 +51,12 @@ export const resourceSubjects = pgTable(
     resourceId: uuid("resource_id").notNull().references(() => resources.id, { onDelete: "cascade" }),
     subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.resourceId, t.subjectId] })],
+  (t) => [
+    primaryKey({ columns: [t.resourceId, t.subjectId] }),
+    // The composite PK leads with resource_id, so "resources for subject X"
+    // could not use it.
+    index("resource_subjects_subject_idx").on(t.subjectId),
+  ],
 );
 
 export type Resource = typeof resources.$inferSelect;

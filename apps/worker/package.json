@@ -5,8 +5,7 @@
   "type": "module",
   "description": "BullMQ consumer for video transcoding (ffmpeg \u2192 HLS 480p) + WhatsApp media post-fetch.",
   "exports": {
-    ".": "./src/index.ts",
-    "./queues": "./src/queues.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "start": "tsx src/index.ts",
@@ -16,10 +15,8 @@
   },
   "dependencies": {
     "@gml/db": "workspace:*",
-    "bullmq": "^5.34.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.39.0",
-    "ioredis": "^5.4.1",
     "pg": "^8.13.1",
     "@supabase/supabase-js": "^2.116.0",
     "@gml/shared": "workspace:*"

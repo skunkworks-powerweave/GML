@@ -9,7 +9,8 @@
     "./schema": "./src/schema/index.ts",
     "./schema/*": "./src/schema/*.ts",
     "./client": "./src/client.ts",
-    "./scripts/retention": "./src/scripts/retention.ts"
+    "./scripts/retention": "./src/scripts/retention.ts",
+    "./queue": "./src/queue.ts"
   },
   "scripts": {
     "generate": "drizzle-kit generate",

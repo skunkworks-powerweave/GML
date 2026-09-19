@@ -5,7 +5,7 @@
 // Two operator verbs surfaced on /admin/transcode-jobs:
 //
 //   * retryTranscodeJobAction — re-enqueues a failed transcode_jobs row
-//     onto the live BullMQ transcodeQueue with the same payload the
+//     onto the live transcode queue with the same payload the
 //     webhook / direct-upload code paths use. The DB row is left in
 //     'failed' (the worker writes a NEW transcode_jobs row when it
 //     picks the job up, so the attempt history is preserved as N
@@ -14,13 +14,13 @@
 //
 //   * dropTranscodeJobAction — flips the row to status='dropped' (the
 //     terminal-non-actionable status added by migration 0021). No
-//     re-enqueue; the BullMQ DLQ entry, if any, is left alone — Redis
+//     re-enqueue; the dead-letter queue entry, if any, is left alone — Redis
 //     ages it out via the queues.ts removeOnFail policy (7 days).
 //
 // Both actions share the same role gate as the page
 // (programme_admin + super_admin), defence in depth against a
 // hand-crafted POST from a non-admin session. The audit row carries
-// the previous status + the BullMQ job id so /admin/audit can chain
+// the previous status + the job id so /admin/audit can chain
 // back to the affected job without an extra round-trip.
 
 import { revalidatePath } from "next/cache";
@@ -28,14 +28,14 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions, files } from "@gml/db/schema";
-import { transcodeQueue } from "@gml/worker/queues";
+import { enqueueTranscode } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 
 const DLQ_PATH = "/admin/transcode-jobs";
 
 /**
- * Retry a failed transcode_jobs row by re-enqueueing it on BullMQ.
+ * Retry a failed transcode_jobs row by re-enqueueing it on the queue.
  *
  * The payload mirrors api/webhooks/whatsapp/route.ts so the worker
  * processes it identically regardless of who triggered the retry.
@@ -52,7 +52,7 @@ export async function retryTranscodeJobAction(formData: FormData): Promise<void>
     redirect(`${DLQ_PATH}?error=missing_job_id`);
   }
 
-  // Recover the file row (bucket + object_key) for the BullMQ payload,
+  // Recover the file row (bucket + object_key) for the job payload,
   // alongside the job's previous status and video_submission_id for
   // the audit metadata. Single round-trip joining all three tables.
   const [row] = await db
@@ -87,7 +87,7 @@ export async function retryTranscodeJobAction(formData: FormData): Promise<void>
   }
 
   // Flip the parent submission back to 'queued' so the videos page
-  // and the topbar queue indicator reflect the truth — BullMQ will
+  // and the topbar queue indicator reflect the truth — the worker will
   // pick the job up shortly and the worker will move it through
   // 'transcoding' → 'ready' as normal.
   await db
@@ -95,15 +95,20 @@ export async function retryTranscodeJobAction(formData: FormData): Promise<void>
     .set({ status: "queued" })
     .where(eq(videoSubmissions.id, row.videoSubmissionId));
 
-  // Re-enqueue with the same payload shape the webhook + direct-upload
-  // call sites use. The 'source' carries through so the worker can
-  // take its source-specific branches (whatsapp skips full re-encode).
-  await transcodeQueue.add("transcode", {
+  // Re-enqueue with the same payload the webhook and direct-upload call sites
+  // use. `source` is no longer carried: the worker used to branch on it to take
+  // a `-c copy` shortcut for WhatsApp video, which failed outright on arbitrary
+  // phone-camera output and, when it worked, preserved a multi-megabit stream
+  // on the path that exists to serve low bandwidth. Every source is re-encoded.
+  //
+  // The dedupe key is scoped to LIVE jobs, so this deliberate retry is allowed
+  // even though the submission has been enqueued before -- which is exactly the
+  // distinction jobs_dedupe_live_uq's partial predicate exists to make.
+  await enqueueTranscode({
     videoSubmissionId: row.videoSubmissionId,
     fileId: row.fileId,
     bucket: row.bucket,
     objectKey: row.objectKey,
-    source: row.source,
   });
 
   void recordAudit({
@@ -127,7 +132,7 @@ export async function retryTranscodeJobAction(formData: FormData): Promise<void>
  * Permanently drop a failed transcode_jobs row.
  *
  * Marks the row 'dropped' (status added in migration 0021) without
- * re-enqueueing. The BullMQ DLQ entry, if any, ages out via the
+ * re-enqueueing. The dead-letter queue entry, if any, ages out via the
  * queues.ts removeOnFail age:7d policy — we don't try to delete it
  * from Redis here because the DB is the source of truth for the
  * audit story, and Redis aging is already configured.
@@ -145,7 +150,6 @@ export async function dropTranscodeJobAction(formData: FormData): Promise<void> 
       jobId: transcodeJobs.id,
       jobStatus: transcodeJobs.status,
       videoSubmissionId: transcodeJobs.videoSubmissionId,
-      bullJobId: transcodeJobs.bullJobId,
     })
     .from(transcodeJobs)
     .where(eq(transcodeJobs.id, jobId))
@@ -184,7 +188,6 @@ export async function dropTranscodeJobAction(formData: FormData): Promise<void> 
     metadata: {
       previousStatus: row.jobStatus,
       videoSubmissionId: row.videoSubmissionId,
-      bullJobId: row.bullJobId,
     },
   });
 

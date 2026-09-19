@@ -104,31 +104,128 @@ test("ExternalEmbed handles youtube / drive / vimeo + shows warning", () => {
 });
 
 // Spec 045 — upload progress UI
-test("UploadProgress is a client component using tus-js-client", () => {
+test("UploadProgress is a client component over the shared resumable uploader", () => {
+  // INVERTED in part. It is still a client component and the transfer is still
+  // resumable tus -- that part of spec 045 was never in question, and on a
+  // Ladakh link it is the whole point: a dropped connection mid-upload
+  // continues rather than restarting a 300 MB transfer.
+  //
+  // What changed is that this component no longer owns the wiring. It and
+  // MobileUploadRunner each carried their own copy, with separate chunk sizes
+  // that were both wrong -- 5 MB, which is neither the tus default nor a value
+  // Supabase's resumable endpoint accepts. `chunkSize:` is therefore no longer
+  // written here at all; it arrives from the server with the reservation.
   const src = read("apps/web/src/components/video/UploadProgress.tsx");
   assert.match(src, /^"use client";/);
-  assert.match(src, /tus-js-client/);
-  assert.match(src, /chunkSize:/);
+  assert.match(
+    src,
+    /import\s*\{\s*startResumableUpload,\s*type UploadHandle\s*\}\s*from\s*"@\/lib\/video\/tus-upload"/,
+    "UploadProgress must use the one shared upload implementation",
+  );
+  const shared = read("apps/web/src/lib/video/tus-upload.ts");
+  assert.match(shared, /tus-js-client/, "the transfer must still be resumable tus");
+  assert.match(
+    shared,
+    /findPreviousUploads\(\)[\s\S]{0,160}?resumeFromPreviousUpload\(/,
+    "a dropped upload must resume rather than restart -- the reason tus is used at all",
+  );
 });
 
-// Spec 038 — tusd handler exists
-test("tusd handler exists at /api/uploads/tus", () => {
-  assert.ok(existsSync(resolve(root, "apps/web/src/app/api/uploads/tus/route.ts")));
-  const src = read("apps/web/src/app/api/uploads/tus/route.ts");
-  assert.match(src, /TUSD_INTERNAL_URL/);
+// Spec 038 — the tusd proxy is gone; uploads go browser -> Storage
+test("uploads go direct to Storage, with no tusd proxy in the application", () => {
+  // INVERTED. This required apps/web/src/app/api/uploads/tus/route.ts to exist
+  // and to read TUSD_INTERNAL_URL.
+  //
+  // The route never worked. TUSD_INTERNAL_URL was set in no compose file and no
+  // .env, so every branch of it returned 501; tusd was configured to write to a
+  // bucket `minio-init` never created; Caddy's route did not match the tus
+  // create request; and there were no post-finish hooks, so no rows were
+  // written and `source='direct'` submissions were unreachable. This test
+  // passed for the entire life of a feature that had never once moved a byte --
+  // which is what asserting the presence of configuration, rather than the
+  // behaviour it configures, buys you.
+  //
+  // The replacement uploads straight from the browser to Supabase Storage and
+  // brackets the transfer with two server round-trips, so the assertions below
+  // are about the bracket rather than about a hostname.
+  assert.ok(
+    !existsSync(resolve(root, "apps/web/src/app/api/uploads")),
+    "no /api/uploads route may exist -- the bytes do not pass through this application",
+  );
+  const shared = read("apps/web/src/lib/video/tus-upload.ts");
+  assert.match(
+    shared,
+    /endpoint:\s*`\$\{supabaseUrl\}\/storage\/v1\/upload\/resumable`/,
+    "the upload endpoint must be Storage's own resumable endpoint",
+  );
+  // The object key is server-issued and prefixed with the uploader's uuid, and
+  // Storage's RLS refuses a key under anyone else's prefix -- which is what
+  // makes a direct browser upload safe without a proxy in front of it.
+  assert.match(
+    shared,
+    /objectName:\s*opts\.objectKey/,
+    "the object key must come from the server-issued reservation, not from the browser",
+  );
+  const actions = read("apps/web/src/app/(authenticated)/uploads/actions.ts");
+  assert.match(actions, /export async function beginUploadAction/, "reservation half of the bracket");
+  assert.match(actions, /export async function completeUploadAction/, "verification half of the bracket");
+  assert.match(
+    actions,
+    /enqueueTranscode/,
+    "the transcode must be queued from the VERIFIED completion, not from the client's claim",
+  );
 });
 
-// Spec 039 — BullMQ worker entry
-test("worker entry exists with transcode queue", () => {
+// Spec 039 — worker entry
+test("worker entry consumes the transcode queue from Postgres", () => {
+  // INVERTED. This required `from "bullmq"`, a `new Worker<...>(` construction,
+  // a re-exported `transcodeQueue`, and a queues.ts to hold it.
+  //
+  // All four described a Redis deployment that no longer exists. Redis was one
+  // of eight services on a single EC2 box in Leh carrying under 100 jobs a day,
+  // and its client was configured with `maxRetriesPerRequest: null`, no
+  // `commandTimeout` and the offline queue enabled -- so when Redis was down,
+  // commands did not reject, they queued indefinitely, and the endpoints that
+  // depended on them hung instead of failing. The queue is a table now, claimed
+  // with `SELECT ... FOR UPDATE SKIP LOCKED`.
+  //
+  // The behaviour this test exists to protect is unchanged and still pinned
+  // below: there is a worker entry point, it consumes transcode work, and it is
+  // separate from the producer.
   const src = read("apps/worker/src/index.ts");
-  assert.match(src, /from "bullmq"/);
-  assert.match(src, /new Worker</);
-  // transcodeQueue moved to queues.ts (split from index.ts so the web app can
-  // import producers without dragging the Worker bootstrap). index.ts now
-  // re-exports it via `export { transcodeQueue, ... }`.
-  assert.match(src, /export\s*\{[^}]*\btranscodeQueue\b/);
-  const queues = read("apps/worker/src/queues.ts");
-  assert.match(queues, /export\s+const\s+transcodeQueue/);
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.ok(!/from\s*["']bullmq["']/.test(code), "the worker must not import bullmq");
+  assert.ok(!/new\s+Worker\s*[<(]/.test(code), "no BullMQ Worker may be constructed");
+  assert.ok(
+    !existsSync(resolve(root, "apps/worker/src/queues.ts")),
+    "apps/worker/src/queues.ts must not exist -- producers go through @gml/db/queue",
+  );
+
+  // The consumer: claim work, run the transcode handler, release the job.
+  assert.match(
+    src,
+    /import\s*\{[\s\S]*?\bclaim\b[\s\S]*?\}\s*from\s*["']@gml\/db\/queue["']/,
+    "worker must claim jobs via @gml/db/queue",
+  );
+  assert.match(
+    src,
+    /case\s+["']transcode["']\s*:[\s\S]{0,200}?transcode480p\(/,
+    "the transcode job name must still dispatch to transcode480p",
+  );
+  // The lease is what replaced BullMQ's stalled-job detection, and it is not
+  // optional: without it a hard-killed worker leaves a job 'running' forever
+  // and the video never transcodes, while a naive timeout instead of a
+  // heartbeat would reap a legitimate 40-minute ffmpeg run mid-flight.
+  assert.match(
+    src,
+    /setInterval\([\s\S]{0,120}?heartbeat\(db,\s*job\.id/,
+    "a claimed job must have its lease heartbeated for as long as it runs",
+  );
+  assert.match(
+    src,
+    /reapExpiredLeases\(db\)/,
+    "the worker must requeue jobs whose lease lapsed, or a SIGKILL strands them as 'running'",
+  );
 });
 
 // Spec 040 — ffmpeg 480p transcode

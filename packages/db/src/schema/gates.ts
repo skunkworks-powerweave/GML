@@ -50,6 +50,9 @@ export const sectionGateGrants = pgTable(
       sql`${t.expiresAt} <= ${t.grantedAt} + interval '8 hours'`,
     ),
     index("section_gate_grants_user_slug_idx").on(t.userId, t.gateSlug, t.expiresAt),
+    // The composite above leads with user_id, so rotation's delete-by-slug --
+    // the operation that actually revokes a section -- could not use it.
+    index("section_gate_grants_slug_idx").on(t.gateSlug),
   ],
 );
 

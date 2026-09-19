@@ -1,5 +1,5 @@
 // Sub-system health pings used by /api/health.
-// Dynamic imports so this module doesn't crash if @gml/db / ioredis / etc. aren't
+// Dynamic imports so this module doesn't crash if @gml/db / the queue client / etc. aren't
 // installed yet (specs 004+ land them).
 
 export type PingResult = {
@@ -43,34 +43,42 @@ export async function pingDb(): Promise<PingResult> {
   }
 }
 
-export async function pingRedis(): Promise<PingResult> {
-  // Spec 170 — Workflow Run 16 post-audit hardening. /api/health now
-  // shares the same ioredis client as the rate limiter (and any other
-  // direct-redis call site) via `getRedis()` from ./redis. Previously
-  // this function built its own one-shot client per probe, which
-  // (a) opened a second TCP connection on every health check and
-  // (b) had its own subtly-different defaults (connectTimeout: 2000,
-  // maxRetriesPerRequest: 1) divergent from the rate limiter. The
-  // singleton consolidates the connection surface.
-  const url = process.env.REDIS_URL;
-  if (!url) return { ok: false, detail: "REDIS_URL not set" };
-  try {
-    const { pingRedis: ping } = await import("./redis");
-    const r = await ping();
-    return r.ok ? { ok: true } : { ok: false, detail: r.error };
-  } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
-  }
-}
+// pingRedis and pingMinio are GONE, along with the services they probed.
+//
+// Redis was replaced by a Postgres-backed queue and rate limiter, so the
+// database probe below now covers both. MinIO was replaced by Supabase
+// Storage.
+//
+// Leaving either behind would have been actively harmful: `ok` in the health
+// route is an AND over every probe, so a probe for a service that no longer
+// exists reports false forever, /api/health returns 503 permanently, and that
+// takes the Docker HEALTHCHECK and the deploy script's readiness wait with it.
 
-export async function pingMinio(): Promise<PingResult> {
-  const endpoint = process.env.MINIO_ENDPOINT;
-  if (!endpoint) return { ok: false, detail: "MINIO_ENDPOINT not set" };
+/**
+ * Can Storage be reached, and is the bucket configuration present?
+ *
+ * Deliberately a cheap metadata call rather than an object read: the probe runs
+ * every 30 seconds from the container healthcheck, and it is answering "is the
+ * dependency reachable", not "is every object intact".
+ */
+export async function pingStorage(): Promise<PingResult> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SECRET_KEY;
+  if (!url || !key) return { ok: false, detail: "Supabase env not set" };
   try {
-    const res = await fetch(`${endpoint}/minio/health/live`, {
-      signal: AbortSignal.timeout(2000),
+    const res = await fetch(`${url}/storage/v1/bucket`, {
+      headers: { apikey: key, authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(3000),
     });
-    return { ok: res.ok, detail: res.ok ? undefined : `status ${res.status}` };
+    if (!res.ok) return { ok: false, detail: `status ${res.status}` };
+    const buckets = (await res.json()) as { name: string }[];
+    const names = new Set(buckets.map((b) => b.name));
+    const missing = ["videos-original", "videos-hls", "posters", "pdfs"].filter(
+      (b) => !names.has(b),
+    );
+    return missing.length === 0
+      ? { ok: true }
+      : { ok: false, detail: `missing buckets: ${missing.join(", ")}` };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

@@ -6,21 +6,21 @@
 //   2. Meta calls this webhook with the message metadata.
 //   3. We verify the signature, fetch the media via Graph API, store it to
 //      MinIO, create video_submissions row with source='whatsapp', then
-//      enqueue a BullMQ transcode_jobs row (spec 039 + 040).
+//      enqueue a the job queue transcode_jobs row (spec 039 + 040).
 //   4. Once transcoded, the row moves to status='ready' and the teacher's
 //      cycle/teach-back drill-in shows the playable HLS link.
 //
 // Meta deletes media 30 days after delivery, so we fetch immediately and
 // retain our copy.
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@gml/db";
-import { files, videoSubmissions, observationCycles, mentorMeetings } from "@gml/db/schema";
-import { eq, isNotNull } from "drizzle-orm";
+import { files, videoSubmissions, observationCycles, mentorMeetings, users } from "@gml/db/schema";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { storage, BUCKETS } from "@/lib/video/storage";
 import { recordAudit } from "@/lib/audit";
-import { transcodeQueue } from "@gml/worker/queues";
+import { enqueueTranscode } from "@/lib/queue";
 
 // Caption-format UUID validator. TB-<uuid> and MM-<uuid> branches require a
 // canonical lowercase-or-uppercase 8-4-4-4-12 hex group; anything else falls
@@ -55,16 +55,43 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad_json" }, { status: 400 });
   }
 
-  // Meta sends a batch of "entry" → "changes" → "value" → "messages".
+  // Meta sends a batch of "entry" -> "changes" -> "value" -> "messages".
+  //
+  // The ingest runs in `after()`, so this handler returns 200 immediately and
+  // the media fetch happens once the response is on the wire. Meta times a
+  // webhook out at roughly 20 seconds and RETRIES on timeout; fetching a video
+  // from the Graph API and uploading it to Storage inside the request meant a
+  // slow link produced duplicate deliveries of work that was already in flight.
+  //
+  // Duplicates are still possible -- Meta can retry for reasons of its own --
+  // and remain harmless: ingestVideoMessage pre-checks whatsappMessageId and
+  // the insert carries onConflictDoNothing against the partial unique index,
+  // so the second delivery is audited as a replay and does nothing.
+  const pending: Array<() => Promise<void>> = [];
   for (const entry of body.entry ?? []) {
     for (const change of entry.changes ?? []) {
-      const messages = change.value?.messages ?? [];
-      for (const msg of messages) {
+      for (const msg of change.value?.messages ?? []) {
         if (msg.type !== "video") continue;
-        await ingestVideoMessage(msg, change.value?.metadata?.display_phone_number);
+        const phone = change.value?.metadata?.display_phone_number;
+        pending.push(() => ingestVideoMessage(msg, phone));
       }
     }
   }
+
+  if (pending.length > 0) {
+    after(async () => {
+      for (const run of pending) {
+        try {
+          await run();
+        } catch (err) {
+          // after() work has no response to fail; log loudly so an operator can
+          // find it, and let the remaining messages in the batch proceed.
+          console.error("[whatsapp] ingest failed after response", err);
+        }
+      }
+    });
+  }
+
   return NextResponse.json({ ok: true });
 }
 
@@ -236,6 +263,18 @@ async function ingestVideoMessage(
   // only one wins at the DB layer. onConflictDoNothing leaves the index as
   // the sole arbiter; the loser path returns no rows and we audit it as a
   // replay too. Downstream transcode enqueue only fires when sub is defined.
+  // ATTRIBUTION. `submitted_by_user_id` had no writer anywhere in the codebase,
+  // so every dashboard count and the "my uploads" badge that join through it
+  // were permanently zero for the PRIMARY ingest path -- and lib/authz.ts's
+  // "you uploaded it" branch could never match for a WhatsApp video.
+  //
+  // WhatsApp gives us the sender's phone number and nothing else, so this is a
+  // best-effort match against users.phone. An unmatched sender leaves the
+  // column null, exactly as before -- the submission is still ingested, because
+  // refusing video from a teacher whose phone number has a different format on
+  // file would lose programme evidence to a data-entry mismatch.
+  const submittedByUserId = await resolveSenderUserId(msg.from);
+
   const inserted = await db
     .insert(videoSubmissions)
     .values({
@@ -246,6 +285,7 @@ async function ingestVideoMessage(
       contextId,
       captionRaw: caption,
       whatsappMessageId: msg.id,
+      submittedByUserId,
     })
     .onConflictDoNothing({
       target: videoSubmissions.whatsappMessageId,
@@ -266,15 +306,17 @@ async function ingestVideoMessage(
     return;
   }
 
-  // 6. Enqueue the BullMQ transcode job. The worker (apps/worker) picks it
-  //    up, runs ffmpeg → HLS 480p, uploads segments to MinIO, then flips
-  //    video_submissions.status to 'ready'.
-  await transcodeQueue.add("transcode", {
+  // 6. Enqueue the transcode. The worker claims it from the jobs table, runs
+  //    ffmpeg -> HLS 480p, uploads to Storage, then flips the submission to
+  //    'ready'.
+  //
+  //    Deduped on the submission id: Meta re-delivers a webhook it believes
+  //    timed out, and this handler is deliberately not fast.
+  await enqueueTranscode({
     videoSubmissionId: sub.id,
     fileId: fileRow.id,
     bucket: BUCKETS.videosOriginal,
     objectKey,
-    source: "whatsapp",
   });
   void recordAudit({
     action: "transcode.enqueued",
@@ -313,14 +355,83 @@ async function fetchMediaUrl(mediaId: string): Promise<string | null> {
   }
 }
 
+/**
+ * WhatsApp Cloud API caps video at 16 MB, so this is buffered rather than
+ * streamed. The cap below is generous headroom over that, and it is enforced
+ * rather than assumed: this function fetches a URL supplied by an upstream
+ * service into memory, and "the platform promises it is small" is not a memory
+ * bound. A response that declares or delivers more is refused.
+ */
+const MAX_WHATSAPP_MEDIA_BYTES = 64 * 1024 * 1024;
+
 async function downloadMediaBytes(url: string): Promise<Uint8Array | null> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   if (!token) return null;
   try {
     const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
     if (!r.ok) return null;
+
+    const declared = Number(r.headers.get("content-length") ?? "0");
+    if (declared > MAX_WHATSAPP_MEDIA_BYTES) {
+      console.error(`[whatsapp] media declares ${declared} bytes, over the cap — refusing`);
+      return null;
+    }
+
     const buf = await r.arrayBuffer();
+    if (buf.byteLength > MAX_WHATSAPP_MEDIA_BYTES) {
+      console.error(`[whatsapp] media delivered ${buf.byteLength} bytes, over the cap — discarding`);
+      return null;
+    }
     return new Uint8Array(buf);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify Meta's HMAC over the RAW body.
+ *
+ * FAILS CLOSED when WHATSAPP_APP_SECRET is unset. It used to return `true` with
+ * a console.warn, which meant that on any deployment where the variable was
+ * missing -- and it was absent from .env.example entirely, so that was every
+ * deployment -- ANY anonymous caller who could reach this URL could inject
+ * video_submissions rows, attach them to a real observation cycle by caption,
+ * and have the worker fetch arbitrary URLs.
+ *
+ * This is the PRIMARY ingest path for the product and it is internet-facing by
+ * necessity. "Accept everything when unconfigured" is not a dev convenience
+ * here; it is the default configuration.
+ */
+/**
+ * Map a WhatsApp sender to an LMS user by phone number.
+ *
+ * Matching is on the last 10 digits. Meta delivers E.164 without a leading "+"
+ * (e.g. 919419123456) while numbers on file are entered by administrators in
+ * whatever shape the teacher gave them -- "+91 94191 23456", "094191 23456",
+ * "9419123456". Comparing the full string would match almost nothing; the last
+ * 10 digits are the subscriber number for every Indian mobile.
+ *
+ * Returns null when there is no match OR when there is more than one: an
+ * ambiguous match must not attribute a classroom recording to the wrong
+ * teacher, and null is the honest answer.
+ */
+async function resolveSenderUserId(from: string): Promise<string | null> {
+  const digits = (from ?? "").replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  const tail = digits.slice(-10);
+  try {
+    const rows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(users.active, true),
+          isNull(users.deletedAt),
+          sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') LIKE ${"%" + tail}`,
+        ),
+      )
+      .limit(2);
+    return rows.length === 1 ? rows[0]!.id : null;
   } catch {
     return null;
   }
@@ -329,9 +440,11 @@ async function downloadMediaBytes(url: string): Promise<Uint8Array | null> {
 function verifySignature(raw: string, signatureHeader: string): boolean {
   const secret = process.env.WHATSAPP_APP_SECRET;
   if (!secret) {
-    // Dev mode: accept everything if no secret configured (logged via audit).
-    console.warn("[whatsapp] WHATSAPP_APP_SECRET unset — accepting webhook without signature check");
-    return true;
+    console.error(
+      "[whatsapp] WHATSAPP_APP_SECRET is not set — REFUSING the webhook. " +
+        "Set it to the app secret from Meta's dashboard; ingest is disabled until you do.",
+    );
+    return false;
   }
   const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
   if (signatureHeader.length !== expected.length) return false;

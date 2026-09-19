@@ -10,12 +10,12 @@
 //                       persistence column yet; see research.md).
 //   - "Complete"      → completePairingAction (super_admin + programme_admin).
 
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
 import { eq, desc } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentorPairings, mentors, teachers, mentorMeetings, feedbackResponses } from "@gml/db/schema";
+import { mentors, teachers, mentorMeetings, feedbackResponses } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";

@@ -1,15 +1,36 @@
 "use client";
 
-// Spec 045 — direct browser upload progress tray. Used by /uploads (teacher's
-// "My Uploads" page) and the admin sidebar's video ingestion widget.
+// Direct browser upload tray. Used by /uploads, /videos and the observation
+// cycle page.
 //
-// Wires to /api/uploads/tus (tusd handler, spec 038). For the WhatsApp PRIMARY
-// path teachers don't see this — they upload from their phone's WhatsApp.
+// The bytes go STRAIGHT TO SUPABASE STORAGE over TUS; this application never
+// sees them. What it does see is two short round-trips that bracket the
+// transfer: `beginUploadAction` reserves the rows and issues an object key
+// prefixed with the uploader's uuid, and `completeUploadAction` verifies the
+// object actually landed at the reserved size before anything is queued.
+//
+// WHAT THIS REPLACED. The previous version posted to /api/uploads/tus, a proxy
+// to a tusd sidecar. It uploaded nothing, ever: TUSD_INTERNAL_URL was set
+// nowhere so every branch returned 501; tusd was pointed at a bucket that was
+// never created; Caddy's route did not match the tus create request; and there
+// were no post-finish hooks, so no rows were written and `source='direct'`
+// submissions were unreachable. Its onSuccess handler read
+// `upload.url?.split("/").pop() ?? "pending"` -- the tus upload id, or the
+// literal string "pending" -- and passed that to onComplete as if it were a
+// video_submissions id.
 
 import { useRef, useState } from "react";
+import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
+import { startResumableUpload, type UploadHandle } from "@/lib/video/tus-upload";
 
 type UploadProgressProps = {
-  contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly" | "classroom_session" | "generic";
+  contextType:
+    | "observation_cycle"
+    | "teach_back"
+    | "mentor_meeting"
+    | "mentee_quarterly"
+    | "classroom_session"
+    | "generic";
   contextId?: string;
   onComplete?: (videoSubmissionId: string) => void;
 };
@@ -21,12 +42,8 @@ type UploadState = {
   bytesTotal: number;
   status: "uploading" | "transcoding" | "ready" | "failed";
   videoSubmissionId?: string;
-  // Spec 156 (Run 14 audit-closure MEDIUM): when tus-js-client fails to
-  // load (rare, but possible if the bundle is corrupted or the user is on
-  // an offline-cached page), surface an explicit message that points the
-  // user at the WhatsApp PRIMARY path. Pre-fix the upload was just marked
-  // failed with no reason, and the user had no idea what to try next.
   errorMessage?: string;
+  handle?: UploadHandle;
 };
 
 export function UploadProgress({ contextType, contextId, onComplete }: UploadProgressProps) {
@@ -37,64 +54,66 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
     inputRef.current?.click();
   }
 
+  function updateUpload(id: string, patch: Partial<UploadState>) {
+    setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+  }
+
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    // crypto.randomUUID() rather than Date.now(): two files chosen in the same
-    // millisecond previously collided on this key, and it keeps an impure clock
-    // read out of the component body.
+
+    // crypto.randomUUID() rather than a clock read: two files chosen in the
+    // same millisecond previously collided on this key.
     const id = `${crypto.randomUUID()}-${file.name}`;
     setUploads((prev) => [
       { id, filename: file.name, bytes: 0, bytesTotal: file.size, status: "uploading" },
       ...prev,
     ]);
 
-    // Use tus-js-client (lazy-imported) for resumable upload
-    // Falls back to a single PUT if tus not available
-    try {
-      const tus = await import("tus-js-client").catch(() => null);
-      if (tus) {
-        const upload = new tus.Upload(file, {
-          endpoint: "/api/uploads/tus",
-          chunkSize: 5 * 1024 * 1024, // 5 MB chunks
-          metadata: {
-            filename: file.name,
-            filetype: file.type || "video/mp4",
-            context_type: contextType,
-            context_id: contextId ?? "",
-          },
-          onError: () => updateUpload(id, { status: "failed" }),
-          onProgress: (bytesUploaded, bytesTotal) => updateUpload(id, { bytes: bytesUploaded, bytesTotal }),
-          onSuccess: async () => {
-            updateUpload(id, { bytes: file.size, bytesTotal: file.size, status: "transcoding" });
-            // Server creates video_submissions row on tusd post-finish hook.
-            // For now, simulate id wiring; spec 038 wires the real handler.
-            const subId = (upload as { url?: string }).url?.split("/").pop() ?? "pending";
-            updateUpload(id, { videoSubmissionId: subId });
-            onComplete?.(subId);
-          },
-        });
-        upload.start();
-      } else {
-        // Fallback path — tus-js-client failed to import. Spec 156: surface
-        // an explicit, actionable message instead of a silent failed row.
-        updateUpload(id, {
-          status: "failed",
-          errorMessage: "Upload library unavailable. Please try the WhatsApp PRIMARY path instead.",
-        });
-      }
-    } catch {
-      updateUpload(id, {
-        status: "failed",
-        errorMessage: "Upload library unavailable. Please try the WhatsApp PRIMARY path instead.",
-      });
+    // 1. Reserve. The server checks that this user may attach a video to this
+    //    context BEFORE anything is written -- contextId comes from the
+    //    browser, and without that check a teacher could attach their upload
+    //    into another teacher's observation cycle, which is a write into
+    //    someone else's evidence rather than a read of it.
+    const reservation = await beginUploadAction({
+      filename: file.name,
+      sizeBytes: file.size,
+      contentType: file.type || "video/mp4",
+      contextType,
+      contextId: contextId ?? null,
+    });
+    if (!reservation.ok) {
+      updateUpload(id, { status: "failed", errorMessage: reservation.error });
+      return;
     }
 
-    e.target.value = "";
-  }
+    updateUpload(id, { videoSubmissionId: reservation.submissionId });
 
-  function updateUpload(id: string, patch: Partial<UploadState>) {
-    setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
+    // 2. Transfer, browser -> Storage.
+    const handle = await startResumableUpload({
+      file,
+      bucket: reservation.bucket,
+      objectKey: reservation.objectKey,
+      chunkBytes: reservation.chunkBytes,
+      onProgress: (bytes, bytesTotal) => updateUpload(id, { bytes, bytesTotal }),
+      onError: (message) => updateUpload(id, { status: "failed", errorMessage: message }),
+      onSuccess: () => {
+        updateUpload(id, { bytes: file.size, bytesTotal: file.size, status: "transcoding" });
+        // 3. Tell the server. It verifies the object against the reserved size
+        //    before queueing -- a client claiming completion having uploaded
+        //    nothing would otherwise put an empty object into the pipeline,
+        //    where it fails in the worker and looks like a transcoding problem.
+        void completeUploadAction(reservation.submissionId).then((res) => {
+          if (!res.ok) {
+            updateUpload(id, { status: "failed", errorMessage: res.error });
+            return;
+          }
+          onComplete?.(reservation.submissionId);
+        });
+      },
+    });
+    if (handle) updateUpload(id, { handle });
   }
 
   return (

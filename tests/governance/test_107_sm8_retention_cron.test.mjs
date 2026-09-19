@@ -1,3 +1,34 @@
+// Governance test for spec 107 — SM-8 notification retention sweep.
+//
+// PARTIALLY INVERTED. The SM-8 contract itself is untouched: notifications
+// older than 90 days are still deleted, still by deleteOldNotifications(),
+// still guarded so an import cannot auto-run the CLI. The five assertions that
+// changed pinned BullMQ's *scheduler*, and BullMQ is gone.
+//
+// WHY THE SCHEDULER WENT WITH IT. The registration read
+// `repeat: { cron: "0 3 * * *" }`. BullMQ 5 renamed that option to `pattern`,
+// so `cron` was a TYPE ERROR -- one that survived in shipped code because this
+// package runs under tsx, which strips types without checking them, while a
+// back-compat shim quietly aliased the old name at runtime. The bug was
+// invisible from both directions: the typechecker never saw the file, and the
+// behaviour never broke. That is the specific hazard a plain `setInterval` in
+// ordinary, typechecked code does not have.
+//
+// The replacement is: an hourly tick calls scheduleDailyWork(), which ENQUEUES
+// a `deleteOldNotifications` job with `dedupeKey: "retention:<YYYY-MM-DD>"`.
+// The partial unique index over live jobs absorbs the other twenty-three ticks,
+// so the sweep runs once per calendar day no matter how many worker replicas
+// are running or how often one restarts -- which is what `jobId:
+// "retention:nightly"` was reaching for and could only achieve on a single
+// Redis instance.
+//
+// NOTE FOR REVIEWERS: the wall-clock time moved. The old schedule fired at
+// 03:00 server-local; the new one fires whenever the first hourly tick after
+// the UTC date rollover lands, i.e. within the hour after 00:00 UTC. That is a
+// real change in behaviour, not merely in transport, and the assertions below
+// pin the dedupe-by-date property rather than a time, because a time is no
+// longer what the implementation guarantees.
+
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
@@ -6,6 +37,11 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
+const exists = (p) => existsSync(resolve(root, p));
+
+/** Comments stripped, so prose explaining a removal cannot fail an absence check. */
+const code = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
 const WORKER_PATH = "apps/worker/src/index.ts";
 const WORKER_QUEUES_PATH = "apps/worker/src/queues.ts";
@@ -22,50 +58,124 @@ test("spec 107: all five spec-kit files present", () => {
   }
 });
 
-test("spec 107: a Queue named 'retention' is constructed in the worker package", () => {
-  // Producer queue construction moved to queues.ts (split from index.ts) so the
-  // web app can import producers without dragging in the Worker bootstrap.
-  const src = read(WORKER_QUEUES_PATH);
-  assert.match(
-    src,
-    /new\s+Queue\s*(?:<[^>]*>)?\s*\(\s*["']retention["']/,
-    "apps/worker/src/queues.ts must construct new Queue('retention', ...)",
+test("spec 107: the BullMQ producer module is gone", () => {
+  // INVERTED. This required `new Queue("retention", ...)` in
+  // apps/worker/src/queues.ts. That file existed to let apps/web import a
+  // producer without booting the consumer -- a split that only made sense while
+  // the queue lived in a separate service. The queue is a Postgres table now,
+  // so the producer is `enqueue()` in @gml/db and the file has no remaining
+  // reason to exist.
+  assert.ok(
+    !exists(WORKER_QUEUES_PATH),
+    `${WORKER_QUEUES_PATH} must not exist -- producers go through @gml/db/queue`,
+  );
+  const src = code(read(WORKER_PATH));
+  assert.ok(
+    !/new\s+Queue\s*[<(]/.test(src),
+    "no BullMQ Queue may be constructed in the worker",
   );
 });
 
-test("spec 107: worker defines a Worker for the 'retention' queue", () => {
-  const src = read(WORKER_PATH);
+test("spec 107: the worker claims retention work from Postgres, not from a BullMQ Worker", () => {
+  // INVERTED. This required `new Worker("retention", ...)`. There is one
+  // consumer loop now and it dispatches on the job's `name` column, so a
+  // second queue would buy a second poller and nothing else.
+  const src = code(read(WORKER_PATH));
+  assert.ok(
+    !/new\s+Worker\s*[<(]/.test(src),
+    "no BullMQ Worker may be constructed -- the consumer is claim() over the jobs table",
+  );
+  assert.ok(
+    !/from\s*["']bullmq["']/.test(src),
+    "the worker must not import bullmq",
+  );
   assert.match(
-    src,
-    /new\s+Worker\s*(?:<[^>]*>)?\s*\(\s*["']retention["']/,
-    "apps/worker/src/index.ts must construct new Worker('retention', ...)",
+    read(WORKER_PATH),
+    /import\s*\{[\s\S]*?\bclaim\b[\s\S]*?\}\s*from\s*["']@gml\/db\/queue["']/,
+    "worker must import claim() from @gml/db/queue -- the SKIP LOCKED claim is the queue",
+  );
+  assert.match(
+    read(WORKER_PATH),
+    /case\s+["']deleteOldNotifications["']\s*:/,
+    "the consumer's dispatch switch must still have a deleteOldNotifications arm, " +
+      "or SM-8's sweep is enqueued and never run",
   );
 });
 
-test("spec 107: worker schedules the retention job with cron '0 3 * * *'", () => {
-  const src = read(WORKER_PATH);
+test("spec 107: no cron expression survives anywhere in the worker", () => {
+  // INVERTED. This required the literal cron string '0 3 * * *' inside
+  // `repeat: { cron }`. BullMQ 5 renamed that key to `pattern`, so the option
+  // as written was a type error that tsx never typechecked and a runtime shim
+  // silently accepted. Pinning the ABSENCE of the whole vocabulary is the point:
+  // a reintroduced `repeat:`/`cron:` here would be un-typechecked configuration
+  // again, in a file whose scheduling is otherwise plain code.
+  const src = code(read(WORKER_PATH));
+  assert.ok(
+    !/\brepeat\s*:/.test(src),
+    "no `repeat:` option -- scheduling is a setInterval in typechecked code",
+  );
+  assert.ok(
+    !/\bcron\s*:/.test(src) && !/["'][\d*/,\-\s]+\*\s+\*\s+\*["']/.test(src),
+    "no cron expression may reappear in the worker",
+  );
   assert.match(
-    src,
-    /cron\s*:\s*["']0\s+3\s+\*\s+\*\s+\*["']/,
-    "apps/worker/src/index.ts must reference cron '0 3 * * *'",
+    read(WORKER_PATH),
+    /setInterval\(\s*\(\)\s*=>\s*void\s+scheduleDailyWork\(\)/,
+    "the daily sweep must be driven by an ordinary interval calling scheduleDailyWork()",
   );
 });
 
-test("spec 107: worker uses fixed jobId 'retention:nightly' for the repeat schedule", () => {
+test("spec 107: the once-per-day guarantee is a dedupe key on the calendar date", () => {
+  // INVERTED. This required `jobId: "retention:nightly"`, BullMQ's way of
+  // making a repeatable job idempotent. A FIXED id is the wrong shape here: it
+  // is unique forever, so the second day's sweep collides with the first day's
+  // completed job. The date-scoped key plus the partial unique index over LIVE
+  // jobs only gives the property that was actually wanted -- at most one sweep
+  // pending per calendar day, and tomorrow's is not blocked by today's.
   const src = read(WORKER_PATH);
+  assert.ok(
+    !/jobId\s*:/.test(code(src)),
+    "no BullMQ jobId -- identity is the dedupe_key column",
+  );
   assert.match(
     src,
-    /jobId\s*:\s*["']retention:nightly["']/,
-    "apps/worker/src/index.ts must pin the repeat schedule under jobId 'retention:nightly'",
+    /\.toISOString\(\)\.slice\(\s*0\s*,\s*10\s*\)/,
+    "the dedupe key must be derived from the calendar date (YYYY-MM-DD)",
+  );
+
+  // The HOUR is checked too, and that is not cosmetic. Enqueuing on the first
+  // tick after date rollover would silently move the sweep from the 03:00 UTC
+  // this spec committed to, to roughly midnight UTC -- 05:30 IST, inside the
+  // morning window when Ladakh mentors are actually on their devices. Sitting
+  // behind that window was the entire reason for choosing 03:00.
+  assert.match(
+    src,
+    /getUTCHours\(\)\s*<\s*RETENTION_HOUR_UTC/,
+    "the sweep must not fire before its committed hour",
+  );
+  assert.match(
+    src,
+    /dedupeKey\s*:\s*`retention:\$\{[A-Za-z_$][\w$]*\}`/,
+    "the sweep must be enqueued with dedupeKey `retention:<YYYY-MM-DD>` so the " +
+      "other 23 hourly ticks are absorbed by jobs_dedupe_live_uq",
   );
 });
 
 test("spec 107: worker enqueues a 'deleteOldNotifications' job", () => {
   const src = read(WORKER_PATH);
+  // Same guarantee as before, expressed against the new producer: the sweep is
+  // ENQUEUED rather than run inline, so it inherits leases, retry/backoff and
+  // the DLQ view instead of dying silently inside a timer callback.
   assert.match(
     src,
-    /\.add\s*\(\s*["']deleteOldNotifications["']/,
-    "apps/worker/src/index.ts must add a job named 'deleteOldNotifications' to the retention queue",
+    /enqueue\(\s*db\s*,\s*\{[\s\S]{0,300}?name\s*:\s*["']deleteOldNotifications["']/,
+    "apps/worker/src/index.ts must enqueue a job named 'deleteOldNotifications'",
+  );
+  assert.match(
+    src,
+    /maxAttempts\s*:\s*[1-9]/,
+    "the sweep must be enqueued with a retry budget -- a transient DB blip must " +
+      "not cost a day of retention",
   );
 });
 

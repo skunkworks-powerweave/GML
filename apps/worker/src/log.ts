@@ -28,7 +28,7 @@
 // Fields are serialised via JSON.stringify with a try/catch wrapper that
 // falls back to `String(fields)` on circular references so a misbehaving
 // caller can never crash the worker process. This is defensive against
-// the kind of payload that BullMQ jobs occasionally produce (jobs whose
+// the kind of payload that the job queue jobs occasionally produce (jobs whose
 // `data` contains a `Buffer` slice or a Node `Stream` reference).
 //
 // Used by apps/worker/src/index.ts. Not exported from package — keep

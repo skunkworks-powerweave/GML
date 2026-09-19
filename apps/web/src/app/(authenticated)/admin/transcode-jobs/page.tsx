@@ -1,18 +1,18 @@
 // /admin/transcode-jobs — Transcode DLQ admin surface (Workflow Run 15
-// audit-closure MISS: failed transcode jobs land in the BullMQ DLQ with
+// audit-closure MISS: failed transcode jobs land in the dead-letter queue with
 // no operator UI to inspect or retry them).
 //
 // Spec 162 ships the DB-backed inspection view + a pair of operator
-// verbs (Retry, Drop) that map onto the real BullMQ queue and the
+// verbs (Retry, Drop) that map onto the real queue and the
 // transcode_jobs table. The same role gate as /admin/whatsapp-log
 // (programme_admin + super_admin) — the DLQ is a programme-oversight
 // surface, not a teacher-facing tool.
 //
 // Surface shape:
 //
-//   - Top strip: live BullMQ queue depth (waiting / active / failed /
+//   - Top strip: live transcode queue depth (waiting / active / failed /
 //     delayed) pulled via transcodeQueue.getJobCounts. The TS schema
-//     and the BullMQ queue can drift — failed-in-DB and failed-in-Redis
+//     and the job queue can drift — failed-in-ledger and failed-in-queue
 //     are independent — so surfacing both lets the operator see when
 //     the two views are out of sync (a Redis flush left rows in the DB
 //     with no live queue entry, for example).
@@ -33,7 +33,7 @@ import Link from "next/link";
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions } from "@gml/db/schema";
-import { transcodeQueue } from "@gml/worker/queues";
+import { transcodeQueueDepthOrNull } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { retryTranscodeJobAction, dropTranscodeJobAction } from "./actions";
@@ -66,7 +66,7 @@ const STATUS_CHIP: Record<string, string> = {
   dropped: "chip chip-indigo",
 };
 
-// The four "live" BullMQ states we surface at the top. delayed is
+// The four "live" queue states we surface at the top. delayed is
 // included because spec 151 added exponential backoff (5s, 10s, 20s)
 // and a job between attempts shows up as 'delayed' — the operator
 // needs to see that depth too or they'll mistake delayed jobs for
@@ -78,7 +78,7 @@ type QueueDepth = {
   delayed: number;
 };
 
-// Spec 168 — wrap the BullMQ getJobCounts() call in try/catch and surface
+// Spec 168 — wrap the queue-depth call in try/catch and surface
 // a Redis-down banner above the historical table. The existing code already
 // returned null on error; this spec makes the failure visible with an
 // explicit banner ABOVE the depth strip rather than hiding the failure
@@ -87,17 +87,17 @@ type QueueDepth = {
 // depth is stale — the historical DB table below is still accurate.
 async function loadDlqDepth(): Promise<QueueDepth | null> {
   try {
-    const counts = await transcodeQueue.getJobCounts(
-      "waiting",
-      "active",
-      "failed",
-      "delayed",
-    );
+    const counts = await transcodeQueueDepthOrNull();
+    if (!counts) return null;
+    // 'dead' maps to the old 'failed' chip: a job that has exhausted its
+    // attempts and needs a human. There is no 'delayed' state any more --
+    // a retry is simply a queued job with run_at in the future, so it is
+    // counted as waiting, which is what an operator actually wants to see.
     return {
-      waiting: counts.waiting ?? 0,
-      active: counts.active ?? 0,
-      failed: counts.failed ?? 0,
-      delayed: counts.delayed ?? 0,
+      waiting: counts.queued,
+      active: counts.running,
+      failed: counts.dead,
+      delayed: 0,
     };
   } catch (err) {
     // Redis unreachable / queue not initialised — return null so the
@@ -174,7 +174,6 @@ export default async function TranscodeJobsAdminPage({
       status: transcodeJobs.status,
       error: transcodeJobs.error,
       profile: transcodeJobs.profile,
-      bullJobId: transcodeJobs.bullJobId,
       startedAt: transcodeJobs.startedAt,
       endedAt: transcodeJobs.endedAt,
       createdAt: transcodeJobs.createdAt,
@@ -223,7 +222,7 @@ export default async function TranscodeJobsAdminPage({
         <p className="text-sm text-neutral-500">
           Inspect and operate the ffmpeg → HLS 480p pipeline. Failed
           rows are listed first; click Retry to re-enqueue a job onto
-          BullMQ, or Drop to bury it without retry. Every action is
+          the queue, or Drop to bury it without retry. Every action is
           logged to the audit trail.
         </p>
       </header>
@@ -239,13 +238,13 @@ export default async function TranscodeJobsAdminPage({
             color: "var(--ink-2)",
           }}
         >
-          <strong>Live queue depth unavailable (Redis is unreachable).</strong>{" "}
+          <strong>Live queue depth unavailable (the database is unreachable).</strong>{" "}
           The historical job table below is still accurate.
         </div>
       ) : null}
 
       <section
-        aria-label="BullMQ queue depth"
+        aria-label="transcode queue depth"
         className="rounded-lg border border-neutral-200 bg-white p-3 text-sm"
         data-testid="dlq-depth-strip"
       >

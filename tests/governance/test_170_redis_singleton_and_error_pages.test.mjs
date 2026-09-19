@@ -1,7 +1,38 @@
 // Governance test for spec 170 — Redis singleton and error-page variants
 // (Workflow Run 16 post-audit hardening).
 //
-// Pins:
+// THE REDIS HALF OF THIS FILE IS INVERTED. There is no Redis.
+//
+// Spec 170's diagnosis was right: three modules were each constructing their
+// own ioredis client, and one shared singleton is better than three. The
+// prescription was wrong, because it standardised on the wrong options.
+//
+// THE DEFECT THE SINGLETON MADE UNIFORM. `getRedis()` set
+// `maxRetriesPerRequest: null`, supplied no `commandTimeout`, and left
+// ioredis's offline queue at its default of enabled. Those three together mean
+// that when Redis is unreachable a command does not reject -- it is buffered
+// and retried forever. So `rateLimit()` never settled. The fail-closed `catch`
+// that lib/rate-limit.ts documents at length, and that tests below still pin,
+// was UNREACHABLE CODE: nothing ever rejected for it to catch. Every login
+// request hung until the browser gave up. A rate limiter whose failure mode is
+// to hang the endpoint it protects is a denial of service with extra steps, and
+// the careful fail-closed documentation is what kept anyone from looking.
+//
+// Note what spec 170 did to that defect: it took one module's bad options and
+// made them the house style, described in the assertions below as
+// "worker-aligned defaults". Agreement is not correctness.
+//
+// Redis was also, separately, not worth its place -- one of eight services on a
+// single EC2 box in Leh, for a queue carrying under 100 jobs a day. Both the
+// counter and the queue now live in Postgres, on the pool the request already
+// holds: an unreachable database rejects promptly, the catch runs, and if the
+// database really is down the handler had nothing to serve anyway.
+//
+// The tests below therefore pin the ABSENCE of the singleton and of the options
+// that made it dangerous, and the presence of the Postgres replacements. The
+// error-page half of the file is untouched.
+//
+// Originally pinned (1)-(3), now inverted:
 //   1. apps/web/src/lib/redis.ts exists and exports the singleton +
 //      pingRedis. Defaults match the worker's queues.ts shape.
 //   2. apps/web/src/lib/rate-limit.ts no longer constructs its own
@@ -20,12 +51,37 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
+
+/**
+ * Comments stripped, so this file's own documentation of what was removed --
+ * which necessarily names the identifiers and options the absence checks
+ * forbid -- cannot fail the checks that read the source it describes.
+ */
+const code = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+/** Every .ts/.tsx file under apps/web/src. */
+function webSourceFiles() {
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(resolve(root, dir))) {
+      const rel = `${dir}/${entry}`;
+      if (statSync(resolve(root, rel)).isDirectory()) {
+        walk(rel);
+        continue;
+      }
+      if (/\.(ts|tsx)$/.test(entry)) out.push(rel);
+    }
+  };
+  walk("apps/web/src");
+  return out;
+}
 
 const REDIS_PATH = "apps/web/src/lib/redis.ts";
 const RATE_LIMIT_PATH = "apps/web/src/lib/rate-limit.ts";
@@ -69,73 +125,89 @@ test("spec 170 — plan.md follows the CREATED/EDITED/MIGRATED contract and name
   }
 });
 
-// ---------- (1) Redis singleton ----------
+// ---------- (1) The Redis singleton is gone ----------
 
-test("spec 170 — apps/web/src/lib/redis.ts exists and exports getRedis + pingRedis", () => {
-  assert.ok(existsSync(resolve(root, REDIS_PATH)), `${REDIS_PATH} must exist`);
-  const src = read(REDIS_PATH);
-  assert.match(
-    src,
-    /export\s+function\s+getRedis\s*\(\s*\)\s*:\s*IORedis/,
-    "redis.ts must export `function getRedis(): IORedis` so callers have a typed factory",
-  );
-  assert.match(
-    src,
-    /export\s+async\s+function\s+pingRedis\s*\(\s*\)/,
-    "redis.ts must export `async function pingRedis()` for the /api/health surface",
+test("spec 170 — apps/web/src/lib/redis.ts does not exist", () => {
+  // INVERTED. This REQUIRED the file, `export function getRedis(): IORedis` and
+  // `export async function pingRedis()`.
+  //
+  // Nothing in the web app talks to Redis any more: the rate limiter is a
+  // Postgres upsert, the queue is a Postgres table, and the health probe that
+  // pinged Redis was deleted along with the service. A surviving factory would
+  // be a loaded gun -- an exported, typed, apparently-blessed way to reopen a
+  // connection to a dependency the deployment no longer runs.
+  assert.ok(
+    !existsSync(resolve(root, REDIS_PATH)),
+    `${REDIS_PATH} must not exist -- see this file's header for the options that made it dangerous`,
   );
 });
 
-test("spec 170 — redis.ts singleton uses module-scope cache and worker-aligned defaults", () => {
-  const src = read(REDIS_PATH);
-  // Module-scope cache variable - the singleton pattern. We pin the
-  // shape `let _client: IORedis | null = null` so a future contributor
-  // can't accidentally turn this into per-call construction.
-  assert.match(
-    src,
-    /let\s+_client\s*:\s*IORedis\s*\|\s*null\s*=\s*null/,
-    "redis.ts must declare `let _client: IORedis | null = null` at module scope so the singleton pattern is explicit",
-  );
-  // The three defaults that match queues.ts. Each pinned individually
-  // so a partial drift (someone flips lazyConnect to false but leaves
-  // maxRetries) hits a specific test failure.
-  assert.match(
-    src,
-    /maxRetriesPerRequest\s*:\s*null/,
-    "redis.ts singleton must set `maxRetriesPerRequest: null` matching the worker's queues.ts (caller-managed timeouts)",
-  );
-  assert.match(
-    src,
-    /enableReadyCheck\s*:\s*false/,
-    "redis.ts singleton must set `enableReadyCheck: false` matching the worker's queues.ts",
-  );
-  assert.match(
-    src,
-    /lazyConnect\s*:\s*true/,
-    "redis.ts singleton must set `lazyConnect: true` so `next build` doesn't fail when redis isn't running at build time",
-  );
+test("spec 170 — the ioredis options that made failures HANG appear nowhere", () => {
+  // INVERTED, and this is the assertion that matters most in the file.
+  //
+  // The original demanded all three of these, calling them "worker-aligned
+  // defaults" and pinning them individually so that "a partial drift ... hits a
+  // specific test failure". Together they are the bug:
+  //
+  //   maxRetriesPerRequest: null   -- retry a command forever, never give up
+  //   (no commandTimeout)          -- and never time it out either
+  //   (offline queue left enabled) -- and buffer it while disconnected
+  //
+  // The result is that a command issued while Redis is down never rejects. Not
+  // slowly: never. `rateLimit()` never settled, its documented fail-closed
+  // catch never ran, and login requests hung. Pinned as an absence across the
+  // whole of apps/web/src, not just in the deleted file, because the shape is
+  // what gets copied back in -- these exact options appear in every BullMQ
+  // quickstart, where they are correct, because BullMQ manages its own
+  // lifecycle and blocking commands. They were never correct for a
+  // request-path client.
+  const OFFENDERS = [
+    [/maxRetriesPerRequest/, "retries a command forever instead of rejecting"],
+    [/enableOfflineQueue/, "buffers commands while disconnected instead of rejecting"],
+    [/enableReadyCheck/, "belongs to an ioredis client, and there is none"],
+    [/lazyConnect/, "belongs to an ioredis client, and there is none"],
+  ];
+  for (const file of webSourceFiles()) {
+    const src = code(read(file));
+    for (const [pattern, why] of OFFENDERS) {
+      assert.ok(
+        !pattern.test(src),
+        `${file}: \`${String(pattern.source)}\` must not appear -- it ${why}`,
+      );
+    }
+  }
 });
 
-test("spec 170 — redis.ts pingRedis is a safe-never-throws probe", () => {
-  const src = read(REDIS_PATH);
-  // The probe must wrap getRedis().ping() in try/catch so the health
-  // endpoint always gets a JSON shape back, never an unhandled throw.
+test("spec 170 — the rate limiter can actually reach its fail-closed path", () => {
+  // INVERTED. The original pinned a "safe-never-throws" Redis probe:
+  // try/catch around .ping(), a structured { ok: false, error } return, and a
+  // 200-char slice on the message. That shape was right for a HEALTH probe,
+  // whose job is to report rather than to decide.
+  //
+  // It is the wrong shape for a rate limiter, and the two were entangled in the
+  // old design, because both went through a client that could not reject. The
+  // limiter's contract is the opposite of never-throws: it must throw when it
+  // cannot count, so the caller denies the request. What follows pins that the
+  // throw is REACHABLE -- an unreachable one is what spec 170 shipped.
+  const src = read(RATE_LIMIT_PATH);
   assert.match(
     src,
-    /try\s*\{[\s\S]{0,200}\.ping\(\)/,
-    "redis.ts pingRedis must wrap the `.ping()` call in try{} so it never throws into the health endpoint",
+    /import\s*\{\s*db\s*\}\s*from\s*"@gml\/db"/,
+    "rate-limit.ts must count in the same database the request already uses -- an " +
+      "unreachable one rejects promptly, and if it is down the handler had nothing to serve",
+  );
+  // One statement. The Redis version counted inside a MULTI and added outside
+  // it, so it raced anyway; the upsert serialises on the primary key.
+  assert.match(
+    src,
+    /INSERT INTO rate_limits[\s\S]{0,600}?ON CONFLICT \(key\) DO UPDATE/,
+    "the counter must be a single atomic upsert, not a read-modify-write",
   );
   assert.match(
     src,
-    /\{\s*ok\s*:\s*false[\s\S]{0,200}error/,
-    "redis.ts pingRedis must return `{ ok: false, error: ... }` on the catch path so the caller can render a structured failure",
-  );
-  // The 200-char slice — defensive against a verbose ioredis stack
-  // trace blowing up the /api/health response body.
-  assert.match(
-    src,
-    /\.slice\(\s*0\s*,\s*200\s*\)/,
-    "redis.ts pingRedis must `.slice(0, 200)` the error string so a verbose ioredis stack can't blow up the health response body",
+    /if\s*\(!row\)\s*throw new Error\(/,
+    "a RETURNING that yields no row must THROW -- returning ok:true there would be " +
+      "the exact fail-open shape this module exists to prevent",
   );
 });
 
@@ -167,19 +239,41 @@ test("spec 170 — rate-limit.ts no longer constructs its own ioredis client", (
   );
 });
 
-test("spec 170 — rate-limit.ts imports getRedis from ./redis and uses it", () => {
-  const src = read(RATE_LIMIT_PATH);
-  assert.match(
-    src,
-    /import\s*\{\s*getRedis\s*\}\s*from\s*["']\.\/redis["']/,
-    "rate-limit.ts must `import { getRedis } from \"./redis\"` so the singleton is wired",
+test("spec 170 — rate-limit.ts counts in Postgres and nothing imports a Redis client", () => {
+  // INVERTED. This required `import { getRedis } from "./redis"` and a
+  // `const r = getRedis()` call inside rateLimit(). The singleton was the right
+  // instinct applied to a client that should not have existed; the counter is a
+  // row in `rate_limits` now, keyed by bucket plus caller identity.
+  //
+  // The window changed shape with the transport, and the trade is worth
+  // recording: the Redis version kept a sorted set of timestamps (a sliding
+  // window); this keeps a count and a window start (a fixed window). Fixed
+  // windows allow up to 2x the limit across a boundary -- for "5 attempts per
+  // 15 minutes" the worst case is 10 in 15 minutes, which is not the difference
+  // between safe and unsafe. What it buys is one atomic statement with no
+  // read-modify-write race. The Redis version counted inside a MULTI and added
+  // outside it, so its extra precision was notional anyway.
+  assert.ok(
+    !/getRedis/.test(code(read(RATE_LIMIT_PATH))),
+    "rate-limit.ts must not reach for a Redis client",
   );
-  // The function body must call getRedis() — pinning the literal call
-  // so a contributor can't keep the import and never use it.
+  for (const file of webSourceFiles()) {
+    assert.ok(
+      !/from\s*["']\.\.?\/(?:lib\/)?redis["']/.test(code(read(file))),
+      `${file}: nothing may import ./redis -- the module is gone`,
+    );
+    assert.ok(
+      !/from\s*["']ioredis["']/.test(code(read(file))),
+      `${file}: nothing in apps/web may import ioredis`,
+    );
+  }
+  // The key is scoped and length-capped, which the Redis version also did; kept
+  // as an assertion because an unbounded key against a varchar(256) primary key
+  // would turn a long caller identity into a 500 on the login path.
   assert.match(
-    src,
-    /const\s+r\s*=\s*getRedis\(\)/,
-    "rate-limit.ts rateLimit() must call `getRedis()` to obtain the shared client",
+    read(RATE_LIMIT_PATH),
+    /`\$\{bucket\}:\$\{id\}`\.slice\(0,\s*256\)/,
+    "the counter key must stay bucket-scoped and bounded to the column width",
   );
 });
 
@@ -195,25 +289,35 @@ test("spec 170 — rate-limit.ts preserves the FAIL-CLOSED contract from spec 16
   );
 });
 
-// ---------- (3) health.ts pingRedis delegates ----------
+// ---------- (3) health.ts has no Redis probe to delegate ----------
 
-test("spec 170 — health.ts pingRedis delegates to ./redis's pingRedis", () => {
-  const src = read(HEALTH_PATH);
-  // The new shape imports pingRedis from ./redis and calls it; the
-  // per-probe `new Redis(...)` construction is gone. The aliasing form
-  // `{ pingRedis: ping }` (rename to avoid shadow of the outer
-  // `pingRedis` function) is what the implementation actually uses.
-  assert.match(
-    src,
-    /pingRedis(?:\s*:\s*ping|\s+as\s+ping)?\s*\}\s*=\s*await\s+import\(\s*["']\.\/redis["']\s*\)/,
-    "health.ts must dynamically import { pingRedis } (optionally as `ping`) from \"./redis\" — the singleton-aware probe — inside its own pingRedis function",
-  );
-  // The old per-probe construction must be gone — pinning absence so
-  // a future refactor that re-adds a local construction breaks the test.
-  const stripped = stripComments(src);
+test("spec 170 — health.ts probes no service the deployment does not run", () => {
+  // INVERTED. This required health.ts's own pingRedis to delegate to the
+  // singleton's. There is no Redis to probe, so there is no probe.
+  //
+  // Deleting it rather than leaving it returning false is not tidiness. The
+  // health route ANDs every probe into one `ok`, and returns 503 when that is
+  // false. A probe for a service that does not exist is therefore permanently
+  // false, which pins /api/health at 503 forever, which takes the container
+  // HEALTHCHECK and the deploy script's `curl -fsS` readiness wait with it. The
+  // stack would be healthy and unable to say so.
+  const src = code(read(HEALTH_PATH));
+  for (const gone of ["pingRedis", "pingMinio"]) {
+    assert.ok(
+      !new RegExp(`\\b${gone}\\b`).test(src),
+      `health.ts must not declare ${gone} -- a probe for a deleted service pins /api/health at 503`,
+    );
+  }
   assert.ok(
-    !/new\s+Redis\(url,\s*\{\s*connectTimeout/.test(stripped),
-    "health.ts must not construct its own `new Redis(url, { connectTimeout: ... })` instance in executable code — the singleton handles the connection lifecycle",
+    !/new\s+Redis\(/.test(src),
+    "health.ts must not construct a Redis client",
+  );
+  // What remains: the database, which now covers both the queue and the
+  // limiter, and Storage, which covers what MinIO used to.
+  assert.match(
+    read(HEALTH_PATH),
+    /export\s+async\s+function\s+pingStorage\b/,
+    "health.ts must export pingStorage in place of the deleted probes",
   );
 });
 
@@ -358,8 +462,9 @@ test("spec 170 — no new dependencies introduced (ioredis + next-auth are pre-e
 });
 
 test("spec 170 — no TODO / FIXME / placeholder markers leaked into shipped source", () => {
+  // REDIS_PATH dropped from the sweep: the file is gone, and a test that reads
+  // it throws ENOENT rather than reporting anything useful about hygiene.
   for (const path of [
-    REDIS_PATH,
     RATE_LIMIT_PATH,
     HEALTH_PATH,
     FORBIDDEN_PATH,
@@ -372,27 +477,30 @@ test("spec 170 — no TODO / FIXME / placeholder markers leaked into shipped sou
   }
 });
 
-test("spec 170 — no remaining direct `new IORedis` / `new Redis` constructions in web src outside the singleton", () => {
-  // The singleton in redis.ts is the only allowed direct construction
-  // on the web side. rate-limit.ts and health.ts must have been
-  // refactored to use it. Documentary mentions in comments (e.g.
-  // "this module previously constructed `new Redis(url, ...)`") are
-  // permitted, so strip comments before the absence-grep.
-  for (const path of [RATE_LIMIT_PATH, HEALTH_PATH]) {
-    const src = stripComments(read(path));
+test("spec 170 — zero Redis constructions anywhere in web src, singleton included", () => {
+  // INVERTED from "exactly one, in the singleton" to "none, anywhere".
+  //
+  // The original allowed the singleton exactly one construction and forbade the
+  // others, which was the correct rule for a codebase that still needed a
+  // client. The count is zero now, and the sweep widens from two named files to
+  // the whole tree, because the thing being guarded against changed. It is no
+  // longer "a contributor adds a fourth client alongside the singleton" -- it
+  // is "a contributor reintroduces Redis to solve a caching or rate-limiting
+  // problem, reaches for the ioredis snippet everyone has memorised, and
+  // restores the hang described in this file's header along with it".
+  for (const file of webSourceFiles()) {
+    const src = code(read(file));
     assert.ok(
       !/new\s+(?:IO)?Redis\s*\(/.test(src),
-      `${path} must not contain a direct \`new Redis(\` or \`new IORedis(\` construction in executable code — only the singleton at apps/web/src/lib/redis.ts is allowed to construct the client (comments mentioning the old shape are fine)`,
+      `${file} must not construct a Redis client -- the counter and the queue are Postgres tables`,
     );
   }
-  // And the singleton MUST construct exactly one instance. Comments
-  // can mention `new IORedis(...)` for documentation; strip them so
-  // we only count the real construction.
-  const singleton = stripComments(read(REDIS_PATH));
-  const matches = singleton.match(/new\s+IORedis\s*\(/g) ?? [];
-  assert.equal(
-    matches.length,
-    1,
-    `apps/web/src/lib/redis.ts must construct exactly one IORedis instance (the singleton); found ${matches.length}`,
-  );
+  // The environment variable goes too. Left behind it is an invitation: a
+  // configured REDIS_URL reads as a dependency the system supports.
+  for (const file of webSourceFiles()) {
+    assert.ok(
+      !/REDIS_URL/.test(code(read(file))),
+      `${file} must not read REDIS_URL -- there is no Redis to point it at`,
+    );
+  }
 });

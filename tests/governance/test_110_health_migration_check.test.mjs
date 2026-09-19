@@ -104,16 +104,65 @@ test("spec 110: /api/health response body includes a 'migrations' field", () => 
 
 test("spec 110: overall ok flag depends on migrations.ok in the && chain", () => {
   const src = read(HEALTH_ROUTE);
-  // The stub `const ok = true` must be gone, replaced with a conjunction including migrations.ok.
+  // UNCHANGED, and the reason spec 110 existed: the stub `const ok = true`
+  // must stay gone, so an unmigrated stack cannot report itself healthy.
   assert.match(
     src,
     /const\s+ok\s*=\s*[^;]*\bmigrations\.ok\b/,
     "route.ts must derive `ok` from a conjunction that includes migrations.ok (no longer the `const ok = true` stub)",
   );
-  // And all three other sub-systems must be in the same chain.
   assert.match(src, /\bdb\.ok\b/);
-  assert.match(src, /\bredis\.ok\b/);
-  assert.match(src, /\bminio\.ok\b/);
+
+  // INVERTED. This used to require `redis.ok` and `minio.ok` as conjuncts.
+  // Both services are gone -- Redis to a Postgres-backed queue and rate
+  // limiter, MinIO to Supabase Storage -- and they are replaced by a single
+  // `storage.ok`.
+  //
+  // Leaving a stale conjunct behind would be worse than a cosmetic wart. `ok`
+  // is an AND over every probe, and a probe for a service that does not exist
+  // returns false forever: /api/health would sit at 503 permanently, which
+  // takes the container HEALTHCHECK and scripts/deploy.sh's `curl -fsS`
+  // readiness wait down with it. A health check that cannot pass is an outage
+  // the same way a health check that cannot fail is a lie -- and spec 110 was
+  // written to fix the second of those.
+  assert.match(
+    src,
+    /const\s+ok\s*=\s*[^;]*\bstorage\.ok\b/,
+    "route.ts must AND in storage.ok -- the single probe that replaced redis + minio",
+  );
+  const body = read(HEALTH_ROUTE)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.ok(
+    !/\bredis\b/i.test(body),
+    "no redis probe may remain in the health route -- it would pin /api/health at 503",
+  );
+  assert.ok(
+    !/\bminio\b/i.test(body),
+    "no minio probe may remain in the health route -- it would pin /api/health at 503",
+  );
+});
+
+test("spec 110: health.ts ships pingStorage and no probe for a deleted service", () => {
+  // The library side of the same inversion. pingRedis and pingMinio were
+  // exported here and consumed by the route; both are gone. Pinned separately
+  // from the route so that re-adding an unused probe is caught even before
+  // something wires it into the AND.
+  const src = read(HEALTH_LIB);
+  assert.match(
+    src,
+    /export\s+async\s+function\s+pingStorage\b/,
+    "health.ts must export pingStorage",
+  );
+  const body = src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  for (const gone of ["pingRedis", "pingMinio"]) {
+    assert.ok(
+      !new RegExp(`\\b${gone}\\b`).test(body),
+      `health.ts must not declare ${gone} -- the service it probed no longer exists`,
+    );
+  }
 });
 
 test("spec 110: _journal.json fixture is present (test sanity)", () => {

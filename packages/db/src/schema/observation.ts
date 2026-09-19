@@ -33,6 +33,9 @@ export const observationCycles = pgTable(
     index("observation_cycles_teacher_idx").on(t.teacherId, t.kind),
     index("observation_cycles_status_idx").on(t.status, t.scheduledAt),
     index("observation_cycles_subject_idx").on(t.subjectId),
+    // lib/authz.ts checks observer_id on every cycle access, so this column is
+    // on the authorization path for the entire observation module.
+    index("observation_cycles_observer_idx").on(t.observerId),
     check("observation_cycles_video_min_check", sql`${t.videoMin} IS NULL OR ${t.videoMin} >= 0`),
   ],
 );

@@ -10,7 +10,7 @@
 // wired to real backend data:
 //   1. The bell is a Link href="/inbox" with the live unread notifications
 //      count rendered as a chip (`99+` past 99).
-//   2. A new queue indicator chip surfaces the BullMQ transcode queue depth
+//   2. A new queue indicator chip surfaces the the job queue transcode queue depth
 //      ("N processing · K waiting · M failed") and hides when all zero.
 //   3. Counts arrive as props from `(authenticated)/layout.tsx`, which calls
 //      the React.cache'd loaders in `@/lib/chrome-counts`.
@@ -104,7 +104,7 @@ export async function Topbar({
 
       {/* Right cluster */}
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-        {/* Queue indicator — surfaces BullMQ transcode queue depth (spec 128).
+        {/* Queue indicator — surfaces the job queue transcode queue depth (spec 128).
             Hidden when active/waiting/failed are all zero so the chrome stays
             quiet on idle systems. */}
         {queueLabel ? (

@@ -169,6 +169,20 @@
       "when": 1780723000000,
       "tag": "0023_audit_log_no_fk_on_user",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1780726000000,
+      "tag": "0024_jobs_and_rate_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1780727000000,
+      "tag": "0025_drop_bull_job_id",
+      "breakpoints": true
     }
   ]
 }

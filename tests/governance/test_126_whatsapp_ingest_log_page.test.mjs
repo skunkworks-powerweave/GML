@@ -223,20 +223,48 @@ test("spec 126 — actions.ts exports resendTranscodeAction with the correct sha
   );
 });
 
-test("spec 126 — actions.ts re-enqueues via transcodeQueue.add with the webhook payload shape", () => {
+test("spec 126 — actions.ts re-enqueues via enqueueTranscode with the webhook payload shape", () => {
+  // INVERTED on two counts, both consequences of BullMQ being removed.
+  //
+  //   1. The import moved from "@gml/worker/queues" to "@/lib/queue". The
+  //      producer used to live inside the consumer's package, which is why
+  //      apps/web declared `"@gml/worker": "workspace:*"` and shipped BullMQ,
+  //      ioredis and the whole worker tree in its container image. The queue is
+  //      a Postgres table now, so the shared code sits in @gml/db and the web
+  //      app's thin wrapper over it sits in @/lib/queue.
+  //
+  //   2. The payload no longer declares `source: "whatsapp"`. The old
+  //      assertion's own wording -- "so the worker takes the WhatsApp branch"
+  //      -- names the defect: that branch stream-copied with `-c copy`, which
+  //      fails on arbitrary phone-camera output and, when it works, hands a
+  //      multi-megabit rendition to exactly the low-bandwidth users the 480p
+  //      ladder exists for. Every source is re-encoded now, so nothing may
+  //      branch on provenance and the payload must not offer it the chance.
   const src = read(ACTIONS_PATH);
-  assert.match(src, /from\s+"@gml\/worker\/queues"/, "actions.ts must import transcodeQueue from @gml/worker/queues");
-  assert.match(src, /transcodeQueue\.add\(/, "action must call transcodeQueue.add to enqueue the re-encode");
-  // The payload must include the four fields the worker expects — same
-  // shape the webhook uses in api/webhooks/whatsapp/route.ts.
-  assert.match(src, /videoSubmissionId:/, "transcodeQueue payload must include videoSubmissionId");
-  assert.match(src, /fileId:/, "transcodeQueue payload must include fileId");
-  assert.match(src, /bucket:/, "transcodeQueue payload must include bucket");
-  assert.match(src, /objectKey:/, "transcodeQueue payload must include objectKey");
   assert.match(
     src,
-    /source:\s*"whatsapp"/,
-    "transcodeQueue payload must declare source='whatsapp' so the worker takes the WhatsApp branch",
+    /import\s*\{\s*enqueueTranscode\s*\}\s*from\s*"@\/lib\/queue"/,
+    "actions.ts must import enqueueTranscode from @/lib/queue",
+  );
+  const call = src.match(/enqueueTranscode\(\s*\{([\s\S]*?)\}\s*\)/);
+  assert.ok(call, "action must call enqueueTranscode({ ... }) to enqueue the re-encode");
+  const payload = call[1];
+  for (const field of ["videoSubmissionId", "fileId", "bucket", "objectKey"]) {
+    assert.match(payload, new RegExp(`\\b${field}\\s*[:,}]`), `payload must include ${field}`);
+  }
+  assert.ok(
+    !/\bsource\b/.test(payload),
+    "the payload must not carry a `source` discriminator -- the worker re-encodes every source identically",
+  );
+
+  // The row-level `source === "whatsapp"` guard above the enqueue is a
+  // DIFFERENT thing and must survive: it stops a hand-crafted POST from this
+  // page acting on a direct-upload submission. Authorisation, not encoding.
+  assert.match(
+    src,
+    /row\.source\s*!==\s*"whatsapp"/,
+    "the action must still refuse non-WhatsApp submissions -- that guard is about " +
+      "what this page is allowed to touch, not about how the video gets encoded",
   );
 });
 

@@ -3,7 +3,7 @@
 // Spec 126 — Resend transcode server action for the WhatsApp ingest log.
 //
 // One-shot action: operator clicks "Resend transcode" on a stuck row in
-// /admin/whatsapp-log, this re-enqueues the BullMQ transcode job for the
+// /admin/whatsapp-log, this re-enqueues the transcode job for the
 // same submission. Same payload shape as the webhook (spec 105) so the
 // existing worker (apps/worker/src/index.ts) processes it identically.
 //
@@ -16,7 +16,7 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions, files } from "@gml/db/schema";
-import { transcodeQueue } from "@gml/worker/queues";
+import { enqueueTranscode } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 
@@ -31,7 +31,7 @@ export async function resendTranscodeAction(formData: FormData): Promise<void> {
   }
 
   // Single round-trip to recover the file row (we need bucket + object_key
-  // for the BullMQ payload). The join is filtered to source='whatsapp' so
+  // for the the job queue payload). The join is filtered to source='whatsapp' so
   // the action is a no-op for non-WhatsApp submissions even if a malformed
   // form submission targets one.
   const [row] = await db
@@ -60,7 +60,7 @@ export async function resendTranscodeAction(formData: FormData): Promise<void> {
   }
 
   // Flip the row back to 'queued' so the surface refreshes truthfully —
-  // BullMQ will pick it up momentarily. We skip the flip on ready/reviewed
+  // the worker will pick it up momentarily. We skip the flip on ready/reviewed
   // states; the page hides the button for those anyway, but defence in
   // depth keeps the action idempotent if an operator double-clicks.
   const previousStatus = row.status;
@@ -77,14 +77,12 @@ export async function resendTranscodeAction(formData: FormData): Promise<void> {
     .set({ status: "queued" })
     .where(eq(videoSubmissions.id, submissionId));
 
-  // Re-enqueue the BullMQ transcode job. The payload shape matches the
-  // webhook's `transcodeQueue.add` call in api/webhooks/whatsapp/route.ts.
-  await transcodeQueue.add("transcode", {
+  // Re-enqueue. Same payload as the webhook's own call.
+  await enqueueTranscode({
     videoSubmissionId: submissionId,
     fileId: row.fileId,
     bucket: row.bucket,
     objectKey: row.objectKey,
-    source: "whatsapp",
   });
 
   void recordAudit({

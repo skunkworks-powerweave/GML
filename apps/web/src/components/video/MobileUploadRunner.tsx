@@ -45,6 +45,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
+import { startResumableUpload } from "@/lib/video/tus-upload";
 
 type MobileUploadRunnerProps = {
   /** Programme WhatsApp number (E.164, no +) for the fallback reminder.
@@ -189,71 +191,72 @@ export function MobileUploadRunner({
     setErrorMsg(null);
 
     try {
-      const tus = await import("tus-js-client").catch(() => null);
-      if (!tus) {
-        setErrorMsg("Upload library failed to load. Try WhatsApp instead.");
+      // Reserve first. The server authorizes the context and issues an object
+      // key prefixed with this user's uuid; the bytes then go straight to
+      // Supabase Storage without passing through the application.
+      const reservation = await beginUploadAction({
+        filename: file.name,
+        sizeBytes: file.size,
+        contentType: file.type || "video/mp4",
+        contextType: activeCycleCode ? "observation_cycle" : "generic",
+        contextId: activeCycleCode ?? null,
+      });
+      if (!reservation.ok) {
+        if (!mountedRef.current) return;
+        setErrorMsg(reservation.error);
         setStep("failed");
         return;
       }
-      const upload = new tus.Upload(file, {
-        endpoint: "/api/uploads/tus",
-        chunkSize: 5 * 1024 * 1024,
-        metadata: {
-          filename: file.name,
-          filetype: file.type || "video/mp4",
-          context_type: activeCycleCode ? "observation_cycle" : "generic",
-          context_id: activeCycleCode ?? "",
-          caption: caption.trim(),
-        },
-        onError: (err: Error) => {
-          // Spec 149 — if the error fires after unmount we must NOT
-          // setState (React will warn and the error UI never reaches a
-          // user anyway). Bail silently; the cleanup in useEffect already
-          // tore down the upload.
+
+      const handle = await startResumableUpload({
+        file,
+        bucket: reservation.bucket,
+        objectKey: reservation.objectKey,
+        chunkBytes: reservation.chunkBytes,
+        onError: (message) => {
+          // Spec 149 — an error after unmount must NOT setState: React warns
+          // and the error UI never reaches a user anyway. The cleanup in
+          // useEffect has already torn the upload down.
           if (!mountedRef.current) return;
-          setErrorMsg(err.message || "Upload failed");
+          setErrorMsg(message);
           setStep("failed");
         },
         onProgress: (bytesUploaded: number, bytesTotal: number) => {
           if (!mountedRef.current) return;
-          const pct = bytesTotal > 0 ? Math.round((bytesUploaded / bytesTotal) * 100) : 0;
-          setProgress(pct);
+          setProgress(bytesTotal > 0 ? Math.round((bytesUploaded / bytesTotal) * 100) : 0);
         },
         onSuccess: () => {
-          // Spec 149 (Workflow Run 13 audit closure) — chain the redirect
-          // through mountedRef + a stored timer handle so:
-          //   (a) If the component unmounted between tus completion and
-          //       the 1200 ms delay, the router.push never fires (the
-          //       cleanup clears the timer). Without this guard a stale
-          //       router.push fired on an unmounted page, leaking memory
-          //       and racing whatever the user's next click was.
-          //   (b) If the redirect itself throws (e.g. router torn down),
-          //       we surface a retry option instead of swallowing the
-          //       error. The user is on the success screen — they need
-          //       SOMETHING to do if the redirect fails.
           if (!mountedRef.current) return;
           setProgress(100);
-          setStep("done");
-          // Give the success screen a beat so the user sees confirmation
-          // before we boot them out to the listing page. Store the handle
-          // so unmount can cancel.
-          redirectTimerRef.current = setTimeout(() => {
-            redirectTimerRef.current = null;
+          // Confirm server-side before claiming success. The old code declared
+          // done the moment tus finished, with no row written anywhere.
+          void completeUploadAction(reservation.submissionId).then((res) => {
             if (!mountedRef.current) return;
-            try {
-              router.push("/uploads");
-            } catch (err) {
-              // Router teardown / navigation rejection — surface a retry
-              // rather than leave the user staring at a dead success page.
-              const msg = err instanceof Error ? err.message : "Redirect failed";
-              setErrorMsg(`${msg} — tap Back to return to My Uploads`);
+            if (!res.ok) {
+              setErrorMsg(res.error ?? "Upload could not be confirmed.");
               setStep("failed");
+              return;
             }
-          }, 1200);
+            setStep("done");
+            // Spec 149 — hold the redirect behind mountedRef and a stored
+            // timer handle so an unmount between completion and the delay
+            // cancels it, and a router teardown surfaces a retry rather than
+            // leaving the user on a dead success screen.
+            redirectTimerRef.current = setTimeout(() => {
+              redirectTimerRef.current = null;
+              if (!mountedRef.current) return;
+              try {
+                router.push("/uploads");
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : "Redirect failed";
+                setErrorMsg(`${msg} — tap Back to return to My Uploads`);
+                setStep("failed");
+              }
+            }, 1200);
+          });
         },
       });
-      uploadRef.current = upload;
-      upload.start();
+      uploadRef.current = handle;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Upload failed";
       setErrorMsg(msg);

@@ -34,6 +34,9 @@ export const mentors = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
+  // Resolved on every page that maps a signed-in user to their mentor record.
+  // This table previously declared no indexes whatsoever.
+  (t) => [index("mentors_user_idx").on(t.userId)],
 );
 
 export const mentorPairings = pgTable(
