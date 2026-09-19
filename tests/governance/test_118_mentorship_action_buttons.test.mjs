@@ -204,11 +204,43 @@ test("Spec 118: page.tsx renders a wa.me/ link for WhatsApp deep-linking", () =>
 
 test("Spec 118: quarter strip links to the forms runner with pairingId + quarter", () => {
   const src = read(PAGE);
-  // The quarter cards link to /forms/<slug>?pairingId=...&quarter=...
+  // The quarter cards link to /forms/<kind>-<audience>-<version>?pairingId=...&quarter=...
+  //
+  // The slug is now assembled inline from three RESOLVED values rather than a
+  // precomputed `formSlug` const, which is why the old single-capture regex no
+  // longer matches. That was not a refactor: the audience and the version were
+  // both hardcoded here, and both were wrong.
+  //
+  //   version   was the literal "1". progress_2 is seeded at version "2" for
+  //             both audiences, so the Q3 link named a slug matching no
+  //             feedback_forms row and rendered "Form not found". Q3 has never
+  //             been openable from this page.
+  //   audience  was the literal "mentor". assertCanAccessPairing admits the
+  //             MENTEE on the pairing too, by design, so a teacher clicking any
+  //             quarter was sent to a mentor-audience form and bounced to
+  //             /forbidden by the runner's audience check.
+  //
+  // Both now come from the database, so the next version bump cannot silently
+  // break this page the way the last one did.
   assert.match(
     src,
-    /\/forms\/\$\{[^}]*\}\?pairingId=\$\{pairingId\}&quarter=\$\{qNum\}/,
-    "page.tsx quarter cards must link to /forms/${formSlug}?pairingId=${pairingId}&quarter=${qNum}",
+    /\/forms\/\$\{formKind}-\$\{formAudience}-\$\{formVersion}\?pairingId=/,
+    "quarter cards must build the slug from resolved kind, audience and version",
+  );
+  assert.match(
+    src,
+    /quarter=\$\{qNum}/,
+    "the quarter number must ride along in the query string",
+  );
+  assert.match(
+    src,
+    /versionByKind/,
+    "the form version must be resolved from feedback_forms, not hardcoded",
+  );
+  assert.match(
+    src,
+    /formAudience/,
+    "the audience must follow the viewer's role -- the mentee reaches this page too",
   );
   // The slug uses the canonical kind-audience-version shape.
   assert.match(

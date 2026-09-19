@@ -190,9 +190,17 @@ test("spec 156 — the tus-load-failed path still tells the user to fall back to
     "the failed import must call back through onError so the caller can render it",
   );
   const src = read(UPLOAD_PATH);
+  // The onError handler is now a BLOCK body rather than a single expression --
+  // it also calls router.refresh(), because the tray used to leave the uploads
+  // table beneath it stale after a finished or failed transfer. The old regex
+  // pinned the arrow-expression shape, which is syntax rather than behaviour,
+  // so adding a second statement broke it while improving the component.
+  //
+  // What is pinned now is the property the original was after: the shared
+  // module's message lands on the failed row rather than being swallowed.
   assert.match(
     src,
-    /onError:\s*\(message\)\s*=>\s*updateUpload\([^)]*\{\s*status:\s*"failed",\s*errorMessage:\s*message\s*\}\)/,
+    /onError:\s*\(message\)\s*=>[\s\S]{0,200}?errorMessage:\s*message/,
     "UploadProgress must put the shared module's message onto the failed row -- the " +
       "assertions below then pin that the row actually renders it",
   );

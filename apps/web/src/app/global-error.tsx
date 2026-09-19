@@ -48,6 +48,14 @@ export default function GlobalError({
             onClick handler would do nothing at all. The link works with no
             JavaScript whatsoever, which is the only safe assumption on the
             page that renders when everything else has failed. */}
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages --
+            A plain <a> is deliberate and <Link> would be wrong here. This
+            boundary catches a fault in the ROOT LAYOUT, replaces the entire
+            document, and is prerendered to a static _global-error.html whose
+            inline scripts carry no CSP nonce -- so React does not hydrate and
+            the client router this component would need may not exist at all.
+            A full page load is the only navigation that can be relied on at
+            this point. */}
         <a
           href="/"
           style={{

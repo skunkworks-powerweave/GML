@@ -67,8 +67,22 @@ test("Spec 046: Browse sidebar lists all 8 entities with correct slugs", () => {
   for (const slug of ["schools", "subjects", "outlines", "sessions", "teachers", "mentors", "learners", "resources"]) {
     assert.match(src, new RegExp(`id:\\s*"${slug}"`), `Browse must include slug "${slug}"`);
   }
-  // Every Browse row is a Link to /repo/<slug>.
-  assert.match(src, /href=\{`\/repo\/\$\{b\.id\}`\}/);
+  // Every Browse row is a Link to /repo/<slug>, UNLESS it carries an explicit
+  // href.
+  //
+  // The old assertion was exactly `href={`/repo/${b.id}`}` with no fallback.
+  // It pinned the bug it was meant to guard: the "learners" row derives
+  // /repo/learners from its id, and the learners page is served at
+  // /repo/students, so that one row 404'd while the assertion passed. The row
+  // now carries `href: "/repo/students"` and the Link reads `b.href ?? ...`,
+  // which is what this now asserts -- the derivation is still the default, so
+  // a new entity that forgets its route is still caught.
+  assert.match(src, /href=\{b\.href \?\? `\/repo\/\$\{b\.id\}`\}/);
+  assert.match(
+    src,
+    /id:\s*"learners",\s*href:\s*"\/repo\/students"/,
+    "the learners row must name its real route rather than deriving a 404",
+  );
 });
 
 test("Spec 046: status pill mapping covers planned / in_progress / complete", () => {

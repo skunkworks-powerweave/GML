@@ -87,16 +87,45 @@ test("FR-109-D: the object mirror runs remote-to-remote, and `mc` is gone", () =
     "backup.sh must not exec into a minio container — MinIO withdrew their public images",
   );
   // The replacement, pinned positively so the mirror cannot simply disappear.
+  // `rclone copy`, NOT `rclone sync`.
+  //
+  // The old assertion required `sync`, which is a DESTRUCTIVE mirror: it makes
+  // the destination match the source by DELETING destination objects that are
+  // absent from it. So a deletion inside Supabase -- accident, bad admin
+  // action, compromised key -- would propagate into the disaster-recovery
+  // bucket on the next nightly run and destroy the only copy of the videos
+  // that is not Supabase's. The test was pinning a backup that would
+  // faithfully replicate the disaster it exists to survive, inside 24 hours.
+  //
+  // `copy` only adds and updates. Pruning belongs to the bucket's lifecycle
+  // policy, where it is deliberate and versioned.
   assert.match(
     src,
-    /rclone sync/,
-    "backup.sh must mirror Storage with `rclone sync`",
+    /rclone copy/,
+    "backup.sh must mirror Storage with `rclone copy`",
+  );
+  assert.ok(
+    !/rclone sync/.test(src),
+    "backup.sh must NOT use `rclone sync` — it deletes destination objects absent from the " +
+      "source, so a deletion in Supabase would wipe the DR copy of the videos on the next run",
+  );
+  // Remote-to-remote, so a 100 GB video set never transits the EC2 root disk.
+  // Both endpoints are now declared as rclone remotes through the environment
+  // rather than inline in argv, because an argv is readable from /proc for the
+  // hours a mirror of that size runs.
+  assert.match(
+    src,
+    /RCLONE_CONFIG_SUPASRC_ENDPOINT="\$\{SUPABASE_S3_ENDPOINT\}"/,
+    "the source must be the Supabase S3 endpoint",
   );
   assert.match(
     src,
-    /:s3,provider=Other,endpoint=\$\{SUPABASE_S3_ENDPOINT\}[\s\S]*?:s3,provider=AWS/,
-    "the mirror must be remote-to-remote (Supabase S3 endpoint -> our S3 bucket): a 100 GB " +
-      "video set must never transit the EC2 root disk",
+    /rclone copy[\s\S]{0,200}?"SUPASRC:\$\{bucket\}"[\s\S]{0,200}?"DRDEST:/,
+    "the mirror must run remote-to-remote, Supabase -> our S3 bucket",
+  );
+  assert.ok(
+    !/secret_access_key=\$\{SUPABASE_S3_SECRET_KEY\}/.test(src),
+    "the S3 secret must not be interpolated into the command line",
   );
   assert.match(
     src,

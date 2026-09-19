@@ -47,9 +47,24 @@ test("069 — ports the three-card explainer (WhatsApp PRIMARY + browser + recor
   assert.match(src, /Forward via WhatsApp/);
   assert.match(src, /Upload here/);
   assert.match(src, /Record in-app/);
-  // WhatsApp number + caption hint (matches the JSX prototype copy).
-  assert.match(src, /\+91 90600 22013/);
-  assert.match(src, /wa\.me\/919060022013/);
+  // The number comes from the ENVIRONMENT, not from this file.
+  //
+  // The old assertions pinned the literal `+91 90600 22013` and
+  // `wa.me/919060022013` "to match the JSX prototype copy". That hardcoded
+  // number sat three lines above this same file's own env-driven
+  // `whatsappPhone`, so every deployment whose programme number is not the one
+  // typed during prototyping sent teachers to a stranger -- on the PRIMARY
+  // video path. The test was the thing keeping it there.
+  //
+  // What is pinned now is that the card is built from the env value and that
+  // no literal phone number survives in the source.
+  assert.match(src, /function explainerCards\(whatsappPhone: string \| null\)/);
+  assert.match(src, /https:\/\/wa\.me\/\$\{dialable\}/);
+  assert.doesNotMatch(
+    src,
+    /\+?91[\s-]?9060[\s-]?0?22013/,
+    "no hardcoded programme phone number in the source",
+  );
   // The primary card has a 2px ink border (JSX `border: m.primary ? "2px solid var(--ink)" : undefined`).
   assert.match(src, /2px solid var\(--ink\)/);
 });

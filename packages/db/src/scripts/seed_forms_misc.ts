@@ -60,25 +60,76 @@ const MISC_KIND_TO_CANONICAL: Record<FieldKind, (typeof CANONICAL_FIELD_KINDS)[n
   text: "text",
 };
 
-function assertCanonicalFieldKinds<T extends { label: string; kind: string; audience: string; version: string; schema: { fields: { kind: string; id: string }[] } }>(rows: T[]): T[] {
+/**
+ * Rewrite this file's field vocabulary into the CANONICAL shape the renderers
+ * and lib/forms/validate.ts read: `{name, kind}`, with kinds drawn from
+ * CANONICAL_FIELD_KINDS.
+ *
+ * The previous version of this function CHECKED that every kind could be
+ * mapped and then returned the rows UNCHANGED -- it computed `mapped` and threw
+ * it away. Identical defect to the one in seed_forms_mentee.ts, and with the
+ * same total consequence: these forms reached the database keyed `{id, kind}`
+ * with kinds like "boolean-group" and "single-choice" that no renderer knows,
+ * so every field fell through to the text fallback, and because `name` was
+ * undefined they all shared one FormData key -- a whole school-visit
+ * questionnaire collapsed into a single unnamed textbox.
+ *
+ * The guard written to prevent exactly this was what concealed it: it validated
+ * the mapping instead of applying it, and then reported success.
+ */
+function toCanonicalFields(rows: SeedRow[]): CanonicalSeedRow[] {
   const valid = new Set<string>(CANONICAL_FIELD_KINDS);
-  const filtered: T[] = [];
+  const out: CanonicalSeedRow[] = [];
+
   for (const row of rows) {
+    const mappedFields: CanonicalField[] = [];
     let allValid = true;
+
     for (const field of row.schema.fields) {
-      const mapped = (MISC_KIND_TO_CANONICAL as Record<string, string>)[field.kind];
-      if (!mapped || !valid.has(mapped)) {
+      const kind = (MISC_KIND_TO_CANONICAL as Record<string, (typeof CANONICAL_FIELD_KINDS)[number] | undefined>)[field.kind];
+      if (!kind || !valid.has(kind)) {
         console.warn(
-          `[seed-forms-misc] WARN — dropping row (label=${row.label}): field "${field.id}" has unmappable kind "${field.kind}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
+          `[seed-forms-misc] WARN - dropping row (label=${row.label}): field "${field.id}" has unmappable kind "${field.kind}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
         );
         allValid = false;
         break;
       }
+      mappedFields.push({
+        name: field.id,
+        kind,
+        label: field.label,
+        hindiLabel: field.hindiLabel,
+        required: field.required,
+        options: field.options,
+        min: field.min,
+        max: field.max,
+        helpText: field.helpText,
+      });
     }
-    if (allValid) filtered.push(row);
+
+    if (allValid) out.push({ ...row, schema: { ...row.schema, fields: mappedFields } });
   }
-  return filtered;
+
+  return out;
 }
+
+/** The canonical field shape, as FormRenderer and validate.ts read it. */
+interface CanonicalField {
+  name: string;
+  kind: (typeof CANONICAL_FIELD_KINDS)[number];
+  label: string;
+  hindiLabel?: string;
+  required?: boolean;
+  options?: string[];
+  min?: number;
+  max?: number;
+  helpText?: string;
+}
+
+/** A seed row after mapping: identical metadata, canonical fields. */
+type CanonicalSeedRow = Omit<SeedRow, "schema"> & {
+  schema: Omit<FormSchema, "fields"> & { fields: CanonicalField[] };
+};
 
 interface FormField {
   id: string;
@@ -215,7 +266,7 @@ interface SeedRow {
   schema: FormSchema;
 }
 
-const ROWS: SeedRow[] = assertCanonicalFieldKinds([
+const ROWS: CanonicalSeedRow[] = toCanonicalFields([
   {
     label: "school-visit checklist",
     kind: "baseline", // route-around: closest existing enum value

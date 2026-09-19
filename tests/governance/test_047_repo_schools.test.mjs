@@ -121,9 +121,19 @@ test("school detail Teachers sidebar renders Hindi name conditionally (SM-7)", (
   assert.match(src, /var\(--deva\)/);
 });
 
-test("school detail cross-links to /repo/school/[id]/learners", () => {
+test("school detail cross-links to that school's learners", () => {
   const src = read(DETAIL_PATH);
-  assert.match(src, /\/repo\/school\/\$\{school\.id\}\/learners/);
+  // The old assertion pinned /repo/school/${school.id}/learners, a route that
+  // has never existed -- the only learners sub-route in the tree is under
+  // /repo/class/[id]. The test passed because it checked the link's TEXT, not
+  // that anything answered it, so it certified a 404 for as long as it existed.
+  // /repo/students already accepts ?school=, which is precisely this view.
+  assert.match(src, /\/repo\/students\?school=\$\{school\.id\}/);
+  assert.doesNotMatch(
+    src,
+    /\/repo\/school\/\$\{school\.id\}\/learners/,
+    "the non-existent learners sub-route must not come back",
+  );
 });
 
 test("schools index uses district-aware chip colours (indigo for Leh, saffron for Kargil)", () => {
