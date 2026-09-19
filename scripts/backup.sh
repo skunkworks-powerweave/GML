@@ -70,7 +70,35 @@ log "dumped $(numfmt --to=iec "${size}" 2>/dev/null || echo "${size}B")"
 # credentials (Project Settings -> Storage -> S3 access keys). Without those
 # configured this step is SKIPPED LOUDLY rather than silently — a backup that
 # quietly omits the irreplaceable half is worse than one that fails.
-if [ -n "${SUPABASE_S3_ENDPOINT:-}" ] && [ -n "${SUPABASE_S3_ACCESS_KEY:-}" ] && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+# ACCEPT THE NAMES SUPABASE'S OWN DASHBOARD PRINTS.
+#
+# Storage -> S3 access keys shows "Access key ID" and "Secret access key", so
+# that is what an operator naturally writes into .env:
+#
+#     SUPABASE_S3_ACCESS_KEY_ID
+#     SUPABASE_S3_SECRET_ACCESS_KEY
+#
+# This script originally demanded SUPABASE_S3_ACCESS_KEY / _SECRET_KEY, which
+# are nobody's first guess, and the mismatch is silent: the mirror is SKIPPED,
+# the warning says the variables are unset, and the operator has just set them.
+# Both spellings work now, dashboard names first.
+S3_ACCESS_KEY="${SUPABASE_S3_ACCESS_KEY_ID:-${SUPABASE_S3_ACCESS_KEY:-}}"
+S3_SECRET_KEY="${SUPABASE_S3_SECRET_ACCESS_KEY:-${SUPABASE_S3_SECRET_KEY:-}}"
+
+# The endpoint is DERIVED when not given, because the dashboard shows a region
+# far more prominently than an endpoint, and the endpoint is a fixed function
+# of the project URL:
+#     https://<ref>.supabase.co  ->  https://<ref>.storage.supabase.co/storage/v1/s3
+S3_ENDPOINT="${SUPABASE_S3_ENDPOINT:-}"
+if [ -z "${S3_ENDPOINT}" ] && [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ]; then
+  ref="$(printf '%s' "${NEXT_PUBLIC_SUPABASE_URL}" | sed -E 's#^https?://([^.]+)\..*##')"
+  if [ -n "${ref}" ] && [ "${ref}" != "${NEXT_PUBLIC_SUPABASE_URL}" ]; then
+    S3_ENDPOINT="https://${ref}.storage.supabase.co/storage/v1/s3"
+    log "derived Storage S3 endpoint for project ${ref}"
+  fi
+fi
+
+if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   command -v rclone >/dev/null || fail "rclone not installed but SUPABASE_S3_* is configured"
 
   # `copy`, NOT `sync`.
@@ -95,12 +123,12 @@ if [ -n "${SUPABASE_S3_ENDPOINT:-}" ] && [ -n "${SUPABASE_S3_ACCESS_KEY:-}" ] &&
   # video set leaves them exposed there for hours.
   export RCLONE_CONFIG_SUPASRC_TYPE=s3
   export RCLONE_CONFIG_SUPASRC_PROVIDER=Other
-  export RCLONE_CONFIG_SUPASRC_ENDPOINT="${SUPABASE_S3_ENDPOINT}"
-  export RCLONE_CONFIG_SUPASRC_ACCESS_KEY_ID="${SUPABASE_S3_ACCESS_KEY}"
-  export RCLONE_CONFIG_SUPASRC_SECRET_ACCESS_KEY="${SUPABASE_S3_SECRET_KEY:-}"
+  export RCLONE_CONFIG_SUPASRC_ENDPOINT="${S3_ENDPOINT}"
+  export RCLONE_CONFIG_SUPASRC_ACCESS_KEY_ID="${S3_ACCESS_KEY}"
+  export RCLONE_CONFIG_SUPASRC_SECRET_ACCESS_KEY="${S3_SECRET_KEY}"
   export RCLONE_CONFIG_DRDEST_TYPE=s3
   export RCLONE_CONFIG_DRDEST_PROVIDER=AWS
-  export RCLONE_CONFIG_DRDEST_REGION="${AWS_REGION:-ap-south-1}"
+  export RCLONE_CONFIG_DRDEST_REGION="${AWS_REGION:-${SUPABASE_S3_REGION:-ap-south-1}}"
 
   for bucket in videos-original videos-hls posters pdfs; do
     log "mirroring ${bucket}"
@@ -110,7 +138,10 @@ if [ -n "${SUPABASE_S3_ENDPOINT:-}" ] && [ -n "${SUPABASE_S3_ACCESS_KEY:-}" ] &&
       --transfers 4 --checkers 8 --stats-one-line
   done
 else
-  echo "[backup] WARNING: Storage mirror SKIPPED — SUPABASE_S3_ENDPOINT / SUPABASE_S3_ACCESS_KEY / BACKUP_S3_BUCKET not all set." >&2
+  echo "[backup] WARNING: Storage mirror SKIPPED. Needs an access key" >&2
+  echo "[backup]          (SUPABASE_S3_ACCESS_KEY_ID), a secret" >&2
+  echo "[backup]          (SUPABASE_S3_SECRET_ACCESS_KEY) and BACKUP_S3_BUCKET." >&2
+  echo "[backup]          The endpoint is derived from NEXT_PUBLIC_SUPABASE_URL." >&2
   echo "[backup] WARNING: The videos are NOT being backed up. Supabase has no backup product for Storage." >&2
 fi
 
