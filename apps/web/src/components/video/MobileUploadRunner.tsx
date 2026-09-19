@@ -24,11 +24,16 @@
 //   3. After a file is chosen we render a Preview frame extracted from the
 //      first decoded frame of the video (drawn on a hidden canvas) — gives
 //      the teacher a recognisable thumbnail before they commit to upload.
-//   4. The caption textarea is the teacher's chance to type OBS- / TB- /
-//      MM- code. We do NOT post the caption anywhere (the tus metadata
-//      contract is fixed); we just store it in component state and prefix
-//      the filename when sending. The webhook ingest worker (spec 043)
-//      strips the caption back out on completion.
+//   4. The caption textarea is the teacher's chance to say what the clip is.
+//      It is POSTED, on completion, through completeUploadAction, and lands on
+//      the observation_evidence row the cycle page renders.
+//
+//      It previously went nowhere at all. The comment here said so plainly --
+//      "We do NOT post the caption anywhere" -- and reasoned that the webhook
+//      ingest worker would strip it back out of the filename. That worker
+//      handles the WHATSAPP path; a direct upload never touches it. So the
+//      screen asked a teacher on a phone to "add a caption so your mentor knows
+//      what this is", and then discarded what she typed.
 //   5. The upload screen shows the WhatsApp PRIMARY-path reminder as a
 //      bottom card so a teacher on a slow link can bail to wa.me/<phone>
 //      mid-upload without losing the file (it stays on disk).
@@ -233,7 +238,8 @@ export function MobileUploadRunner({
           setProgress(100);
           // Confirm server-side before claiming success. The old code declared
           // done the moment tus finished, with no row written anywhere.
-          void completeUploadAction(reservation.submissionId).then((res) => {
+          // The caption travels with the completion, not the filename.
+          void completeUploadAction(reservation.submissionId, caption).then((res) => {
             if (!mountedRef.current) return;
             if (!res.ok) {
               setErrorMsg(res.error ?? "Upload could not be confirmed.");

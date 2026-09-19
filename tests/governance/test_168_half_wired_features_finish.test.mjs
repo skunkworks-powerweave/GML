@@ -318,10 +318,14 @@ test("spec 168 — /repo/students adds q= search with ilike on learners.name", (
     /ilike\(\s*learners\.name\s*,/,
     `${STUDENTS_PAGE} must call ilike(learners.name, ...) so the search narrows on the canonical learner name column`,
   );
+  // Was: `/function\s+escapeIlike/` -- each page had to DECLARE its own copy.
+  // That requirement is what left /api/quickfind without one, so `?q=%` there
+  // returned the whole staff and school roster. One shared implementation now
+  // lives in @gml/shared/sql/ilike and is pinned in test_158.
   assert.match(
     src,
-    /function\s+escapeIlike/,
-    `${STUDENTS_PAGE} must declare an escapeIlike helper so ILIKE wildcards %, _, \\ in user input don't act as pattern characters`,
+    /import \{ escapeIlike \} from "@gml\/shared\/sql\/ilike"/,
+    `${STUDENTS_PAGE} must import the shared escapeIlike rather than declaring its own`,
   );
   assert.match(
     src,

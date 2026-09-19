@@ -38,6 +38,26 @@ export default async function AuditViewer({
       ? sql`true`
       : sql.join(filters, sql.raw(" AND "));
 
+  // THE ACTION DROPDOWN IS BUILT FROM THE DATA, NOT FROM A LITERAL LIST.
+  //
+  // It used to offer nine bare names -- view, download, upload, edit, delete,
+  // gate_pass, gate_fail, login, logout -- and the filter is an exact equality
+  // match. Nothing in the repository writes any of them: every action this
+  // application records is dotted and namespaced (observation.signed_off,
+  // admin.row.delete, video.play, teach_back.reviewed, form.submit ...). So
+  // every option in the dropdown returned zero rows, on the surface an
+  // administrator opens precisely when something has gone wrong.
+  //
+  // A DISTINCT over the column cannot drift: the options are exactly the
+  // actions that exist. Cheap -- the column is indexed and the cardinality is
+  // a few dozen.
+  const actionOptions = (
+    await db
+      .selectDistinct({ action: auditLog.action })
+      .from(auditLog)
+      .orderBy(auditLog.action)
+  ).map((r) => r.action);
+
   const rows = await db
     .select({
       id: auditLog.id,
@@ -63,7 +83,14 @@ export default async function AuditViewer({
   // a Content-Disposition attachment header.
   const exportQs = new URLSearchParams();
   if (sp.action) exportQs.set("action", sp.action);
-  if (sp.user) exportQs.set("user", sp.user);
+  // `userFilter`, not `sp.user`. This page validates the id and IGNORES it when
+  // malformed -- then built the export link from the raw value anyway, so the
+  // CSV route received the same unparseable string this page had just rejected
+  // and bound it straight into a uuid comparison, producing a 500. The
+  // documented "typo or truncated id must not take down the surface an
+  // administrator goes to when something has gone wrong" held for the page and
+  // not for the download button beside it.
+  if (userFilter) exportQs.set("user", userFilter);
   const exportHref = exportQs.toString()
     ? `/api/admin/audit/export?${exportQs.toString()}`
     : `/api/admin/audit/export`;
@@ -93,7 +120,7 @@ export default async function AuditViewer({
           <span className="text-xs text-neutral-500">Action</span>
           <select name="action" defaultValue={sp.action ?? ""} className="rounded-md border border-neutral-300 px-2 py-1">
             <option value="">any</option>
-            {["view", "download", "upload", "edit", "delete", "gate_pass", "gate_fail", "login", "logout"].map((a) => (
+            {actionOptions.map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
           </select>

@@ -28,6 +28,25 @@ export default async function RttIndexPage() {
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
           {phaseRows.length} phases · {termRows.length} terms · {subjectRows.length} subjects across Leh + Kargil.
         </p>
+
+        {/* THE ONLY WAY INTO THE ONLINE SURFACES.
+            /rtt/online/synchronous (the webinar and live-quiz calendar) and
+            /rtt/online/asynchronous both shipped complete and were linked from
+            nowhere -- not from this hub, not from nav.ts, not from any other
+            page. Two finished features reachable only by someone who already
+            knew the URL, which in practice means nobody. /rtt is where they
+            belong: it is the section root for everything RTT. */}
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <Link href="/rtt/online/synchronous" className="btn btn-sm">
+            Webinars &amp; live quizzes →
+          </Link>
+          <Link href="/rtt/online/asynchronous" className="btn btn-sm btn-ghost">
+            Self-paced units →
+          </Link>
+          <Link href="/rtt/teach-back" className="btn btn-sm btn-ghost">
+            Teach-back queue →
+          </Link>
+        </div>
       </div>
 
       <div className="page-body" style={{ display: "grid", gap: 16 }}>

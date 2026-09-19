@@ -19,6 +19,7 @@ import { auth } from "@/auth";
 // Spec 138 — mobile card-list fallback (desktop keeps the table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -42,9 +43,6 @@ type KindFilter = (typeof KIND_FILTERS)[number];
 // escape ILIKE wildcards so a literal "%" / "_" in the query doesn't
 // become a pattern character.
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 export default async function RepoResourcesIndexPage({
   searchParams,

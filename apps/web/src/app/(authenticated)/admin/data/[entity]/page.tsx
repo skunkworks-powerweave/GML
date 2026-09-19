@@ -182,7 +182,18 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   if (!entity) notFound();
 
   // Role gate — readRoles guards the page; mutateRoles enforced in actions.ts.
-  await requireRole(entity.readRoles);
+  const session = await requireRole(entity.readRoles);
+
+  // Can THIS caller actually export?
+  //
+  // exportCsv re-gates PII-bearing entities to super_admin specifically, per
+  // SM-9 -- but the button was rendered to anyone who could read the grid. So a
+  // programme_admin on /admin/data/learners was shown "Export CSV", clicked it,
+  // and was navigated away to /forbidden. Offering an action and then refusing
+  // it reads as a broken permission rather than a deliberate one.
+  const canExport =
+    !(entity.piiAudited && entity.slug === "learners") ||
+    session.user.role === "super_admin";
 
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
@@ -401,11 +412,18 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
         </div>
         <div className="flex items-center gap-3 text-xs text-neutral-500">
           <span>Page {pageNum} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>
-          <a
-            href={`/api/admin/data/${slug}/export`}
-            className="rounded-md border border-neutral-300 bg-white px-2 py-1 hover:border-neutral-400"
-            title="Download CSV"
-          >Export CSV</a>
+          {canExport ? (
+            <a
+              href={`/api/admin/data/${slug}/export`}
+              className="rounded-md border border-neutral-300 bg-white px-2 py-1 hover:border-neutral-400"
+              title="Download CSV"
+            >Export CSV</a>
+          ) : (
+            <span
+              className="rounded-md border border-neutral-200 px-2 py-1 text-neutral-400"
+              title="Exporting learner records requires a super administrator"
+            >Export CSV</span>
+          )}
         </div>
       </header>
 

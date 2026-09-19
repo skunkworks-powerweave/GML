@@ -22,14 +22,16 @@
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   feedbackForms,
   feedbackResponses,
   formDrafts,
+  mentorPairings,
   type FeedbackForm,
 } from "@gml/db/schema";
+
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
@@ -42,6 +44,19 @@ import { FormRenderer } from "@/components/forms/FormRenderer";
 // action, same autosave pipeline; only the layout changes (one field per
 // screen, big touch targets, sticky Prev/Next, review screen at the end).
 import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
+
+/**
+ * The quarter a pairing moves INTO once a form of this kind is submitted.
+ *
+ * `final` is absent deliberately: it closes the pairing rather than opening a
+ * quarter, and completePairingAction owns that transition.
+ */
+const QUARTER_AFTER: Record<string, number | undefined> = {
+  baseline: 2,
+  progress_1: 3,
+  progress_2: 4,
+};
+
 
 export const dynamic = "force-dynamic";
 
@@ -286,6 +301,11 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     );
   }
 
+  // Which quarter a pairing moves INTO once this form kind is submitted.
+  // baseline closes Q1, progress_1 closes Q2, progress_2 closes Q3. `final`
+  // is absent deliberately: it closes the pairing rather than opening a
+  // quarter, and completePairingAction owns that transition.
+  //
   // Spec 130 — persist the context block alongside the user-supplied answers.
   // Using a __context key (double-underscore prefix is already reserved above)
   // keeps the schema locked (no new column) while still letting reports join
@@ -311,6 +331,33 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     await tx
       .delete(formDrafts)
       .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)));
+
+    // ADVANCE THE PAIRING'S QUARTER.
+    //
+    // mentor_pairings.current_quarter drives the entire quarter strip on
+    // /mentorship/[pairingId] -- which card is "done", which is "current",
+    // which is "future" and therefore unclickable -- and it was written by
+    // NOTHING except the development seed. So every real pairing sat at Q1
+    // forever: Q2, Q3 and Q4 never became reachable, and the quarterly
+    // feedback cycle that is the point of the mentorship module could not be
+    // worked through at all.
+    //
+    // Submitting the quarter's form is the event that closes it, so that is
+    // where the advance belongs. GREATEST() rather than a plain assignment
+    // because re-submitting an earlier quarter's form must never walk the
+    // pairing backwards, and it makes concurrent submissions safe without a
+    // read-modify-write. Capped at 4: there is no Q5.
+    if (pairingId) {
+      const nextQuarter = QUARTER_AFTER[form.kind];
+      if (nextQuarter) {
+        await tx
+          .update(mentorPairings)
+          .set({
+            currentQuarter: sql`LEAST(GREATEST(COALESCE(${mentorPairings.currentQuarter}, 1), ${nextQuarter}), 4)`,
+          })
+          .where(eq(mentorPairings.id, pairingId));
+      }
+    }
   });
 
   // Best-effort audit (failure does not roll back the response). The audit

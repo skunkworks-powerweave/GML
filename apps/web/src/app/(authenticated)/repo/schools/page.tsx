@@ -24,6 +24,7 @@ import { auth } from "@/auth";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -57,9 +58,6 @@ type SearchParams = Promise<{ district?: string; q?: string }>;
 // We escape ILIKE wildcards because a user may legitimately search for a
 // school whose name contains a literal '%' or '_'.
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 export default async function RepoSchoolsIndexPage({
   searchParams,

@@ -13,6 +13,7 @@ import { courseOutlines, subjects, teachers } from "@gml/db/schema";
 // Spec 138 — mobile card-list fallback (desktop keeps the 9-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -29,9 +30,6 @@ const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "archived"]
 // escape ILIKE wildcards so a literal "%" / "_" in the query doesn't
 // become a pattern character.
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 type SearchParams = Promise<{ grade?: string; term?: string; status?: string; q?: string }>;
 

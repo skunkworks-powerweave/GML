@@ -122,28 +122,28 @@ for (const [label, path, column, ariaLabel] of ALL_PAGES) {
       `${path} must cap the search input at SEARCH_Q_MAX = 200 chars so a giant pasted blob doesn't bloat the URL or stress the planner`,
     );
 
-    // (4) escapeIlike helper — the pattern characters %, _, and \ must
-    // be escaped so a literal underscore in a school code doesn't
-    // accidentally become a wildcard.
+    // (4) escapeIlike — ONE SHARED IMPLEMENTATION, imported.
+    //
+    // This used to require each page to DECLARE its own
+    // `function escapeIlike(s: string)` and to pin all three .replace calls
+    // verbatim, in all eight files. That is how the bug happened: the eight
+    // copies stayed correct and /api/quickfind -- the one endpoint that fans
+    // eight leading-wildcard searches across the staff and school roster on
+    // every keystroke -- was never given a copy at all, so `?q=%` returned the
+    // entire roster. A test that mandates duplication cannot notice the place
+    // that was left out of it.
+    //
+    // Pinned now: each page imports the shared helper and uses it in the
+    // pattern. The escaping itself is pinned once, below this loop, where it
+    // lives.
     assert.match(
       src,
-      /function\s+escapeIlike\s*\(\s*s\s*:\s*string\s*\)/,
-      `${path} must declare an escapeIlike(s: string) helper so ILIKE wildcard chars don't leak from user input`,
+      /import \{ escapeIlike \} from "@gml\/shared\/sql\/ilike"/,
+      `${path} must import the shared escapeIlike rather than declaring its own`,
     );
-    assert.match(
-      src,
-      /\.replace\(\s*\/\\\\\/g\s*,\s*"\\\\\\\\"\s*\)/,
-      `${path} escapeIlike must escape the backslash FIRST (\\\\ -> \\\\\\\\) so the later % and _ escapes don't double-escape themselves`,
-    );
-    assert.match(
-      src,
-      /\.replace\(\s*\/%\/g\s*,\s*"\\\\%"\s*\)/,
-      `${path} escapeIlike must escape % so a literal percent in the query doesn't act as a wildcard`,
-    );
-    assert.match(
-      src,
-      /\.replace\(\s*\/_\/g\s*,\s*"\\\\_"\s*\)/,
-      `${path} escapeIlike must escape _ so a literal underscore in the query doesn't act as a single-char wildcard`,
+    assert.ok(
+      !/function\s+escapeIlike/.test(src),
+      `${path} must not re-declare escapeIlike -- one copy, shared`,
     );
 
     // (5) The input element — type="search", name="q", aria-label set
@@ -291,5 +291,45 @@ test("spec 158 — /repo/students name-search is allowed ONLY when audit dedup i
   assert.ok(
     !hasIlikeOnName || hasAuditDedup,
     "/repo/students may carry ilike(learners.name, …) ONLY when recordAuditDedup is also called (spec 168) — adding the search without dedup floods the SM-9 audit log",
+  );
+});
+
+test("spec 158 — the shared escapeIlike escapes backslash first, then % and _", () => {
+  // The escaping contract itself, checked once in the module that owns it.
+  //
+  // Asserted by literal substring rather than by regex: the thing under test is
+  // itself a set of backslash escapes, and a regex describing it needs four
+  // levels of escaping to say anything at all. A wrong regex here would fail
+  // open, which is the one outcome this must not have.
+  const src = read("packages/shared/src/sql/ilike.ts");
+  const backslashFirst = ".replace(/\\\\/g, \"\\\\\\\\\")";
+  const percent = ".replace(/%/g, \"\\\\%\")";
+  const underscore = ".replace(/_/g, \"\\\\_\")";
+  assert.ok(src.includes(backslashFirst), `escapeIlike must double the backslash: ${backslashFirst}`);
+  assert.ok(src.includes(percent), `escapeIlike must escape %: ${percent}`);
+  assert.ok(src.includes(underscore), `escapeIlike must escape _: ${underscore}`);
+  // ORDER IS LOAD-BEARING. Backslashes must be doubled BEFORE % and _ are
+  // escaped, or the escapes introduced for those would themselves be escaped.
+  assert.ok(
+    src.indexOf(backslashFirst) < src.indexOf(percent) &&
+      src.indexOf(backslashFirst) < src.indexOf(underscore),
+    "the backslash replacement must come first",
+  );
+});
+
+test("spec 158 — /api/quickfind escapes its query too", () => {
+  // The endpoint the eight-copy contract left out. It interpolated the raw
+  // query into an ILIKE pattern across eight tables, so `?q=%` dumped the
+  // staff and school roster to any signed-in user.
+  const src = read("apps/web/src/app/api/quickfind/route.ts");
+  assert.match(
+    src,
+    /import \{ escapeIlike \} from "@gml\/shared\/sql\/ilike"/,
+    "quickfind must import the shared escapeIlike",
+  );
+  assert.match(
+    src,
+    /`%\$\{escapeIlike\(rawQ\)\}%`/,
+    "quickfind must escape the user query before building the ILIKE pattern",
   );
 });

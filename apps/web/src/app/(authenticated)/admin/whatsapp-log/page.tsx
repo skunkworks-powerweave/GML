@@ -173,8 +173,10 @@ export default async function WhatsappIngestLogPage({
           Every video sent to the GML WhatsApp number. Captions starting
           with OBS- / TB- / MM- link the upload to an observation cycle,
           teach-back, or mentor meeting; everything else is parked as a
-          generic submission so the operator can re-link it from
-          /admin/data/videos.
+          generic submission. The operator can find it in the video library at
+          /videos and re-link it there -- /admin/data/videos, which this page
+          used to name, is not one of the registered admin entities and has
+          never existed.
         </p>
       </header>
 

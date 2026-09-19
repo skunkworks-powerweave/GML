@@ -100,6 +100,8 @@ export default async function PairingDetailPage({
     pairing_not_found: "That pairing no longer exists.",
     invalid_commitment: "That commitment reference was not valid.",
     empty_commitment: "A commitment needs some text before it can be added.",
+    commitments_full:
+      "This pairing already has the maximum of 50 commitments. Mark some done before adding more.",
   };
   const pairingError = sp.error
     ? (PAIRING_ERRORS[sp.error] ?? "That action could not be completed. Please try again.")

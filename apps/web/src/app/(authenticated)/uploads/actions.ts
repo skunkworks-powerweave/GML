@@ -154,7 +154,12 @@ function browserSupabaseConfig(): SupabaseBrowserConfig | null {
 
 export type CompleteUploadState = { ok: boolean; error?: string };
 
-export async function completeUploadAction(submissionId: string): Promise<CompleteUploadState> {
+export async function completeUploadAction(
+  submissionId: string,
+  // The uploader's note. Stored on the observation_evidence row, which is what
+  // the observer reads on the cycle page.
+  caption?: string,
+): Promise<CompleteUploadState> {
   const session = await auth();
   if (!session) return { ok: false, error: "Please sign in again." };
 
@@ -162,6 +167,7 @@ export async function completeUploadAction(submissionId: string): Promise<Comple
     submissionId,
     userId: session.user.id,
     isAdmin: hasAnyRole(session.user.role, ["programme_admin", "super_admin"]),
+    caption,
     enqueue: enqueueTranscode,
   });
 

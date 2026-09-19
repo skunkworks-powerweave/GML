@@ -160,8 +160,11 @@ export default async function RttOnlineSynchronousPage() {
         >
           <p style={{ fontSize: 14, margin: 0 }}>
             No webinars scheduled. Schedule via{" "}
-            <Link href="/admin/data/sessions" style={{ color: "var(--indigo)" }}>
-              /admin/data/sessions
+            {/* /admin/data/sessions manages the CLASSROOM sessions table, which is
+                not what this calendar renders -- nothing entered there has ever
+                appeared here. This calendar reads rtt_sessions. */}
+            <Link href="/admin/data/rtt-sessions" style={{ color: "var(--indigo)" }}>
+              /admin/data/rtt-sessions
             </Link>
             .
           </p>
@@ -306,8 +309,8 @@ export default async function RttOnlineSynchronousPage() {
 
             <footer style={{ marginTop: 8, paddingTop: 10, borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--ink-3)" }}>
               Schedule changes? Open{" "}
-              <Link href="/admin/data/sessions" style={{ color: "var(--indigo)" }}>
-                /admin/data/sessions
+              <Link href="/admin/data/rtt-sessions" style={{ color: "var(--indigo)" }}>
+                /admin/data/rtt-sessions
               </Link>
               .
             </footer>

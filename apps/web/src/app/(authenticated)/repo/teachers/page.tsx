@@ -29,6 +29,7 @@ import { auth } from "@/auth";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -60,9 +61,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // turn it into a wildcard (no teacher has those today, but the contract
 // is the same across all repo index pages).
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 type SearchParams = Promise<{ school?: string; phase?: string; q?: string }>;
 

@@ -103,7 +103,14 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
       .update(mentorPairings)
       .set({
         meetingsCount: sql`${mentorPairings.meetingsCount} + 1`,
-        lastMeetingAt: scheduledAt,
+        // GREATEST, not an assignment. "Last meeting" means the most recent
+        // one, and this used to be set unconditionally to whatever date was
+        // submitted -- so back-filling a meeting from three months ago moved
+        // the pairing's "last meeting" backwards to it. The dashboard's
+        // stale-pairing view reads this column, so a mentor doing the
+        // conscientious thing and recording a missed entry made their pairing
+        // look neglected.
+        lastMeetingAt: sql`GREATEST(COALESCE(${mentorPairings.lastMeetingAt}, ${scheduledAt}), ${scheduledAt})`,
       })
       .where(eq(mentorPairings.id, pairingId));
   });
@@ -304,6 +311,13 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   // Append in SQL. A read-modify-write would lose a concurrent addition.
   // Capped at 50 so the column cannot grow without bound on a row that is read
   // on every visit to the pairing page.
+  //
+  // THE CAP NOW REPORTS ITSELF. The CASE returns the array unchanged once the
+  // limit is reached, and the action then redirected as though it had
+  // succeeded -- so past 50 commitments the Add button silently did nothing,
+  // forever, with no message. Returning the resulting length lets the caller
+  // tell "appended" from "refused", which is the whole difference between a
+  // cap and a bug.
   const updated = await db
     .update(mentorPairings)
     .set({
@@ -314,10 +328,16 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
       END`,
     })
     .where(eq(mentorPairings.id, pairingId))
-    .returning({ id: mentorPairings.id });
+    .returning({
+      id: mentorPairings.id,
+      count: sql<number>`jsonb_array_length(${mentorPairings.commitments})`,
+    });
 
   if (updated.length === 0) {
     redirect(`/mentorship/${pairingId}?error=pairing_not_found`);
+  }
+  if ((updated[0]?.count ?? 0) >= 50) {
+    redirect(`/mentorship/${pairingId}?error=commitments_full`);
   }
 
   void recordAudit({
