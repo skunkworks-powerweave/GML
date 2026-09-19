@@ -53,6 +53,24 @@ export const mentorPairings = pgTable(
     currentQuarter: smallint("current_quarter"),
     meetingsCount: integer("meetings_count").notNull().default(0),
     lastMeetingAt: timestamp("last_meeting_at", { withTimezone: true, mode: "date" }),
+    // Commitments agreed between this mentor and mentee. Each entry carries a
+    // uuid, because the toggle used to address items BY INDEX -- unstable the
+    // moment anything is inserted or removed, so two mentors editing at once
+    // would toggle each other's items.
+    commitments: jsonb("commitments")
+      .$type<
+        Array<{
+          id: string;
+          text: string;
+          who: "mentor" | "mentee";
+          due: string | null;
+          done: boolean;
+          doneAt: string | null;
+          doneBy: string | null;
+        }>
+      >()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
   },
   (t) => [
     uniqueIndex("mentor_pairings_mentor_teacher_started_uq").on(t.mentorId, t.teacherId, t.startedAt),

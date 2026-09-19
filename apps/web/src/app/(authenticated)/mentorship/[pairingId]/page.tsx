@@ -6,8 +6,10 @@
 //   - "Message"       → /inbox link (internal messaging deferred; see
 //                       specs/118-.../research.md design deviations).
 //   - Q1-Q4 strip     → links to /forms/<kind>-<audience>-1?pairingId=&quarter=.
-//   - Commitments     → audit-only toggle via toggleCommitmentAction (no
-//                       persistence column yet; see research.md).
+//   - Commitments     → persisted on mentor_pairings.commitments. This used
+//                       to render a hardcoded array of four placeholder
+//                       strings, identical for every pairing, with a toggle
+//                       that wrote an audit row and changed nothing.
 //   - "Complete"      → completePairingAction (super_admin + programme_admin).
 
 import { redirect } from "next/navigation";
@@ -24,6 +26,7 @@ import {
   logMeetingAction,
   completePairingAction,
   toggleCommitmentAction,
+  addCommitmentAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -75,6 +78,10 @@ export default async function PairingDetailPage({
   const pairing = await assertCanAccessPairing(pairingActor, pairingId);
   const [mentor] = await db.select().from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+
+  // assertCanAccessPairing returns the pairing row, so the commitments come
+  // along with the ownership check rather than costing a second query.
+  const commitments = Array.isArray(pairing.commitments) ? pairing.commitments : [];
 
   // Pick a WhatsApp/Message target — the mentee (teacher) is the primary
   // contact for a mentor-led pairing. Phone may be NULL.
@@ -472,71 +479,152 @@ export default async function PairingDetailPage({
             </div>
           ) : null}
 
-          {/* Commitments register (spec 118) — v1 audit-only stub. The
-              `commitments` jsonb column is not yet on mentor_pairings; the
-              toggle action records an audit row instead so clicks are not
-              silently dropped. See specs/118-.../research.md. */}
+          {/* Commitments register.
+              Until now this rendered a HARDCODED array of four placeholder
+              strings -- the same four for every mentor and every teacher -- and
+              the toggle wrote an audit row while persisting nothing. A mentor
+              could tick an item, see nothing change, reload, and find it
+              untouched. It was the one place in the application that showed
+              invented content as real programme data. */}
           <div className="card card-hi">
             <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
               <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
                 Commitments register
               </h2>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                Click a row to mark/unmark. Persistence lands in the next migration.
+                What each of you agreed to do before the next meeting.
               </div>
             </div>
+
             <div style={{ padding: 4 }}>
-              {[
-                { t: "Use 4-minute cool-down in every lesson", who: "mentee", due: "Wk 8" },
-                { t: "Share sound-box video with cohort", who: "mentor", due: "Wk 7" },
-                { t: "Co-teach with mentee at school visit", who: "mentor", due: "Wk 6" },
-                { t: "Track exit-ticket completion daily", who: "mentee", due: "Wk 7" },
-              ].map((c, i) => (
-                <form
-                  key={i}
-                  action={toggleCommitmentAction}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "20px 1fr 60px",
-                    gap: 10,
-                    padding: "8px 12px",
-                    borderTop: i ? "1px solid var(--line)" : "none",
-                    fontSize: 12,
-                    alignItems: "center",
-                  }}
-                >
-                  <input type="hidden" name="pairingId" value={pairingId} />
-                  <input type="hidden" name="index" value={i} />
-                  <input type="hidden" name="text" value={c.t} />
-                  <input type="hidden" name="done" value="true" />
-                  <button
-                    type="submit"
-                    aria-label={`Toggle commitment: ${c.t}`}
+              {commitments.length === 0 ? (
+                <p style={{ padding: "12px 14px", fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+                  Nothing agreed yet. Add the first commitment below.
+                </p>
+              ) : (
+                commitments.map((c, i) => (
+                  <form
+                    key={c.id}
+                    action={toggleCommitmentAction}
                     style={{
-                      width: 16,
-                      height: 16,
-                      border: "1px solid var(--ink-3)",
-                      background: "var(--card)",
-                      borderRadius: 3,
-                      cursor: "pointer",
-                      padding: 0,
+                      display: "grid",
+                      gridTemplateColumns: "20px 1fr 60px",
+                      gap: 10,
+                      padding: "8px 12px",
+                      borderTop: i ? "1px solid var(--line)" : "none",
+                      fontSize: 12,
+                      alignItems: "center",
                     }}
-                  />
-                  <div>
-                    <div style={{ color: "var(--ink)" }}>{c.t}</div>
-                    <div style={{ fontSize: 10, color: "var(--ink-3)" }}>
-                      {c.who} · {c.due}
-                    </div>
-                  </div>
-                  <span
-                    className="mono"
-                    style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right" }}
                   >
-                    {c.due}
-                  </span>
-                </form>
-              ))}
+                    <input type="hidden" name="pairingId" value={pairingId} />
+                    {/* BY ID, not by index: an index is unstable the moment
+                        anything is added or removed, so two mentors editing at
+                        once would toggle each other's items. */}
+                    <input type="hidden" name="commitmentId" value={c.id} />
+                    <button
+                      type="submit"
+                      aria-label={`${c.done ? "Unmark" : "Mark"} commitment: ${c.text}`}
+                      style={{
+                        width: 16,
+                        height: 16,
+                        border: "1px solid var(--ink-3)",
+                        background: c.done ? "var(--ink)" : "var(--card)",
+                        borderRadius: 3,
+                        cursor: "pointer",
+                        padding: 0,
+                      }}
+                    />
+                    <div>
+                      <div
+                        style={{
+                          color: c.done ? "var(--ink-3)" : "var(--ink)",
+                          textDecoration: c.done ? "line-through" : "none",
+                        }}
+                      >
+                        {c.text}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--ink-3)" }}>
+                        {c.who}
+                        {c.due ? ` · ${c.due}` : ""}
+                      </div>
+                    </div>
+                    <span
+                      className="mono"
+                      style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right" }}
+                    >
+                      {c.done ? "done" : (c.due ?? "")}
+                    </span>
+                  </form>
+                ))
+              )}
             </div>
+
+            <form
+              action={addCommitmentAction}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 90px 70px auto",
+                gap: 6,
+                padding: "10px 12px",
+                borderTop: "1px solid var(--line)",
+                alignItems: "center",
+              }}
+            >
+              <input type="hidden" name="pairingId" value={pairingId} />
+              <input
+                name="text"
+                required
+                maxLength={500}
+                placeholder="Add a commitment…"
+                style={{
+                  padding: "6px 8px",
+                  border: "1px solid var(--line-2)",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  background: "var(--card)",
+                }}
+              />
+              <select
+                name="who"
+                defaultValue="mentee"
+                style={{
+                  padding: "6px 4px",
+                  border: "1px solid var(--line-2)",
+                  borderRadius: 6,
+                  fontSize: 11,
+                  background: "var(--card)",
+                }}
+              >
+                <option value="mentee">mentee</option>
+                <option value="mentor">mentor</option>
+              </select>
+              <input
+                name="due"
+                maxLength={40}
+                placeholder="Wk 8"
+                style={{
+                  padding: "6px 6px",
+                  border: "1px solid var(--line-2)",
+                  borderRadius: 6,
+                  fontSize: 11,
+                  background: "var(--card)",
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  padding: "6px 12px",
+                  border: "none",
+                  borderRadius: 6,
+                  background: "var(--ink)",
+                  color: "var(--paper)",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Add
+              </button>
+            </form>
           </div>
         </div>
       </div>

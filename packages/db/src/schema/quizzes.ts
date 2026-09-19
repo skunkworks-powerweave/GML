@@ -50,6 +50,11 @@ export const quizzes = pgTable(
     // headroom for hypothetical long-form assessments without inviting
     // "infinite" timers that exist only to bypass the cap).
     timeLimitSeconds: integer("time_limit_seconds"),
+    // Attempts allowed per learner. NULL = unlimited, which is the correct
+    // default for every quiz that already exists -- retroactively capping a
+    // quiz learners have been retaking would lock people out of an assessment
+    // they were told they could retry.
+    maxAttempts: smallint("max_attempts"),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
@@ -69,6 +74,10 @@ export const quizzes = pgTable(
     // [60, 7200]. The CHECK uses the literal column name because Drizzle's
     // sql tagged-template emits the unqualified identifier inside CHECK
     // clauses (mirrors quizzes_pass_threshold_range above).
+    check(
+      "quizzes_max_attempts_range",
+      sql`${t.maxAttempts} IS NULL OR ${t.maxAttempts} BETWEEN 1 AND 20`,
+    ),
     check(
       "quizzes_time_limit_range",
       sql`${t.timeLimitSeconds} IS NULL OR ${t.timeLimitSeconds} BETWEEN 60 AND 7200`,
@@ -127,3 +136,39 @@ export type QuizQuestion = typeof quizQuestions.$inferSelect;
 export type NewQuizQuestion = typeof quizQuestions.$inferInsert;
 export type QuizSubmission = typeof quizSubmissions.$inferSelect;
 export type NewQuizSubmission = typeof quizSubmissions.$inferInsert;
+
+// ── quiz_attempts ─────────────────────────────────────────────────────────────
+//
+// Opened when a learner starts the runner, closed when they submit.
+//
+// WHY IT HAS TO EXIST. `quizzes.time_limit_seconds` was enforced ONLY by a
+// countdown in the browser, because quiz_submissions records submitted_at and
+// nothing else -- there was no record of when an attempt STARTED, so the server
+// had nothing to measure against. It could not have enforced the limit even if
+// the code had tried. And with no attempt record at all there was no attempt
+// cap either: a learner could resubmit until they passed, which for a
+// programme that issues completion on these scores is the difference between an
+// assessment and a formality.
+export const quizAttempts = pgTable(
+  "quiz_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    quizId: uuid("quiz_id").notNull().references(() => quizzes.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    submissionId: uuid("submission_id").references(() => quizSubmissions.id, { onDelete: "set null" }),
+    closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    index("quiz_attempts_user_quiz_idx").on(t.userId, t.quizId, t.startedAt),
+    // At most ONE open attempt per learner per quiz. Partial, so a closed
+    // attempt does not block a legitimate retry -- opening the runner in two
+    // tabs would otherwise create two attempts and the earlier one becomes an
+    // invisible extra life.
+    uniqueIndex("quiz_attempts_one_open_uq")
+      .on(t.userId, t.quizId)
+      .where(sql`closed_at IS NULL`),
+  ],
+);
+
+export type QuizAttempt = typeof quizAttempts.$inferSelect;

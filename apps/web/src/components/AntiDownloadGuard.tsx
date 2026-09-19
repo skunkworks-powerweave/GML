@@ -26,9 +26,19 @@ type AttemptKind = "save" | "print" | "printscreen";
 function emitAudit(action: string, metadata: Record<string, unknown> = {}): void {
   if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") return;
   try {
-    const blob = new Blob([JSON.stringify({ action, metadata })], {
-      type: "application/json",
-    });
+    const blob = new Blob(
+      [
+        JSON.stringify({
+          action,
+          // The page is what makes the row actionable: "someone tried to
+          // print" is far less useful than "someone tried to print THIS
+          // learner record". The server caps it and rejects anything that is
+          // not a same-site absolute path.
+          metadata: { ...metadata, path: window.location.pathname },
+        }),
+      ],
+      { type: "application/json" },
+    );
     navigator.sendBeacon("/api/audit/client", blob);
   } catch {
     // Silent — the deterrent CSS/UX still functions without server-side audit.

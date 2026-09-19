@@ -23,6 +23,7 @@
 // state required) and live inline in page.tsx; only the three above need
 // actions because they mutate.
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { eq, sql } from "drizzle-orm";
@@ -166,29 +167,127 @@ export async function toggleCommitmentAction(formData: FormData): Promise<void> 
   if (!commitmentActor) redirect("/login");
 
   const pairingId = String(formData.get("pairingId") ?? "").trim();
-  const index = Number(formData.get("index") ?? -1);
-  const done = String(formData.get("done") ?? "") === "true";
-  const text = String(formData.get("text") ?? "").trim();
-
-  if (!pairingId || Number.isNaN(index) || index < 0) {
+  const commitmentId = String(formData.get("commitmentId") ?? "").trim();
+  if (!pairingId || !commitmentId) {
     redirect(`/mentorship/${pairingId || ""}?error=invalid_commitment`);
   }
 
   // OWNERSHIP GATE. This action had a session check and nothing else, so any
-  // authenticated user could write an unbounded attacker-controlled `text` into
+  // authenticated user could write an unbounded attacker-controlled string into
   // the APPEND-ONLY audit log against any pairing id -- rows the application
   // role cannot delete afterwards.
   await assertCanAccessPairing(commitmentActor, pairingId);
 
-  // Bound the free-text field. It is attacker-controlled and lands in a table
-  // that is append-only by trigger.
-  const boundedText = text.slice(0, 500);
+  // IT NOW PERSISTS. The previous version wrote an audit row and changed
+  // nothing: a mentor ticked an item, saw nothing happen, reloaded, and found
+  // it untouched. The control had no backing state at all.
+  //
+  // Addressed BY ID, not by index. The old signature took an array index,
+  // which is unstable the moment an item is added or removed -- two mentors
+  // editing concurrently would toggle each other's commitments.
+  //
+  // Done in one SQL statement so a concurrent toggle on a different item
+  // cannot be lost to a read-modify-write on the whole array.
+  const updated = await db
+    .update(mentorPairings)
+    .set({
+      commitments: sql`(
+        SELECT jsonb_agg(
+          CASE WHEN elem->>'id' = ${commitmentId}
+            THEN elem
+                 || jsonb_build_object('done', NOT COALESCE((elem->>'done')::boolean, false))
+                 || jsonb_build_object(
+                      'doneAt',
+                      CASE WHEN COALESCE((elem->>'done')::boolean, false)
+                           THEN NULL ELSE to_jsonb(now()) END)
+                 || jsonb_build_object(
+                      'doneBy',
+                      CASE WHEN COALESCE((elem->>'done')::boolean, false)
+                           THEN NULL ELSE to_jsonb(${session.user.id}::text) END)
+            ELSE elem
+          END
+          ORDER BY ord
+        )
+        FROM jsonb_array_elements(${mentorPairings.commitments}) WITH ORDINALITY AS t(elem, ord)
+      )`,
+    })
+    .where(eq(mentorPairings.id, pairingId))
+    .returning({ id: mentorPairings.id });
+
+  if (updated.length === 0) {
+    redirect(`/mentorship/${pairingId}?error=pairing_not_found`);
+  }
 
   void recordAudit({
     action: "mentor.commitment.toggled",
     entityType: "mentor_pairing",
     entityId: pairingId,
-    metadata: { index, done, text: boundedText },
+    // The commitment id, not its text. The text is user-supplied and lands in a
+    // table that is append-only by trigger; the id is enough to correlate.
+    metadata: { commitmentId },
+  });
+
+  revalidatePath(`/mentorship/${pairingId}`);
+}
+
+/**
+ * Add a commitment to a pairing.
+ *
+ * The register previously rendered a hardcoded array of four placeholder
+ * strings -- the same four for every mentor and every teacher -- with no way to
+ * add a real one. This is that way.
+ */
+export async function addCommitmentAction(formData: FormData): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+
+  const pairingId = String(formData.get("pairingId") ?? "").trim();
+  const text = String(formData.get("text") ?? "").trim().slice(0, 500);
+  const whoRaw = String(formData.get("who") ?? "mentee");
+  const who = whoRaw === "mentor" ? "mentor" : "mentee";
+  const due = String(formData.get("due") ?? "").trim().slice(0, 40) || null;
+
+  if (!pairingId) redirect("/mentorship?error=invalid_commitment");
+  if (!text) redirect(`/mentorship/${pairingId}?error=empty_commitment`);
+
+  await assertCanAccessPairing(actor, pairingId);
+
+  const entry = {
+    id: randomUUID(),
+    text,
+    who,
+    due,
+    done: false,
+    doneAt: null,
+    doneBy: null,
+  };
+
+  // Append in SQL. A read-modify-write would lose a concurrent addition.
+  // Capped at 50 so the column cannot grow without bound on a row that is read
+  // on every visit to the pairing page.
+  const updated = await db
+    .update(mentorPairings)
+    .set({
+      commitments: sql`CASE
+        WHEN jsonb_array_length(${mentorPairings.commitments}) >= 50
+        THEN ${mentorPairings.commitments}
+        ELSE ${mentorPairings.commitments} || ${JSON.stringify([entry])}::jsonb
+      END`,
+    })
+    .where(eq(mentorPairings.id, pairingId))
+    .returning({ id: mentorPairings.id });
+
+  if (updated.length === 0) {
+    redirect(`/mentorship/${pairingId}?error=pairing_not_found`);
+  }
+
+  void recordAudit({
+    action: "mentor.commitment.added",
+    entityType: "mentor_pairing",
+    entityId: pairingId,
+    metadata: { commitmentId: entry.id, who },
   });
 
   revalidatePath(`/mentorship/${pairingId}`);
