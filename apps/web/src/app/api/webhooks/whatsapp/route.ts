@@ -195,8 +195,9 @@ async function ingestVideoMessage(
 
   // Resolve context_id by looking up the parent entity using the caption
   // prefix. Each branch falls through to 'generic' on lookup failure so a
-  // typo never blocks the upload — the operator sees the raw caption in
-  // /admin/data/videos and can re-link manually.
+  // typo never blocks the upload -- the raw caption is kept on the submission
+  // (caption_raw) and the unmatched case is audited as
+  // whatsapp.context.unmatched, so an operator can find and re-link it.
   let contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic" = ctx.type;
   let contextId: string | null = null;
 
@@ -204,7 +205,14 @@ async function ingestVideoMessage(
     const [cycle] = await db
       .select({ id: observationCycles.id })
       .from(observationCycles)
-      .where(eq(observationCycles.code, ctx.code))
+      // Either convention: the column stores "OBS-2026-004" today, and a
+      // future import might store "2026-004". Neither should silently miss.
+      .where(
+        or(
+          eq(observationCycles.code, ctx.fullCode ?? ctx.code),
+          eq(observationCycles.code, ctx.code),
+        ),
+      )
       .limit(1);
     if (cycle?.id) {
       contextId = cycle.id;
@@ -333,19 +341,47 @@ async function ingestVideoMessage(
   });
 }
 
-function parseCaption(caption: string): { type: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic"; code?: string } {
-  // OBS-<code>  → observation_cycle
-  // TB-<code>   → teach_back
-  // MM-<code>   → mentor_meeting
-  // anything else → generic
+/**
+ * Read the routing prefix out of a caption.
+ *
+ * Returns BOTH forms of the code, because the two sides of this lookup do not
+ * agree on whether the prefix is part of it:
+ *
+ *   caption        "OBS-2026-004"
+ *   bare           "2026-004"      <- what this used to return
+ *   full           "OBS-2026-004"  <- what observation_cycles.code stores
+ *
+ * The observation branch compared the BARE code against a column holding the
+ * FULL one, so `WHERE code = '2026-004'` never matched a row. Every caption a
+ * teacher was told to write -- the whole point of the prefix convention -- fell
+ * through to the 'generic' branch and the video arrived attached to nothing.
+ * It failed quietly, by design: the fall-through exists so a typo cannot block
+ * an upload, which also meant a systematic mismatch looked exactly like a
+ * programme full of typists.
+ *
+ * Matching on either form keeps it working whichever convention a future seed
+ * or import uses.
+ */
+function parseCaption(caption: string): {
+  type: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic";
+  code?: string;
+  fullCode?: string;
+} {
+  // OBS-<code>  -> observation_cycle
+  // TB-<code>   -> teach_back
+  // MM-<code>   -> mentor_meeting
+  // anything else -> generic
   const m = caption.match(/^(OBS|TB|MM)-([A-Za-z0-9._-]+)/);
   if (!m) return { type: "generic" };
-  const tag = m[1].toUpperCase();
-  if (tag === "OBS") return { type: "observation_cycle", code: caption.match(/^OBS-([A-Za-z0-9._-]+)/)?.[1] };
-  if (tag === "TB") return { type: "teach_back", code: m[2] };
-  if (tag === "MM") return { type: "mentor_meeting", code: m[2] };
+  const tag = m[1]!.toUpperCase();
+  const bare = m[2]!;
+  const full = `${tag}-${bare}`;
+  if (tag === "OBS") return { type: "observation_cycle", code: bare, fullCode: full };
+  if (tag === "TB") return { type: "teach_back", code: bare, fullCode: full };
+  if (tag === "MM") return { type: "mentor_meeting", code: bare, fullCode: full };
   return { type: "generic" };
 }
+
 
 async function fetchMediaUrl(mediaId: string): Promise<string | null> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
