@@ -16,8 +16,15 @@
 import { NextResponse, after } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@gml/db";
-import { files, videoSubmissions, observationCycles, mentorMeetings, users } from "@gml/db/schema";
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import {
+  files,
+  videoSubmissions,
+  observationCycles,
+  mentorMeetings,
+  users,
+  teachers,
+} from "@gml/db/schema";
+import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { storage, BUCKETS } from "@/lib/video/storage";
 import { recordAudit } from "@/lib/audit";
 import { enqueueTranscode } from "@/lib/queue";
@@ -415,19 +422,59 @@ async function downloadMediaBytes(url: string): Promise<Uint8Array | null> {
  * ambiguous match must not attribute a classroom recording to the wrong
  * teacher, and null is the honest answer.
  */
+/**
+ * Which user sent this video?
+ *
+ * WhatsApp gives us a phone number and nothing else, so this is a best-effort
+ * match. An unmatched sender leaves submitted_by_user_id null and the
+ * submission is still ingested -- refusing a teacher's video over a data-entry
+ * mismatch would lose programme evidence.
+ *
+ * ── WHY IT ALSO LOOKS AT teachers.phone ─────────────────────────────────────
+ *
+ * It used to match users.phone ALONE, and in the live database that column is
+ * empty for every row:
+ *
+ *     users     total 1   with_phone 0
+ *     teachers  total 10  with_phone 10
+ *
+ * Phone numbers are entered against TEACHERS -- that is where the seed puts
+ * them, and /admin/data/teachers is the only surface that edits one. There is
+ * no users entity in the admin registry and /admin/users has no phone field,
+ * so users.phone cannot be populated through the product at all.
+ *
+ * The result was that every inbound WhatsApp video -- the programme's PRIMARY
+ * ingest path -- would have been attributed to nobody, no matter how correctly
+ * Meta was configured. The uploader's own "my uploads" and every dashboard
+ * count that joins through submitted_by_user_id would have stayed at zero
+ * while the videos arrived perfectly well.
+ *
+ * Matching through teachers.user_id uses the data that is already there, in
+ * the place an administrator would naturally put it.
+ *
+ * Still deliberately conservative: the last ten digits (so +91 99999 11111,
+ * 09999911111 and 919999911111 all agree), active and non-deleted users only,
+ * and a match is accepted ONLY when exactly one user answers to that number.
+ * Two people sharing a handset attributes to neither rather than to the wrong
+ * one.
+ */
 async function resolveSenderUserId(from: string): Promise<string | null> {
   const digits = (from ?? "").replace(/\D/g, "");
   if (digits.length < 10) return null;
-  const tail = digits.slice(-10);
+  const tail = "%" + digits.slice(-10);
   try {
     const rows = await db
-      .select({ id: users.id })
+      .selectDistinct({ id: users.id })
       .from(users)
+      .leftJoin(teachers, eq(teachers.userId, users.id))
       .where(
         and(
           eq(users.active, true),
           isNull(users.deletedAt),
-          sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') LIKE ${"%" + tail}`,
+          or(
+            sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') LIKE ${tail}`,
+            sql`regexp_replace(coalesce(${teachers.phone}, ''), '[^0-9]', '', 'g') LIKE ${tail}`,
+          ),
         ),
       )
       .limit(2);
@@ -436,6 +483,7 @@ async function resolveSenderUserId(from: string): Promise<string | null> {
     return null;
   }
 }
+
 
 function verifySignature(raw: string, signatureHeader: string): boolean {
   const secret = process.env.WHATSAPP_APP_SECRET;
