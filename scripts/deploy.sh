@@ -93,13 +93,21 @@ for svc in app worker; do
 done
 
 log "building images"
+# Compose writes straight into gml-lms-<svc>:current, because docker-compose.yml
+# now names that tag explicitly on each service.
+#
+# WHAT WAS HERE, AND WHY IT COULD NOT WORK:
+#
+#     built="$(docker compose images -q "${svc}" | head -1)"
+#     docker tag "${built}" "gml-lms-${svc}:current"
+#
+# `docker compose images` lists the images of CREATED CONTAINERS, not the ones
+# just built. It ran after `build` but before `up`, so at that moment the
+# containers were still the OLD ones -- and on a first deploy there are no
+# containers at all, so it returned nothing and tagged nothing. Neither
+# gml-lms-app:current nor :previous has ever actually existed on a deployed
+# box, which is why rollback.sh always aborted with ":previous does not exist".
 docker compose build
-
-# Tag the freshly built images as ':current' so the next deploy can demote them.
-for svc in app worker; do
-  built="$(docker compose images -q "${svc}" 2>/dev/null | head -1)"
-  [ -n "${built}" ] && docker tag "${built}" "gml-lms-${svc}:current"
-done
 
 # ── 2. Up ────────────────────────────────────────────────────────────────────
 # `migrate` runs first and `app`/`worker` block on it exiting 0. If the schema

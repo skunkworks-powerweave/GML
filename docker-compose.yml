@@ -66,6 +66,20 @@ services:
     # Safe on every `up`: both ledgers make it a no-op once current. If it exits
     # non-zero, `app` never starts and the PREVIOUS container keeps serving.
     # That is the rollback posture, and it is deliberate.
+    # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
+    #
+    # Without an `image:` key Compose derives one from the project name --
+    # gml-lms-migrate:latest -- and runs THAT regardless of what else is tagged.
+    # So deploy.sh tagged gml-lms-migrate:current / :previous and Compose ignored
+    # both, and rollback.sh's "retag previous -> current, then up" changed
+    # nothing: it restarted the very image it was rolling back from. Neither tag
+    # had ever been created either, so in practice rollback.sh aborted first
+    # with "gml-lms-app:previous does not exist".
+    #
+    # Naming the tag here makes `docker compose build` write into :current and
+    # `docker compose up` run :current, which is what gives those two scripts
+    # something real to move.
+    image: gml-lms-migrate:current
     build:
       context: .
       dockerfile: docker/migrate.Dockerfile
@@ -102,6 +116,20 @@ services:
 
   app:
     # Next.js web + API + Server Actions.
+    # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
+    #
+    # Without an `image:` key Compose derives one from the project name --
+    # gml-lms-app:latest -- and runs THAT regardless of what else is tagged.
+    # So deploy.sh tagged gml-lms-app:current / :previous and Compose ignored
+    # both, and rollback.sh's "retag previous -> current, then up" changed
+    # nothing: it restarted the very image it was rolling back from. Neither tag
+    # had ever been created either, so in practice rollback.sh aborted first
+    # with "gml-lms-app:previous does not exist".
+    #
+    # Naming the tag here makes `docker compose build` write into :current and
+    # `docker compose up` run :current, which is what gives those two scripts
+    # something real to move.
+    image: gml-lms-app:current
     build:
       context: .
       dockerfile: docker/app.Dockerfile
@@ -154,6 +182,20 @@ services:
 
   worker:
     # ffmpeg transcoding, queue consumer, periodic sweeps.
+    # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
+    #
+    # Without an `image:` key Compose derives one from the project name --
+    # gml-lms-worker:latest -- and runs THAT regardless of what else is tagged.
+    # So deploy.sh tagged gml-lms-worker:current / :previous and Compose ignored
+    # both, and rollback.sh's "retag previous -> current, then up" changed
+    # nothing: it restarted the very image it was rolling back from. Neither tag
+    # had ever been created either, so in practice rollback.sh aborted first
+    # with "gml-lms-app:previous does not exist".
+    #
+    # Naming the tag here makes `docker compose build` write into :current and
+    # `docker compose up` run :current, which is what gives those two scripts
+    # something real to move.
+    image: gml-lms-worker:current
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
