@@ -5,6 +5,7 @@ seen the codebase.
 
 ---
 
+
 ## 1. What you are deploying
 
 Three long-running containers on **one** EC2 instance, plus a one-shot schema
@@ -128,6 +129,37 @@ It is idempotent. Re-running it is the normal upgrade path.
 only the hash is stored. You can rotate them later at `/admin/gates`.
 
 ---
+
+### 3.1 Clearing the demonstration data
+
+The seed inserts two kinds of row and does not distinguish them. The
+**districts and zones are real** Ladakh administrative divisions, and so are
+the phases, terms, subjects, form and quiz catalogues, and section gates —
+keep all of it.
+
+The **schools, teachers, mentors, pairings and observation cycles are
+invented**: ten schools with sequential contact numbers, ten teachers with
+sequential mobiles (`+91 9419100001..`), and eight cycles `OBS-2026-001..008`.
+Left in place they appear in the roster, in QuickFind, in every admin grid and
+in the dashboard counts, indistinguishable from real staff.
+
+```bash
+docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/purge_demo_data.ts
+```
+
+That is a **dry run** — it prints what would go and changes nothing. Add
+`--apply` to commit, which runs in a single transaction.
+
+Two things it does deliberately:
+
+- **It keeps the districts.** `seed.ts` skips everything when any district
+  exists, and `deploy.sh` runs the seed on every deploy — so removing them
+  would reinstate all of this on the next deployment.
+- **It keeps anything with real work attached.** A demo cycle that has acquired
+  a genuine form, video or evidence row, or a demo teacher who has been given a
+  login, is reported and left alone rather than cascaded away.
+
+Safe to run twice; the second run finds nothing.
 
 ## 4. Upgrading
 
