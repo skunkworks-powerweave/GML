@@ -247,6 +247,40 @@ export default async function QuizRunnerPage({
     .values({ quizId: quiz.id, userId: session.user.id })
     .onConflictDoNothing();
 
+  // THE COUNTDOWN MUST CONTINUE THE ATTEMPT, NOT RESTART IT.
+  //
+  // The runner was handed `timeLimitSeconds` and nothing else, so it started a
+  // fresh countdown from the FULL limit on every render -- while the server
+  // measures elapsed time from quiz_attempts.startedAt, which is set once when
+  // the attempt opens. A learner who reloaded the page, lost their connection
+  // and came back, or simply reopened the tab saw the whole time again,
+  // answered in good faith, and was rejected with ?error=time_expired at
+  // submit. On a Ladakh connection a dropped page is ordinary, so this is the
+  // normal path, not an edge case.
+  //
+  // Reading the attempt back and passing what is actually LEFT makes the
+  // countdown agree with the rule it is displaying. Clamped at zero rather
+  // than going negative, and the +30s grace mirrors the submit-side margin so
+  // a learner is never shown less time than the server will honour.
+  let remainingSeconds: number | null = quiz.timeLimitSeconds ?? null;
+  if (remainingSeconds != null) {
+    const [attempt] = await db
+      .select({ startedAt: quizAttempts.startedAt })
+      .from(quizAttempts)
+      .where(
+        and(
+          eq(quizAttempts.quizId, quiz.id),
+          eq(quizAttempts.userId, session.user.id),
+          isNull(quizAttempts.closedAt),
+        ),
+      )
+      .limit(1);
+    if (attempt) {
+      const elapsed = (Date.now() - attempt.startedAt.getTime()) / 1000;
+      remainingSeconds = Math.max(0, Math.round(remainingSeconds + 30 - elapsed));
+    }
+  }
+
   // Spec 134 — device-aware runner. Mobile gets the full-screen
   // one-question-per-screen layout from mobile-runners.jsx::MobQuiz.
   // Same grading contract (submitQuizAttempt) — drop-in replacement.
@@ -262,7 +296,9 @@ export default async function QuizRunnerPage({
   // and the legacy seed quizzes all carry NULL, so this prop is opt-in
   // and existing learners see no change. When set, the runner renders
   // a countdown banner and auto-submits at 00:00.
-  const timeLimitSeconds = quiz.timeLimitSeconds ?? null;
+  // The countdown the runner renders: seconds REMAINING on the open attempt,
+  // not the quiz's full limit. See the attempt read above.
+  const timeLimitSeconds = remainingSeconds;
 
   // RENDER THE REASON WE BOUNCED THEM BACK.
   //

@@ -321,7 +321,20 @@ function CheckboxGroup({
   value: unknown;
   onChange: (v: string[]) => void;
 }) {
-  const selected = Array.isArray(value) ? (value as string[]) : [];
+  // A SINGLE PRIOR SELECTION COMES BACK AS A BARE STRING.
+  //
+  // Responses are stored as jsonb and read back through FormData, where a
+  // checkbox group with exactly one box ticked round-trips as a string rather
+  // than a one-element array. This read `Array.isArray(value) ? ... : []`, so
+  // that one selection was discarded: reopening a saved form showed the box
+  // unchecked, and re-submitting silently cleared an answer the user had
+  // already given. Groups with two or more selections restored correctly,
+  // which is why it looked like an intermittent fault rather than a rule.
+  const selected = Array.isArray(value)
+    ? (value as string[])
+    : typeof value === "string" && value.length > 0
+      ? [value]
+      : [];
   const toggle = (v: string) => {
     const next = selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v];
     onChange(next);

@@ -42,13 +42,29 @@ const SECTION_KEY: Record<string, string> = {
   "Resources": "resources",
 };
 
-/** Nav item id → `nav.*` key. Items not in the map fall back to item.label. */
+/**
+ * Nav item id → `nav.*` key. Items not in the map fall back to item.label.
+ *
+ * FOUR IDS ARE DELIBERATELY ABSENT: observation, mentorship, rtt and videos.
+ *
+ * NAV_BY_ROLE reuses those ids across roles with DIFFERENT labels by design --
+ * `videos` is "Video library" for an admin and "Pending review" for a mentor;
+ * `observation` is "Classroom Observation", "Observation cycles" or "My
+ * observations" depending on who is looking. This map is keyed by id alone, so
+ * whichever single translation existed overwrote all of them: a mentor's
+ * sidebar said "Video library" and "Mentorship" instead of "Pending review" and
+ * "My mentees". Not a translation bug -- it showed the wrong label in English
+ * too, which is how it went unnoticed in a programme whose default locale is
+ * English.
+ *
+ * Falling back to item.label restores the role-specific wording everywhere.
+ * The cost is that those four are not translated: fixing that properly needs
+ * per-role keys in the dictionaries (nav.videos.mentor and so on), which is a
+ * content change across en/hi/bo, not a code change. Showing the right label
+ * untranslated beats showing the wrong one in three languages.
+ */
 const ITEM_KEY: Record<string, string> = {
   "dashboard": "dashboard",
-  "observation": "observation",
-  "mentorship": "mentorship",
-  "rtt": "rtt",
-  "videos": "videos",
   "repo": "repoHome",
   "repo-schools": "schools",
   "repo-subjects": "subjects",

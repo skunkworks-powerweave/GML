@@ -39,6 +39,25 @@ export type Actor = { id: string; role: RoleName | string };
 
 const isAdmin = (actor: Actor): boolean => hasAnyRole(actor.role, ADMIN_ROLES);
 
+/**
+ * Every id these helpers take arrives from a URL segment or a form body.
+ *
+ * Postgres raises 22P02 ("invalid input syntax for type uuid") when a
+ * non-uuid string is compared against a uuid column, which surfaces as an
+ * unhandled exception -- a 500, or a blank page before this codebase had any
+ * error boundary. /observation/not-a-uuid did exactly that, on the same helper
+ * whose entire design principle is that an unauthorised row must be
+ * indistinguishable from an absent one. A 500 is very distinguishable.
+ *
+ * A malformed id cannot name a row, so notFound() is both the safe answer and
+ * the correct one.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertUuid(id: string): void {
+  if (!UUID_RE.test(id)) notFound();
+}
+
 /** teachers.id for the signed-in user, or null if they are not a teacher. */
 async function teacherIdFor(actor: Actor): Promise<string | null> {
   const [row] = await db
@@ -77,6 +96,7 @@ async function menteeTeacherIds(mentorId: string): Promise<string[]> {
  *   mentor   -> cycles about a teacher they are actively paired with
  */
 export async function assertCanAccessCycle(actor: Actor, cycleId: string) {
+  assertUuid(cycleId);
   const [cycle] = await db
     .select()
     .from(observationCycles)
@@ -122,6 +142,7 @@ export async function assertCanAccessCycle(actor: Actor, cycleId: string) {
  *   observer -> denied; observers have no mentorship role
  */
 export async function assertCanAccessPairing(actor: Actor, pairingId: string) {
+  assertUuid(pairingId);
   const [pairing] = await db
     .select()
     .from(mentorPairings)
@@ -152,6 +173,7 @@ export async function assertCanAccessPairing(actor: Actor, pairingId: string) {
  * because context_id deliberately carries no foreign key.
  */
 export async function assertCanAccessVideo(actor: Actor, videoId: string) {
+  assertUuid(videoId);
   const [video] = await db
     .select()
     .from(videoSubmissions)

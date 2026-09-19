@@ -9,6 +9,7 @@
 
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
@@ -110,10 +111,40 @@ export default async function CycleDetailPage({
 
   // CTA gating — each form may only be submitted once, and only when the
   // cycle is in the expected upstream status.
-  const canSubmitPre = cycle.status === "nominated";
-  const canSubmitObserver = cycle.status === "pre_submitted";
-  const canSubmitPost = cycle.status === "observed";
-  const canSignOff = cycle.status === "post_submitted";
+  // ROLE, NOT JUST STATUS.
+  //
+  // These four flags gated purely on cycle.status, while every action behind
+  // them role-gates with requireRole() and redirects to /forbidden on a
+  // mismatch. So the page showed a teacher a "Sign off cycle" button -- the
+  // terminal, locking transition, which only a mentor or an administrator may
+  // perform -- and clicking it threw her out of the cycle onto a permissions
+  // error. Rendering a control that the server will refuse is worse than
+  // hiding it: it reads as a permission that has been revoked rather than one
+  // that was never held.
+  //
+  // Each list mirrors the requireRole() list of the action it triggers. If one
+  // changes, both must.
+  // `actor` is the narrowed, non-null form -- the redirect above guarantees it.
+  const viewerRole = actor.role;
+  const canSubmitPre =
+    cycle.status === "nominated" &&
+    hasAnyRole(viewerRole, ["teacher", "observer", "mentor", "programme_admin", "super_admin"]);
+  const canSubmitObserver =
+    cycle.status === "pre_submitted" &&
+    hasAnyRole(viewerRole, ["observer", "mentor", "programme_admin", "super_admin"]);
+  const canSubmitPost =
+    cycle.status === "observed" &&
+    hasAnyRole(viewerRole, ["teacher", "observer", "mentor", "programme_admin", "super_admin"]);
+  const canSignOff =
+    cycle.status === "post_submitted" &&
+    hasAnyRole(viewerRole, ["mentor", "programme_admin", "super_admin"]);
+  // addNoteAction: observer, mentor, programme_admin, super_admin.
+  const canAddNote = hasAnyRole(viewerRole, [
+    "observer",
+    "mentor",
+    "programme_admin",
+    "super_admin",
+  ]);
 
   // Spec 137 — device-aware adoption of MobileDetailFrame. On mobile the
   // existing single-column flow is wrapped in the thin-header + back-arrow
@@ -373,6 +404,7 @@ export default async function CycleDetailPage({
         ) : (
           <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No mentor note yet.</p>
         )}
+        {canAddNote ? (
         <form action={addNoteAction} style={{ display: "grid", gap: 8 }}>
           <input type="hidden" name="cycleId" value={cycleId} />
           <textarea
@@ -389,6 +421,7 @@ export default async function CycleDetailPage({
             </button>
           </div>
         </form>
+        ) : null}
       </section>
     </div>
   );

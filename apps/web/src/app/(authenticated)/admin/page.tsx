@@ -101,11 +101,34 @@ export default async function AdminIndexPage() {
               </div>
             </Link>
           </li>
+          {/* Forms & quizzes shipped. This was still rendered as a greyed-out
+              dashed placeholder reading "Lands in spec 073" while /admin/forms
+              and /admin/quizzes were both fully implemented and linked from the
+              sidebar -- so the admin index told an administrator a working
+              feature did not exist yet. */}
           <li>
-            <span className="block rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 text-neutral-400">
-              <div className="text-sm font-medium">Forms & quizzes</div>
-              <div className="text-xs">Lands in spec 073</div>
-            </span>
+            <Link
+              href="/admin/forms"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">Forms &amp; quizzes</div>
+              <div className="text-xs text-neutral-500">
+                Feedback form and quiz templates
+              </div>
+            </Link>
+          </li>
+          {/* /admin/whatsapp-log had no entry here at all, despite being the
+              operator surface for the programme's PRIMARY video ingest path. */}
+          <li>
+            <Link
+              href="/admin/whatsapp-log"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">WhatsApp ingest log</div>
+              <div className="text-xs text-neutral-500">
+                Incoming videos · unmatched submissions
+              </div>
+            </Link>
           </li>
           <li>
             <Link

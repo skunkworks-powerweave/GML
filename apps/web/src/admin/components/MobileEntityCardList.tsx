@@ -11,9 +11,9 @@
 // to show). Title = first displayColumn (the canonical name field). Card
 // body = next 2-3 displayColumns as KV pairs. The full row is still
 // reachable via the desktop view; this card view exposes:
-//   - a "View row" affordance (anchors the desktop URL for now — there is
-//     no per-row admin detail page yet, but the anchor preserves intent and
-//     lets us add one later without re-touching the card)
+//   - a "View row" affordance, linking to the grid's own ?edit=<id> panel.
+//     It used to link to ?row=<id>, a parameter the grid has never read, so on
+//     a phone the button reloaded the same list and nothing else.
 //   - an Export CSV button (re-uses the generic /api/admin/data/[slug]/export
 //     endpoint that the desktop header already points at — so CSV stays a
 //     one-click affordance on small screens too)
@@ -184,8 +184,13 @@ export function MobileEntityCardList({
         const rowId = pickRowId(row);
         const titleValue = formatCell(titleCol, row[titleCol.key]);
         const hindi = pickHindi(row);
+        // `?edit=`, not `?row=`. The grid page reads `sp.edit` to open its
+        // detail panel and has never read `row` at all, so on a phone this
+        // button reloaded the identical list and did nothing else -- the only
+        // way to open a record from the mobile admin was to switch to a
+        // desktop. Nothing reported it because the page did visibly reload.
         const viewHref = rowId
-          ? `/admin/data/${entitySlug}?row=${encodeURIComponent(rowId)}`
+          ? `/admin/data/${entitySlug}?edit=${encodeURIComponent(rowId)}`
           : `/admin/data/${entitySlug}`;
 
         return (

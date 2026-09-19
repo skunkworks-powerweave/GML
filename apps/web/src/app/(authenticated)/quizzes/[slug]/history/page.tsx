@@ -87,6 +87,20 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
     )
     .orderBy(desc(quizSubmissions.submittedAt));
 
+  // ARE THERE ATTEMPTS LEFT?
+  //
+  // Without this the page produced a loop. /quizzes/[slug] redirects HERE with
+  // ?error=attempts_exhausted when the cap is reached, and both buttons on this
+  // page linked straight back to /quizzes/[slug] -- which redirected here
+  // again. A learner who had used their attempts could press "Take quiz again"
+  // forever and never see anything change except the page flickering.
+  //
+  // The count is the same one the runner uses: submissions, not attempts, so an
+  // abandoned attempt does not consume a try.
+  const attemptsLeft =
+    quiz.maxAttempts == null ? null : Math.max(0, quiz.maxAttempts - rows.length);
+  const canRetake = attemptsLeft === null || attemptsLeft > 0;
+
   return (
     <main>
       {historyError ? (
@@ -142,13 +156,19 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
               You haven&apos;t submitted this quiz yet. Start it to see your
               first attempt here.
             </p>
-            <Link
-              href={`/quizzes/${slug}`}
-              className="btn btn-primary"
-              style={{ marginTop: 16, textDecoration: "none" }}
-            >
-              Start the quiz
-            </Link>
+            {canRetake ? (
+              <Link
+                href={`/quizzes/${slug}`}
+                className="btn btn-primary"
+                style={{ marginTop: 16, textDecoration: "none" }}
+              >
+                Start the quiz
+              </Link>
+            ) : (
+              <p style={{ marginTop: 16, fontSize: 13, color: "var(--ink-3)" }}>
+                You have no attempts left at this quiz.
+              </p>
+            )}
           </div>
         ) : (
           <div
@@ -294,9 +314,16 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             justifyContent: "center",
           }}
         >
-          <Link href={`/quizzes/${slug}`} className="btn">
-            Take quiz again
-          </Link>
+          {canRetake ? (
+            <Link href={`/quizzes/${slug}`} className="btn">
+              Take quiz again
+              {attemptsLeft !== null ? ` (${attemptsLeft} left)` : ""}
+            </Link>
+          ) : (
+            <span className="btn" aria-disabled="true" style={{ opacity: 0.5, cursor: "default" }}>
+              No attempts left
+            </span>
+          )}
           <Link href="/dashboard" className="btn btn-ghost">
             Back to dashboard
           </Link>

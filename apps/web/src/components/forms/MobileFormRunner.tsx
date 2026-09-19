@@ -278,7 +278,15 @@ function BigCheckboxGroup({
   value: unknown;
   onChange: (v: string[]) => void;
 }) {
-  const selected = Array.isArray(value) ? (value as string[]) : [];
+  // Same restore bug as FormRenderer's CheckboxGroup, and the same fix: a
+  // checkbox group with exactly one prior selection round-trips as a bare
+  // string, not a one-element array, so reopening a saved form showed the box
+  // unchecked and re-submitting silently cleared the answer.
+  const selected = Array.isArray(value)
+    ? (value as string[])
+    : typeof value === "string" && value.length > 0
+      ? [value]
+      : [];
   const toggle = (v: string) => {
     const next = selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v];
     onChange(next);
