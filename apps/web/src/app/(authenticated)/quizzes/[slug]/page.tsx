@@ -264,8 +264,18 @@ export default async function QuizRunnerPage({
   // a learner is never shown less time than the server will honour.
   let remainingSeconds: number | null = quiz.timeLimitSeconds ?? null;
   if (remainingSeconds != null) {
+    // Elapsed time comes from POSTGRES, not from this process.
+    //
+    // started_at is a database timestamp, so measuring against the app
+    // server's clock introduces a second source of truth that drifts -- and on
+    // a countdown a learner is being graded against, drift means being cut off
+    // early. now() - started_at uses one clock for both ends. It also keeps
+    // this Server Component free of Date.now(), which React's purity rule
+    // flags in a component body.
     const [attempt] = await db
-      .select({ startedAt: quizAttempts.startedAt })
+      .select({
+        elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::int`,
+      })
       .from(quizAttempts)
       .where(
         and(
@@ -276,8 +286,10 @@ export default async function QuizRunnerPage({
       )
       .limit(1);
     if (attempt) {
-      const elapsed = (Date.now() - attempt.startedAt.getTime()) / 1000;
-      remainingSeconds = Math.max(0, Math.round(remainingSeconds + 30 - elapsed));
+      remainingSeconds = Math.max(
+        0,
+        Math.round(remainingSeconds + 30 - (attempt.elapsedSeconds ?? 0)),
+      );
     }
   }
 
