@@ -52,6 +52,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
+import { assertSectionGate } from "@/lib/gates";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
@@ -222,6 +223,15 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
@@ -269,6 +279,15 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
@@ -317,6 +336,15 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
@@ -369,6 +397,15 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const code = await transitionCycleStatus(cycleId, "post_submitted", "complete");
@@ -417,6 +454,15 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
   if (!note) {
     redirect(`/observation/${cycleId}?error=empty_note`);

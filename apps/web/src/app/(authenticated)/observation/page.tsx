@@ -9,9 +9,12 @@
 // WHERE clause runs in Postgres, not over an already-fetched mock array.
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, teachers, subjects } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
@@ -76,9 +79,30 @@ export default async function ObservationListPage({
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
   const kindFilter = KIND_VALUES.has(sp.kind ?? "") ? sp.kind! : "all";
 
+  // OWNERSHIP, BEFORE ANYTHING ELSE.
+  //
+  // This page previously built its WHERE from the filter chips alone, so with
+  // no chip selected it served the 80 most recent cycles IN THE PROGRAMME to
+  // whoever asked. The section gate does not prevent that: the gate is one
+  // shared rotatable password, and a teacher is given it precisely so she can
+  // open her OWN cycle. Having entered, she was shown every other teacher's
+  // name and Hindi name, their subject and lesson topic, whether their cycle
+  // was 'evaluative', its stage, and its real UUID -- the last being the
+  // enumeration signal that assertCanAccessCycle's notFound()-over-403 choice
+  // exists to suppress.
+  //
+  // The detail page at the far end of every one of those links was already
+  // guarded. The list was missed.
+  const session = await auth();
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const visibility = await cycleVisibilityFilter(actor);
+
   // Build the WHERE clause server-side — only emit predicates for filters
-  // the user actively chose. Empty array → no WHERE → whole table.
+  // the user actively chose. The visibility predicate is NOT one of them: it
+  // is unconditional and cannot be cleared by removing a chip.
   const conds: SQL[] = [];
+  if (visibility) conds.push(visibility);
   if (statusFilter !== "all") {
     conds.push(eq(observationCycles.status, statusFilter as (typeof CYCLE_STAGES)[number]));
   }
@@ -109,12 +133,19 @@ export default async function ObservationListPage({
 
   // Per-tab counts run as a single GROUP BY so the chips can show the
   // current totals even when a filter is active. One extra round-trip.
+  //
+  // BOTH aggregates carry the visibility predicate. They previously had no
+  // WHERE at all, so even with the row query scoped the chips would still have
+  // published programme-wide totals per status and per kind -- a smaller leak
+  // than the rows, but the same one. /videos had to correct exactly this half
+  // of the fix after the first attempt scoped only the rows.
   const statusCounts = await db
     .select({
       status: observationCycles.status,
       n: sql<number>`count(*)::int`.as("n"),
     })
     .from(observationCycles)
+    .where(visibility)
     .groupBy(observationCycles.status);
 
   const kindCounts = await db
@@ -123,6 +154,7 @@ export default async function ObservationListPage({
       n: sql<number>`count(*)::int`.as("n"),
     })
     .from(observationCycles)
+    .where(visibility)
     .groupBy(observationCycles.kind);
 
   const totalRows = statusCounts.reduce((acc, r) => acc + r.n, 0);

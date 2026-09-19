@@ -46,6 +46,28 @@ export default async function CycleDetailPage({
   const sp = (await searchParams) ?? {};
   const error = (sp.error ?? "").trim();
 
+  const CYCLE_ERRORS: Record<string, { message: string; tone: "warn" | "error" }> = {
+    invalid_transition: {
+      message:
+        "That action can't be performed in the cycle's current status. The page has been refreshed.",
+      tone: "error",
+    },
+    empty_note: { message: "Note text can't be empty.", tone: "warn" },
+    submit_failed: {
+      message:
+        "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
+      tone: "error",
+    },
+    invalid_cycle: { message: "That cycle reference was not valid.", tone: "error" },
+    cycle_not_found: { message: "That cycle no longer exists.", tone: "error" },
+  };
+  const cycleError = error
+    ? (CYCLE_ERRORS[error] ?? {
+        message: "That action could not be completed. Please try again.",
+        tone: "error" as const,
+      })
+    : null;
+
   // OWNERSHIP GATE. This page did not call auth() at all -- it was login-gated
   // only by the proxy policy and the (authenticated) layout, then loaded the
   // cycle by id with no ownership predicate. Any signed-in user could read any
@@ -150,35 +172,33 @@ export default async function CycleDetailPage({
         ) : null}
       </header>
 
-      {error === "invalid_transition" ? (
+      {/* EVERY ?error= actions.ts CAN ISSUE.
+          Only invalid_transition and empty_note had branches. submit_failed --
+          the code a FAILED TRANSACTION redirects with, when a form submission
+          was rolled back and nothing was saved -- rendered nothing at all, so
+          the most consequential failure on this page was also its quietest:
+          the user saw the cycle again, unchanged, with no indication their
+          answers had been discarded. Unknown codes get a generic sentence
+          rather than the raw code. */}
+      {cycleError ? (
         <div
           role="alert"
+          data-testid="cycle-error"
+          data-error={error}
           style={{
-            background: "var(--rust-soft)",
-            color: "var(--rust)",
-            border: "1px solid var(--rust)",
+            background: cycleError.tone === "warn" ? "var(--saffron-soft)" : "var(--rust-soft)",
+            color: cycleError.tone === "warn" ? undefined : "var(--rust)",
+            border:
+              cycleError.tone === "warn"
+                ? "1px solid oklch(0.82 0.08 60)"
+                : "1px solid var(--rust)",
             borderRadius: "var(--r-2)",
             padding: 12,
             fontSize: 13,
             marginBottom: 16,
           }}
         >
-          That action can&apos;t be performed in the cycle&apos;s current status. The page has been refreshed.
-        </div>
-      ) : null}
-      {error === "empty_note" ? (
-        <div
-          role="alert"
-          style={{
-            background: "var(--saffron-soft)",
-            border: "1px solid oklch(0.82 0.08 60)",
-            borderRadius: "var(--r-2)",
-            padding: 12,
-            fontSize: 13,
-            marginBottom: 16,
-          }}
-        >
-          Note text can&apos;t be empty.
+          {cycleError.message}
         </div>
       ) : null}
 
@@ -323,12 +343,33 @@ export default async function CycleDetailPage({
         </article>
       </section>
 
-      {/* Add / edit mentor note */}
+      {/* APPEND a mentor note. Deliberately not an edit surface.
+          This block used to pre-fill the textarea with the ENTIRE existing
+          remark and label the button "Update note", while addNoteAction
+          appends a timestamped entry. Pressing it therefore appended a second
+          copy of every note already written -- growing the remark
+          exponentially with each press -- and the label promised an edit the
+          action has never performed. The notes are an append-only written
+          record of an observer's judgement about a named teacher's lesson, so
+          the fix is to make the UI honest about that rather than to make the
+          action destructive. */}
       <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
         <div className="label" style={{ marginBottom: 6 }}>Remark</div>
-        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor note</h2>
+        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor notes</h2>
         {cycle.remark ? (
-          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, marginBottom: 12 }}>{cycle.remark}</p>
+          // whiteSpace: pre-wrap so the blank line between appended entries,
+          // and the timestamp each one carries, survive rendering.
+          <p
+            style={{
+              fontSize: 13,
+              color: "var(--ink-2)",
+              lineHeight: 1.5,
+              marginBottom: 12,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {cycle.remark}
+          </p>
         ) : (
           <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No mentor note yet.</p>
         )}
@@ -338,14 +379,13 @@ export default async function CycleDetailPage({
             name="note"
             rows={3}
             required
-            defaultValue={cycle.remark ?? ""}
             className="text"
-            placeholder="Add or update the mentor note…"
+            placeholder="Add a note. Existing notes are kept above."
             style={{ fontSize: 13 }}
           />
           <div>
             <button type="submit" className="btn btn-sm">
-              {cycle.remark ? "Update note" : "Add note"}
+              Add note
             </button>
           </div>
         </form>

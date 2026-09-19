@@ -107,7 +107,10 @@ export default async function FormsIndexPage() {
   // A mentorship form is filled in against a PAIRING. Without one there is
   // nothing to answer about, so say that plainly instead of linking to a page
   // that will reject the submission.
-  const pairingCount = await countPairingsFor(session.user.id, role);
+  const { count: pairingCount, soleId: solePairingId } = await pairingsFor(
+    session.user.id,
+    role,
+  );
 
   return (
     <main style={{ padding: "24px 28px", maxWidth: 820 }}>
@@ -150,7 +153,11 @@ export default async function FormsIndexPage() {
             return (
               <li key={f.id}>
                 <Link
-                  href={`/forms/${slug}`}
+                  href={
+                    solePairingId
+                      ? `/forms/${slug}?pairingId=${encodeURIComponent(solePairingId)}`
+                      : "/inbox"
+                  }
                   data-testid="form-link"
                   style={{
                     display: "flex",
@@ -195,33 +202,56 @@ export default async function FormsIndexPage() {
   );
 }
 
-/** How many live pairings this user belongs to, from whichever side. */
-async function countPairingsFor(userId: string, role: RoleName): Promise<number> {
+/**
+ * The pairings this user belongs to, from whichever side.
+ *
+ * Returns the count AND, when there is exactly one, its id -- because the
+ * catalogue has to put that id in the link. submitFormAction REQUIRES a
+ * pairingId and redirects to `?error=missing_pairing` without one, but every
+ * link on this page was a bare `/forms/<slug>`, so a form opened from the
+ * catalogue could never be submitted. The only working route to these forms was
+ * the inbox card. This page has been a dead end since it was written.
+ *
+ * Two pairings or more is genuinely ambiguous -- the answer belongs to one
+ * specific pairing and the catalogue cannot know which -- so those users are
+ * sent to the inbox, where the card carries the id. That is a real navigation
+ * step rather than a rejected submission.
+ *
+ * LIMIT 2, not 1: distinguishing "exactly one" from "more than one" is the
+ * whole point, and LIMIT 1 cannot tell them apart.
+ */
+async function pairingsFor(
+  userId: string,
+  role: RoleName,
+): Promise<{ count: number; soleId: string | null }> {
   try {
     // Administrators always see the forms; the hint is for staff who cannot
     // submit yet, and an admin previewing the catalogue is not in that position.
-    if (role === "programme_admin" || role === "super_admin") return 1;
-
-    if (role === "mentor") {
-      const rows = await db
-        .select({ id: mentorPairings.id })
-        .from(mentorPairings)
-        .innerJoin(mentors, eq(mentors.id, mentorPairings.mentorId))
-        .where(eq(mentors.userId, userId))
-        .limit(1);
-      return rows.length;
+    // They get no id, so their links route through the inbox like anyone with
+    // an ambiguous choice -- an admin is not a party to any pairing.
+    if (role === "programme_admin" || role === "super_admin") {
+      return { count: 1, soleId: null };
     }
 
-    const rows = await db
-      .select({ id: mentorPairings.id })
-      .from(mentorPairings)
-      .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
-      .where(eq(teachers.userId, userId))
-      .limit(1);
-    return rows.length;
+    const rows =
+      role === "mentor"
+        ? await db
+            .select({ id: mentorPairings.id })
+            .from(mentorPairings)
+            .innerJoin(mentors, eq(mentors.id, mentorPairings.mentorId))
+            .where(eq(mentors.userId, userId))
+            .limit(2)
+        : await db
+            .select({ id: mentorPairings.id })
+            .from(mentorPairings)
+            .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
+            .where(eq(teachers.userId, userId))
+            .limit(2);
+
+    return { count: rows.length, soleId: rows.length === 1 ? rows[0]!.id : null };
   } catch {
     // A failure here must not take the page down -- it only controls a hint,
     // and showing the forms is the safer wrong answer.
-    return 1;
+    return { count: 1, soleId: null };
   }
 }

@@ -213,6 +213,9 @@ export function MobileUploadRunner({
         bucket: reservation.bucket,
         objectKey: reservation.objectKey,
         chunkBytes: reservation.chunkBytes,
+        // Server-supplied, not read from process.env in the browser -- see
+        // lib/supabase/browser.ts.
+        supabase: reservation.supabase,
         onError: (message) => {
           // Spec 149 — an error after unmount must NOT setState: React warns
           // and the error UI never reaches a user anyway. The cleanup in

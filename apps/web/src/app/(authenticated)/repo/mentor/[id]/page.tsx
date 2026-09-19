@@ -18,6 +18,7 @@ import { and, eq, desc } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom, pairingVisibilityFilter } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
@@ -43,9 +44,18 @@ export default async function RepoMentorDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const session = await auth();
-  if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
 
   const { id } = await params;
+
+  // The mentor's own profile -- name, base location, expertise -- is directory
+  // data and stays visible to any signed-in user, which is the point of /repo.
+  // THE PAIRING ROSTER IS NOT. It names mentees and their meeting history, and
+  // this page sits OUTSIDE the mentorship section gate, so it was reproducing
+  // the exact roster /mentorship protects to anyone who knew a mentor id. The
+  // same predicate that scopes /mentorship scopes it here.
+  const visibility = await pairingVisibilityFilter(actor);
 
   // Spec 153 — only return active mentors. A soft-retired mentor (active=false)
   // must not render here; the row exists in the DB so without this guard the
@@ -73,7 +83,7 @@ export default async function RepoMentorDetailPage({
     })
     .from(mentorPairings)
     .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
-    .where(eq(mentorPairings.mentorId, id))
+    .where(and(eq(mentorPairings.mentorId, id), ...(visibility ? [visibility] : [])))
     .orderBy(desc(mentorPairings.startedAt))
     .limit(120);
 

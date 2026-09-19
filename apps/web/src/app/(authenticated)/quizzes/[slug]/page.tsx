@@ -182,8 +182,10 @@ export async function submitQuizAttempt(
 
 export default async function QuizRunnerPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<{ error?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -262,9 +264,44 @@ export default async function QuizRunnerPage({
   // a countdown banner and auto-submits at 00:00.
   const timeLimitSeconds = quiz.timeLimitSeconds ?? null;
 
+  // RENDER THE REASON WE BOUNCED THEM BACK.
+  //
+  // submitQuizAttempt redirects here with ?error= when an attempt is refused,
+  // and this page did not read searchParams at all — so a learner who ran out
+  // of time or used their last attempt was silently returned to the quiz with
+  // no explanation, looking at the questions they had just answered. They would
+  // reasonably try again, and be refused again, with no way to find out why.
+  const sp = searchParams ? await searchParams : {};
+  const QUIZ_ERRORS: Record<string, string> = {
+    time_expired:
+      "Your time ran out before the answers reached us, so this attempt was not scored.",
+    attempts_exhausted: "You have used all your attempts at this quiz.",
+    not_found: "That quiz is no longer available.",
+  };
+  const errorMessage = sp.error ? QUIZ_ERRORS[sp.error] ?? null : null;
+
+  const errorBanner = errorMessage ? (
+    <p
+      role="alert"
+      data-testid="quiz-error"
+      style={{
+        margin: "12px 16px 0",
+        padding: "10px 12px",
+        border: "1px solid var(--saffron)",
+        background: "var(--saffron-soft)",
+        borderRadius: "var(--r-2, 8px)",
+        fontSize: 13,
+        lineHeight: 1.5,
+      }}
+    >
+      {errorMessage}
+    </p>
+  ) : null;
+
   if (device === "mobile") {
     return (
       <main>
+        {errorBanner}
         <MobileQuizRunner
           slug={slug}
           title={quiz.title}
@@ -278,6 +315,7 @@ export default async function QuizRunnerPage({
 
   return (
     <main>
+      {errorBanner}
       <div className="page-header" style={{ paddingBottom: 0 }}>
         <Link
           href="/dashboard"

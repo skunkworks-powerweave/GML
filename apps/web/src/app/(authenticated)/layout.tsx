@@ -91,23 +91,23 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   const htmlLang = LOCALE_HTML_LANG[locale];
   const ftuxSeenAt = prefRow?.ftuxSeenAt ? prefRow.ftuxSeenAt.toISOString() : null;
 
-  // Spec 122 — helpdesk contact details for the "Talk to a person" card.
-  // We fall back to existing env contracts (WHATSAPP_PHONE_NUMBER_ID,
-  // SMTP_FROM) so no new env vars are required to ship this spec, but a
-  // deployment may set GML_HELPDESK_PHONE / GML_HELPDESK_EMAIL to override.
+  // Helpdesk contact details for the "Talk to a person" card.
   //
-  // Spec 169 — the GML_* overrides are now validated by assertEnv() before
-  // they reach the UI. A set-but-invalid value (typo, missing `+`, stray
-  // whitespace) is logged SEVERE in production and surfaced to consumers
-  // as `null` so the affected affordance hides instead of rendering a
-  // broken wa.me / mailto link. The legacy fallbacks (WHATSAPP_PHONE_NUMBER_ID,
-  // SMTP_FROM) are kept unchanged for backwards compat with deployments
-  // that haven't migrated to the GML_HELPDESK_* names yet.
+  // Spec 169 — the GML_* values are validated by assertEnv() before they reach
+  // the UI. A set-but-invalid value (typo, missing `+`, stray whitespace) is
+  // logged SEVERE in production and surfaced as `null`, so the affordance hides
+  // rather than rendering a broken wa.me / mailto link.
+  //
+  // The SMTP_FROM fallback that used to sit on `email` is GONE. Outbound email
+  // moved to Supabase, so SMTP_FROM is set nowhere in this application's
+  // environment and the fallback could never be satisfied -- it read as a
+  // working default while always resolving to null. WHATSAPP_PHONE_NUMBER_ID
+  // is kept because compose does still pass it.
   const envSummary = assertEnv();
   const helpdeskContact = {
     whatsappPhone:
       envSummary.helpdeskPhone.value ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
-    email: envSummary.helpdeskEmail.value ?? process.env.SMTP_FROM ?? null,
+    email: envSummary.helpdeskEmail.value ?? null,
   };
 
   // Spec 128 — dynamic chrome counts. Each loader is React.cache'd so calling

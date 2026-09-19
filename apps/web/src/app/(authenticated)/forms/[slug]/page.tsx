@@ -369,6 +369,9 @@ export default async function FormRunnerPage({
 
   const pairingId = readParam(sp.pairingId);
   const error = readParam(sp.error);
+  // The validator's own summary, echoed back by the ?error=invalid redirect.
+  // Rendered as text inside JSX, so it cannot inject markup.
+  const errorDetail = readParam(sp.detail);
 
   const parsed = parseSlug(slug);
   if (!parsed) return <NotFoundShell slug={slug} />;
@@ -559,7 +562,16 @@ export default async function FormRunnerPage({
       </div>
 
       <div className="page-body" style={{ maxWidth: 760, margin: "0 auto" }}>
-        {error === "missing_pairing" ? (
+        {/* EVERY ?error= THE ACTION CAN ISSUE IS RENDERED HERE.
+            Only `missing_pairing` had a branch. submitFormAction also redirects
+            back with `wrong_audience` and with `invalid&detail=...` -- the
+            latter carrying the precise server-side validation summary -- and
+            both landed on a page that rendered nothing at all. A rejected
+            submission simply redisplayed the empty form, so the user could not
+            tell a refusal from a reload and had no way to learn which answer
+            was at fault. `detail` is the summary the validator produced; it is
+            rendered as text, never as markup. */}
+        {error ? (
           <div
             style={{
               background: "var(--rust-soft)",
@@ -571,13 +583,38 @@ export default async function FormRunnerPage({
               marginBottom: 16,
             }}
             role="alert"
+            data-testid="form-error"
+            data-error={error}
           >
-            This form must be opened from your inbox so we can attach the
-            response to the right mentorship pairing. Head back to{" "}
-            <Link href="/inbox" style={{ color: "var(--indigo)" }}>
-              your inbox
-            </Link>{" "}
-            and click the form card.
+            {error === "missing_pairing" ? (
+              <>
+                This form must be opened from your inbox so we can attach the
+                response to the right mentorship pairing. Head back to{" "}
+                <Link href="/inbox" style={{ color: "var(--indigo)" }}>
+                  your inbox
+                </Link>{" "}
+                and click the form card.
+              </>
+            ) : error === "wrong_audience" ? (
+              <>
+                This form is not meant for your role, so it cannot be submitted from
+                your account. If you think that is wrong, contact your programme
+                administrator.
+              </>
+            ) : error === "invalid" ? (
+              <>
+                <strong>Your answers could not be saved.</strong>
+                {errorDetail ? (
+                  <div style={{ marginTop: 6 }}>{errorDetail}</div>
+                ) : (
+                  <div style={{ marginTop: 6 }}>
+                    Please check the required questions and try again.
+                  </div>
+                )}
+              </>
+            ) : (
+              <>That submission could not be completed. Please try again.</>
+            )}
           </div>
         ) : null}
 

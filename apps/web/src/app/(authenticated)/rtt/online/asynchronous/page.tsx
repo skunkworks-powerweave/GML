@@ -241,8 +241,8 @@ export default async function RttOnlineAsynchronousPage({
             </div>
             <div style={{ fontSize: 11, color: "var(--ink-4)" }}>
               Programme admins can attach external videos or PDFs from{" "}
-              <Link href="/admin/resources" style={{ color: "var(--indigo)" }}>
-                /admin/resources
+              <Link href="/admin/data/resources" style={{ color: "var(--indigo)" }}>
+                /admin/data/resources
               </Link>
               .
             </div>

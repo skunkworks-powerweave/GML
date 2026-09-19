@@ -7,9 +7,12 @@
 // even when the visible slice has narrowed.
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorPairings, mentors, teachers } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { actorFrom, pairingVisibilityFilter } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +47,18 @@ export default async function MentorshipListPage({
   const sp = await searchParams;
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
 
+  // OWNERSHIP. The detail page refuses to show a teacher anyone else's
+  // pairing (assertCanAccessPairing); this list was showing her all of them --
+  // every mentor's name and base location, every mentee's name, meeting counts
+  // and last-meeting dates. Same defect as /observation, same cause: the WHERE
+  // was built from the filter chip alone.
+  const session = await auth();
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const visibility = await pairingVisibilityFilter(actor);
+
   const conds: SQL[] = [];
+  if (visibility) conds.push(visibility);
   if (statusFilter !== "all") {
     conds.push(eq(mentorPairings.status, statusFilter as PairingStatus));
   }
@@ -71,12 +85,16 @@ export default async function MentorshipListPage({
 
   // Per-status counts so the filter chips remain truthful regardless of
   // the active filter. Cheap — pairing count is ≤ a few hundred.
+  //
+  // Scoped by the same predicate as the rows: an unscoped GROUP BY would keep
+  // publishing programme-wide pairing totals even once the rows were fixed.
   const statusCountRows = await db
     .select({
       status: mentorPairings.status,
       n: sql<number>`count(*)::int`.as("n"),
     })
     .from(mentorPairings)
+    .where(visibility)
     .groupBy(mentorPairings.status);
   const totalPairings = statusCountRows.reduce((acc, r) => acc + r.n, 0);
   const statusCount = (v: string) =>

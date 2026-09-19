@@ -373,6 +373,15 @@ function Likert({
   const current = typeof value === "number" ? value : null;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+      {/* THE VALUE HAS TO LEAVE THE PAGE.
+          These controls are <button type="button"> only -- they carry no name
+          and contribute nothing to FormData. This form submits natively via
+          <form action={serverAction}>, so the server read NO answer at all for
+          any rating or likert field: every mentor progress and final form
+          failed server-side validation on "required", and an optional one
+          silently stored nothing. React state is invisible to a native submit;
+          a mirrored hidden input is what makes it visible. */}
+      <input type="hidden" name={field.name} value={current ? String(current) : ""} />
       {labels.map((lbl, i) => {
         const n = i + 1;
         const selected = current === n;
@@ -423,6 +432,15 @@ function Rating({
   ];
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      {/* THE VALUE HAS TO LEAVE THE PAGE.
+          These controls are <button type="button"> only -- they carry no name
+          and contribute nothing to FormData. This form submits natively via
+          <form action={serverAction}>, so the server read NO answer at all for
+          any rating or likert field: every mentor progress and final form
+          failed server-side validation on "required", and an optional one
+          silently stored nothing. React state is invisible to a native submit;
+          a mirrored hidden input is what makes it visible. */}
+      <input type="hidden" name={field.name} value={current > 0 ? String(current) : ""} />
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const on = current >= n;
         return (

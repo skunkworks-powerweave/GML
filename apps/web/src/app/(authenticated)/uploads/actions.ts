@@ -13,6 +13,7 @@ import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { beginUpload, completeUpload, type UploadContextType } from "@/lib/video/upload";
 import { enqueueTranscode } from "@/lib/queue";
+import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
 
 const CONTEXT_TYPES: ReadonlySet<string> = new Set([
   "observation_cycle",
@@ -24,7 +25,22 @@ const CONTEXT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 export type BeginUploadState =
-  | { ok: true; submissionId: string; bucket: string; objectKey: string; chunkBytes: number }
+  | {
+      ok: true;
+      submissionId: string;
+      bucket: string;
+      objectKey: string;
+      chunkBytes: number;
+      /**
+       * The browser needs the project URL and the publishable key to talk to
+       * Storage directly, and it CANNOT read them from process.env: NEXT_PUBLIC_*
+       * is inlined at build time and the app image is built with only
+       * DATABASE_URL. So they ride back on this response instead, read here at
+       * request time where the real environment is visible. See
+       * lib/supabase/browser.ts.
+       */
+      supabase: SupabaseBrowserConfig;
+    }
   | { ok: false; error: string };
 
 /**
@@ -76,6 +92,17 @@ export async function beginUploadAction(input: {
   const actor = actorFrom(session);
   if (!actor || !session) return { ok: false, error: "Please sign in again." };
 
+  // Checked BEFORE any row is reserved. A misconfigured deployment should say
+  // so on the first click rather than leaving a trail of `uploading` rows that
+  // the reconciler has to fail 30 minutes later.
+  const supabaseConfig = browserSupabaseConfig();
+  if (!supabaseConfig) {
+    return {
+      ok: false,
+      error: "Uploads are not configured on this deployment. Please contact your administrator.",
+    };
+  }
+
   if (!CONTEXT_TYPES.has(input.contextType)) {
     return { ok: false, error: "Unknown upload context." };
   }
@@ -109,7 +136,20 @@ export async function beginUploadAction(input: {
     },
   });
 
-  return { ok: true, ...result };
+  return { ok: true, ...result, supabase: supabaseConfig };
+}
+
+/**
+ * The two public Supabase values, read server-side at request time.
+ *
+ * Returns null rather than throwing when either is missing, so a misconfigured
+ * deployment produces one clear sentence in the UI instead of an unhandled
+ * server-action rejection.
+ */
+function browserSupabaseConfig(): SupabaseBrowserConfig | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  return url && anonKey ? { url, anonKey } : null;
 }
 
 export type CompleteUploadState = { ok: boolean; error?: string };

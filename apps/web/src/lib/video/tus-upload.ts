@@ -29,7 +29,7 @@
 //                submissions could not exist.
 
 import type { Upload } from "tus-js-client";
-import { accessToken } from "@/lib/supabase/browser";
+import { accessToken, type SupabaseBrowserConfig } from "@/lib/supabase/browser";
 
 export type UploadHandle = { abort: () => void };
 
@@ -38,6 +38,9 @@ export type StartUploadOptions = {
   bucket: string;
   objectKey: string;
   chunkBytes: number;
+  /** Supplied by beginUploadAction — see lib/supabase/browser.ts for why it is
+   *  not read from process.env here. */
+  supabase: SupabaseBrowserConfig;
   onProgress: (uploaded: number, total: number) => void;
   onError: (message: string) => void;
   onSuccess: () => void;
@@ -50,13 +53,13 @@ export type StartUploadOptions = {
 export async function startResumableUpload(
   opts: StartUploadOptions,
 ): Promise<UploadHandle | null> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!supabaseUrl) {
+  const supabaseUrl = opts.supabase?.url;
+  if (!supabaseUrl || !opts.supabase?.anonKey) {
     opts.onError("Uploads are not configured on this deployment.");
     return null;
   }
 
-  const token = await accessToken();
+  const token = await accessToken(opts.supabase);
   if (!token) {
     opts.onError("Your session has expired. Please sign in again.");
     return null;

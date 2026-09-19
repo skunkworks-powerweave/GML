@@ -32,6 +32,7 @@ import { mentorPairings, mentorMeetings } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
+import { assertSectionGate } from "@/lib/gates";
 import { recordAudit } from "@/lib/audit";
 
 // ---------------------------------------------------------------------------
@@ -72,6 +73,15 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // meetings_count / last_meeting_at counters.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(actor, pairingId);
 
   let newMeetingId = "";
@@ -127,6 +137,15 @@ export async function completePairingAction(formData: FormData): Promise<void> {
   // action added here inherits the check instead of forgetting it.
   const completeActor = actorFrom(session);
   if (!completeActor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(completeActor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(completeActor, pairingId);
 
   const endedAt = new Date();
@@ -176,6 +195,15 @@ export async function toggleCommitmentAction(formData: FormData): Promise<void> 
   // authenticated user could write an unbounded attacker-controlled string into
   // the APPEND-ONLY audit log against any pairing id -- rows the application
   // role cannot delete afterwards.
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(commitmentActor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(commitmentActor, pairingId);
 
   // IT NOW PERSISTS. The previous version wrote an audit row and changed
@@ -252,6 +280,15 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   if (!pairingId) redirect("/mentorship?error=invalid_commitment");
   if (!text) redirect(`/mentorship/${pairingId}?error=empty_commitment`);
 
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(actor, pairingId);
 
   const entry = {

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { signOutAction } from "./actions";
+import { ChangePasswordForm } from "./ChangePasswordForm";
 
 export type Density = "dense" | "regular" | "loose";
 export type FontScale = "regular" | "large" | "xlarge";
@@ -223,9 +224,11 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
           </span>
         </KvRow>
         <KvRow label="Password">
-          <a href="/account/security" style={{ color: "var(--indigo)", fontSize: 12, textDecoration: "none" }}>
-            Change on security page →
-          </a>
+          {/* Was an <a href="/account/security"> — a route that has never
+              existed. With self-service reset off until IT configures SMTP,
+              this is the ONLY way a user can change the password an
+              administrator chose for them. */}
+          <ChangePasswordForm />
         </KvRow>
         <KvRow label="Replay tour">
           <ReplayTourButton />

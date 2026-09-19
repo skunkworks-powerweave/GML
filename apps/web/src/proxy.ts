@@ -87,6 +87,75 @@ function matchPolicy(pathname: string): PolicyRule | undefined {
 }
 
 /**
+ * Build the per-request Content-Security-Policy.
+ *
+ * ── WHY THIS MOVED OUT OF CADDY ──────────────────────────────────────────────
+ *
+ * The Caddyfile served `script-src 'self'` with no nonce. A production Next
+ * build emits its entire RSC flight payload through INLINE
+ * `<script>self.__next_f.push(...)</script>` tags -- six of them on /login,
+ * measured against the built image -- and `'self'` does not permit inline
+ * script. Every browser would have blocked all six, React would never have
+ * hydrated, and the application would have been a dead static shell behind
+ * TLS. The Caddyfile comment asserted that "a production Next build needs
+ * neither [unsafe-inline nor unsafe-eval]" and told the reader to verify it in
+ * a browser; that verification never happened, because Caddy cannot bind :80
+ * on the development machine. It was wrong.
+ *
+ * A nonce is the fix, and it can only be minted where a request is -- Caddy
+ * emits one static header for every response. Next reads the nonce from the
+ * `content-security-policy` header on the INCOMING request (see
+ * get-script-nonce-from-header.js) and stamps it onto every script tag it
+ * renders, so the policy and the markup are generated together and cannot
+ * drift.
+ *
+ * NOTE: Caddy must NOT also send a CSP. Two CSP headers are both enforced, and
+ * the intersection of a nonce policy and a nonce-less one blocks everything the
+ * nonce was added to allow.
+ *
+ * ── DIRECTIVE NOTES ──────────────────────────────────────────────────────────
+ *
+ *   script-src   'strict-dynamic' lets the nonced bootstrap load the chunk
+ *                graph without listing every chunk. `'self'` is kept purely as
+ *                a CSP2 fallback -- CSP3 browsers ignore it once
+ *                'strict-dynamic' is present.
+ *
+ *   style-src    Carries 'unsafe-inline' and DELIBERATELY NO NONCE. A nonce in
+ *                style-src makes browsers ignore 'unsafe-inline', and this
+ *                codebase styles pervasively through inline `style=`
+ *                attributes -- which a nonce cannot cover, since an attribute
+ *                has nowhere to carry one. Adding a style nonce would strip the
+ *                application's styling instead of protecting it.
+ *
+ *   connect-src  Supabase over both https and wss: the browser client talks to
+ *                Storage directly for resumable uploads.
+ */
+function buildCsp(nonce: string): string {
+  const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://*.supabase.co";
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
+    "style-src 'self' 'unsafe-inline'",
+    `img-src 'self' data: blob: ${supabase}`,
+    `media-src 'self' blob: ${supabase}`,
+    `connect-src 'self' ${supabase} wss://*.supabase.co`,
+    "font-src 'self' data:",
+    "frame-ancestors 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+}
+
+/** 128 bits of randomness, base64. Must be unpredictable and per-request. */
+function makeNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes));
+}
+
+/**
  * Move any cookies the Supabase client set onto a different response.
  *
  * A redirect or rewrite creates a NEW response object, and the refreshed token
@@ -96,11 +165,41 @@ function matchPolicy(pathname: string): PolicyRule | undefined {
  */
 function carryCookies(from: NextResponse, to: NextResponse): NextResponse {
   for (const cookie of from.cookies.getAll()) to.cookies.set(cookie);
+  // The CSP travels with them. The /forbidden rewrite RENDERS a page, so
+  // without this it would be served with no policy at all -- and a 403 is
+  // exactly the kind of response an attacker is looking at.
+  const csp = from.headers.get("content-security-policy");
+  if (csp) to.headers.set("content-security-policy", csp);
   return to;
 }
 
 export default async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
+  const nonce = makeNonce();
+  const csp = buildCsp(nonce);
+
+  /**
+   * Every response this function returns is built here.
+   *
+   * The request headers are re-snapshotted on each call rather than captured
+   * once: the Supabase cookie writer mutates `request.cookies`, which rewrites
+   * the request's own Cookie header, and a stale snapshot would forward the
+   * pre-rotation cookies to the renderer.
+   */
+  const nextWithCsp = (): NextResponse => {
+    const headers = new Headers(request.headers);
+    headers.set("content-security-policy", csp);
+    headers.set("x-nonce", nonce);
+    // The requested path, for server components that need it. A layout cannot
+    // otherwise discover which URL it is rendering, so the gated layouts had to
+    // hardcode a section root as their post-unlock destination and threw away
+    // whatever deep link the user actually followed.
+    headers.set("x-pathname", request.nextUrl.pathname + request.nextUrl.search);
+    const res = NextResponse.next({ request: { headers } });
+    res.headers.set("content-security-policy", csp);
+    return res;
+  };
+
+  let response = nextWithCsp();
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -114,7 +213,7 @@ export default async function proxy(request: NextRequest) {
       getAll: () => request.cookies.getAll(),
       setAll: (toSet) => {
         for (const { name, value } of toSet) request.cookies.set(name, value);
-        response = NextResponse.next({ request });
+        response = nextWithCsp();
         for (const { name, value, options } of toSet) response.cookies.set(name, value, options);
       },
     },

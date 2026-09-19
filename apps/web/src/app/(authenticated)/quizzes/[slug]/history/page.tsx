@@ -41,14 +41,26 @@ function formatSubmittedAt(d: Date): string {
 
 type Props = {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<{ error?: string }>;
 };
 
-export default async function QuizHistoryPage({ params }: Props) {
+export default async function QuizHistoryPage({ params, searchParams }: Props) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   const userId = session.user.id;
 
   const { slug } = await params;
+
+  // The quiz runner redirects HERE with ?error=attempts_exhausted when a
+  // learner opens a quiz they have no attempts left for — sending them
+  // somewhere useful (their past scores) rather than a dead end. This page
+  // read no searchParams, so they arrived at their history with no idea why
+  // the quiz would not open.
+  const sp = searchParams ? await searchParams : {};
+  const historyError =
+    sp.error === "attempts_exhausted"
+      ? "You have used all your attempts at this quiz. Your previous scores are below."
+      : null;
 
   // Resolve the quiz first so we 404 cleanly for bad slugs (rather than
   // rendering an empty history page for a non-existent quiz).
@@ -77,6 +89,23 @@ export default async function QuizHistoryPage({ params }: Props) {
 
   return (
     <main>
+      {historyError ? (
+        <p
+          role="alert"
+          data-testid="history-error"
+          style={{
+            margin: "12px 16px 0",
+            padding: "10px 12px",
+            border: "1px solid var(--saffron)",
+            background: "var(--saffron-soft)",
+            borderRadius: "var(--r-2, 8px)",
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          {historyError}
+        </p>
+      ) : null}
       <div className="page-header">
         <Link
           href={`/quizzes/${slug}`}

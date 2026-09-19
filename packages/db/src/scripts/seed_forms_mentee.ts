@@ -42,25 +42,86 @@ const MENTEE_TYPE_TO_CANONICAL: Record<FieldType, (typeof CANONICAL_FIELD_KINDS)
   number: "number",
 };
 
-function assertCanonicalFieldKinds<T extends { kind: string; audience: string; version: string; schema: { fields: { type: string; id: string }[] } }>(rows: T[]): T[] {
+/**
+ * Rewrite this file's per-file field vocabulary into the CANONICAL shape that
+ * FormRenderer, MobileFormRunner and lib/forms/validate.ts all read.
+ *
+ * ── WHAT THIS REPLACES, AND WHY IT MATTERED ──────────────────────────────────
+ *
+ * The previous version of this function CHECKED that every `type` could be
+ * mapped and then wrote the rows through UNCHANGED -- it computed `mapped` and
+ * threw the result away. So every mentee form reached the database still keyed
+ * `{id, type}`, while every consumer reads `{name, kind}`.
+ *
+ * The consequences were total, not partial:
+ *   - `field.kind` was undefined, so the renderer's kind ladder fell all the
+ *     way through to its text fallback. A five-point confidence Likert
+ *     rendered as a text box.
+ *   - `field.name` was undefined, so EVERY input on the form was emitted with
+ *     the same undefined name and collapsed into a single FormData entry --
+ *     one shared textbox for the whole questionnaire.
+ *   - validate.ts keys on field.name, so required-ness was unenforceable.
+ *
+ * Every mentee-audience form -- baseline, both progress forms and the final --
+ * was affected. The guard that was supposed to catch exactly this class of
+ * problem was the thing that hid it, because it validated the mapping instead
+ * of applying it.
+ *
+ * Rows whose type cannot be mapped are still dropped with a warning: an
+ * unmappable field would reach the renderer's text fallback, which is the
+ * failure this was originally written to prevent.
+ */
+function toCanonicalFields(rows: FormSeedRow[]): CanonicalFormSeedRow[] {
   const valid = new Set<string>(CANONICAL_FIELD_KINDS);
-  const filtered: T[] = [];
+  const out: CanonicalFormSeedRow[] = [];
+
   for (const row of rows) {
+    const mappedFields: CanonicalField[] = [];
     let allValid = true;
+
     for (const field of row.schema.fields) {
-      const mapped = (MENTEE_TYPE_TO_CANONICAL as Record<string, string>)[field.type];
-      if (!mapped || !valid.has(mapped)) {
+      const kind = MENTEE_TYPE_TO_CANONICAL[field.type];
+      if (!kind || !valid.has(kind)) {
         console.warn(
-          `[seed:forms-mentee] WARN — dropping row (kind=${row.kind}, audience=${row.audience}, version=${row.version}): field "${field.id}" has unmappable type "${field.type}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
+          `[seed:forms-mentee] WARN - dropping row (kind=${row.kind}, audience=${row.audience}, version=${row.version}): field "${field.id}" has unmappable type "${field.type}" (canonical set: ${CANONICAL_FIELD_KINDS.join(", ")})`,
         );
         allValid = false;
         break;
       }
+      mappedFields.push({
+        name: field.id,
+        kind,
+        label: field.label,
+        hindiLabel: field.hindiLabel,
+        required: field.required,
+        options: field.options,
+        helpText: field.helpText,
+        helpHindi: field.helpHindi,
+      });
     }
-    if (allValid) filtered.push(row);
+
+    if (allValid) out.push({ ...row, schema: { ...row.schema, fields: mappedFields } });
   }
-  return filtered;
+
+  return out;
 }
+
+/** The canonical field shape, as FormRenderer and validate.ts read it. */
+interface CanonicalField {
+  name: string;
+  kind: (typeof CANONICAL_FIELD_KINDS)[number];
+  label: string;
+  hindiLabel?: string;
+  required: boolean;
+  options?: { value: string; label: string; hindiLabel?: string }[];
+  helpText?: string;
+  helpHindi?: string;
+}
+
+/** A seed row after mapping: identical metadata, canonical fields. */
+type CanonicalFormSeedRow = Omit<FormSeedRow, "schema"> & {
+  schema: Omit<FormSchema, "fields"> & { fields: CanonicalField[] };
+};
 
 interface FieldDescriptor {
   id: string;
@@ -402,7 +463,7 @@ interface FormSeedRow {
   schema: FormSchema;
 }
 
-const ROWS: FormSeedRow[] = assertCanonicalFieldKinds([
+const ROWS: CanonicalFormSeedRow[] = toCanonicalFields([
   { kind: "baseline", audience: "mentee", version: "1", schema: baselineMentee },
   { kind: "progress_1", audience: "mentee", version: "1", schema: progress1Mentee },
   { kind: "progress_2", audience: "mentee", version: "2", schema: progress2Mentee },

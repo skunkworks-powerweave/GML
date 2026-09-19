@@ -63,6 +63,26 @@ services:
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
       SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY must be set}
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:?NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set}
+      # SEED-TIME CREDENTIALS. deploy.sh runs the seed with
+      #   docker compose run --rm --no-deps migrate ... seed_all.ts
+      # and `compose run` passes ONLY what this block declares -- it does not
+      # leak the host environment or .env into the container. Without these,
+      # seed.ts took the `SUPER_ADMIN_EMAIL not set` branch, logged "skipped",
+      # and exited 0. A fresh deploy therefore reported SUCCESS and produced a
+      # system WITH NO ADMINISTRATOR -- and no way to create one, because
+      # /admin/users requires an administrator to reach it.
+      #
+      # Unset rather than `:?` because they are only needed on a first deploy;
+      # re-running the seed against an existing super admin is a no-op and must
+      # not require the password to still be lying around in .env.
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:-}
+      # Optional: choose the section-gate passwords instead of having the seed
+      # generate and print them once.
+      GATE_PASSWORD_OBSERVATION: ${GATE_PASSWORD_OBSERVATION:-}
+      GATE_PASSWORD_MENTORSHIP: ${GATE_PASSWORD_MENTORSHIP:-}
+      GATE_PASSWORD_ADMIN: ${GATE_PASSWORD_ADMIN:-}
+      SEED_DRY_RUN: ${SEED_DRY_RUN:-}
     networks:
       - lms_net
 
@@ -92,6 +112,11 @@ services:
       GML_WHATSAPP_NUMBER: ${GML_WHATSAPP_NUMBER:-}
       GML_HELPDESK_PHONE: ${GML_HELPDESK_PHONE:-}
       GML_HELPDESK_EMAIL: ${GML_HELPDESK_EMAIL:-}
+      # Off by default. /api/health's `details` carry raw driver messages --
+      # internal hostnames, ports, auth-failure text -- and the endpoint is
+      # public. Documented in .env.example; passed here so it can actually be
+      # turned on during an incident without editing this file.
+      HEALTH_DEBUG: ${HEALTH_DEBUG:-}
       TZ: ${TZ:-Asia/Kolkata}
     depends_on:
       migrate:

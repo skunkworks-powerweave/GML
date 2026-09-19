@@ -1,6 +1,22 @@
 import Link from "next/link";
 import { auth } from "@/auth";
 
+/**
+ * Rendered per request, never prerendered. Two independent reasons:
+ *
+ *  1. CORRECTNESS. This page branches on the session, but the build runs
+ *     WITHOUT Supabase credentials, so auth() returned null before it ever
+ *     touched cookies(). Next saw no dynamic API, froze the signed-out variant
+ *     into index.html, and served that to everyone -- a signed-in user landing
+ *     on / was told "Please sign in to continue". The bug only existed in the
+ *     built image, which is why it survived every dev-server check.
+ *
+ *  2. CSP. proxy.ts issues a fresh per-request nonce, and a prerendered page
+ *     carries whatever nonce existed at build time (none), so its inline
+ *     scripts would be blocked by the very policy that protects it.
+ */
+export const dynamic = "force-dynamic";
+
 export default async function Home() {
   const session = await auth();
 

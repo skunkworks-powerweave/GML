@@ -15,9 +15,15 @@
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentors, teachers, mentorMeetings, feedbackResponses } from "@gml/db/schema";
+import {
+  mentors,
+  teachers,
+  mentorMeetings,
+  feedbackForms,
+  feedbackResponses,
+} from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
@@ -47,19 +53,33 @@ const QUARTER_TO_KIND: Record<number, (typeof QUARTERS)[number]> = {
   4: "final",
 };
 
-// Default form audience when opening a quarter form. We pick "mentor" because
-// the pairing-detail surface is mentor-first in the prototype; mentees reach
-// their forms via /inbox. The audience is overridable via the URL once on the
-// form page.
-const DEFAULT_AUDIENCE = "mentor";
-const FORM_VERSION = "1";
+// THE FORM SLUG IS RESOLVED FROM THE DATABASE, NOT ASSEMBLED FROM CONSTANTS.
+//
+// What stood here was `DEFAULT_AUDIENCE = "mentor"` and `FORM_VERSION = "1"`,
+// and both were wrong in a way that silently broke the quarter strip:
+//
+//   VERSION   progress_2 is seeded at version "2" for BOTH audiences, so the
+//             Q3 link pointed at a slug matching no feedback_forms row and
+//             rendered the "Form not found" shell. Q3 has never been openable
+//             from this page.
+//
+//   AUDIENCE  Hardcoding "mentor" assumed a mentor-first surface, but this page
+//             is reachable by the MENTEE -- assertCanAccessPairing admits the
+//             teacher on the pairing, by design, and the mentee's own contact
+//             card is rendered on it. A teacher clicking any quarter was sent
+//             to a mentor-audience form, where the runner's audience check
+//             bounced them to /forbidden. Their own quarterly form is the
+//             mentee-audience one.
+//
+// A lookup also means the next version bump does not silently break this page
+// again, which a corrected constant would not have prevented.
 
 export default async function PairingDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ pairingId: string }>;
-  searchParams?: Promise<{ logMeeting?: string }>;
+  searchParams?: Promise<{ logMeeting?: string; error?: string }>;
 }) {
   const { pairingId } = await params;
   const sp = (await searchParams) ?? {};
@@ -67,6 +87,23 @@ export default async function PairingDetailPage({
   if (!session?.user?.id) redirect("/login");
   const canComplete = hasAnyRole(session.user.role, ["programme_admin", "super_admin"]);
   const showLogMeetingForm = sp.logMeeting === "1";
+
+  // EVERY ?error= actions.ts CAN REDIRECT WITH.
+  // All six were silent: the actions bounced back here on failure and the page
+  // rendered nothing, so a rejected "Log meeting" or "Add commitment" looked
+  // exactly like a successful one that had not appeared yet. Unknown codes fall
+  // through to a generic sentence rather than rendering the raw code.
+  const PAIRING_ERRORS: Record<string, string> = {
+    invalid_meeting: "A meeting needs both a date and a time. Nothing was saved.",
+    invalid_meeting_time: "That meeting date could not be read. Please pick it again.",
+    invalid_pairing: "That pairing reference was not valid.",
+    pairing_not_found: "That pairing no longer exists.",
+    invalid_commitment: "That commitment reference was not valid.",
+    empty_commitment: "A commitment needs some text before it can be added.",
+  };
+  const pairingError = sp.error
+    ? (PAIRING_ERRORS[sp.error] ?? "That action could not be completed. Please try again.")
+    : null;
 
   // OWNERSHIP GATE. auth() above only established that SOMEONE is signed in.
   // The page then loaded the pairing by id and rendered the mentee teacher's
@@ -76,6 +113,18 @@ export default async function PairingDetailPage({
   const pairingActor = actorFrom(session);
   if (!pairingActor) redirect("/login");
   const pairing = await assertCanAccessPairing(pairingActor, pairingId);
+
+  // Which audience's forms does THIS viewer answer? A mentor answers the
+  // mentor-audience form about their mentee; the mentee answers the
+  // mentee-audience one. Admins preview the mentor side.
+  const formAudience = session.user.role === "teacher" ? "mentee" : "mentor";
+
+  // Active form versions for that audience, keyed by kind. Resolved once.
+  const activeForms = await db
+    .select({ kind: feedbackForms.kind, version: feedbackForms.version })
+    .from(feedbackForms)
+    .where(and(eq(feedbackForms.audience, formAudience), eq(feedbackForms.active, true)));
+  const versionByKind = new Map(activeForms.map((f) => [f.kind, f.version]));
   const [mentor] = await db.select().from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
 
@@ -123,6 +172,26 @@ export default async function PairingDetailPage({
 
   const body = (
     <div>
+      {/* Rendered inside the shared `body`, so it reaches the mobile frame and
+          the desktop layout alike -- a banner added to only one of them would
+          be invisible on exactly the device most meetings are logged from. */}
+      {pairingError ? (
+        <div
+          role="alert"
+          data-testid="pairing-error"
+          style={{
+            background: "var(--rust-soft)",
+            color: "var(--rust)",
+            border: "1px solid var(--rust)",
+            borderRadius: "var(--r-2)",
+            padding: 12,
+            fontSize: 13,
+            margin: "0 0 12px",
+          }}
+        >
+          {pairingError}
+        </div>
+      ) : null}
       <div className="page-header">
         <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
           ← All pairings
@@ -278,8 +347,12 @@ export default async function PairingDetailPage({
                     ? "Mid-year evaluation"
                     : "Endline + certification";
             const formKind = QUARTER_TO_KIND[qNum];
-            const formSlug = `${formKind}-${DEFAULT_AUDIENCE}-${FORM_VERSION}`;
-            const formHref = `/forms/${formSlug}?pairingId=${pairingId}&quarter=${qNum}`;
+            // No active form for this quarter yet -> no link, rather than a
+            // link to a "Form not found" shell.
+            const formVersion = versionByKind.get(formKind);
+            const formHref = formVersion
+              ? `/forms/${formKind}-${formAudience}-${formVersion}?pairingId=${pairingId}&quarter=${qNum}`
+              : null;
             return (
               <div
                 key={q}
@@ -319,7 +392,15 @@ export default async function PairingDetailPage({
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
-                {state === "current" ? (
+                {!formHref ? (
+                  // No active form published for this quarter and audience.
+                  // Saying so beats a link into a "Form not found" shell.
+                  state === "future" ? null : (
+                    <span style={{ marginTop: 10, fontSize: 11, color: "var(--ink-3)", display: "inline-flex" }}>
+                      No form published for this quarter yet.
+                    </span>
+                  )
+                ) : state === "current" ? (
                   <Link
                     href={formHref}
                     className="btn btn-sm"

@@ -96,6 +96,9 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
       bucket: reservation.bucket,
       objectKey: reservation.objectKey,
       chunkBytes: reservation.chunkBytes,
+      // Server-supplied, not read from process.env in the browser -- see
+      // lib/supabase/browser.ts.
+      supabase: reservation.supabase,
       onProgress: (bytes, bytesTotal) => updateUpload(id, { bytes, bytesTotal }),
       onError: (message) => updateUpload(id, { status: "failed", errorMessage: message }),
       onSuccess: () => {
