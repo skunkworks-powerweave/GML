@@ -189,7 +189,14 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                       gate
                     </span>
                   ) : null}
-                  {item.count != null ? (
+                  {/* `> 0`, not `!= null`. A count badge showing 0 is noise at
+                      best, and on "Forms & quizzes" it was actively wrong: that
+                      badge counts the viewer's own in-flight autosave DRAFTS
+                      (chrome-counts.ts pendingForms), so a super_admin with no
+                      half-finished form saw a black "0" pill that reads as
+                      "there are no forms" -- next to a catalogue holding ten.
+                      BottomTabs already used `> 0`; the two shells disagreed. */}
+                  {typeof item.count === "number" && item.count > 0 ? (
                     <span
                       style={{
                         fontSize: 11,
