@@ -402,3 +402,137 @@ entirely on the triggers. `_post/002` names `anon` / `authenticated` /
 - **Storage buckets are anonymously listable** (`GET /storage/v1/bucket` -> `200 []`).
   Harmless with zero buckets; to be locked down via RLS on `storage.buckets` when
   the buckets are created.
+
+---
+
+# Phase 4-8 verification (2026-09-19)
+
+Everything below was OBSERVED, not reasoned about. Where something could not be
+observed here, it says so rather than being left to look verified.
+
+## Migrations apply from an EMPTY database
+
+    $ docker run -d --name probe postgres:16.4-alpine
+    $ DATABASE_URL=... tsx scripts/migrate.ts
+    [migrate] applied _post/001_revoke_audit_writes.sql
+    [migrate] applied _post/002_lock_down_data_api.sql
+    [migrate] applied _post/003_supabase_identity.sql
+    [migrate] applied _post/004_access_token_hook.sql
+    [migrate] applied _post/005_storage_buckets_and_policies.sql
+    [migrate] all done.
+
+    public tables      : 43
+    users columns      : id, email, name, phone, image, role, active,
+                         default_locale, last_seen_at, created_at, updated_at,
+                         deleted_at, hindi_name
+    tables with RLS on : 43
+
+This was NOT true before. `_post/002-004` referenced Supabase's `anon`,
+`authenticated`, `supabase_auth_admin` roles and the `auth` schema unguarded, so
+against a plain Postgres the FIRST `_post` file aborted the run and no schema was
+created at all.
+
+## Supabase Storage — measured before the design was committed to
+
+    existing buckets                       : none -> 4 created, all private
+    anon read of a private object          : HTTP 400
+    createSignedUrls(200 keys)             : 200 urls in 43ms (ONE round trip)
+    signed URL, 7-day TTL                  : accepted
+    TUS resumable create                   : HTTP 201, Location issued
+
+The 43ms figure is why there is no SigV4 presigning in this codebase. The plan
+called for it to avoid a per-segment network hop; the batch API signs a whole
+200-segment playlist in one request, and SigV4 would have required Storage S3
+access keys as an extra credential to provision and rotate.
+
+## Storage RLS — the upload security model
+
+    user TUS upload, NO policy             : 403 new row violates RLS policy
+    user TUS upload, own prefix            : 201 Location issued
+    user TUS upload, another user's prefix : 403 new row violates RLS policy
+    user direct READ, no SELECT policy     : HTTP 400
+
+The third line is the one that matters: the object key is bound to the uploader
+by the DATABASE, so a forged key is refused even if application code is bypassed.
+
+## Auth, end to end (scripts/verify-auth.mjs)
+
+    PASS  public.users is a profile table
+    PASS  users.id -> auth.users is ON DELETE RESTRICT
+    PASS  trigger on_auth_user_created
+    PASS  trigger on_auth_user_email_changed
+    PASS  RLS enabled on every public table
+    PASS  Data API refuses anonymous reads - HTTP 404
+    PASS  hook is SECURITY DEFINER
+    PASS  hook owner bypasses RLS - postgres
+    PASS  supabase_auth_admin can execute the hook
+    PASS  supabase_auth_admin has no direct table access
+    PASS  a new account is created INERT - role=teacher active=false
+    PASS  an inactive account is refused a token - HTTP 403
+    PASS  the token carries user_role - user_role=mentor
+
+## Account lifecycle, against the live project
+
+    trigger made profile            : role=teacher active=false (inert)
+    after promote                   : role=mentor  active=true
+    sign-in while active            : HTTP 200, token issued
+    sign-in after deactivate        : HTTP 400 user_banned
+    sign-in after reactivate        : HTTP 200, token issued
+    deleteUser with profile present : REFUSED by the ON DELETE RESTRICT FK
+
+The last line proves programme data cannot be destroyed by pressing delete in
+the Supabase dashboard.
+
+## The stack, running
+
+`docker compose up app` against the live Supabase project:
+
+    {"ok":true,"app":true,"db":true,"storage":true,"migrations":true,
+     "migrationsApplied":28,"migrationsExpected":28}
+
+Ten smoke assertions over real HTTP, all passing: health shape and status
+agreeing, no driver detail leaked to anonymous callers, /login rendering,
+/dashboard redirecting anonymously to `/login?from=%2Fdashboard` rather than
+403ing, API routes answering 401 rather than a redirect, the WhatsApp webhook
+refusing an unsigned POST, and the deleted Auth.js and tusd endpoints 404ing.
+
+In a browser: the login page renders, the magic-link tab is correctly hidden
+with `AUTH_EMAIL_ENABLED=false`, there are no console errors, and the mobile
+shell renders at 375px.
+
+**This run found a real defect that nothing static would have.** `pingDb` and
+`pingMigrations` built their connection from `POSTGRES_HOST`/`POSTGRES_USER`/
+`POSTGRES_PASSWORD` while the application connects with `DATABASE_URL` — so
+/api/health reported `db:false, migrations 0 of 28` against a database that was
+up, fully migrated, and being queried successfully by the app in the same
+container at the same moment.
+
+## Behavioural tests: 21/21, and mutation-checked
+
+A test that has never failed is not evidence. Two mutations were injected and
+both were caught:
+
+    dropped the SM-1 append-only triggers        -> 2 tests fail
+    made jobs_dedupe_live_uq non-partial         -> the retry test fails
+
+The second is the exact shape of bug that would silently kill the operator
+Retry button.
+
+## NOT verified here
+
+Stated plainly rather than left ambiguous.
+
+- **The worker image does not build on this machine.** `apt-get install` fails
+  fetching from deb.debian.org — reproduced in a plain `node:22-slim` container
+  with no Dockerfile involved, so it is this host's network, not the Dockerfile.
+  CI builds it and gates on it reaching its startup log and on ffmpeg/ffprobe
+  being present.
+- **Caddy cannot bind port 80 here** (Windows reserved port range), so the CSP
+  and Permissions-Policy headers are unexercised. The smoke suite checks them
+  when present rather than passing silently.
+- **A real video has not been transcoded end to end.** That needs the worker
+  image, which needs a host that can reach Debian's mirrors.
+- **The WhatsApp ingest path has not been exercised with a real Meta delivery.**
+  The signature refusal is verified; a genuine signed payload is not.
+- **The EC2 deploy has not been performed.** `scripts/deploy.sh` is written and
+  syntax-checked; it has not been run on a clean instance.
