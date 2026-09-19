@@ -14,17 +14,34 @@ export type MigrationsResult = {
   error?: string;
 };
 
+/**
+ * Both database probes below connect with DATABASE_URL — the SAME string the
+ * application itself uses.
+ *
+ * They used to assemble a connection from POSTGRES_HOST / POSTGRES_PORT /
+ * POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD, which is a different
+ * database from the one the app talks to. Those could always have pointed
+ * somewhere else, and once compose stopped forwarding them (there is no local
+ * Postgres any more) they pointed nowhere at all: /api/health reported
+ * `db: false, migrations: 0 of 28` against a database that was up, fully
+ * migrated, and being queried successfully by the app in the same container.
+ *
+ * Found by booting the stack and asking it. Nothing static would have caught
+ * it, because both sets of variables are perfectly valid names.
+ *
+ * A health check must probe the dependency the application actually uses. One
+ * that probes a different one is worse than none: it reports green when the
+ * real dependency is down, and red when it is fine.
+ */
 export async function pingDb(): Promise<PingResult> {
-  const host = process.env.POSTGRES_HOST;
-  if (!host) return { ok: false, detail: "POSTGRES_HOST not set" };
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return { ok: false, detail: "DATABASE_URL not set" };
   const { Pool } = await import("pg");
   const pool = new Pool({
-    host,
-    port: Number(process.env.POSTGRES_PORT ?? 5432),
-    database: process.env.POSTGRES_DB,
-    user: process.env.POSTGRES_USER,
-    password: process.env.POSTGRES_PASSWORD,
-    connectionTimeoutMillis: 2000,
+    connectionString,
+    // 5s, not 2s. The database is in another region now; a 2-second budget
+    // turns ordinary latency into a reported outage.
+    connectionTimeoutMillis: 5000,
     max: 1,
   });
   try {
@@ -136,19 +153,17 @@ export async function pingMigrations(): Promise<MigrationsResult> {
   }
 
   // Applied: query the drizzle.__drizzle_migrations table.
-  const host = process.env.POSTGRES_HOST;
-  if (!host) {
-    return { ok: false, applied: 0, expected, error: "POSTGRES_HOST not set" };
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    return { ok: false, applied: 0, expected, error: "DATABASE_URL not set" };
   }
+  let pool: import("pg").Pool | null = null;
   try {
     const { Pool } = await import("pg");
-    const pool = new Pool({
-      host,
-      port: Number(process.env.POSTGRES_PORT ?? 5432),
-      database: process.env.POSTGRES_DB,
-      user: process.env.POSTGRES_USER,
-      password: process.env.POSTGRES_PASSWORD,
-      connectionTimeoutMillis: 2000,
+    pool = new Pool({
+      connectionString,
+      // 5s, matching pingDb: the database is in another region.
+      connectionTimeoutMillis: 5000,
       max: 1,
     });
     try {
