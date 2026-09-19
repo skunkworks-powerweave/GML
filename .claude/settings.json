@@ -28,7 +28,7 @@
       },
       {
         "matcher": "Edit|Write",
-        "pathGlob": "**/apps/web/src/middleware.ts",
+        "pathGlob": "**/apps/web/src/{middleware,proxy}.ts",
         "hooks": [
           {
             "type": "command",
@@ -40,7 +40,7 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "pathGlob": "**/apps/web/src/db/migrations/**",
+        "pathGlob": "**/packages/db/src/migrations/**",
         "hooks": [
           {
             "type": "command",

@@ -43,10 +43,6 @@ COPY --from=deps /repo/node_modules               ./node_modules
 COPY --from=deps /repo/apps/web/node_modules      ./apps/web/node_modules
 COPY --from=deps /repo/packages/db/node_modules   ./packages/db/node_modules
 COPY --from=deps /repo/packages/shared/node_modules ./packages/shared/node_modules
-# apps/web declares a workspace dependency on @gml/worker (for transcodeQueue),
-# which is why bullmq and ioredis are in the web dependency graph at all. This
-# line goes away with that dependency when the queue moves to Postgres.
-COPY --from=deps /repo/apps/worker/node_modules   ./apps/worker/node_modules
 
 WORKDIR /repo/apps/web
 ENV NEXT_TELEMETRY_DISABLED=1

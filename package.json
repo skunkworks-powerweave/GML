@@ -2,7 +2,7 @@
   "name": "gml-lms",
   "version": "0.0.1",
   "private": true,
-  "description": "Goldenmile Learning RTT LMS — Postgres + Next.js, self-hostable, low-bandwidth-aware",
+  "description": "Goldenmile Learning RTT LMS \u2014 Postgres + Next.js, self-hostable, low-bandwidth-aware",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -20,6 +20,15 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "migrate": "pnpm --filter @gml/db migrate",
     "seed:all": "pnpm --filter @gml/db seed:all",
-    "session-start": "node scripts/session_start.mjs"
+    "session-start": "node scripts/session_start.mjs",
+    "test:behaviour": "node --import tsx --test tests/behaviour/*.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "@gml/db": "workspace:*",
+    "@gml/shared": "workspace:*",
+    "pg": "^8.13.1",
+    "drizzle-orm": "^0.39.0",
+    "@types/pg": "^8.11.10"
   }
 }

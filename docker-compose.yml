@@ -1,190 +1,107 @@
-# GML LMS — single-host stack.
-# `docker compose up -d` from this directory brings up the 7-service deployment.
-# All secrets, the domain, and ports come from the sibling `.env` file
-# (copy from `.env.example`).
-#
-# Start order (depends_on): postgres → redis → minio → tusd → app → worker → caddy.
-# Hot data lives in named volumes (NOT bind mounts) so OneDrive sync never touches it.
-
 name: gml-lms
 
+# GML LMS — three long-running services plus a one-shot schema gate.
+#
+# ── WHAT HAPPENED TO THE OTHER FIVE ──────────────────────────────────────────
+#
+# This file used to declare nine services. `postgres`, `redis`, `minio`,
+# `minio-init` and `tusd` are gone, and none of them were removed for tidiness:
+#
+#   minio / minio-init  MinIO WITHDREW their public Docker images. Not the
+#                       pinned tag -- the entire `minio/*` namespace returns
+#                       "pull access denied ... repository does not exist".
+#                       Because `app` and `worker` both declared
+#                       `depends_on: minio: service_healthy`, NOTHING in this
+#                       stack could start, on any machine, regardless of every
+#                       other defect. See docs/verification.md (B9).
+#
+#   tusd                Wrote to bucket `gml-media`, which `minio-init` never
+#                       created; had no healthcheck and nothing depended on it,
+#                       so the failure was silent. Its proxy route returned 501
+#                       on every branch because TUSD_INTERNAL_URL was set
+#                       nowhere. Uploads go browser-direct to Supabase Storage.
+#
+#   redis               One service, one volume and one healthcheck for a queue
+#                       carrying under 100 jobs/day. Replaced by a `jobs` table
+#                       claimed with FOR UPDATE SKIP LOCKED.
+#
+#   postgres            Supabase IS the database. Keeping a local Postgres here
+#                       while DATABASE_URL pointed at Supabase meant compose and
+#                       .env disagreed about where the data lived, and the app
+#                       container silently dialled the wrong one.
+#
+# ── WHAT RUNS ON THE BOX ─────────────────────────────────────────────────────
+#
+#   caddy     TLS termination and reverse proxy (the only published ports)
+#   app       Next.js — HTML, RSC and API
+#   worker    ffmpeg transcoding, queue consumer, periodic sweeps
+#   migrate   one-shot; `app` and `worker` block on it exiting 0
+#
+# Video bytes never transit this host in either direction: uploads go browser →
+# Supabase Storage, and playback segments are fetched by the browser from
+# Supabase's CDN via signed URLs embedded in the playlist. EC2 serves HTML, RSC
+# and API only, which is what makes a 2-vCPU instance sufficient.
+
 services:
-
-  postgres:
-    # role: primary relational store (RTT data, audit log, sessions, etc.)
-    image: postgres:16.4-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-gml_lms}
-      POSTGRES_USER: ${POSTGRES_USER:-gml}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - lms_net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gml} -d ${POSTGRES_DB:-gml_lms}"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-
-  redis:
-    # role: BullMQ queue + rate-limit cache + session-gate attempt counters
-    image: redis:7.4-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
-    volumes:
-      - redisdata:/data
-    networks:
-      - lms_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
-
-  minio:
-    # role: S3-compatible object storage for video originals + HLS chunks + PDFs
-    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
-    restart: unless-stopped
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
-    volumes:
-      - miniodata:/data
-    networks:
-      - lms_net
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
-      interval: 15s
-      timeout: 5s
-      retries: 6
-
-  minio-init:
-    # role: one-shot bucket bootstrapper — runs once per `docker compose up`, creates the
-    # four private buckets the app + worker + signed-URL helper rely on, then exits 0.
-    # Buckets must match the BUCKETS constant in apps/web/src/lib/video/minio.ts:
-    #   gml-videos-original, gml-videos-hls, gml-posters, gml-pdfs.
-    # `mc mb ... --ignore-existing` makes the step idempotent across restarts.
-    # `mc anonymous set none ...` enforces PRIVATE policy — all reads go through the
-    # signed-URL proxy at /api/media/[token], never direct from MinIO.
-    image: minio/mc:latest
-    restart: "no"
-    depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    entrypoint: >
-      /bin/sh -c "
-      set -e;
-      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
-      mc mb local/gml-videos-original --ignore-existing;
-      mc mb local/gml-videos-hls --ignore-existing;
-      mc mb local/gml-posters --ignore-existing;
-      mc mb local/gml-pdfs --ignore-existing;
-      mc anonymous set none local/gml-videos-original;
-      mc anonymous set none local/gml-videos-hls;
-      mc anonymous set none local/gml-posters;
-      mc anonymous set none local/gml-pdfs;
-      echo 'minio-init: buckets ready';
-      "
-    networks:
-      - lms_net
-
-  tusd:
-    # role: resumable upload endpoint (tus protocol); writes through to MinIO via S3 API
-    image: tusproject/tusd:v2.6.0
-    restart: unless-stopped
-    command:
-      - "-s3-bucket=${MINIO_BUCKET:-gml-media}"
-      - "-s3-endpoint=${MINIO_ENDPOINT:-http://minio:9000}"
-      - "-behind-proxy"
-      - "-base-path=/uploads/"
-      - "-max-size=2147483648"  # 2 GB
-    environment:
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      AWS_REGION: us-east-1
-    depends_on:
-      minio:
-        condition: service_healthy
-    networks:
-      - lms_net
-
   migrate:
-    # role: one-shot schema gate. Applies drizzle migrations + _post/*.sql, then
-    # exits 0. `app` and `worker` block on it completing successfully, so the
-    # stack can never come up against an unmigrated database -- which is exactly
-    # what happened before (health reported migrations 0-of-22 applied, and every
+    # One-shot schema gate. Applies drizzle migrations + _post/*.sql, then exits.
+    # `app` and `worker` block on it completing successfully, so the stack can
+    # never come up against an unmigrated database -- which is exactly what
+    # used to happen (health reported 0-of-22 migrations applied and every
     # authenticated page threw). See docs/verification.md (B13).
     #
-    # Safe to run on every `up`: both ledgers make it a no-op once current.
-    # If it exits non-zero, `app` never starts and the PREVIOUS app container
-    # keeps serving -- that is the intended rollback posture.
+    # Safe on every `up`: both ledgers make it a no-op once current. If it exits
+    # non-zero, `app` never starts and the PREVIOUS container keeps serving.
+    # That is the rollback posture, and it is deliberate.
     build:
       context: .
       dockerfile: docker/migrate.Dockerfile
     restart: "no"
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      DATABASE_URL: postgres://${POSTGRES_USER:-gml}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gml_lms}
-    depends_on:
-      postgres:
-        condition: service_healthy
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set — Supabase session-pooler URI}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY must be set}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:?NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set}
     networks:
       - lms_net
 
   app:
-    # role: Next.js web + API + Server Actions (the LMS UI)
+    # Next.js web + API + Server Actions.
     build:
       context: .
       dockerfile: docker/app.Dockerfile
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgres://${POSTGRES_USER:-gml}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gml_lms}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-gml_lms}
-      POSTGRES_USER: ${POSTGRES_USER:-gml}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gml-media}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set}
-      AUTH_URL: ${AUTH_URL:-https://localhost}
+      APP_URL: ${APP_URL:-https://${DOMAIN:-localhost}}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:?NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY must be set}
+      # Outbound email is configured in the Supabase dashboard, not here. Set
+      # this to `true` only after an SMTP provider is attached there; until then
+      # the UI says plainly that password resets go through an administrator.
+      AUTH_EMAIL_ENABLED: ${AUTH_EMAIL_ENABLED:-false}
+      # Refused rather than defaulted: an unset app secret used to make the
+      # WhatsApp webhook accept unsigned POSTs from anyone on the internet.
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?WHATSAPP_APP_SECRET must be set — the webhook refuses all traffic without it}
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
-      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?WHATSAPP_APP_SECRET must be set in .env (webhook signature verification)}
-      MEDIA_SIGN_SECRET: ${MEDIA_SIGN_SECRET:?MEDIA_SIGN_SECRET must be set in .env (signed-URL HMAC for video + PDF proxy)}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASS: ${SMTP_PASS:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:?SUPER_ADMIN_EMAIL must be set}
-      SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:?SUPER_ADMIN_INITIAL_PASSWORD must be set}
+      GML_WHATSAPP_NUMBER: ${GML_WHATSAPP_NUMBER:-}
+      GML_HELPDESK_PHONE: ${GML_HELPDESK_PHONE:-}
+      GML_HELPDESK_EMAIL: ${GML_HELPDESK_EMAIL:-}
+      TZ: ${TZ:-Asia/Kolkata}
     depends_on:
       migrate:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
     networks:
       - lms_net
     healthcheck:
-      # See docker/app.Dockerfile: node:22-slim has no wget and no curl, so the
-      # previous check could never pass and the container sat `unhealthy`
-      # forever (docs/verification.md B14).
+      # node:22-slim has neither wget nor curl, so the previous check could
+      # never pass and the container sat `unhealthy` forever
+      # (docs/verification.md B14). `node` is the only usable binary.
       test:
         - CMD
         - node
@@ -196,43 +113,61 @@ services:
       start_period: 40s
 
   worker:
-    # role: BullMQ consumer for ffmpeg transcoding + WhatsApp media ingest (real entry in spec 024)
+    # ffmpeg transcoding, queue consumer, periodic sweeps.
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgres://${POSTGRES_USER:-gml}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gml_lms}
-      REDIS_URL: redis://redis:6379
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gml-media}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY must be set}
+      # ONE, not two. A single ffmpeg at -preset veryfast saturates both vCPUs
+      # of the target instance; a second starves the web tier it shares the box
+      # with. Queue depth absorbs bursts -- that is what a queue is for.
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      TZ: ${TZ:-Asia/Kolkata}
     depends_on:
       migrate:
         condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
     networks:
       - lms_net
-    tmpfs:
-      - /tmp:size=2g  # ffmpeg scratch space — wiped on restart
+    healthcheck:
+      # The worker has no HTTP surface, so this asks the question that actually
+      # matters: can it still reach the queue? A worker that is running but
+      # cannot claim looks identical to an idle one, and previously the
+      # container had no healthcheck at all -- a crash-loop was invisible.
+      test:
+        - CMD
+        - node
+        - -e
+        - "const{Client}=require('pg');const c=new Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:4000});c.connect().then(()=>c.query('select 1 from jobs limit 1')).then(()=>c.end()).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      # ffmpeg scratch. On DISK, not tmpfs: the previous `tmpfs: /tmp size=2g`
+      # both failed on a source larger than ~1 GB (which has to coexist with its
+      # own HLS output) and spent 2 GiB of RAM on a box with 8.
+      - worker_scratch:/tmp
 
   caddy:
-    # role: TLS termination, reverse proxy to app + tusd, static cache, auto-LE for prod domains
     image: caddy:2.8-alpine
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     environment:
       DOMAIN: ${DOMAIN:-localhost}
-      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set in .env (Let's Encrypt registration contact for production TLS)}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set for Let's Encrypt}
+      # The CSP has to name the exact Supabase project origin: the browser
+      # uploads to Storage and fetches HLS segments from it directly. Falls back
+      # to a wildcard over supabase.co, which works but is looser than it needs
+      # to be -- set this to your project origin in .env.
+      SUPABASE_ORIGIN: ${NEXT_PUBLIC_SUPABASE_URL:-https://*.supabase.co}
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -243,15 +178,13 @@ services:
     networks:
       - lms_net
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1 || exit 1"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80"]
       interval: 30s
       timeout: 5s
-      retries: 5
+      retries: 3
 
 volumes:
-  pgdata:
-  miniodata:
-  redisdata:
+  worker_scratch:
   caddy_data:
   caddy_config:
 

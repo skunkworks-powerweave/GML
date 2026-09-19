@@ -51,7 +51,8 @@ test("spec 113: quickstart.md references 'docker compose ps' for service health 
   assert.match(
     src,
     /docker\s+compose\s+ps/,
-    "quickstart.md must reference 'docker compose ps' — step 3 of the smoke checklist verifies all 7 services are Up",
+    "quickstart.md must reference 'docker compose ps' — the operator has to be able to see " +
+      "which containers are up and which are unhealthy",
   );
 });
 
@@ -64,13 +65,67 @@ test("spec 113: quickstart.md references the /api/health endpoint", () => {
   );
 });
 
-test("spec 113: quickstart.md names all seven core services", () => {
+// INVERTED. This test used to assert the quickstart named seven services:
+// postgres, redis, minio, tusd, app, worker, caddy (plus a one-shot minio-init
+// in the prose). Five of those no longer exist, and the assertion is why the
+// stale checklist stayed green:
+//
+//   minio / minio-init  MinIO withdrew their public Docker images — the whole
+//                       `minio/*` namespace 404s on pull. Because app and
+//                       worker both declared `depends_on: minio:
+//                       service_healthy`, NOTHING in the stack could start, on
+//                       any machine.
+//   tusd                Wrote to a bucket minio-init never created, had no
+//                       healthcheck and nothing depended on it, so it failed
+//                       silently; its proxy route returned 501 on every branch.
+//                       Uploads now go browser-direct to Supabase Storage.
+//   redis               A service, a volume and a healthcheck for a queue
+//                       carrying under 100 jobs/day. Replaced by a `jobs` table
+//                       claimed with FOR UPDATE SKIP LOCKED.
+//   postgres            Supabase IS the database. A local Postgres alongside a
+//                       Supabase DATABASE_URL meant compose and .env disagreed
+//                       about where the data lived.
+//
+// Telling an operator to expect five containers that cannot exist sends them
+// hunting for a fault in a healthy deployment, which is worse than saying
+// nothing. The property still worth protecting is the one the original test was
+// reaching for: the checklist must describe the boot the operator will actually
+// see. So the service list is now DERIVED from docker-compose.yml rather than
+// hardcoded — it cannot go stale again the way this one did — and the five
+// withdrawn names are pinned absent.
+test("spec 113: quickstart.md names exactly the services docker-compose.yml declares", () => {
   const src = read(QUICKSTART).toLowerCase();
-  for (const svc of ["postgres", "redis", "minio", "tusd", "app", "worker", "caddy"]) {
+
+  const compose = read("docker-compose.yml").replace(/\r\n/g, "\n");
+  const block = compose.match(/^services:[ \t]*\n([\s\S]*?)(?=^\S)/m);
+  assert.ok(block, "could not locate the `services:` block in docker-compose.yml");
+  const services = [...block[1].matchAll(/^ {2}([a-z][a-z0-9_-]*):[ \t]*$/gm)].map((m) => m[1]);
+
+  assert.deepEqual(
+    services.slice().sort(),
+    ["app", "caddy", "migrate", "worker"],
+    "the stack is four services — migrate (one-shot schema gate), app, worker, caddy. " +
+      "If this changed deliberately, the quickstart has to change with it.",
+  );
+
+  for (const svc of services) {
     assert.match(
       src,
       new RegExp(`\\b${svc}\\b`),
-      `quickstart.md must mention the '${svc}' service so the operator knows it's part of the 7-service boot`,
+      `quickstart.md must mention the '${svc}' service — docker-compose.yml declares it, ` +
+        `so the operator will see it in 'docker compose ps' and needs to know what it is`,
+    );
+  }
+
+  // Markdown has no comment syntax, so the quickstart cannot explain the
+  // removals inline without tripping this; the history lives in the header of
+  // docker-compose.yml and in the comment above, and the operator checklist
+  // stays a checklist.
+  for (const gone of ["postgres", "redis", "minio", "minio-init", "tusd"]) {
+    assert.ok(
+      !new RegExp(`\\b${gone}\\b`).test(src),
+      `quickstart.md must not mention '${gone}' — that service is gone, and an operator ` +
+        `told to look for it will read a healthy 'docker compose ps' as a failure`,
     );
   }
 });

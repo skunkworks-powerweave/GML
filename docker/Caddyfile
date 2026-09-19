@@ -1,60 +1,84 @@
-# Spec 092 — Caddy reverse proxy with auto-TLS via Let's Encrypt.
-# In production, set DOMAIN=lms.your-domain.org in .env; Caddy auto-provisions.
-# Locally DOMAIN=localhost; Caddy issues a self-signed cert via its internal CA.
+# Caddy — TLS termination and reverse proxy.
+#
+# The tusd upload route is gone: uploads go browser-direct to Supabase Storage,
+# so there is nothing to proxy. The route was broken anyway --
+# `handle_path /api/uploads/tus/*` did not match the tus CREATE request
+# (POST /api/uploads/tus, no trailing segment), and `handle_path` stripped a
+# prefix that tusd's own `-base-path=/uploads/` expected.
 
 {
-  email {$ACME_EMAIL:lms-admin@example.org}
+	email {$ACME_EMAIL:admin@example.com}
+	# Caddy obtains and renews certificates automatically. Nothing here needs
+	# a cron job or a renewal script.
 }
 
 {$DOMAIN:localhost} {
-  encode gzip zstd
+	encode gzip zstd
 
-  request_body {
-    max_size 5GB
-  }
+	# Request bodies are small now. Video never passes through this proxy in
+	# either direction — uploads go browser → Supabase Storage, and playback
+	# segments are fetched from Supabase's CDN via signed URLs. The old 5 GB
+	# cap existed for the tusd path that no longer exists; leaving it would
+	# invite a 5 GB body at an endpoint with no legitimate use for one.
+	request_body {
+		max_size 25MB
+	}
 
-  # tus resumable uploads — proxy directly to tusd
-  handle_path /api/uploads/tus/* {
-    reverse_proxy tusd:1080 {
-      flush_interval -1
-      header_up X-Forwarded-Proto {scheme}
-      header_up X-Forwarded-Host {host}
-      transport http {
-        read_timeout  10m
-        write_timeout 10m
-      }
-    }
-  }
+	# WhatsApp webhook. Meta re-delivers on timeout, and the handler does its
+	# media fetch in `after()` so the response is prompt — but Meta's own
+	# tolerance is the thing being accommodated here, not ours.
+	handle /api/webhooks/whatsapp* {
+		reverse_proxy app:3000 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+			transport http {
+				read_timeout 60s
+				write_timeout 60s
+			}
+		}
+	}
 
-  # WhatsApp webhook → Next.js
-  handle /api/webhooks/whatsapp* {
-    reverse_proxy app:3000 {
-      transport http {
-        read_timeout  60s
-        write_timeout 60s
-      }
-    }
-  }
+	handle {
+		reverse_proxy app:3000 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {remote_host}
+		}
+	}
 
-  # Default: everything else → Next.js
-  handle {
-    reverse_proxy app:3000 {
-      header_up X-Forwarded-Proto {scheme}
-      header_up X-Real-IP {remote_host}
-    }
-  }
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
 
-  log {
-    output stdout
-    format console
-    level INFO
-  }
+		# CONTENT SECURITY POLICY.
+		#
+		# This is load-bearing rather than hygiene, for a specific reason: the
+		# Supabase auth cookies are NOT httpOnly (that is the library's own
+		# default, because the browser client reads them to drive the direct
+		# upload). An XSS on this origin therefore yields the access token. The
+		# CSP is what makes that hard to get in the first place.
+		#
+		# connect-src must include the Supabase project origin: the browser
+		# talks directly to Storage for uploads, and fetches HLS segments from
+		# signed Storage URLs. media-src likewise — segments are <video> sources
+		# loaded cross-origin.
+		#
+		# 'unsafe-inline' on style-src is required by Next.js, which emits inline
+		# <style> for critical CSS, and by this codebase's pervasive inline style
+		# attributes. script-src gets NEITHER 'unsafe-inline' NOR 'unsafe-eval':
+		# a production Next build needs neither, and granting them would defeat
+		# the reason this header exists. VERIFY IN A BROWSER after any Next
+		# upgrade -- a CSP violation is silent server-side and shows only as a
+		# console error and a dead page.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {$SUPABASE_ORIGIN:https://*.supabase.co}; media-src 'self' blob: {$SUPABASE_ORIGIN:https://*.supabase.co}; connect-src 'self' {$SUPABASE_ORIGIN:https://*.supabase.co} wss://*.supabase.co; font-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
 
-  header {
-    Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    X-Content-Type-Options "nosniff"
-    X-Frame-Options "SAMEORIGIN"
-    Referrer-Policy "strict-origin-when-cross-origin"
-    -Server
-  }
+		# Switch off device APIs this product never uses. Without it, any script
+		# that does get through can ask for the camera or the microphone — on a
+		# device a teacher is holding in a classroom.
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+		# Do not advertise the server software.
+		-Server
+	}
 }

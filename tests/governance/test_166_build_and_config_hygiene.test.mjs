@@ -8,9 +8,13 @@
 //        explicit binary pins for known file formats.
 //
 //   2. .env.example (EDITED)
-//      — six new env-var documentation lines: WORKER_CONCURRENCY,
-//        TZ, MINIO_BUCKET (verified present from earlier work),
-//        GML_WHATSAPP_NUMBER, GML_HELPDESK_PHONE, GML_HELPDESK_EMAIL.
+//      — env-var documentation lines: WORKER_CONCURRENCY, TZ,
+//        GML_WHATSAPP_NUMBER, GML_HELPDESK_PHONE, GML_HELPDESK_EMAIL,
+//        plus the Supabase storage/database surface.
+//        PARTLY INVERTED: this list used to include MINIO_BUCKET and
+//        used to pin WORKER_CONCURRENCY=2. MinIO is gone from the
+//        stack (withdrawn Docker images), and the concurrency default
+//        is now 1. Both are explained at the assertions themselves.
 //
 //   3. package.json (EDITED, root)
 //      — three new scripts: typecheck, migrate, seed:all.
@@ -137,18 +141,31 @@ test("spec 166 — .gitattributes pins all required binary file formats", () => 
 
 // ---------- (2) .env.example ----------
 
-test("spec 166 — .env.example documents all six required env-vars", () => {
+test("spec 166 — .env.example documents the operator-facing env-vars", () => {
   const src = read(ENV_EXAMPLE_PATH);
-  // The six knobs the audit team flagged. Pinning each as a
+  // The knobs the audit team flagged. Pinning each as a
   // leading-anchored declaration (`^KEY=`) so a comment that
   // merely mentions one of them in passing doesn't false-positive.
+  //
+  // MINIO_BUCKET is no longer in this list, and MUST NOT come back: MinIO is
+  // gone from the stack entirely (they withdrew their public Docker images —
+  // the whole `minio/*` namespace answers "pull access denied", and because
+  // `app` and `worker` declared `depends_on: minio: service_healthy`, nothing
+  // could start on any machine). Object storage is Supabase Storage, and the
+  // bucket NAMES are rows created by a migration, not an operator knob. A
+  // documented variable that nothing reads is worse than an undocumented one:
+  // it teaches the operator that this file is not to be trusted, and this file
+  // used to carry five of them.
   const requiredKeys = [
     "WORKER_CONCURRENCY",
     "TZ",
-    "MINIO_BUCKET",
     "GML_WHATSAPP_NUMBER",
     "GML_HELPDESK_PHONE",
     "GML_HELPDESK_EMAIL",
+    // Replacing MINIO_BUCKET: the storage surface an operator must now supply.
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "SUPABASE_SECRET_KEY",
+    "BACKUP_ROOT",
   ];
   for (const key of requiredKeys) {
     assert.match(
@@ -157,18 +174,47 @@ test("spec 166 — .env.example documents all six required env-vars", () => {
       `.env.example must declare \`${key}=...\` on its own line so a new operator copying the file to .env sees the knob explicitly`,
     );
   }
+  for (const dead of ["MINIO_BUCKET", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "REDIS_URL", "TUSD_INTERNAL_URL"]) {
+    assert.ok(
+      !new RegExp(`^${dead}=`, "m").test(src),
+      `.env.example must not declare ${dead}= — the service that read it no longer exists`,
+    );
+  }
 });
 
-test("spec 166 — .env.example WORKER_CONCURRENCY default matches the worker clamp range", () => {
+test("spec 166 — WORKER_CONCURRENCY default is 1 and agrees in all three places", () => {
   const src = read(ENV_EXAMPLE_PATH);
-  // Pin the default value too — the worker clamps to [1, 16], so
-  // the default must be in that range. We pin `=2` specifically
-  // because that's what the worker reads when WORKER_CONCURRENCY
-  // is unset (matches the existing code in apps/worker/src/index.ts).
+  // Was: `^WORKER_CONCURRENCY=2\b`. The default is now ONE. A single ffmpeg at
+  // -preset veryfast already saturates both vCPUs of the target instance; a
+  // second starves the web tier it shares the box with, so the old default
+  // shipped a self-inflicted outage under load. Queue depth absorbs bursts —
+  // that is what a queue is for.
   assert.match(
     src,
-    /^WORKER_CONCURRENCY=2\b/m,
-    ".env.example must default WORKER_CONCURRENCY=2 (matching the worker's runtime default; the worker clamps the env-var to [1, 16])",
+    /^WORKER_CONCURRENCY=1\b/m,
+    ".env.example must default WORKER_CONCURRENCY=1 (one ffmpeg saturates both vCPUs; the worker clamps the env-var to [1, 16])",
+  );
+
+  // Stronger than the original: reconcile the three declarations against each
+  // other instead of hard-coding a literal in one of them. The old test pinned
+  // `=2` "matching the existing code", which is exactly the kind of pin that
+  // silently stops matching when the code moves.
+  const workerSrc = read("apps/worker/src/index.ts");
+  const codeDefault = workerSrc.match(/process\.env\.WORKER_CONCURRENCY\s*\?\?\s*"(\d+)"/);
+  assert.ok(codeDefault, "apps/worker/src/index.ts must read WORKER_CONCURRENCY with a literal fallback");
+  assert.equal(
+    codeDefault[1],
+    "1",
+    "the worker's own fallback must be 1, so an unset variable behaves like the documented default",
+  );
+  const composeDefault = read("docker-compose.yml").match(
+    /WORKER_CONCURRENCY:\s*\$\{WORKER_CONCURRENCY:-(\d+)\}/,
+  );
+  assert.ok(composeDefault, "docker-compose.yml must default WORKER_CONCURRENCY");
+  assert.equal(
+    composeDefault[1],
+    codeDefault[1],
+    "compose and the worker must agree on the concurrency default",
   );
 });
 

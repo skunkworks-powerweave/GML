@@ -36,22 +36,21 @@ export function getDb(): NodePgDatabase<typeof schema> {
 }
 
 // Convenience handle for the common case.
-// IMPORTANT: This is a direct reference (NOT a Proxy) so that `instanceof
-// PgDatabase` checks in third-party libraries (e.g. Auth.js DrizzleAdapter)
-// pass cleanly. The trade-off: importing this module requires DATABASE_URL.
-// If you need lazy init (e.g. during type-checking), use `getDb()` instead.
-// During build-time when DATABASE_URL may be unset, we fall back to a
-// build-safe stub URL so the module loads; runtime queries will still throw
-// on actual use, which is the desired behaviour.
-function buildSafeUrl(): void {
-  if (!process.env.DATABASE_URL) {
-    const host = process.env.POSTGRES_HOST ?? "localhost";
-    const port = process.env.POSTGRES_PORT ?? "5432";
-    const user = process.env.POSTGRES_USER ?? "gml";
-    const pass = process.env.POSTGRES_PASSWORD ?? "postgres";
-    const dbn = process.env.POSTGRES_DB ?? "gml_lms";
-    process.env.DATABASE_URL = `postgres://${user}:${pass}@${host}:${port}/${dbn}`;
-  }
-}
-buildSafeUrl();
+//
+// A direct reference, NOT a Proxy, so `instanceof PgDatabase` checks in
+// third-party libraries pass cleanly. The trade-off is that importing this
+// module requires DATABASE_URL; use `getDb()` where lazy init is needed.
+//
+// `buildSafeUrl()` WAS HERE AND IS GONE. It silently rewrote a missing
+// DATABASE_URL into
+//     postgres://gml:postgres@localhost:5432/gml_lms
+// from POSTGRES_* fallbacks, at import time, which made the explicit throw in
+// poolConfig() unreachable for this export. A misconfigured deployment
+// therefore did not fail at startup with "DATABASE_URL is not set" -- it came
+// up, dialled localhost, and produced connection errors that look like a
+// network fault rather than a missing variable. On a box where Postgres is not
+// even installed any more, that is a confusing error instead of an obvious one.
+//
+// Builds that legitimately have no database (next build, typecheck) pass a
+// throwaway URL explicitly. See docker/app.Dockerfile and .github/workflows.
 export const db: NodePgDatabase<typeof schema> = getDb();

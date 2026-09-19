@@ -1,26 +1,34 @@
 // Governance test for spec 171 — Docs refresh (Workflow Run 16
 // audit-closure, docs-only spec).
 //
+// ── WHY HALF OF THIS FILE IS INVERTED ────────────────────────────────────────
+//
+// A governance test that pins documentation pins whatever the documentation
+// said on the day it was written. When the system moves and the doc does not,
+// the test does not catch the drift — it PROTECTS it. This file did exactly
+// that: it asserted README-IT.md documented an account lockout policy and a
+// self-service password-reset flow, both of which were deleted from the product
+// on security grounds. The suite stayed green precisely because the doc was
+// wrong, and an operator following it would have run commands that cannot
+// execute against services that do not exist.
+//
+// The assertions below are therefore kept, not deleted, and pointed at the new
+// reality with a note on each saying what the old one pinned and where that
+// thing went. A doc test is only worth having if failing it means the doc is
+// wrong.
+//
 // Surface area:
 //
-//   1. README-IT.md (EDITED)
-//      — three new sections appended: "New admin surfaces (post-audit
-//        closure)", "Account lockout policy", "Password reset flow".
-//      — env table extended with WORKER_CONCURRENCY, TZ, MINIO_BUCKET,
-//        GML_WHATSAPP_NUMBER, GML_HELPDESK_PHONE, GML_HELPDESK_EMAIL.
+//   1. README-IT.md — now a SHORT quick reference that defers to
+//      README-deploy.md for the full procedure. Two operator documents that
+//      overlap will drift, and that drift is what produced this mess.
 //
-//   2. docs/audit-actions.md (REWRITTEN)
-//      — comprehensive taxonomy with 30+ distinct dotted-notation
-//        actions grouped by entity prefix.
+//   2. docs/audit-actions.md — the canonical audit-action taxonomy.
 //
-//   3. specs/113-docker-compose-boot-smoke/quickstart.md (EDITED)
-//      — new sub-steps 7.5, 7.6, 7.7 for the three new admin surfaces.
-//      — new step 11 for the password-reset flow.
+//   3. specs/113-docker-compose-boot-smoke/quickstart.md — the four-service
+//      boot checklist.
 //
-//   4. tests/integration/smoke.test.mjs (EDITED)
-//      — four new probes (smoke 9 through smoke 12) covering the new
-//        admin surfaces and /login/forgot.
-//      — fetch-call count >= 12 (was 8).
+//   4. tests/integration/smoke.test.mjs — the post-deploy HTTP probe suite.
 //
 //   5. specs/171-docs-refresh/{spec,plan,research,quickstart,tasks}.md
 
@@ -87,13 +95,23 @@ test("spec 171 — spec.md mentions Run 16 and audit closure", () => {
 
 // ---------- README-IT.md — admin surfaces section ----------
 
-test("spec 171 — README-IT.md mentions all four new admin surfaces", () => {
+test("spec 171 — README-IT.md mentions every admin surface an operator needs", () => {
   const src = read(README_PATH);
   // Each admin surface path MUST appear in the README so an IT
   // operator can find it. We pin the literal path strings (not
   // the surrounding prose) so a future copy-edit can't silently
   // drop one of the URLs.
+  //
+  // /admin/users is NEW to this list. Account creation did not exist at all
+  // when the original four were written — the only insert into users anywhere
+  // in the repository was the seed, so the only way to onboard a teacher was a
+  // hand-written UPDATE against the database. It is now the single most
+  // load-bearing surface in the product for an IT operator: it is how accounts
+  // are made, how roles are assigned, how people are deactivated, and (since
+  // self-service reset is off by default) how a forgotten password is dealt
+  // with.
   for (const path of [
+    "/admin/users",
     "/admin/quizzes",
     "/admin/transcode-jobs",
     "/admin/system-settings",
@@ -107,78 +125,175 @@ test("spec 171 — README-IT.md mentions all four new admin surfaces", () => {
   }
 });
 
-// ---------- README-IT.md — account lockout policy ----------
+// ---------- README-IT.md — the account lockout that no longer exists ----------
 
-test("spec 171 — README-IT.md describes the account lockout policy", () => {
+// INVERTED. This test used to require README-IT.md to document a "5 failed
+// login attempts in 1 hour" lockout, a `POST /api/admin/users/[id]/unlock`
+// super_admin override, and three `auth.account.*` audit actions.
+//
+// All of it is gone — the endpoint, the audit actions, and the
+// users.failed_login_count / users.locked_until columns that backed the state
+// machine (see packages/db/src/schema/identity.ts). It was deleted because it
+// was a denial-of-service tool in BOTH directions:
+//
+//   • Anyone who knew an address could lock that account at will by submitting
+//     five wrong passwords. No authentication required, no cost to the
+//     attacker. Locking a programme administrator out during a deploy took
+//     five HTTP requests.
+//   • The counter never decayed. After the hour expired the account was
+//     unlocked but still sitting at five failures, so ONE further wrong guess
+//     re-locked it for another hour — an indefinite lockout sustained at one
+//     request per hour.
+//   • The distinct "account is locked" error was an account-existence oracle:
+//     it answered "does this address have an account here" for free.
+//
+// Supabase Auth rate-limits sign-in centrally now, with no per-account flag a
+// stranger can set on somebody else's behalf. The operator remedy for a user
+// who cannot get in is to set them a new password at /admin/users.
+//
+// So the assertion flips: the README must NOT resurrect any of this. Pinning
+// absence is what stops the next person restoring the section from an old copy
+// of the file — which is a live risk, since the deleted text reads like a
+// perfectly reasonable security control.
+test("spec 171 — README-IT.md does not resurrect the deleted account-lockout policy", () => {
   const src = read(README_PATH);
-  // The policy section must mention the load-bearing numbers:
-  // "5" failed attempts and "1 hour" lockout. Pin both literally
-  // so a future contributor can't silently relax the policy
-  // (e.g. weaken to "3 attempts in 5 minutes") without touching
-  // the doc.
-  assert.match(
-    src,
-    /5\s+failed\s+login\s+attempts/i,
-    "README-IT.md lockout section must mention '5 failed login attempts' so the threshold is discoverable",
+
+  // The endpoint was deleted. Confirm that at the filesystem, not just in
+  // prose, so this test fails if somebody re-adds the route as well as if
+  // somebody re-adds the paragraph.
+  assert.ok(
+    !existsSync(resolve(root, "apps/web/src/app/api/admin/users/[id]/unlock")),
+    "the unlock endpoint must stay deleted — it existed to undo a lockout any " +
+      "stranger could impose, and the lockout itself is gone",
   );
-  assert.match(
-    src,
-    /1[\s-]?hour|1\s+hour/i,
-    "README-IT.md lockout section must mention '1 hour' so the lockout duration is discoverable",
+  assert.ok(
+    !/\/api\/admin\/users\/\[id\]\/unlock/.test(src),
+    "README-IT.md must not document the unlock endpoint — it does not exist, and an " +
+      "operator who tries it gets a 404 at the moment they most need it to work",
   );
-  // The super_admin override endpoint MUST be documented.
-  assert.match(
-    src,
-    /\/api\/admin\/users\/\[id\]\/unlock/,
-    "README-IT.md lockout section must document the POST /api/admin/users/[id]/unlock super_admin override",
+
+  // The threshold and duration. README-IT.md explains in prose that there is no
+  // per-account lockout; what it must not do is state a policy with numbers,
+  // because a number in an operator doc reads as a contract.
+  assert.ok(
+    !/5\s+failed\s+login\s+attempts/i.test(src),
+    "README-IT.md must not state a failed-attempt threshold — there is no per-account " +
+      "counter any more, so any number here is fiction",
   );
-  // The three audit actions involved MUST be listed.
+
+  // The three audit actions. Verified absent from shipped code first, so this
+  // is pinning a real property and not merely doc hygiene.
   for (const action of [
     "auth.account.locked",
     "auth.account.locked_attempt",
     "auth.account.unlocked",
   ]) {
-    assert.match(
-      src,
-      new RegExp(action.replace(/\./g, "\\.")),
-      `README-IT.md lockout section must list the \`${action}\` audit action`,
+    assert.ok(
+      !new RegExp(action.replace(/\./g, "\\.")).test(src),
+      `README-IT.md must not list the \`${action}\` audit action — nothing emits it, so an ` +
+        `operator grepping the audit log for it finds nothing and concludes the log is broken`,
     );
   }
+
+  // And the replacement must actually be documented, or removing the section
+  // just leaves a hole where an operator's question used to be answered.
+  assert.match(
+    src,
+    /\/admin\/users/,
+    "README-IT.md must point at /admin/users as the remedy for a user who cannot sign in",
+  );
+  assert.match(
+    src,
+    /supabase\s+auth\s+rate[- ]limits/i,
+    "README-IT.md must say where sign-in rate limiting lives now (Supabase Auth, centrally) — " +
+      "otherwise the doc reads as though nothing protects the login path at all",
+  );
 });
 
-// ---------- README-IT.md — password reset flow ----------
+// ---------- README-IT.md — password resets go through an administrator ----------
 
-test("spec 171 — README-IT.md describes the password-reset flow", () => {
+// INVERTED. This test used to require README-IT.md to document a self-service
+// reset flow: a token minted at /login/forgot with a 30-minute TTL, a row in
+// password_reset_tokens, a 3-per-hour-per-IP rate limit, and SMTP_HOST as the
+// env flag that switched the whole thing on.
+//
+// Two separate things changed, and the test has to follow both.
+//
+//   1. The IMPLEMENTATION was deleted. /api/auth/reset-password took the
+//      submitted token and bcrypt-compared it against EVERY live row in
+//      password_reset_tokens — an O(N) bcrypt loop on an anonymous endpoint
+//      with no rate limit in front of it. That is a CPU-exhaustion primitive
+//      handed to the internet: one unauthenticated request could pin a core,
+//      and the "3 per hour" limit this test pinned lived on a different
+//      endpoint. Recovery is Supabase's now. The table is gone too.
+//
+//   2. The FLAG moved, and it had to. SMTP_HOST was the application's own
+//      environment variable. Under Supabase, SMTP is configured in the
+//      dashboard — so SMTP_HOST can be unset on a deployment where email works
+//      perfectly, and set on one where it does not. It is simply the wrong
+//      signal. AUTH_EMAIL_ENABLED is an explicit statement of intent instead,
+//      and it defaults to `false` because attaching a relay has been deferred
+//      to IT.
+//
+// While it is false the honest operator-facing fact is that an administrator
+// sets passwords at /admin/users and hands them over. That is what the README
+// must say. Documenting a token TTL for a token nobody mints would send an
+// operator hunting for an email that was never going to be sent.
+test("spec 171 — README-IT.md documents administrator-set passwords, not the deleted token flow", () => {
   const src = read(README_PATH);
-  assert.match(
-    src,
-    /\/login\/forgot/,
-    "README-IT.md must reference the /login/forgot entry point",
+
+  // The endpoint and its whole route segment are gone. Pin that at the
+  // filesystem so re-adding the route fails here too, not just re-adding prose.
+  assert.ok(
+    !existsSync(resolve(root, "apps/web/src/app/api/auth/reset-password")),
+    "the self-service reset endpoint must stay deleted — it bcrypt-compared a submitted " +
+      "token against every live token row, unauthenticated and unthrottled",
   );
-  // The TTL must be documented — 30 minutes is the spec-161 contract.
+
+  for (const [needle, why] of [
+    [
+      /\/api\/auth\/reset-password/,
+      "the endpoint does not exist; documenting it points an operator at a 404",
+    ],
+    [
+      /password_reset_tokens/,
+      "the table was dropped with the flow it backed",
+    ],
+    [
+      /30\s*min/i,
+      "there is no token TTL to state — no token of ours is minted any more",
+    ],
+    [
+      /3\s*(?:per|\/|\s+requests?\s+per)\s*hour/i,
+      "that rate limit belonged to the deleted endpoint",
+    ],
+    [
+      /SMTP_HOST/,
+      "SMTP_HOST is the wrong signal under Supabase — mail is configured in the " +
+        "dashboard, so the variable can be unset where email works and set where it does not",
+    ],
+  ]) {
+    assert.ok(!needle.test(src), `README-IT.md must not mention ${needle} — ${why}`);
+  }
+
+  // The replacement, which is the part an operator actually has to act on.
   assert.match(
     src,
-    /30\s*min/i,
-    "README-IT.md password-reset section must document the 30-minute token TTL",
+    /AUTH_EMAIL_ENABLED/,
+    "README-IT.md must name AUTH_EMAIL_ENABLED — it is the flag that decides whether the " +
+      "reset page shows a form or tells the user to contact an administrator",
   );
-  // The SMTP-gating must be documented — the unavailable-banner
-  // degradation is the operator-visible contract.
   assert.match(
     src,
-    /SMTP_HOST/,
-    "README-IT.md password-reset section must reference SMTP_HOST so the env dependency is discoverable",
+    /supabase\s+dashboard/i,
+    "README-IT.md must say SMTP is configured in the Supabase dashboard, not in this " +
+      "application — otherwise IT goes looking for an SMTP block in .env that is not there",
   );
   assert.match(
     src,
-    /feature unavailable|unavailable/i,
-    "README-IT.md password-reset section must mention the 'feature unavailable' fallback banner",
-  );
-  // Rate limit: 3 per hour per IP. Accept either the literal "3 / hour"
-  // or the prose form "3 requests per hour".
-  assert.match(
-    src,
-    /3\s*(?:per|\/|\s+requests?\s+per)\s*hour/i,
-    "README-IT.md password-reset section must document the 3/hour per-IP rate limit",
+    /\/admin\/users/,
+    "README-IT.md must name /admin/users as where an administrator sets a password while " +
+      "self-service reset is off",
   );
 });
 

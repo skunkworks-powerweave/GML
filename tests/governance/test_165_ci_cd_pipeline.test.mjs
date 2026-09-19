@@ -196,18 +196,42 @@ test("spec 165 — workflow runs pnpm test, pnpm build, and pnpm -r typecheck", 
   );
 });
 
-test("spec 165 — workflow runs pnpm test:smoke leniently (|| true)", () => {
+test("spec 165 — CI runs a lane that EXECUTES code, not only source-text assertions", () => {
   const src = read(WORKFLOW_PATH);
-  // Previously this required `pnpm test:smoke || true`. The mask has been
-  // dropped deliberately: the smoke suite already test.skip()s on connection
-  // refusal and `node --test` exits 0 when every test skips, so `|| true` never
-  // protected against the unreachable-stack case it was written for. All it
-  // could actually do was swallow a real failure once the suite runs against a
-  // live stack. Assert the step exists; do not require it to be un-failable.
+  // INVERTED, in two steps.
+  //
+  // First the `|| true` mask went: the smoke suite already test.skip()s on
+  // connection refusal and `node --test` exits 0 when every test skips, so the
+  // mask never protected against the unreachable-stack case it was written for.
+  // All it could do was swallow a real failure.
+  //
+  // Now the step itself has gone. `pnpm test:smoke` curled a Docker stack that
+  // had to be up on the runner and was therefore skipped in practice on every
+  // run — it asserted nothing, leniently or otherwise. It has been replaced by
+  // a behavioural job that stands up a REAL Postgres service container, applies
+  // the migration set from empty, and runs `pnpm test:behaviour` against it.
+  //
+  // What this assertion protects is the property the smoke step was standing in
+  // for, and it is worth stating plainly: the governance suite reads source
+  // files and regex-matches their text. Not one of its ~1500 assertions can
+  // observe a runtime behaviour. CI must therefore contain at least one lane
+  // that actually executes something, or the whole gate is a spell-checker.
   assert.match(
     src,
-    /pnpm\s+test:smoke/,
-    "workflow must run `pnpm test:smoke || true` — the smoke suite is opportunistic and shouldn't fail the gate when the Docker stack is unreachable on the runner",
+    /pnpm\s+test:behaviour/,
+    "workflow must run `pnpm test:behaviour` — the governance suite only reads source text, " +
+      "so something in CI has to execute code against a real database",
+  );
+  assert.match(
+    src,
+    /services:\s*\n\s*postgres:\s*\n\s*image:\s*postgres:/,
+    "the behavioural job must provision a real Postgres service container, not a mock",
+  );
+  assert.match(
+    src,
+    /exec tsx scripts\/migrate\.ts/,
+    "CI must apply the migration set from EMPTY — a schema that only works by accumulating " +
+      "patches on an existing database is not one you can deploy",
   );
 });
 

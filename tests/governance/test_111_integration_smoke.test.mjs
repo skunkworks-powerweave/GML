@@ -55,39 +55,49 @@ test("spec 111: smoke references at least 4 distinct /api/... endpoints", () => 
   );
 });
 
-test("spec 111: smoke implements skip-when-unreachable logic", () => {
+test("spec 111: smoke FAILS when the target is unreachable", () => {
+  // INVERTED, and this is the sharpest inversion in the repo.
+  //
+  // This test used to REQUIRE a skip-when-unreachable path, on the reasoning
+  // that CI environments which do not boot the stack should stay green. That
+  // reasoning produced a suite that was structurally incapable of failing:
+  // `node --test` exits 0 when everything skips, and CI ran it with `|| true`
+  // on top of that. It reported green whether the deployment worked or not --
+  // the same defect the governance suite has, one layer up.
+  //
+  // It now fails loudly, and scripts/deploy.sh runs it against the deployment
+  // it has just made, where a full stack genuinely exists. CI's executable
+  // coverage moved to `pnpm test:behaviour`, which runs against a real Postgres
+  // service container and needs no booted application.
   const src = read(SMOKE);
-  // The skip path must be wired in: env var to override the base URL, AND a
-  // probe path that exercises /api/health. Both signals together guarantee
-  // the suite stays green in non-running environments.
+
   assert.match(
     src,
     /SMOKE_BASE_URL/,
-    "smoke must reference SMOKE_BASE_URL env var so operators can target a remote stack",
+    "an operator must be able to target a specific deployment",
   );
+  assert.match(src, /\/api\/health/, "the reachability probe is /api/health");
   assert.match(
     src,
-    /\/api\/health/,
-    "smoke must probe /api/health to decide whether to skip",
+    /assert\.fail\(/,
+    "unreachable must be a FAILURE. A suite that skips instead is not evidence " +
+      "that anything works, and this one spent its whole life being green " +
+      "without testing a thing.",
   );
-  // Skip itself must be called per-test (t.skip(...)). Accept either form to
-  // be resilient to minor formatting differences.
-  assert.match(
-    src,
-    /\bskip\s*\(/,
-    "smoke must call .skip(...) when the app is unreachable",
+  assert.ok(
+    !/t\.skip\s*\(|ctx\.skip\s*\(/.test(src),
+    "no per-test skip path may return -- it is what made the suite unfalsifiable",
   );
 });
 
-test("spec 111: smoke uses an AbortController-style probe timeout", () => {
+test("spec 111: smoke bounds every probe so a hung server cannot hang the suite", () => {
   const src = read(SMOKE);
-  // A 2-second timeout via AbortController is the canonical way to cap a
-  // probe fetch. We accept either the constructor reference or the abort()
-  // method as evidence — both are required to make the timeout actually fire.
+  // AbortSignal.timeout() replaces the hand-rolled AbortController +
+  // setTimeout pair. Same property, one line, and no timer to leak.
   assert.match(
     src,
-    /AbortController/,
-    "smoke must use AbortController to bound the probe (so a hung server doesn't hang the suite)",
+    /AbortSignal\.timeout\(|AbortController/,
+    "probes must be time-bounded",
   );
 });
 
@@ -126,24 +136,29 @@ test("spec 111: default 'test' script does NOT run the smoke folder", () => {
   );
 });
 
-test("spec 111: smoke covers the 8 endpoints called out in the spec", () => {
+test("spec 111: smoke covers the endpoints that exist now", () => {
   const src = read(SMOKE);
-  // Hard-coded sanity check: the spec lists 8 specific paths the smoke must
-  // hit. We assert each one appears in the file so a future edit that drops
-  // a check (say, removes the WhatsApp signature gate test) trips this guard.
-  const required = [
+  // The old list pinned /api/auth/csrf and /api/auth/callback/credentials --
+  // Auth.js endpoints deleted with Auth.js. A test that requires a suite to
+  // probe routes which no longer exist does not protect coverage; it prevents
+  // the suite from being corrected.
+  for (const path of [
     "/api/health",
     "/login",
-    "/api/auth/csrf",
-    "/api/auth/callback/credentials",
     "/dashboard",
-    "/api/notifications/mark-read",
+    "/admin/users",
     "/api/webhooks/whatsapp",
-  ];
-  for (const path of required) {
+  ]) {
+    assert.ok(src.includes(path), `smoke must exercise ${path}`);
+  }
+
+  // And it must assert the deleted ones are GONE, which is the stronger
+  // property: a route that still answers after being "removed" is a live
+  // surface nobody is maintaining.
+  for (const gone of ["/api/auth/csrf", "/api/uploads/tus"]) {
     assert.ok(
-      src.includes(path),
-      `smoke must exercise ${path} (listed in spec.md "What" section)`,
+      src.includes(gone),
+      `smoke must confirm ${gone} no longer exists`,
     );
   }
 });
