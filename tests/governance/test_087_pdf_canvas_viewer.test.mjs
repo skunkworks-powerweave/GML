@@ -83,13 +83,25 @@ test("spec 087: view page is force-dynamic and gates on auth() with /login redir
   assert.match(src, /redirect\(["']\/login["']\)/);
 });
 
-test("spec 087: view page mints a 5-min signed URL via signMediaToken and routes through /api/media/", () => {
+test("spec 087: the view page routes the PDF through an authenticated proxy", () => {
   const src = read(PAGE_PATH);
-  assert.match(src, /signMediaToken/);
-  assert.match(src, /from\s+["']@\/lib\/video\/signed-url["']/);
-  assert.match(src, /\/api\/media\//);
-  // The bucket name is part of the contract — keeps PDFs separate from HLS.
-  assert.match(src, /gml-resources/);
+  // Was: mint a 5-minute HMAC token over bucket `gml-resources` and hand the
+  // browser /api/media/<token>. Two things were wrong with that. The bucket did
+  // not exist -- nothing ever created `gml-resources` -- so every view 502'd.
+  // And a token is a bearer capability: once minted it worked for anyone who
+  // had the URL, regardless of whether the viewer still had a session.
+  //
+  // The PDF is now proxied by a route that checks the session on every request.
+  // Deliberately a proxy rather than a redirect to a signed Storage URL: a
+  // redirect leaves a working, shareable link in the address bar and browser
+  // history for a document the UI watermarks and stamps OBS-CONFIDENTIAL.
+  assert.match(src, /\/api\/media\/pdf\//, "must point at the authenticated PDF route");
+  assert.ok(
+    !/signMediaToken|gml-resources/.test(
+      src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"),
+    ),
+    "the deleted signer and the bucket that never existed must both be gone",
+  );
 });
 
 test("spec 087: view page renders the PdfViewer with src + watermark + resourceId props", () => {

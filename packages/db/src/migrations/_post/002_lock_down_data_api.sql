@@ -34,11 +34,25 @@
 -- `public`. That switches the surface off at the gateway. The SQL below is what
 -- keeps it shut if anyone ever switches it back on.
 
+-- PORTABILITY. `anon` and `authenticated` are Supabase roles. On a plain
+-- Postgres -- a CI service container, a local dev database -- they do not
+-- exist, and an unguarded REVOKE aborts the whole migration run, so NO schema
+-- gets created at all. The role checks below make this file a no-op there
+-- while still doing its full job on Supabase.
+--
+-- RLS enablement is deliberately OUTSIDE the role guard: it is portable, it
+-- costs nothing, and it means a non-Supabase database ends up in the same
+-- nothing-readable-by-non-owners posture rather than a weaker one.
+
 -- ── 1. Application tables ─────────────────────────────────────────────────────
 DO $$
 DECLARE
   r record;
+  has_api_roles boolean;
 BEGIN
+  SELECT count(*) = 2 INTO has_api_roles
+    FROM pg_roles WHERE rolname IN ('anon', 'authenticated');
+
   FOR r IN
     SELECT c.relname
     FROM pg_class c
@@ -49,23 +63,30 @@ BEGIN
     -- Drop the default API grants. service_role is deliberately left alone: it
     -- is the server-side admin identity, already bypasses RLS, and is never
     -- exposed to a browser.
-    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', r.relname);
+    IF has_api_roles THEN
+      EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', r.relname);
+    END IF;
 
     -- Defence in depth. No policies are created, so the effective grant for any
     -- non-owner role is "nothing".
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', r.relname);
   END LOOP;
+
+  IF NOT has_api_roles THEN
+    RAISE NOTICE '[_post/002] anon/authenticated absent (not a Supabase database) -- RLS enabled, grants skipped';
+    RETURN;
+  END IF;
+
+  -- Stop future tables from inheriting the same default grants.
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
+
+  -- Revoke schema-level USAGE last: without it the grants above cannot be
+  -- exercised even if a table grant were restored by hand.
+  REVOKE USAGE ON SCHEMA public FROM anon, authenticated;
 END
 $$;--> statement-breakpoint
-
--- Stop future tables from inheriting the same default grants.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;--> statement-breakpoint
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;--> statement-breakpoint
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;--> statement-breakpoint
-
--- Revoke schema-level USAGE last: without it the grants above cannot be
--- exercised even if a table grant were restored by hand.
-REVOKE USAGE ON SCHEMA public FROM anon, authenticated;--> statement-breakpoint
 
 -- ── 2. SM-1: audit_log stays append-only on Supabase too ──────────────────────
 -- _post/001 revokes UPDATE/DELETE/TRUNCATE from PUBLIC and from the role named
@@ -76,8 +97,13 @@ REVOKE USAGE ON SCHEMA public FROM anon, authenticated;--> statement-breakpoint
 -- revoking from PUBLIC, so they need naming.
 DO $$
 BEGIN
-  IF to_regclass('public.audit_log') IS NOT NULL THEN
+  IF to_regclass('public.audit_log') IS NOT NULL
+     AND (SELECT count(*) = 3 FROM pg_roles
+           WHERE rolname IN ('anon', 'authenticated', 'service_role')) THEN
     EXECUTE 'REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.audit_log FROM anon, authenticated, service_role';
   END IF;
+  -- On a non-Supabase database these roles do not exist, and SM-1 rests
+  -- entirely on _post/001's BEFORE UPDATE / BEFORE DELETE triggers -- which are
+  -- portable and are the load-bearing control either way.
 END
 $$;

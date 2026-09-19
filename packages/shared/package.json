@@ -7,10 +7,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./api-contracts/*": "./src/api-contracts/*.ts",
-    "./auth/*": "./src/auth/*.ts"
+    "./auth/*": "./src/auth/*.ts",
+    "./storage/*": "./src/storage/*.ts"
   },
   "dependencies": {
-    "zod": "^3.23.0"
+    "zod": "^3.23.0",
+    "@supabase/supabase-js": "^2.116.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -91,15 +91,37 @@ END;
 $$;--> statement-breakpoint
 
 -- Lock the function down: only GoTrue may call it, and nobody gets it by default.
+-- The PUBLIC revoke is portable and does the real work; naming anon and
+-- authenticated as well is belt-and-braces, because an explicit grant to a role
+-- is NOT removed by revoking from PUBLIC.
 REVOKE EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) FROM PUBLIC;--> statement-breakpoint
-REVOKE EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) FROM anon, authenticated;--> statement-breakpoint
-GRANT  EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) TO supabase_auth_admin;--> statement-breakpoint
 
--- supabase_auth_admin needs to reach the function, but NOT the tables. _post/002
--- revoked schema USAGE from anon/authenticated only, so this is belt-and-braces
--- against a future tightening -- it grants the ability to resolve the function
--- name, nothing more. No table privileges are granted anywhere in this file.
-GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
+DO $$
+BEGIN
+  IF (SELECT count(*) = 2 FROM pg_roles WHERE rolname IN ('anon', 'authenticated')) THEN
+    REVOKE EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) FROM anon, authenticated;
+  END IF;
+END
+$$;--> statement-breakpoint
+-- PORTABILITY: supabase_auth_admin is a Supabase role. On a plain Postgres the
+-- GRANT would abort the whole migration run; the hook function itself is
+-- portable and still gets created, it simply has no GoTrue to call it.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
+    RAISE NOTICE '[_post/004] supabase_auth_admin absent (not a Supabase database) -- grants skipped';
+    RETURN;
+  END IF;
+  GRANT EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) TO supabase_auth_admin;
+  -- supabase_auth_admin needs to reach the function, but NOT the tables.
+  GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
+END
+$$;--> statement-breakpoint
+
+-- The USAGE grant above is belt-and-braces against a future tightening -- _post/002
+-- revoked schema USAGE from anon/authenticated only. It grants the ability to
+-- resolve the function name, nothing more. No table privileges are granted
+-- anywhere in this file.
 
 -- MANUAL STEP, and it has no SQL equivalent:
 --   Dashboard -> Authentication -> Hooks -> "Customize Access Token (JWT) Claims"

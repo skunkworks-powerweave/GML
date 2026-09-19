@@ -18,7 +18,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@gml/db";
 import { files, videoSubmissions, observationCycles, mentorMeetings } from "@gml/db/schema";
 import { eq, isNotNull } from "drizzle-orm";
-import { putObject, BUCKETS } from "@/lib/video/minio";
+import { storage, BUCKETS } from "@/lib/video/storage";
 import { recordAudit } from "@/lib/audit";
 import { transcodeQueue } from "@gml/worker/queues";
 
@@ -143,7 +143,7 @@ async function ingestVideoMessage(
 
   // 4. Store original to MinIO
   const objectKey = `whatsapp/${msg.id}.mp4`;
-  await putObject(BUCKETS.videosOriginal, objectKey, bytes, msg.video.mime_type ?? "video/mp4");
+  await storage.put(BUCKETS.videosOriginal, objectKey, bytes, msg.video.mime_type ?? "video/mp4");
 
   // 5. Insert files + video_submissions rows
   const [fileRow] = await db

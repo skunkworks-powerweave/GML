@@ -54,8 +54,16 @@ ALTER TABLE public.users ALTER COLUMN id DROP DEFAULT;--> statement-breakpoint
 -- (users.deleted_at); erasure under DPDP is anonymisation -- overwrite the PII,
 -- keep the row and the uuid so audit attribution and referential integrity
 -- survive -- performed as a deliberate admin action, never as a side effect.
+-- PORTABILITY: `auth` is a Supabase schema. On a plain Postgres it does not
+-- exist, and an unguarded reference aborts the whole migration run so NO schema
+-- gets created at all. Everything else in this file is portable and still runs
+-- there -- the profile shape is the same, it simply has nothing to key to.
 DO $$
 BEGIN
+  IF to_regclass('auth.users') IS NULL THEN
+    RAISE NOTICE '[_post/003] auth.users absent (not a Supabase database) -- FK skipped';
+    RETURN;
+  END IF;
   ALTER TABLE public.users
     ADD CONSTRAINT users_id_auth_fkey
     FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE RESTRICT;
@@ -116,10 +124,15 @@ $$;--> statement-breakpoint
 
 REVOKE EXECUTE ON FUNCTION public.handle_new_auth_user() FROM PUBLIC;--> statement-breakpoint
 
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;--> statement-breakpoint
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();--> statement-breakpoint
+DO $$
+BEGIN
+  IF to_regclass('auth.users') IS NULL THEN RETURN; END IF;
+  DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+  CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
+END
+$$;--> statement-breakpoint
 
 -- ── 4. Keep public.users.email in step with auth.users.email ──────────────────
 -- auth.users.email is the source of truth. public.users.email is retained
@@ -143,10 +156,15 @@ $$;--> statement-breakpoint
 
 REVOKE EXECUTE ON FUNCTION public.sync_auth_user_email() FROM PUBLIC;--> statement-breakpoint
 
-DROP TRIGGER IF EXISTS on_auth_user_email_changed ON auth.users;--> statement-breakpoint
-CREATE TRIGGER on_auth_user_email_changed
-  AFTER UPDATE OF email ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.sync_auth_user_email();
+DO $$
+BEGIN
+  IF to_regclass('auth.users') IS NULL THEN RETURN; END IF;
+  DROP TRIGGER IF EXISTS on_auth_user_email_changed ON auth.users;
+  CREATE TRIGGER on_auth_user_email_changed
+    AFTER UPDATE OF email ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.sync_auth_user_email();
+END
+$$;
 
 -- NOTE: no grants to supabase_auth_admin here. The withdrawn version granted it
 -- SELECT on public.users so the access-token hook could read role/active — but

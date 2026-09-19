@@ -1,0 +1,81 @@
+// HLS media playlist for one video submission.
+//
+// The player requests this URL; it returns an .m3u8 whose every segment line is
+// an absolute, individually-signed Supabase Storage URL. The browser then pulls
+// the segments straight from Supabase's CDN -- they never transit this server.
+//
+// AUTHORIZATION IS A REAL CHECK, NOT A TOKEN. This replaces `/api/media/[token]`,
+// which verified a hand-rolled HMAC over
+// `bucket:objectKey:userId:ipBindKey:exp`. That design was a liability in four
+// distinct ways, all of which disappear here rather than getting fixed:
+//
+//   * It bound the token to a /24 (v4) or /64 (v6) IP prefix. Behind carrier-
+//     grade NAT that is not identity -- thousands of unrelated subscribers share
+//     the prefix -- while for a teacher whose phone hops between Jio and Airtel
+//     mid-lesson it is a hard failure. It was hostile to the actual users and
+//     useless against the actual threat.
+//   * The secret fell back to AUTH_SECRET when MEDIA_SIGN_SECRET was unset,
+//     which it always was. The shipped `.env` carried a `dev-only-...` value, so
+//     media URLs were signed with a published placeholder.
+//   * The payload was split on ":" and objectKey read as field[1], so any key
+//     containing a colon decoded to the wrong object.
+//   * It answered "does this token verify", never "may this person watch this
+//     video". A leaked token was a capability; here, access is re-decided from
+//     the session on every request, so revoking a role revokes playback.
+//
+// Segment URLs remain bearer capabilities -- that is what a signed URL is -- but
+// they are minted only after the check below passes, scoped to one object, and
+// expire on a duration-derived schedule (see segmentTtlSeconds).
+
+import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
+import { buildSignedPlaylist } from "@/lib/video/storage";
+
+export const dynamic = "force-dynamic";
+
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+
+  const session = await auth();
+  const actor = actorFrom(session);
+  if (!actor) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+
+  // Throws notFound() when this actor may not see this video. 404 rather than
+  // 403 on purpose: a 403 on /api/media/playlist/<uuid> confirms the uuid names
+  // a real video, which is exactly the enumeration a guessed-uuid attack wants.
+  const video = await assertCanAccessVideo(actor, id);
+
+  if (video.status !== "ready" || !video.hlsMasterKey) {
+    return NextResponse.json({ error: "not_ready", status: video.status }, { status: 409 });
+  }
+
+  const playlist = await buildSignedPlaylist(id, video.hlsMasterKey, video.durationSec ?? null);
+  if (!playlist) {
+    // Marked ready, output missing. Real state, worth distinguishing from a
+    // permission failure so an operator reading logs can tell them apart.
+    return NextResponse.json({ error: "playlist_missing" }, { status: 502 });
+  }
+
+  return new NextResponse(playlist.body, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/vnd.apple.mpegurl",
+      // private: the response embeds URLs minted for this viewer. A shared
+      // cache holding it would hand another user a working set of segment URLs.
+      //
+      // The max-age is deliberately far shorter than the segment TTL: when the
+      // player re-fetches the playlist after a network error it must get freshly
+      // signed URLs, not a cached copy of the ones that just expired.
+      "Cache-Control": "private, no-store, max-age=0",
+      "X-Content-Type-Options": "nosniff",
+      // Advisory, for the player's refresh scheduling.
+      "X-Media-Expires-At": playlist.expiresAt.toISOString(),
+    },
+  });
+}

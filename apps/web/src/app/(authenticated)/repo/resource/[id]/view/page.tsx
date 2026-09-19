@@ -3,9 +3,11 @@
 // Server responsibilities:
 //   1. auth() gate → /login redirect for anon.
 //   2. Resolve the resource by id (must be active, must have a fileKey).
-//   3. Mint a 5-min signed media token via signMediaToken — same helper the
-//      HLS player uses; works for any MIME because /api/media/[token] streams
-//      bytes verbatim.
+//   3. Point the viewer at /api/media/pdf/[id], a route that re-checks the
+//      session on every request and streams the bytes. It used to mint a
+//      5-minute HMAC token instead -- over a bucket named `gml-resources` that
+//      nothing ever created, so every view 502'd, and as a bearer capability
+//      that kept working after the viewer's session ended.
 //   4. recordAudit({ action: "resource.pdf.view", entityType: "resource",
 //      entityId: id }) — required by SM-9. Best-effort (the helper swallows
 //      errors so a broken audit table can't take the viewer down).
@@ -20,7 +22,6 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { signMediaToken } from "@/lib/video/signed-url";
 import { recordAudit } from "@/lib/audit";
 import { PdfViewer } from "@/components/pdf/PdfViewer";
 
@@ -61,13 +62,11 @@ export default async function RepoResourceViewPage({
     metadata: { piiAudited: false, kind: res.kind, fileKey: res.fileKey },
   });
 
-  const token = signMediaToken({
-    bucket: "gml-resources",
-    objectKey: res.fileKey,
-    userId,
-    ip,
-  });
-  const signedUrl = `/api/media/${token}`;
+  // Proxied through the app rather than redirected to a signed Storage URL, so
+  // the document cannot be reopened from browser history without a session.
+  // This also corrects the bucket: the old token named `gml-resources`, which
+  // nothing ever created, so every PDF view 502'd.
+  const signedUrl = `/api/media/pdf/${res.id}`;
 
   const watermark = `${session.user.email ?? session.user.name ?? "viewer"} · OBS-CONFIDENTIAL`;
 

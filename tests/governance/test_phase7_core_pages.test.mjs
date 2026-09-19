@@ -46,9 +46,14 @@ test("mentorship detail renders the Q1-Q4 quarter strip", () => {
   assert.match(src, /QUARTERS\s*=\s*\["baseline",\s*"progress_1",\s*"progress_2",\s*"final"\]/);
 });
 
-test("video player page mints a per-viewer signed URL + watermark", () => {
+test("video player page is ownership-gated, watermarked, and audited", () => {
   const src = read("apps/web/src/app/(authenticated)/videos/[id]/page.tsx");
-  assert.match(src, /signMediaToken/);
+  // Was: assert it mints a signed token. The token is gone -- see test_145.
+  // Playback now points at a session-authenticated playlist route, and the
+  // ownership check that was the highest-severity IDOR in the app runs here AND
+  // again inside that route on every fetch.
+  assert.match(src, /assertCanAccessVideo/, "ownership gate must run on the page");
+  assert.match(src, /\/api\/media\/playlist\//, "player source is the playlist route");
   assert.match(src, /watermark/);
   assert.match(src, /HlsPlayer/);
   assert.match(src, /ExternalEmbed/);

@@ -129,56 +129,50 @@ test("spec 144: webhook insert sets whatsappMessageId AND uses onConflictDoNothi
   );
 });
 
-test("spec 144: media route reads incoming Range header", () => {
-  const src = read(MEDIA_PATH);
-  assert.match(
-    src,
-    /req\.headers\.get\s*\(\s*["']range["']\s*\)/i,
-    "media route must read the incoming Range header from the request",
-  );
-  // The GET signature must accept the request object (was _req before).
-  assert.match(
-    src,
-    /export\s+async\s+function\s+GET\s*\(\s*req\s*:/,
-    "GET handler signature must take req (not _req) since we now inspect it",
-  );
-});
+// ---------- Media range: INVERTED ----------
+//
+// Spec 144 taught the media proxy to forward a Range header to S3 and answer
+// 206 with Content-Range, so a viewer could seek without re-downloading. That
+// proxy no longer exists, and the capability it added is now provided by
+// something better: segments are fetched by the browser DIRECTLY from Supabase
+// Storage via individually-signed URLs, and Storage answers Range natively over
+// its CDN.
+//
+// The old arrangement streamed every byte of every video through the
+// application server. For a 20-minute lesson that is ~200 requests and hundreds
+// of megabytes per viewer proxied by the box that also has to render pages. It
+// was the single largest input to how big the EC2 instance had to be.
 
-test("spec 144: media route forwards Range to GetObjectCommand", () => {
-  const src = read(MEDIA_PATH);
-  assert.match(
-    src,
-    /GetObjectCommand\s*\(\s*\{[^}]*Range\s*:\s*range[^}]*\}\s*\)/s,
-    "media route must build GetObjectCommand with Range: range so S3/MinIO returns a partial response",
-  );
-});
-
-test("spec 144: media route returns 206 + Content-Range on the range branch", () => {
-  const src = read(MEDIA_PATH);
-  assert.match(
-    src,
-    /status\s*:\s*206/,
-    "media route must return status 206 when a Range header is present",
-  );
-  assert.match(
-    src,
-    /["']Content-Range["']/,
-    "media route must echo Content-Range from the storage response",
-  );
-  assert.match(
-    src,
-    /["']Content-Length["']/,
-    "media route must echo Content-Length from the storage response",
-  );
-});
-
-test("spec 144: media route advertises Accept-Ranges: bytes on both branches", () => {
-  const src = read(MEDIA_PATH);
-  // Count occurrences — must be at least 2 (range branch AND no-range branch).
-  const matches = src.match(/["']Accept-Ranges["']\s*:\s*["']bytes["']/g) ?? [];
+test("spec 144: the application no longer proxies video bytes", () => {
   assert.ok(
-    matches.length >= 2,
-    `media route must declare Accept-Ranges: bytes on both the 206 and 200 paths so HLS.js learns range support is available; found ${matches.length} occurrence(s)`,
+    !existsSync(resolve(root, "apps/web/src/app/api/media/[token]/route.ts")),
+    "the byte-proxying media route must not exist",
+  );
+  const playlist = readFileSync(
+    resolve(root, "apps/web/src/app/api/media/playlist/[id]/route.ts"),
+    "utf8",
+  );
+  assert.ok(
+    !/Range|Content-Range|206/.test(playlist),
+    "the playlist route returns a small text document and must not grow range " +
+      "handling -- ranged reads belong to Storage, which serves them from a CDN",
+  );
+});
+
+test("spec 144: segment URLs are signed per object, not per request", () => {
+  const storage = readFileSync(resolve(root, "apps/web/src/lib/video/storage.ts"), "utf8");
+  assert.match(
+    storage,
+    /signMany\(bucket, keys, ttl\)/,
+    "the playlist builder must batch-sign, so rewriting a 200-segment playlist " +
+      "is one round trip rather than 200",
+  );
+  assert.match(
+    storage,
+    /extractSegments\(playlistText\)/,
+    "it must sign the names the playlist actually references. Supabase refuses " +
+      "to sign a key with no object behind it, so a computed range would " +
+      "silently drop any segment whose numbering was guessed wrong",
   );
 });
 

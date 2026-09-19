@@ -5,7 +5,6 @@ import { headers } from "next/headers";
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
 import { redirect } from "next/navigation";
-import { signMediaToken } from "@/lib/video/signed-url";
 import { recordAudit } from "@/lib/audit";
 import { HlsPlayer } from "@/components/video/HlsPlayer";
 import { ExternalEmbed } from "@/components/video/ExternalEmbed";
@@ -23,7 +22,9 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   // and then minted a playable media token. Any signed-in teacher could play any
   // video in the programme -- including mentorship meeting recordings and mentee
   // quarterly videos -- from a guessed or observed UUID. The check must run
-  // BEFORE signMediaToken() below.
+  // BEFORE the player source is built below -- and it now runs AGAIN inside
+  // /api/media/playlist/[id] on every playlist fetch, so losing access revokes
+  // playback rather than waiting for a token to expire.
   //
   // assertCanAccessVideo returns the row, so this replaces the old SELECT rather
   // than adding a query. It notFound()s (not 403) so an unauthorised id is
@@ -43,15 +44,14 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
     metadata: { source: video.source, status: video.status },
   });
 
+  // The playlist route re-checks authorization from the session on every
+  // request, so there is no token to mint, leak, or bind to an IP prefix. It
+  // returns an .m3u8 whose segment lines are signed Storage URLs, and the
+  // browser pulls those directly from Supabase's CDN -- no video byte passes
+  // through this server.
   let playerSrc: string | null = null;
   if (video.hlsMasterKey && video.status === "ready") {
-    const token = signMediaToken({
-      bucket: "gml-videos-hls",
-      objectKey: video.hlsMasterKey,
-      userId,
-      ip,
-    });
-    playerSrc = `/api/media/${token}`;
+    playerSrc = `/api/media/playlist/${id}`;
   }
 
   const watermark = `${session.user.name ?? session.user.email ?? "viewer"} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
