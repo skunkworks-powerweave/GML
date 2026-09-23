@@ -7,7 +7,8 @@
 //      and still points at /repo/resource/<id>/view (not a download).
 //   2. /rtt/subject/[id]: header "Resume" CTA links to an in-page module anchor.
 //   3. /rtt/subject/[id]: each module row carries an id="module-<seq>" anchor target.
-//   4. /rtt/subject/[id]: session rows link to /repo/session/<session.id>.
+//   4. /rtt/subject/[id]: session rows use rtt_sessions.link_or_recording
+//      (NOT /repo/session/<id>, which reads a different table -- see below).
 //   5. /rtt/subject/[id]: each session row has a Join/Watch action button.
 //   6. /rtt/subject/[id]: readings with fileKey link to /repo/resource/<reading.id>/view.
 //   7. /rtt/subject/[id]: Assessment card emits /quizzes/mid-unit and /quizzes/endline links.
@@ -114,18 +115,38 @@ test("spec 119 — /rtt/subject/[id] adds id='module-<seq>' anchor targets on ea
   );
 });
 
-test("spec 119 — /rtt/subject/[id] session rows link to /repo/session/<id>", () => {
+test("spec 119 — /rtt/subject/[id] session rows do NOT link to /repo/session/<id>", () => {
   const src = read(RTT_SUBJECT);
-  assert.match(
+
+  // ── THIS ASSERTION IS THE INVERSE OF WHAT IT ORIGINALLY CHECKED ────────────
+  //
+  // It used to REQUIRE `/repo/session/${s.id}`, and that requirement was the
+  // bug. The rows on this page come from `rtt_sessions`; /repo/session/[id]
+  // selects from `sessions`. Two different tables, each with its own
+  // `uuid primary key default gen_random_uuid()` and no foreign key between
+  // them, so an id from one is never an id in the other except by uuid
+  // collision. Every session row on every RTT subject page linked to a 404.
+  //
+  // The test passed throughout, because it asserted the presence of the broken
+  // string. Keeping it as a negative is the point: it now fails if anyone
+  // reintroduces the cross-table href.
+  assert.doesNotMatch(
     src,
     /\/repo\/session\/\$\{s\.id\}/,
-    "each session row must compute /repo/session/${s.id} as its navigation target",
+    "session rows must not link an rtt_sessions id into /repo/session/[id], which reads the `sessions` table",
   );
-  // The hrefs are passed to <Link> wrappers, not raw <a> with no href.
+  assert.doesNotMatch(
+    src,
+    /sessionHref/,
+    "the sessionHref const built that cross-table URL and should be gone",
+  );
+
+  // What replaced it: the row's own meeting link or recording, which is a real
+  // column on rtt_sessions and the only URL this page actually has.
   assert.match(
     src,
-    /sessionHref\s*=\s*`\/repo\/session\/\$\{s\.id\}`/,
-    "session row must lift the href into a sessionHref const so all three cells share one source of truth",
+    /s\.linkOrRecording/,
+    "session rows must use rtt_sessions.link_or_recording as their navigation target",
   );
 });
 

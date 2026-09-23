@@ -24,6 +24,7 @@ import { auth } from "@/auth";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -57,9 +58,6 @@ type SearchParams = Promise<{ district?: string; q?: string }>;
 // We escape ILIKE wildcards because a user may legitimately search for a
 // school whose name contains a literal '%' or '_'.
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 export default async function RepoSchoolsIndexPage({
   searchParams,
@@ -68,6 +66,9 @@ export default async function RepoSchoolsIndexPage({
 }) {
   const session = await auth();
   const role = session?.user?.role ?? "teacher";
+  // Mirrors src/admin/entities/schools.ts readRoles. The export route enforces
+  // it server-side regardless; this only decides whether to offer the control.
+  const canExport = role === "programme_admin" || role === "super_admin";
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
@@ -285,15 +286,25 @@ export default async function RepoSchoolsIndexPage({
             ) : null}
           </form>
 
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <Link
-              href="/repo/schools.csv"
-              className="btn btn-sm"
-              style={{ textDecoration: "none" }}
-            >
-              CSV
-            </Link>
-          </div>
+          {/* The href was `/repo/schools.csv` — a path with no route behind it,
+              so this button 404'd. The working export is the admin entity route,
+              which is gated to programme_admin/super_admin
+              (src/admin/entities/schools.ts readRoles). /repo/schools itself is
+              visible to more roles than that, so the button is HIDDEN rather
+              than shown-and-refused: offering a control that answers 403 reads
+              as a broken page, not as a permission boundary. */}
+          {canExport ? (
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <Link
+                href="/api/admin/data/schools/export"
+                className="btn btn-sm"
+                style={{ textDecoration: "none" }}
+                prefetch={false}
+              >
+                CSV
+              </Link>
+            </div>
+          ) : null}
         </div>
 
         {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}

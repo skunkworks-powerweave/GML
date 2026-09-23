@@ -20,6 +20,7 @@ import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
+import { NetworkStatus } from "./NetworkStatus";
 import { Icon } from "./Icon";
 
 type SidebarProps = {
@@ -42,13 +43,29 @@ const SECTION_KEY: Record<string, string> = {
   "Resources": "resources",
 };
 
-/** Nav item id → `nav.*` key. Items not in the map fall back to item.label. */
+/**
+ * Nav item id → `nav.*` key. Items not in the map fall back to item.label.
+ *
+ * FOUR IDS ARE DELIBERATELY ABSENT: observation, mentorship, rtt and videos.
+ *
+ * NAV_BY_ROLE reuses those ids across roles with DIFFERENT labels by design --
+ * `videos` is "Video library" for an admin and "Pending review" for a mentor;
+ * `observation` is "Classroom Observation", "Observation cycles" or "My
+ * observations" depending on who is looking. This map is keyed by id alone, so
+ * whichever single translation existed overwrote all of them: a mentor's
+ * sidebar said "Video library" and "Mentorship" instead of "Pending review" and
+ * "My mentees". Not a translation bug -- it showed the wrong label in English
+ * too, which is how it went unnoticed in a programme whose default locale is
+ * English.
+ *
+ * Falling back to item.label restores the role-specific wording everywhere.
+ * The cost is that those four are not translated: fixing that properly needs
+ * per-role keys in the dictionaries (nav.videos.mentor and so on), which is a
+ * content change across en/hi/bo, not a code change. Showing the right label
+ * untranslated beats showing the wrong one in three languages.
+ */
 const ITEM_KEY: Record<string, string> = {
   "dashboard": "dashboard",
-  "observation": "observation",
-  "mentorship": "mentorship",
-  "rtt": "rtt",
-  "videos": "videos",
   "repo": "repoHome",
   "repo-schools": "schools",
   "repo-subjects": "subjects",
@@ -173,7 +190,14 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                       gate
                     </span>
                   ) : null}
-                  {item.count != null ? (
+                  {/* `> 0`, not `!= null`. A count badge showing 0 is noise at
+                      best, and on "Forms & quizzes" it was actively wrong: that
+                      badge counts the viewer's own in-flight autosave DRAFTS
+                      (chrome-counts.ts pendingForms), so a super_admin with no
+                      half-finished form saw a black "0" pill that reads as
+                      "there are no forms" -- next to a catalogue holding ten.
+                      BottomTabs already used `> 0`; the two shells disagreed. */}
+                  {typeof item.count === "number" && item.count > 0 ? (
                     <span
                       style={{
                         fontSize: 11,
@@ -195,30 +219,12 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
         );
       })}
 
-      {/* Network status — cosmetic per v2 plan (no PWA / offline queue) */}
-      <div
-        style={{
-          marginTop: "auto",
-          padding: "8px 8px 4px",
-          fontSize: 11,
-          color: "var(--ink-3)",
-          borderTop: "1px solid var(--line)",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 999,
-            background: "var(--lichen)",
-            display: "inline-block",
-          }}
-        />
-        {tStatus("online")}
-      </div>
+      {/* Network status -- a real probe, not a green dot. See NetworkStatus.tsx. */}
+      <NetworkStatus
+        labelOnline={tStatus("online")}
+        labelOffline={tStatus("offline")}
+        labelChecking={tStatus("checking")}
+      />
     </aside>
   );
 }

@@ -47,7 +47,7 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Governance tests
+      - name: Governance + script tests
         run: pnpm test
 
   behaviour:

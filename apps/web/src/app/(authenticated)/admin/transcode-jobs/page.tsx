@@ -133,12 +133,27 @@ END`;
 export default async function TranscodeJobsAdminPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string }>;
+  searchParams: Promise<{ filter?: string; error?: string }>;
 }) {
   await requireRole(["programme_admin", "super_admin"]);
 
   const sp = await searchParams;
   const filter = resolveFilter(sp.filter);
+
+  // RENDER THE REFUSAL. retryTranscodeJobAction and dropTranscodeJobAction both
+  // redirect back here with ?error=..., and this page typed searchParams as
+  // `{ filter?: string }` — so an operator who clicked Retry on a job that had
+  // since succeeded was returned to an unchanged page with no message, and no
+  // way to tell that from the click not registering. They would click again.
+  const DLQ_ERRORS: Record<string, string> = {
+    missing_job_id: "That action arrived without a job id. Try again from the table.",
+    job_not_found: "That job no longer exists — it may have been pruned.",
+    not_retriable_status:
+      "Only a failed job can be retried. This one has since changed state; reload to see its current status.",
+    not_droppable_status:
+      "Only a failed job can be dropped. Reload to see its current status.",
+  };
+  const dlqError = sp.error ? DLQ_ERRORS[sp.error] ?? "That action could not be completed." : null;
 
   // Audit the surface view itself — DLQ inspection is a programme-admin
   // oversight tool, same as /admin/whatsapp-log.
@@ -226,6 +241,16 @@ export default async function TranscodeJobsAdminPage({
           logged to the audit trail.
         </p>
       </header>
+
+      {dlqError ? (
+        <p
+          role="alert"
+          data-testid="dlq-error"
+          className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"
+        >
+          {dlqError}
+        </p>
+      ) : null}
 
       {redisUnavailable ? (
         <div

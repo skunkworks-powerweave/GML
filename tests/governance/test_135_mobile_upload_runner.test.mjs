@@ -336,15 +336,29 @@ test("spec 135 — uploads/page.tsx still imports + renders UploadProgress for d
 test("spec 135 — uploads/page.tsx wires whatsappPhone from the spec 132 env chain", () => {
   const src = read(PAGE_PATH);
   // Same env contract as UploadModal (spec 132) — no new env vars.
+  // GML_WHATSAPP_NUMBER is read THROUGH assertEnv(), which validates it, so the
+  // literal now lives in lib/env.ts rather than in this page.
   assert.match(
     src,
-    /process\.env\.GML_WHATSAPP_NUMBER/,
-    "uploads page must read GML_WHATSAPP_NUMBER (human-readable display)",
+    /assertEnv\(\)\.whatsappNumber\.value/,
+    "uploads page must read the validated GML_WHATSAPP_NUMBER via assertEnv()",
   );
-  assert.match(
-    src,
-    /process\.env\.WHATSAPP_PHONE_NUMBER_ID/,
-    "uploads page must fall back to WHATSAPP_PHONE_NUMBER_ID (spec 043 webhook env)",
+  // THE WHATSAPP_PHONE_NUMBER_ID FALLBACK IS GONE, AND MUST STAY GONE.
+  //
+  // The old assertion REQUIRED that fallback ("spec 043 webhook env"). It is
+  // not a phone number: WHATSAPP_PHONE_NUMBER_ID is Meta's opaque Cloud API
+  // account identifier -- fifteen digits, which is exactly why it survived
+  // every "looks numeric" validation -- and wa.me/<id> resolves to no WhatsApp
+  // account. Whenever GML_WHATSAPP_NUMBER was unset or malformed, a teacher on
+  // 2G following the programme's PRIMARY video path was handed a link to
+  // nothing. The test was requiring the defect.
+  //
+  // Resolving to null instead is correct: both the modal and the runner already
+  // hide the WhatsApp path entirely when the number is null, and no link beats
+  // a wrong one.
+  assert.ok(
+    !/process\.env\.WHATSAPP_PHONE_NUMBER_ID/.test(src),
+    "WHATSAPP_PHONE_NUMBER_ID is Meta's account id, not a dialable number — never a fallback",
   );
   assert.match(
     src,

@@ -196,6 +196,29 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
  * Mobile bottom tabs. Match `mobile-shell.jsx::TABS_BY_ROLE`.
  * Max 5 tabs per role. `inbox` becomes `audit` for super_admin.
  */
+/**
+ * Give every role a link to its own settings page.
+ *
+ * `/settings` appeared in NAV_BY_ROLE for super_admin ONLY, so a
+ * programme_admin, mentor, observer or teacher had no link to it anywhere in
+ * the application. That page is where the interface language is chosen -- in a
+ * programme that ships en/hi/bo -- and where the self-service password change
+ * lives, so four of the five roles could reach neither except by typing the URL.
+ *
+ * Appended here rather than added to five separate arrays so a role added later
+ * cannot be forgotten: whatever sections a role declares, it ends up with this
+ * one.
+ */
+for (const role of Object.keys(NAV_BY_ROLE) as RoleName[]) {
+  const sections = NAV_BY_ROLE[role];
+  const hasSettings = sections.some((sec) => sec.items.some((i) => i.href === "/settings"));
+  if (hasSettings) continue;
+  sections.push({
+    section: "Your account",
+    items: [{ id: "settings", label: "Settings", icon: "settings", href: "/settings" }],
+  });
+}
+
 export type MobileTab = {
   id: string;
   label: string;
@@ -240,3 +263,53 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
     { id: "audit", label: "Audit", icon: "shield", href: "/admin/audit", gate: "admin" },
   ],
 };
+
+/**
+ * Which nav entry does this pathname belong to?
+ *
+ * Both shells accept an active-item id, both forward it to their nav
+ * components, and NO CALLER HAS EVER SUPPLIED ONE -- so `isActive` was false
+ * for every item on every page and nothing was ever highlighted. On a product
+ * whose nav spans three sections and eleven entries, "where am I" was
+ * unanswerable from the chrome.
+ *
+ * Longest-prefix wins, which is what makes nested routes resolve correctly:
+ * /repo/schools must match the `repo-schools` entry and not the `repo` one
+ * that also prefixes it. A bare "/" href would prefix everything, so it is
+ * excluded from prefix matching and only ever matches exactly.
+ */
+export function activeNavIdFor(
+  role: RoleName,
+  pathname: string | null | undefined,
+): string | undefined {
+  if (!pathname) return undefined;
+  const path = pathname.split("?")[0] ?? pathname;
+
+  let best: { id: string; len: number } | undefined;
+  for (const section of NAV_BY_ROLE[role] ?? []) {
+    for (const item of section.items) {
+      const href = item.href;
+      const matches =
+        href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
+      if (matches && (!best || href.length > best.len)) best = { id: item.id, len: href.length };
+    }
+  }
+  return best?.id;
+}
+
+/** The same resolution for the mobile bottom tabs, which use their own ids. */
+export function activeTabIdFor(
+  role: RoleName,
+  pathname: string | null | undefined,
+): string | undefined {
+  if (!pathname) return undefined;
+  const path = pathname.split("?")[0] ?? pathname;
+
+  let best: { id: string; len: number } | undefined;
+  for (const tab of TABS_BY_ROLE[role] ?? TABS_BY_ROLE.teacher) {
+    const href = tab.href;
+    const matches = href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
+    if (matches && (!best || href.length > best.len)) best = { id: tab.id, len: href.length };
+  }
+  return best?.id;
+}

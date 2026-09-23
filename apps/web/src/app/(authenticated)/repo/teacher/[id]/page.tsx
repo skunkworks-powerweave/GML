@@ -243,7 +243,7 @@ export default async function RepoTeacherDetailPage({
               Sessions taught ({recentSessions.length})
             </div>
             <div style={{ marginLeft: "auto" }}>
-              <Link href="/sessions" className="btn btn-sm">
+              <Link href="/repo/sessions" className="btn btn-sm">
                 All sessions →
               </Link>
             </div>

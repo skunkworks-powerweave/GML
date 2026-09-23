@@ -22,14 +22,16 @@
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   feedbackForms,
   feedbackResponses,
   formDrafts,
+  mentorPairings,
   type FeedbackForm,
 } from "@gml/db/schema";
+
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
@@ -42,6 +44,19 @@ import { FormRenderer } from "@/components/forms/FormRenderer";
 // action, same autosave pipeline; only the layout changes (one field per
 // screen, big touch targets, sticky Prev/Next, review screen at the end).
 import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
+
+/**
+ * The quarter a pairing moves INTO once a form of this kind is submitted.
+ *
+ * `final` is absent deliberately: it closes the pairing rather than opening a
+ * quarter, and completePairingAction owns that transition.
+ */
+const QUARTER_AFTER: Record<string, number | undefined> = {
+  baseline: 2,
+  progress_1: 3,
+  progress_2: 4,
+};
+
 
 export const dynamic = "force-dynamic";
 
@@ -133,9 +148,27 @@ function readSchema(form: FeedbackForm): FormSchemaShape {
 // shipped schema; the gate carries an explicit branch for it so the runner
 // stays open if a future migration adds it (or if a partially-typed form
 // somehow lands with `audience: undefined`).
+// ADMINS ARE ADMITTED, because the submit path already admits them and the two
+// halves disagreeing is the bug.
+//
+// The READ gate listed only the audience's own role, so a programme_admin or
+// super_admin opening any form was redirected to /forbidden and an audit row
+// was written accusing them of a denied access. The SUBMIT path has always
+// taken the opposite view -- audienceAllows() in lib/forms/validate.ts returns
+// true for both admin roles, and assertCanAccessPairing() returns early for
+// them -- so the same account was allowed to POST a form it was forbidden to
+// GET.
+//
+// It also made the whole runner untestable by the only account that exists on
+// a fresh deployment, and made the quarter strip on /mentorship/[pairingId]
+// look broken: every link on it led straight to /forbidden.
+//
+// Admins reading a form is the correct behaviour anyway -- they administer the
+// catalogue and answer questions about it.
+const ADMIN_ROLES: RoleName[] = ["programme_admin", "super_admin"];
 const AUDIENCE_ALLOWED_ROLES: Record<string, RoleName[] | "any"> = {
-  mentor: ["mentor"],
-  mentee: ["teacher"],
+  mentor: ["mentor", ...ADMIN_ROLES],
+  mentee: ["teacher", ...ADMIN_ROLES],
   programme: "any",
 };
 
@@ -286,6 +319,11 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     );
   }
 
+  // Which quarter a pairing moves INTO once this form kind is submitted.
+  // baseline closes Q1, progress_1 closes Q2, progress_2 closes Q3. `final`
+  // is absent deliberately: it closes the pairing rather than opening a
+  // quarter, and completePairingAction owns that transition.
+  //
   // Spec 130 — persist the context block alongside the user-supplied answers.
   // Using a __context key (double-underscore prefix is already reserved above)
   // keeps the schema locked (no new column) while still letting reports join
@@ -311,6 +349,33 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     await tx
       .delete(formDrafts)
       .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)));
+
+    // ADVANCE THE PAIRING'S QUARTER.
+    //
+    // mentor_pairings.current_quarter drives the entire quarter strip on
+    // /mentorship/[pairingId] -- which card is "done", which is "current",
+    // which is "future" and therefore unclickable -- and it was written by
+    // NOTHING except the development seed. So every real pairing sat at Q1
+    // forever: Q2, Q3 and Q4 never became reachable, and the quarterly
+    // feedback cycle that is the point of the mentorship module could not be
+    // worked through at all.
+    //
+    // Submitting the quarter's form is the event that closes it, so that is
+    // where the advance belongs. GREATEST() rather than a plain assignment
+    // because re-submitting an earlier quarter's form must never walk the
+    // pairing backwards, and it makes concurrent submissions safe without a
+    // read-modify-write. Capped at 4: there is no Q5.
+    if (pairingId) {
+      const nextQuarter = QUARTER_AFTER[form.kind];
+      if (nextQuarter) {
+        await tx
+          .update(mentorPairings)
+          .set({
+            currentQuarter: sql`LEAST(GREATEST(COALESCE(${mentorPairings.currentQuarter}, 1), ${nextQuarter}), 4)`,
+          })
+          .where(eq(mentorPairings.id, pairingId));
+      }
+    }
   });
 
   // Best-effort audit (failure does not roll back the response). The audit
@@ -369,6 +434,9 @@ export default async function FormRunnerPage({
 
   const pairingId = readParam(sp.pairingId);
   const error = readParam(sp.error);
+  // The validator's own summary, echoed back by the ?error=invalid redirect.
+  // Rendered as text inside JSX, so it cannot inject markup.
+  const errorDetail = readParam(sp.detail);
 
   const parsed = parseSlug(slug);
   if (!parsed) return <NotFoundShell slug={slug} />;
@@ -559,7 +627,16 @@ export default async function FormRunnerPage({
       </div>
 
       <div className="page-body" style={{ maxWidth: 760, margin: "0 auto" }}>
-        {error === "missing_pairing" ? (
+        {/* EVERY ?error= THE ACTION CAN ISSUE IS RENDERED HERE.
+            Only `missing_pairing` had a branch. submitFormAction also redirects
+            back with `wrong_audience` and with `invalid&detail=...` -- the
+            latter carrying the precise server-side validation summary -- and
+            both landed on a page that rendered nothing at all. A rejected
+            submission simply redisplayed the empty form, so the user could not
+            tell a refusal from a reload and had no way to learn which answer
+            was at fault. `detail` is the summary the validator produced; it is
+            rendered as text, never as markup. */}
+        {error ? (
           <div
             style={{
               background: "var(--rust-soft)",
@@ -571,13 +648,38 @@ export default async function FormRunnerPage({
               marginBottom: 16,
             }}
             role="alert"
+            data-testid="form-error"
+            data-error={error}
           >
-            This form must be opened from your inbox so we can attach the
-            response to the right mentorship pairing. Head back to{" "}
-            <Link href="/inbox" style={{ color: "var(--indigo)" }}>
-              your inbox
-            </Link>{" "}
-            and click the form card.
+            {error === "missing_pairing" ? (
+              <>
+                This form must be opened from your inbox so we can attach the
+                response to the right mentorship pairing. Head back to{" "}
+                <Link href="/inbox" style={{ color: "var(--indigo)" }}>
+                  your inbox
+                </Link>{" "}
+                and click the form card.
+              </>
+            ) : error === "wrong_audience" ? (
+              <>
+                This form is not meant for your role, so it cannot be submitted from
+                your account. If you think that is wrong, contact your programme
+                administrator.
+              </>
+            ) : error === "invalid" ? (
+              <>
+                <strong>Your answers could not be saved.</strong>
+                {errorDetail ? (
+                  <div style={{ marginTop: 6 }}>{errorDetail}</div>
+                ) : (
+                  <div style={{ marginTop: 6 }}>
+                    Please check the required questions and try again.
+                  </div>
+                )}
+              </>
+            ) : (
+              <>That submission could not be completed. Please try again.</>
+            )}
           </div>
         ) : null}
 

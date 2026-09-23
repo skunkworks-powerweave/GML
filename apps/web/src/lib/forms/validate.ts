@@ -39,6 +39,15 @@ export type ValidationError = { field: string; message: string };
  * a surface someone will later open.
  */
 const MAX_TEXT_LENGTH = 5000;
+
+/**
+ * Kinds whose stored answer is a number, not one of `options`.
+ *
+ * `likert` belongs here for the same reason `rating` does: both renderers
+ * submit the ordinal (1..5) and use `options` / likertLabels only to caption
+ * each point.
+ */
+const NUMERIC_KINDS: ReadonlySet<string> = new Set(["number", "rating", "scale", "likert"]);
 const MAX_SELECTIONS = 50;
 
 function asArray(v: unknown): string[] {
@@ -90,7 +99,17 @@ export function validateResponses(
     // OPTIONS. A radio, select or checkbox may only carry a value the schema
     // declares. Without this the stored answer can be any string at all, and
     // every downstream report that groups by it silently gains a category.
-    if (field.options && field.options.length > 0) {
+    //
+    // NUMERIC SCALES ARE EXCLUDED, and that is not a loosening. On a rating,
+    // scale or likert field `options` holds the LABEL FOR EACH POINT -- the
+    // seeded mentor form declares ["1 - No movement", "2", "3 - On track", ...]
+    // -- while both renderers submit the ordinal the user picked. Treating
+    // those labels as the permitted value set rejected every rating whose
+    // label was not the bare number, so the mentor progress and final forms
+    // could not be submitted at all. The numeric block below is the real
+    // constraint for these kinds, and it is stricter: it enforces min/max
+    // rather than mere membership.
+    if (field.options && field.options.length > 0 && !NUMERIC_KINDS.has(field.kind)) {
       const allowed = new Set(field.options);
       for (const v of values) {
         if (!allowed.has(v)) {
@@ -103,8 +122,8 @@ export function validateResponses(
       }
     }
 
-    // NUMBERS. `kind` is consulted here for the first time.
-    if (field.kind === "number" || field.kind === "rating" || field.kind === "scale") {
+    // NUMBERS.
+    if (NUMERIC_KINDS.has(field.kind)) {
       for (const v of values) {
         const n = Number(v);
         if (!Number.isFinite(n)) {

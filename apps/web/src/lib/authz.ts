@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { db } from "@gml/db";
 import {
@@ -39,6 +39,25 @@ export type Actor = { id: string; role: RoleName | string };
 
 const isAdmin = (actor: Actor): boolean => hasAnyRole(actor.role, ADMIN_ROLES);
 
+/**
+ * Every id these helpers take arrives from a URL segment or a form body.
+ *
+ * Postgres raises 22P02 ("invalid input syntax for type uuid") when a
+ * non-uuid string is compared against a uuid column, which surfaces as an
+ * unhandled exception -- a 500, or a blank page before this codebase had any
+ * error boundary. /observation/not-a-uuid did exactly that, on the same helper
+ * whose entire design principle is that an unauthorised row must be
+ * indistinguishable from an absent one. A 500 is very distinguishable.
+ *
+ * A malformed id cannot name a row, so notFound() is both the safe answer and
+ * the correct one.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertUuid(id: string): void {
+  if (!UUID_RE.test(id)) notFound();
+}
+
 /** teachers.id for the signed-in user, or null if they are not a teacher. */
 async function teacherIdFor(actor: Actor): Promise<string | null> {
   const [row] = await db
@@ -77,6 +96,7 @@ async function menteeTeacherIds(mentorId: string): Promise<string[]> {
  *   mentor   -> cycles about a teacher they are actively paired with
  */
 export async function assertCanAccessCycle(actor: Actor, cycleId: string) {
+  assertUuid(cycleId);
   const [cycle] = await db
     .select()
     .from(observationCycles)
@@ -122,6 +142,7 @@ export async function assertCanAccessCycle(actor: Actor, cycleId: string) {
  *   observer -> denied; observers have no mentorship role
  */
 export async function assertCanAccessPairing(actor: Actor, pairingId: string) {
+  assertUuid(pairingId);
   const [pairing] = await db
     .select()
     .from(mentorPairings)
@@ -152,6 +173,7 @@ export async function assertCanAccessPairing(actor: Actor, pairingId: string) {
  * because context_id deliberately carries no foreign key.
  */
 export async function assertCanAccessVideo(actor: Actor, videoId: string) {
+  assertUuid(videoId);
   const [video] = await db
     .select()
     .from(videoSubmissions)
@@ -300,6 +322,80 @@ export async function videoVisibilityFilter(actor: Actor): Promise<SQL | undefin
 
   // The "own uploads" clause is always present, so this is never an empty OR.
   return clauses.length === 1 ? clauses[0] : (or(...clauses) as SQL);
+}
+
+/**
+ * Never-matches predicate, for a role with no legitimate rows in a list.
+ *
+ * Returning `undefined` here would mean "no restriction" and show the caller
+ * EVERYTHING -- the exact inversion these filters exist to prevent -- so the
+ * deny case has to be an explicit false rather than an absent clause.
+ */
+const DENY_ALL: SQL = sql`false`;
+
+/**
+ * WHERE predicate scoping an observation-cycle LIST to what `actor` may see.
+ *
+ * The mirror of assertCanAccessCycle, for the list surface. /observation
+ * selected every cycle in the programme with a WHERE built only from the
+ * ?status= and ?kind= chips, so any user holding the observation section
+ * password -- which is how a teacher is let in to view her OWN cycle -- was
+ * served 80 rows of other teachers' names, subjects, evaluative cycle kinds and
+ * real cycle UUIDs. The detail page at the far end of each of those links was
+ * already guarded; the list was not.
+ *
+ * The section gate cannot substitute for this: it is one shared rotatable
+ * password per section and answers "may you enter", never "whose rows".
+ *
+ * Must be ANDed into the query. Filtering in JS would still transfer every row
+ * out of Postgres and would leave the GROUP BY chip counts unscoped -- the same
+ * half-fix /videos had to correct once already.
+ */
+export async function cycleVisibilityFilter(actor: Actor): Promise<SQL | undefined> {
+  if (isAdmin(actor)) return undefined;
+
+  if (actor.role === "observer") return eq(observationCycles.observerId, actor.id);
+
+  if (actor.role === "teacher") {
+    const tid = await teacherIdFor(actor);
+    return tid ? eq(observationCycles.teacherId, tid) : DENY_ALL;
+  }
+
+  if (actor.role === "mentor") {
+    const mid = await mentorIdFor(actor);
+    if (!mid) return DENY_ALL;
+    const teacherIds = await menteeTeacherIds(mid);
+    return teacherIds.length ? inArray(observationCycles.teacherId, teacherIds) : DENY_ALL;
+  }
+
+  return DENY_ALL;
+}
+
+/**
+ * WHERE predicate scoping a mentorship-pairing LIST to what `actor` may see.
+ *
+ * The mirror of assertCanAccessPairing. /mentorship had the same defect as
+ * /observation: the detail page refuses to show a teacher anyone else's
+ * pairing, while the list showed her all of them -- every mentor's name and
+ * base location, every mentee's name, meeting counts and last-meeting dates.
+ *
+ * Observers are denied outright rather than given a narrow scope, matching
+ * assertCanAccessPairing: observers have no role in mentorship at all.
+ */
+export async function pairingVisibilityFilter(actor: Actor): Promise<SQL | undefined> {
+  if (isAdmin(actor)) return undefined;
+
+  if (actor.role === "mentor") {
+    const mid = await mentorIdFor(actor);
+    return mid ? eq(mentorPairings.mentorId, mid) : DENY_ALL;
+  }
+
+  if (actor.role === "teacher") {
+    const tid = await teacherIdFor(actor);
+    return tid ? eq(mentorPairings.teacherId, tid) : DENY_ALL;
+  }
+
+  return DENY_ALL;
 }
 
 /** Narrow a possibly-null session into the Actor shape these helpers take. */

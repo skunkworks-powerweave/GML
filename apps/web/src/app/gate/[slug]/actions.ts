@@ -11,7 +11,13 @@ import { rateLimit } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
 import { getCurrentGate, type GateSlug } from "@/lib/gates";
 
-const VALID: GateSlug[] = ["mentorship", "observation", "tkt", "ttt"];
+// `admin` was ABSENT here, which made it unreachable: /gate/admin answered
+// "Unknown section." for every attempt, so the gate could not be unlocked by
+// anyone, ever -- while nav.ts rendered a padlock badge for it and
+// /admin/gates offered a rotate button. `tkt` and `ttt` remain accepted
+// because they are still members of the section_gate_slug enum, but nothing
+// routes to them (see GATED_PREFIXES).
+const VALID: GateSlug[] = ["mentorship", "observation", "admin", "tkt", "ttt"];
 
 export type GateState = { error?: string };
 

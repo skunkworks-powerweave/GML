@@ -2,7 +2,7 @@
   "name": "gml-lms",
   "version": "0.0.1",
   "private": true,
-  "description": "Goldenmile Learning RTT LMS \u2014 Postgres + Next.js, self-hostable, low-bandwidth-aware",
+  "description": "Goldenmile Learning RTT LMS — Postgres + Next.js, self-hostable, low-bandwidth-aware",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -12,7 +12,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test \"tests/governance/**/*.test.mjs\"",
+    "test": "pnpm run test:governance && pnpm run test:scripts",
+    "test:governance": "node --test \"tests/governance/**/*.test.mjs\"",
+    "test:scripts": "node --test \"tests/scripts/**/*.test.mjs\"",
     "test:smoke": "node --test \"tests/integration/**/*.test.mjs\"",
     "dev": "pnpm --filter @gml/web dev",
     "lint": "pnpm -r --if-present lint",

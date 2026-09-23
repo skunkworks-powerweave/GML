@@ -32,6 +32,7 @@ import { mentorPairings, mentorMeetings } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
+import { assertSectionGate } from "@/lib/gates";
 import { recordAudit } from "@/lib/audit";
 
 // ---------------------------------------------------------------------------
@@ -72,6 +73,15 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // meetings_count / last_meeting_at counters.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(actor, pairingId);
 
   let newMeetingId = "";
@@ -93,7 +103,14 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
       .update(mentorPairings)
       .set({
         meetingsCount: sql`${mentorPairings.meetingsCount} + 1`,
-        lastMeetingAt: scheduledAt,
+        // GREATEST, not an assignment. "Last meeting" means the most recent
+        // one, and this used to be set unconditionally to whatever date was
+        // submitted -- so back-filling a meeting from three months ago moved
+        // the pairing's "last meeting" backwards to it. The dashboard's
+        // stale-pairing view reads this column, so a mentor doing the
+        // conscientious thing and recording a missed entry made their pairing
+        // look neglected.
+        lastMeetingAt: sql`GREATEST(COALESCE(${mentorPairings.lastMeetingAt}, ${scheduledAt}), ${scheduledAt})`,
       })
       .where(eq(mentorPairings.id, pairingId));
   });
@@ -127,6 +144,15 @@ export async function completePairingAction(formData: FormData): Promise<void> {
   // action added here inherits the check instead of forgetting it.
   const completeActor = actorFrom(session);
   if (!completeActor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(completeActor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(completeActor, pairingId);
 
   const endedAt = new Date();
@@ -176,6 +202,15 @@ export async function toggleCommitmentAction(formData: FormData): Promise<void> 
   // authenticated user could write an unbounded attacker-controlled string into
   // the APPEND-ONLY audit log against any pairing id -- rows the application
   // role cannot delete afterwards.
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(commitmentActor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(commitmentActor, pairingId);
 
   // IT NOW PERSISTS. The previous version wrote an audit row and changed
@@ -252,6 +287,15 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   if (!pairingId) redirect("/mentorship?error=invalid_commitment");
   if (!text) redirect(`/mentorship/${pairingId}?error=empty_commitment`);
 
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(actor, pairingId);
 
   const entry = {
@@ -267,6 +311,13 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   // Append in SQL. A read-modify-write would lose a concurrent addition.
   // Capped at 50 so the column cannot grow without bound on a row that is read
   // on every visit to the pairing page.
+  //
+  // THE CAP NOW REPORTS ITSELF. The CASE returns the array unchanged once the
+  // limit is reached, and the action then redirected as though it had
+  // succeeded -- so past 50 commitments the Add button silently did nothing,
+  // forever, with no message. Returning the resulting length lets the caller
+  // tell "appended" from "refused", which is the whole difference between a
+  // cap and a bug.
   const updated = await db
     .update(mentorPairings)
     .set({
@@ -277,10 +328,16 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
       END`,
     })
     .where(eq(mentorPairings.id, pairingId))
-    .returning({ id: mentorPairings.id });
+    .returning({
+      id: mentorPairings.id,
+      count: sql<number>`jsonb_array_length(${mentorPairings.commitments})`,
+    });
 
   if (updated.length === 0) {
     redirect(`/mentorship/${pairingId}?error=pairing_not_found`);
+  }
+  if ((updated[0]?.count ?? 0) >= 50) {
+    redirect(`/mentorship/${pairingId}?error=commitments_full`);
   }
 
   void recordAudit({

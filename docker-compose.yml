@@ -42,6 +42,19 @@ name: gml-lms
 # Supabase's CDN via signed URLs embedded in the playlist. EC2 serves HTML, RSC
 # and API only, which is what makes a 2-vCPU instance sufficient.
 
+# ── Logging ───────────────────────────────────────────────────────────────────
+# Docker's default json-file driver has NO SIZE LIMIT. On a long-running single
+# EC2 box that is a slow disk-fill: the worker logs an ffmpeg line per job and
+# Caddy an access line per request, forever, until / is full -- at which point
+# Postgres connections, the next backup and the next deploy all fail at once,
+# for a reason that looks nothing like "log files". 3x10MB per service is 120MB
+# worst case across the stack.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   migrate:
     # One-shot schema gate. Applies drizzle migrations + _post/*.sql, then exits.
@@ -53,25 +66,75 @@ services:
     # Safe on every `up`: both ledgers make it a no-op once current. If it exits
     # non-zero, `app` never starts and the PREVIOUS container keeps serving.
     # That is the rollback posture, and it is deliberate.
+    # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
+    #
+    # Without an `image:` key Compose derives one from the project name --
+    # gml-lms-migrate:latest -- and runs THAT regardless of what else is tagged.
+    # So deploy.sh tagged gml-lms-migrate:current / :previous and Compose ignored
+    # both, and rollback.sh's "retag previous -> current, then up" changed
+    # nothing: it restarted the very image it was rolling back from. Neither tag
+    # had ever been created either, so in practice rollback.sh aborted first
+    # with "gml-lms-app:previous does not exist".
+    #
+    # Naming the tag here makes `docker compose build` write into :current and
+    # `docker compose up` run :current, which is what gives those two scripts
+    # something real to move.
+    image: gml-lms-migrate:current
     build:
       context: .
       dockerfile: docker/migrate.Dockerfile
     restart: "no"
+    logging: *default-logging
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set — Supabase session-pooler URI}
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL must be set}
       SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?SUPABASE_SECRET_KEY must be set}
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:?NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set}
+      # SEED-TIME CREDENTIALS. deploy.sh runs the seed with
+      #   docker compose run --rm --no-deps migrate ... seed_all.ts
+      # and `compose run` passes ONLY what this block declares -- it does not
+      # leak the host environment or .env into the container. Without these,
+      # seed.ts took the `SUPER_ADMIN_EMAIL not set` branch, logged "skipped",
+      # and exited 0. A fresh deploy therefore reported SUCCESS and produced a
+      # system WITH NO ADMINISTRATOR -- and no way to create one, because
+      # /admin/users requires an administrator to reach it.
+      #
+      # Unset rather than `:?` because they are only needed on a first deploy;
+      # re-running the seed against an existing super admin is a no-op and must
+      # not require the password to still be lying around in .env.
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      SUPER_ADMIN_INITIAL_PASSWORD: ${SUPER_ADMIN_INITIAL_PASSWORD:-}
+      # Optional: choose the section-gate passwords instead of having the seed
+      # generate and print them once.
+      GATE_PASSWORD_OBSERVATION: ${GATE_PASSWORD_OBSERVATION:-}
+      GATE_PASSWORD_MENTORSHIP: ${GATE_PASSWORD_MENTORSHIP:-}
+      GATE_PASSWORD_ADMIN: ${GATE_PASSWORD_ADMIN:-}
+      SEED_DRY_RUN: ${SEED_DRY_RUN:-}
     networks:
       - lms_net
 
   app:
     # Next.js web + API + Server Actions.
+    # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
+    #
+    # Without an `image:` key Compose derives one from the project name --
+    # gml-lms-app:latest -- and runs THAT regardless of what else is tagged.
+    # So deploy.sh tagged gml-lms-app:current / :previous and Compose ignored
+    # both, and rollback.sh's "retag previous -> current, then up" changed
+    # nothing: it restarted the very image it was rolling back from. Neither tag
+    # had ever been created either, so in practice rollback.sh aborted first
+    # with "gml-lms-app:previous does not exist".
+    #
+    # Naming the tag here makes `docker compose build` write into :current and
+    # `docker compose up` run :current, which is what gives those two scripts
+    # something real to move.
+    image: gml-lms-app:current
     build:
       context: .
       dockerfile: docker/app.Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
       APP_URL: ${APP_URL:-https://${DOMAIN:-localhost}}
@@ -92,6 +155,11 @@ services:
       GML_WHATSAPP_NUMBER: ${GML_WHATSAPP_NUMBER:-}
       GML_HELPDESK_PHONE: ${GML_HELPDESK_PHONE:-}
       GML_HELPDESK_EMAIL: ${GML_HELPDESK_EMAIL:-}
+      # Off by default. /api/health's `details` carry raw driver messages --
+      # internal hostnames, ports, auth-failure text -- and the endpoint is
+      # public. Documented in .env.example; passed here so it can actually be
+      # turned on during an incident without editing this file.
+      HEALTH_DEBUG: ${HEALTH_DEBUG:-}
       TZ: ${TZ:-Asia/Kolkata}
     depends_on:
       migrate:
@@ -114,10 +182,25 @@ services:
 
   worker:
     # ffmpeg transcoding, queue consumer, periodic sweeps.
+    # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
+    #
+    # Without an `image:` key Compose derives one from the project name --
+    # gml-lms-worker:latest -- and runs THAT regardless of what else is tagged.
+    # So deploy.sh tagged gml-lms-worker:current / :previous and Compose ignored
+    # both, and rollback.sh's "retag previous -> current, then up" changed
+    # nothing: it restarted the very image it was rolling back from. Neither tag
+    # had ever been created either, so in practice rollback.sh aborted first
+    # with "gml-lms-app:previous does not exist".
+    #
+    # Naming the tag here makes `docker compose build` write into :current and
+    # `docker compose up` run :current, which is what gives those two scripts
+    # something real to move.
+    image: gml-lms-worker:current
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
@@ -156,6 +239,7 @@ services:
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -178,7 +262,11 @@ services:
     networks:
       - lms_net
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80"]
+      # Probes the dedicated :2021 health listener in the Caddyfile. The old
+      # check hit http://127.0.0.1:80, whose Host header matches no site block,
+      # so Caddy answered 404 and this container reported unhealthy forever
+      # while proxying correctly.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:2021/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

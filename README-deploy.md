@@ -5,6 +5,7 @@ seen the codebase.
 
 ---
 
+
 ## 1. What you are deploying
 
 Three long-running containers on **one** EC2 instance, plus a one-shot schema
@@ -90,7 +91,7 @@ When you attach SMTP: set `AUTH_EMAIL_ENABLED=true` and redeploy. No code change
 | Data volume | 100 GiB gp3 mounted at `/var/lib/gml` (ffmpeg scratch + local dumps) |
 | Region | `ap-south-1` |
 | Security group in | 80, 443 from `0.0.0.0/0`; 22 from your admin range **only** |
-| Security group out | 443 (Supabase, Let's Encrypt, Meta) |
+| Security group out | 443 (Supabase, Let's Encrypt, Meta) **and 80** — `docker/worker.Dockerfile` installs ffmpeg with apt, and `node:22-slim`'s Debian sources are `http://deb.debian.org` on port 80. With 443 only, the worker image fails to build on the first deploy. |
 | DNS | An A record for `DOMAIN` pointing at the Elastic IP, **before** first deploy — Caddy needs it to obtain a certificate |
 
 **Why not a plain burstable instance.** Sizing is driven by ffmpeg, not by
@@ -109,7 +110,7 @@ bursts — that is what a queue is for.
 ```bash
 # On the instance, as a user in the docker group
 sudo mkdir -p /var/lib/gml && sudo chown "$USER" /var/lib/gml
-git clone <repo> gml-lms && cd gml-lms/lms-app
+git clone <repo> gml-lms && cd gml-lms   # the repo root IS the app root
 
 cp .env.example .env
 chmod 600 .env
@@ -128,6 +129,37 @@ It is idempotent. Re-running it is the normal upgrade path.
 only the hash is stored. You can rotate them later at `/admin/gates`.
 
 ---
+
+### 3.1 Clearing the demonstration data
+
+The seed inserts two kinds of row and does not distinguish them. The
+**districts and zones are real** Ladakh administrative divisions, and so are
+the phases, terms, subjects, form and quiz catalogues, and section gates —
+keep all of it.
+
+The **schools, teachers, mentors, pairings and observation cycles are
+invented**: ten schools with sequential contact numbers, ten teachers with
+sequential mobiles (`+91 9419100001..`), and eight cycles `OBS-2026-001..008`.
+Left in place they appear in the roster, in QuickFind, in every admin grid and
+in the dashboard counts, indistinguishable from real staff.
+
+```bash
+docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/purge_demo_data.ts
+```
+
+That is a **dry run** — it prints what would go and changes nothing. Add
+`--apply` to commit, which runs in a single transaction.
+
+Two things it does deliberately:
+
+- **It keeps the districts.** `seed.ts` skips everything when any district
+  exists, and `deploy.sh` runs the seed on every deploy — so removing them
+  would reinstate all of this on the next deployment.
+- **It keeps anything with real work attached.** A demo cycle that has acquired
+  a genuine form, video or evidence row, or a demo teacher who has been given a
+  login, is reported and left alone rather than cascaded away.
+
+Safe to run twice; the second run finds nothing.
 
 ## 4. Upgrading
 
@@ -255,8 +287,8 @@ sudo apt-get install -y postgresql-client-16 rclone awscli
 #              SUPABASE_S3_SECRET_KEY, BACKUP_S3_BUCKET, AWS_REGION
 
 crontab -e
-# 0 2 * * *  cd /home/ubuntu/gml-lms/lms-app && ./scripts/backup.sh >> /var/lib/gml/backup.log 2>&1
-# 0 4 * * 0  cd /home/ubuntu/gml-lms/lms-app && ./scripts/restore.sh >> /var/lib/gml/drill.log 2>&1
+# 0 2 * * *  cd /home/ubuntu/gml-lms && ./scripts/backup.sh >> /var/lib/gml/backup.log 2>&1
+# 0 4 * * 0  cd /home/ubuntu/gml-lms && ./scripts/restore.sh >> /var/lib/gml/drill.log 2>&1
 ```
 
 If the Storage credentials are absent, `backup.sh` **warns loudly on stderr and
@@ -279,7 +311,12 @@ under `$BACKUP_S3_BUCKET/storage/`.
 1. Stop the app: `docker compose stop app worker`
 2. Restore the dump into a fresh Supabase project (or a new database on the
    existing one) with `pg_restore --no-owner --no-acl`.
-3. Restore objects: `rclone sync` the S3 mirror back into the Storage buckets.
+3. Restore objects: `rclone copy` the S3 mirror back into the Storage buckets.
+   Use `copy`, not `sync` — `sync` would delete anything in the destination
+   that is absent from the mirror, which during a partial recovery means
+   deleting the objects you still had. (`backup.sh` uses `copy` for the same
+   reason in the other direction: a deletion inside Supabase must never
+   propagate into the DR bucket.)
 4. Re-run the two dashboard steps in §2.2 — **hooks and settings are not in the
    dump.**
 5. Point `DATABASE_URL` and the Supabase keys at the restored project, redeploy.

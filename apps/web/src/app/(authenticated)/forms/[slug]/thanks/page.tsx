@@ -149,7 +149,9 @@ export default async function FormThanksPage({
           Back to inbox
         </Link>
         <Link
-          href="/inbox?filter=forms"
+          // /inbox implements filter=unread and nothing else; `forms` fell
+          // through to the "all" branch, so the parameter was decoration.
+          href="/inbox"
           style={{
             background: "transparent",
             color: "var(--ink-2)",

@@ -61,7 +61,23 @@ test("backup.sh exists with Postgres dump + object mirror + retention", () => {
     !/\bmc\s+(mirror|alias)\b/.test(src),
     "backup.sh must not invoke `mc` — the minio server image never contained it",
   );
-  assert.match(src, /rclone sync/, "the object mirror must run via rclone");
+  // `rclone copy`, NOT `rclone sync`.
+  //
+  // The old assertion required `sync`, which is a DESTRUCTIVE mirror: it makes
+  // the destination match the source by DELETING destination objects that are
+  // absent from it. So a deletion inside Supabase -- accident, bad admin
+  // action, compromised key -- would propagate into the disaster-recovery
+  // bucket on the next nightly run and destroy the only copy of the videos
+  // that is not Supabase's. The test was pinning a backup that would
+  // faithfully replicate the disaster it exists to survive, inside 24 hours.
+  //
+  // `copy` only adds and updates. Pruning belongs to the bucket's lifecycle
+  // policy, where it is deliberate and versioned.
+  assert.match(src, /rclone copy/, "the object mirror must run via rclone copy");
+  assert.ok(
+    !/rclone sync/.test(src),
+    "`rclone sync` would propagate a Supabase-side deletion into the DR bucket",
+  );
   // Was: `/mtime \+14|mtime \+28/` — a literal that pinned the number rather
   // than the policy. The retention window is now a named, overridable variable;
   // what still matters is that pruning happens and is bounded.
@@ -98,29 +114,44 @@ test("Caddyfile proxies app + WhatsApp webhook + security headers (no tusd)", ()
   assert.match(src, /X-Content-Type-Options "nosniff"/);
   assert.match(src, /\{\$DOMAIN:localhost\}/); // domain via env
 
-  // NEW, and load-bearing rather than hygiene: the Supabase auth cookies are
-  // NOT httpOnly (the library's own default, because the browser client reads
-  // them to drive direct uploads), so an XSS on this origin yields the access
-  // token outright. The CSP is what makes that hard to reach in the first
-  // place, which is why it is pinned here rather than left to taste.
-  assert.match(src, /Content-Security-Policy/, "a CSP is required, not optional");
-  assert.match(
-    src,
-    /script-src 'self';/,
-    "script-src must not grant 'unsafe-inline' or 'unsafe-eval' — a production Next build " +
-      "needs neither, and granting them would defeat the reason the header exists",
-  );
-  assert.match(
-    src,
-    /connect-src 'self' \{\$SUPABASE_ORIGIN/,
-    "connect-src must name the Supabase project origin: the browser uploads to Storage and " +
-      "fetches HLS segments from signed Storage URLs directly",
+  // THE CSP MOVED TO THE APPLICATION. Caddy must NOT set one.
+  //
+  // What stood here asserted `script-src 'self';` in the Caddyfile, with the
+  // justification that "a production Next build needs neither 'unsafe-inline'
+  // nor 'unsafe-eval'". That is false, and the test was pinning it.
+  //
+  // A production Next build delivers its entire RSC flight payload through
+  // INLINE <script> tags -- six of them on /login, counted against the built
+  // image -- and `'self'` does not permit inline script. Every browser would
+  // have blocked all six, React would never have hydrated, and the application
+  // would have been a dead static shell behind TLS. It went unnoticed because
+  // Caddy cannot bind :80 on the development machine, so the header was never
+  // once exercised in a browser.
+  //
+  // The fix needs a fresh nonce per request, which a static reverse-proxy
+  // header cannot produce. proxy.ts mints one, sets it on the request so Next
+  // stamps it onto every script tag it renders, and sets the matching policy on
+  // the response.
+  //
+  // Caddy must not also send a CSP: two CSP headers are BOTH enforced, and the
+  // intersection of a nonce policy with a nonce-less one blocks precisely what
+  // the nonce exists to allow. That is what the negative assertion guards.
+  assert.ok(
+    !/^\s*Content-Security-Policy\s+"/m.test(code(src)),
+    "Caddy must NOT set a CSP header — proxy.ts owns it, and two CSP headers intersect",
   );
   assert.match(
     src,
     /Permissions-Policy[^\n]*camera=\(\)[^\n]*microphone=\(\)/,
     "device APIs this product never uses must be switched off — a teacher is holding the device",
   );
+
+  // A dedicated health listener, because the site block matches on Host: a
+  // probe of http://127.0.0.1:80 carries Host "127.0.0.1", matches no site and
+  // gets a 404, which is why this container reported unhealthy permanently
+  // while proxying every real request correctly.
+  assert.match(src, /:2021 \{/, "a host-independent health listener is required");
+  assert.match(src, /respond \/healthz "ok" 200/);
 
   // The 5 GB body cap belonged to the tusd path. Video no longer transits this
   // proxy in either direction, so leaving it would invite a 5 GB body at an

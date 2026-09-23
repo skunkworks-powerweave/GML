@@ -23,6 +23,17 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
+/**
+ * Comments stripped, so prose about a construct is not evidence the construct
+ * is there. The rotate audit-shape assertion below used to match the comment at
+ * rotate/route.ts:172 that records the `void recordAudit(...)` → captured-
+ * boolean upgrade, so it could not have failed if the audit call were deleted.
+ * The `[^:]` guard keeps a "https://" inside a string from reading as a comment
+ * start.
+ */
+const code = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
 const ROTATE_PATH = "apps/web/src/app/api/admin/gates/[slug]/rotate/route.ts";
 const SHARE_PATH = "apps/web/src/app/api/admin/gates/[slug]/share/route.ts";
 const PAGE_PATH = "apps/web/src/app/(authenticated)/admin/gates/page.tsx";
@@ -139,8 +150,16 @@ test("spec 115 — rotate audit fires gate.password.rotated with version + grant
   assert.match(src, /action:\s*"gate\.password\.rotated"/);
   assert.match(src, /entityType:\s*"section_gate"/);
   assert.match(src, /grantsInvalidated/);
-  // Best-effort void so audit failure never blocks the 200.
-  assert.match(src, /void\s+recordAudit/);
+  // Best-effort with respect to the 200: audit failure never blocks the
+  // rotation response. Spec 167 replaced `void recordAudit(...)` here with a
+  // captured-boolean `const auditOk = await recordAudit(...)` feeding
+  // noteAuditDegraded, so accept either — against the comment-stripped view,
+  // because the only `void recordAudit` text left in this route is the comment
+  // describing that upgrade.
+  assert.match(
+    code(src),
+    /(?:void\s+recordAudit|const\s+auditOk\s*=\s*await\s+recordAudit)/,
+  );
 });
 
 test("spec 115 — rotate response carries plaintext + version + ok:true on 200", () => {

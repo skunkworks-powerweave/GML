@@ -42,6 +42,7 @@ import {
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,13 @@ export async function GET(req: Request) {
     );
   }
 
-  const pattern = `%${rawQ}%`;
+  // ESCAPED. `%`, `_` and `\` are LIKE metacharacters, and this route
+  // interpolated the raw query straight into the pattern -- so `?q=%` matched
+  // every row of every table it searches and returned the entire staff and
+  // school roster, and `_` silently widened any search containing one. Every
+  // /repo list page escaped its input; the one endpoint that fans out across
+  // eight tables on each keystroke did not.
+  const pattern = `%${escapeIlike(rawQ)}%`;
   const results: QuickFindResult[] = [];
 
   // 1) Teachers — full_name ILIKE. School code joined for the sublabel.

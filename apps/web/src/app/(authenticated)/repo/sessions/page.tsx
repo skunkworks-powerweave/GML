@@ -28,6 +28,7 @@ import { sessions, schools, classes, subjects, teachers } from "@gml/db/schema";
 // Spec 138 — mobile card-list fallback (desktop keeps the 9-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -54,9 +55,6 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // (sessions don't have a "name"; topic is the primary user-visible
 // label). 200-char cap + escape ILIKE wildcards.
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 // Spec 153 — accept only well-formed ISO yyyy-mm-dd strings AND validate the
 // calendar values (month 1-12, day in range for the month). Postgres would

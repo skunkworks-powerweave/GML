@@ -308,11 +308,27 @@ test("spec 132 — videos/page.tsx imports UploadModal and renders it in the hea
     /whatsappPhone=/,
     "UploadModal must receive a whatsappPhone prop",
   );
-  // Env-driven phone with the spec 043 fallback.
+  // THE WHATSAPP_PHONE_NUMBER_ID FALLBACK IS GONE, AND MUST STAY GONE.
+  //
+  // The old assertion REQUIRED that fallback ("spec 043 webhook env"). It is
+  // not a phone number: WHATSAPP_PHONE_NUMBER_ID is Meta's opaque Cloud API
+  // account identifier -- fifteen digits, which is exactly why it survived
+  // every "looks numeric" validation -- and wa.me/<id> resolves to no WhatsApp
+  // account. Whenever GML_WHATSAPP_NUMBER was unset or malformed, a teacher on
+  // 2G following the programme's PRIMARY video path was handed a link to
+  // nothing. The test was requiring the defect.
+  //
+  // Resolving to null instead is correct: both the modal and the runner already
+  // hide the WhatsApp path entirely when the number is null, and no link beats
+  // a wrong one.
   assert.match(
     src,
-    /process\.env\.WHATSAPP_PHONE_NUMBER_ID/,
-    "whatsappPhone source must fall back to WHATSAPP_PHONE_NUMBER_ID (spec 043 webhook env)",
+    /whatsappPhone=\{assertEnv\(\)\.whatsappNumber\.value \?\? null\}/,
+    "whatsappPhone must come from the validated env value, or be null",
+  );
+  assert.ok(
+    !/process\.env\.WHATSAPP_PHONE_NUMBER_ID/.test(src),
+    "WHATSAPP_PHONE_NUMBER_ID is Meta's account id, not a dialable number — never a fallback",
   );
 });
 

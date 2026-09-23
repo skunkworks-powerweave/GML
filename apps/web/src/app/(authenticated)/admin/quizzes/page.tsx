@@ -8,6 +8,7 @@ import { asc, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { quizzes, quizQuestions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
+import { NewQuizForm } from "./new-quiz-form";
 
 export const dynamic = "force-dynamic";
 
@@ -53,14 +54,17 @@ export default async function AdminQuizzesIndexPage() {
               take them. Editing a quiz lands in the audit log.
             </p>
           </div>
-          <Link
-            href="/admin/forms"
-            className="chip"
-            style={{ textDecoration: "none" }}
-            title="Switch to the feedback-form registry"
-          >
-            → Feedback forms
-          </Link>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <NewQuizForm />
+            <Link
+              href="/admin/forms"
+              className="chip"
+              style={{ textDecoration: "none" }}
+              title="Switch to the feedback-form registry"
+            >
+              → Feedback forms
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -85,7 +89,11 @@ export default async function AdminQuizzesIndexPage() {
                     colSpan={7}
                     style={{ padding: 36, textAlign: "center", color: "var(--ink-3)" }}
                   >
-                    No quizzes yet. Seed via SQL or use the JSON editor on the detail page.
+                    {/* The old copy said "Seed via SQL or use the JSON editor on
+                        the detail page" -- neither was followable: there is no
+                        quiz seed script, and the detail page needs an id that
+                        could not be obtained. */}
+                    No quizzes yet. Create one above, then add its questions.
                   </td>
                 </tr>
               ) : (

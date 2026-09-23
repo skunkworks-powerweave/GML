@@ -8,6 +8,7 @@
 // var(--ink-3), var(--line)). No raw hex colours; everything routes through tokens.
 
 import Link from "next/link";
+import { QuickFindTrigger } from "@/components/quickfind/QuickFindTrigger";
 import { and, asc, between, count, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -152,14 +153,17 @@ export default async function RepoHomePage() {
     .orderBy(asc(sessions.scheduledDate), asc(sessions.scheduledTime))
     .limit(8);
 
-  const browse: { id: string; label: string; n: number; icon: string }[] = [
+  const browse: { id: string; href?: string; label: string; n: number; icon: string }[] = [
     { id: "schools", label: "Schools", n: stats.schools, icon: "school" },
     { id: "subjects", label: "Subjects", n: stats.subjects, icon: "book" },
     { id: "outlines", label: "Course outlines", n: stats.outlines, icon: "filter" },
     { id: "sessions", label: "Sessions", n: stats.sessions, icon: "cycle" },
     { id: "teachers", label: "Teachers", n: stats.teachers, icon: "users" },
     { id: "mentors", label: "Mentors", n: stats.mentors, icon: "users" },
-    { id: "learners", label: "Learners", n: stats.learners, icon: "users" },
+    // href is explicit: the Browse card derives its link from `id`, and the
+    // learners page is served at /repo/students, so this one row 404d while
+    // every other entry in the list happened to match its route name.
+    { id: "learners", href: "/repo/students", label: "Learners", n: stats.learners, icon: "users" },
     { id: "resources", label: "Reading material", n: stats.resources, icon: "file" },
   ];
 
@@ -175,9 +179,13 @@ export default async function RepoHomePage() {
               course outlines, learners and reading material. Every record links to the others.
             </p>
           </div>
-          <button type="button" className="btn">
+          {/* Was a bare <button type="button"> with no handler, inside an async
+              Server Component that cannot carry one -- it did nothing at all
+              when clicked. QuickFindTrigger is the client island that reaches
+              the QuickFind panel mounted in the authenticated layout. */}
+          <QuickFindTrigger>
             <Glyph name="search" /> Find a record
-          </button>
+          </QuickFindTrigger>
         </div>
       </div>
 
@@ -234,7 +242,9 @@ export default async function RepoHomePage() {
                       return (
                         <tr key={s.id}>
                           <td className="mono" style={{ fontSize: 12 }}>
-                            <Link href={`/repo/sessions/${s.id}`} style={{ color: "var(--ink)", textDecoration: "none" }}>
+                            {/* /repo/session/<id>, singular. The plural is the LIST route, so
+                                every row in this table 404d. */}
+                            <Link href={`/repo/session/${s.id}`} style={{ color: "var(--ink)", textDecoration: "none" }}>
                               {s.date}
                             </Link>
                           </td>
@@ -264,7 +274,7 @@ export default async function RepoHomePage() {
               {browse.map((b, i) => (
                 <Link
                   key={b.id}
-                  href={`/repo/${b.id}`}
+                  href={b.href ?? `/repo/${b.id}`}
                   style={{
                     display: "flex",
                     alignItems: "center",

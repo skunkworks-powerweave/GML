@@ -179,24 +179,55 @@ test("security headers are present on an HTML response", async () => {
   const res = await get("/login");
   const h = res.headers;
 
-  // Only meaningful behind Caddy; a direct hit on the app container has no
-  // proxy to add them. Skipped rather than failed in that case, with a message
-  // that says which it was.
-  if (!h.get("content-security-policy")) {
-    assert.ok(
-      BASE.includes("localhost") || BASE.includes("127.0.0.1"),
-      "no CSP on a non-local target — Caddy is not adding its security headers",
-    );
-    return;
-  }
-
+  // THESE ARE SET BY THE APPLICATION, so they hold on a direct hit as well as
+  // behind Caddy.
+  //
+  // This test used to treat "no CSP" as "not behind the proxy" and skip. That
+  // detection stopped working when the CSP moved into proxy.ts -- but more to
+  // the point, it was hiding a real gap: nothing reaching the app directly got
+  // any security header at all. The app now sets its own baseline and Caddy
+  // still sets the same values, which its `header` directive replaces rather
+  // than appends.
   const csp = h.get("content-security-policy");
-  assert.match(csp, /script-src 'self'/, "script-src must not be widened");
+  assert.ok(csp, "the application must set a CSP itself, not rely on the proxy");
+
+  // A PER-REQUEST NONCE IS THE LOAD-BEARING PART.
+  //
+  // What this asserted before was `script-src 'self'` with neither
+  // 'unsafe-inline' nor 'unsafe-eval', on the stated grounds that "a production
+  // Next build needs neither". That is false. A production Next build delivers
+  // its RSC flight payload through INLINE <script> tags -- six on /login,
+  // counted against the built image -- and 'self' forbids inline script, so
+  // that policy blocked React from ever hydrating. It was never caught because
+  // Caddy cannot bind :80 on the development machine, so the header was never
+  // exercised in a browser.
+  //
+  // 'self' is still required, as a CSP2 fallback, and unsafe-* is still
+  // forbidden. What is added is the nonce, without which the policy is either
+  // broken or pointless.
+  assert.match(csp, /script-src[^;]*'self'/, "script-src must keep 'self' as a CSP2 fallback");
+  assert.match(
+    csp,
+    /script-src[^;]*'nonce-[A-Za-z0-9+/=_-]+'/,
+    "script-src must carry a per-request nonce — without one, either the inline RSC " +
+      "payload is blocked and the app never hydrates, or the policy has been widened to " +
+      "'unsafe-inline' and stopped protecting anything",
+  );
   assert.ok(
     !/script-src[^;]*unsafe-(inline|eval)/.test(csp),
     "script-src must grant neither unsafe-inline nor unsafe-eval — the Supabase " +
       "auth cookies are not httpOnly, so an XSS on this origin yields the token",
   );
+
+  // And the nonce must actually be unpredictable: two requests, two values.
+  const second = await get("/login");
+  const nonceOf = (v) => (v?.match(/'nonce-([^']+)'/) ?? [])[1];
+  assert.notEqual(
+    nonceOf(csp),
+    nonceOf(second.headers.get("content-security-policy")),
+    "the nonce must be fresh per request — a fixed one is guessable and grants nothing",
+  );
+
   assert.match(h.get("x-content-type-options") ?? "", /nosniff/);
   assert.ok(h.get("permissions-policy"), "Permissions-Policy must be set");
 });

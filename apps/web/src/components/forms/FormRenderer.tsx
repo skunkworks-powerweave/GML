@@ -15,6 +15,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearDraft, saveDraft, type DraftKey } from "@/lib/form-draft";
 
+/**
+ * A scale answer as a number, or null when genuinely unanswered.
+ *
+ * Handles both shapes the same value arrives in: a number from an autosaved
+ * draft (JSON preserves it) and a string from a previously SUBMITTED response
+ * (FormData stringifies everything). Anything non-numeric, including "" and
+ * null, is unanswered.
+ */
+function coerceScaleValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+
 // ---------- Schema types ----------
 
 export type FieldKind =
@@ -321,7 +339,20 @@ function CheckboxGroup({
   value: unknown;
   onChange: (v: string[]) => void;
 }) {
-  const selected = Array.isArray(value) ? (value as string[]) : [];
+  // A SINGLE PRIOR SELECTION COMES BACK AS A BARE STRING.
+  //
+  // Responses are stored as jsonb and read back through FormData, where a
+  // checkbox group with exactly one box ticked round-trips as a string rather
+  // than a one-element array. This read `Array.isArray(value) ? ... : []`, so
+  // that one selection was discarded: reopening a saved form showed the box
+  // unchecked, and re-submitting silently cleared an answer the user had
+  // already given. Groups with two or more selections restored correctly,
+  // which is why it looked like an intermittent fault rather than a rule.
+  const selected = Array.isArray(value)
+    ? (value as string[])
+    : typeof value === "string" && value.length > 0
+      ? [value]
+      : [];
   const toggle = (v: string) => {
     const next = selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v];
     onChange(next);
@@ -370,9 +401,33 @@ function Likert({
   onChange: (v: number) => void;
 }) {
   const labels = field.likertLabels ?? DEFAULT_LIKERT;
-  const current = typeof value === "number" ? value : null;
+  // Accept a STRING too. Prior answers come back as strings.
+  //
+  // A submitted response is read out of FormData and stored in
+  // feedback_responses.responses as "4", not 4. Gating on
+  // `typeof value === "number"` therefore treated every previously-saved
+  // likert and rating answer as unanswered: reopening a completed form showed
+  // every scale blank, and -- worse -- the mirrored hidden input emitted "",
+  // so pressing Submit without re-clicking each scale silently dropped answers
+  // the user could see they had already given. Client-side validation passed
+  // them (the raw string "4" is non-empty), so the first sign of trouble was
+  // the server rejecting the whole form as incomplete.
+  //
+  // Drafts were unaffected, because those round-trip through JSON and keep
+  // their numbers -- which is why this only bit on the re-open-after-submit
+  // path.
+  const current = coerceScaleValue(value);
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+      {/* THE VALUE HAS TO LEAVE THE PAGE.
+          These controls are <button type="button"> only -- they carry no name
+          and contribute nothing to FormData. This form submits natively via
+          <form action={serverAction}>, so the server read NO answer at all for
+          any rating or likert field: every mentor progress and final form
+          failed server-side validation on "required", and an optional one
+          silently stored nothing. React state is invisible to a native submit;
+          a mirrored hidden input is what makes it visible. */}
+      <input type="hidden" name={field.name} value={current ? String(current) : ""} />
       {labels.map((lbl, i) => {
         const n = i + 1;
         const selected = current === n;
@@ -412,7 +467,8 @@ function Rating({
   onChange: (v: number) => void;
 }) {
   const max = field.starsMax ?? 5;
-  const current = typeof value === "number" ? value : 0;
+  // Same string-vs-number problem as Likert above.
+  const current = coerceScaleValue(value) ?? 0;
   const verdict = [
     "Not yet rated",
     "Emerging",
@@ -423,6 +479,15 @@ function Rating({
   ];
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      {/* THE VALUE HAS TO LEAVE THE PAGE.
+          These controls are <button type="button"> only -- they carry no name
+          and contribute nothing to FormData. This form submits natively via
+          <form action={serverAction}>, so the server read NO answer at all for
+          any rating or likert field: every mentor progress and final form
+          failed server-side validation on "required", and an optional one
+          silently stored nothing. React state is invisible to a native submit;
+          a mirrored hidden input is what makes it visible. */}
+      <input type="hidden" name={field.name} value={current > 0 ? String(current) : ""} />
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const on = current >= n;
         return (

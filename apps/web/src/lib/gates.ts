@@ -7,11 +7,21 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { db } from "@gml/db";
 import { sectionGates, sectionGateGrants } from "@gml/db/schema";
 
-export type GateSlug = "mentorship" | "observation" | "tkt" | "ttt";
+// Mirrors the section_gate_slug enum in packages/db/src/schema/enums.ts.
+// `admin` was omitted here, which is the type-level half of why that gate was
+// inert: it could not be named in GATED_PREFIXES even if someone tried.
+export type GateSlug = "mentorship" | "observation" | "admin" | "tkt" | "ttt";
 
 export const GATED_PREFIXES: { prefix: string; slug: GateSlug }[] = [
   { prefix: "/mentorship", slug: "mentorship" },
   { prefix: "/observation", slug: "observation" },
+  // The audit log. nav.ts has declared `gate: "admin"` on this item since it
+  // was written and rendered a padlock badge for it, but the slug appeared in
+  // no prefix list and was rejected by verifyGate -- so the padlock was purely
+  // cosmetic and the most sensitive read surface in the product was guarded by
+  // a role check alone. The enforcement is in admin/audit/layout.tsx; this
+  // entry is what lets the proxy redirect quickly.
+  { prefix: "/admin/audit", slug: "admin" },
   // '/rtt/tkt' and '/rtt/ttt' were listed here and have been removed: neither
   // route exists in the app. The RTT surfaces that actually ship are /rtt,
   // /rtt/subject/[id], /rtt/teach-back and /rtt/online/{a,}synchronous, none of

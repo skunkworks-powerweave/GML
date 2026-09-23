@@ -194,23 +194,21 @@ export default async function VideoLibraryPage({
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             {/*
-              Spec 132 — Upload trigger now opens the WhatsApp / direct-upload
-              modal. We pass the programme WhatsApp number from env (set in
-              spec 043 deployment as WHATSAPP_PHONE_NUMBER_ID) with a
-              GML_WHATSAPP_NUMBER override for human-readable formatting.
+              Spec 132 — the upload trigger opens the WhatsApp / direct-upload
+              modal, with the programme WhatsApp number from env.
 
-              Spec 169 — the GML_WHATSAPP_NUMBER override is now validated
-              via assertEnv(); a set-but-invalid value falls through to the
-              legacy WHATSAPP_PHONE_NUMBER_ID before defaulting to null.
-              When the final value is null the modal hides the WhatsApp
-              section entirely (broken wa.me link > no link).
+              NO WHATSAPP_PHONE_NUMBER_ID FALLBACK. That variable is Meta's
+              opaque phone-number ID for the Cloud API account -- a 15-digit
+              internal identifier, not a dialable number. Being all digits, it
+              passed every "looks like a number" check and was rendered into
+              wa.me/<id>, which resolves to no WhatsApp account at all: a
+              teacher on 2G following the programme's PRIMARY video path landed
+              on "this person is not on WhatsApp". Resolving to null is
+              correct, because the modal already hides the WhatsApp section
+              entirely when the number is null. No link beats a wrong one.
             */}
             <UploadModal
-              whatsappPhone={
-                assertEnv().whatsappNumber.value ??
-                process.env.WHATSAPP_PHONE_NUMBER_ID ??
-                null
-              }
+              whatsappPhone={assertEnv().whatsappNumber.value ?? null}
               videoDefaultQuality={sysSettings?.videoDefaultQuality ?? "480p"}
             />
             {canSeeWhatsappLog && (

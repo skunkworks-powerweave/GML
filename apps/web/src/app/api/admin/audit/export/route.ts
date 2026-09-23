@@ -49,6 +49,9 @@ import { auth } from "@/auth";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
 
+/** Same shape /admin/audit validates against, kept in step deliberately. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const dynamic = "force-dynamic";
 
 const ALLOWED_ROLES: RoleName[] = ["super_admin", "programme_admin"];
@@ -80,7 +83,17 @@ export async function GET(req: Request) {
   // the documented entityType/from/to superset.
   const filters = [] as ReturnType<typeof sql>[];
   if (actionParam) filters.push(sql`${auditLog.action} = ${actionParam}`);
-  if (userIdParam) filters.push(sql`${auditLog.userId} = ${userIdParam}`);
+  // Validated, exactly as /admin/audit validates it. This is a SEPARATE entry
+  // point -- reachable directly, not only through that page's export button --
+  // and an unparseable id bound against a uuid column is a 22P02 from the
+  // driver, i.e. a 500 on the forensic export. An unparseable filter is a
+  // filter that matches nothing, not an error.
+  if (userIdParam) {
+    if (!UUID_RE.test(userIdParam)) {
+      return NextResponse.json({ error: "invalid_user_id" }, { status: 400 });
+    }
+    filters.push(sql`${auditLog.userId} = ${userIdParam}`);
+  }
   if (entityTypeParam) filters.push(sql`${auditLog.entityType} = ${entityTypeParam}`);
   if (fromParam) {
     const from = new Date(fromParam);

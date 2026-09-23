@@ -129,7 +129,13 @@ export async function POST(req: Request) {
   // own inbox.
   const recipients = admins.filter((u) => u.id !== userId);
 
-  const subject = `Help request from ${userName} on ${pageSlug}`;
+  // notifications.subject is varchar(200) and pageSlug is accepted up to 200
+  // chars on its own, so the concatenation overflowed and the INSERT threw --
+  // taking down the whole help-request submission for a long page slug, with
+  // the user told only that their request failed. Truncated to fit, with the
+  // slug the part that gives way: the requester's name is the load-bearing
+  // half of the line.
+  const subject = `Help request from ${userName} on ${pageSlug}`.slice(0, 200);
   const bodyText = message?.trim().length
     ? message
     : `Help request from ${userName}${topic ? ` (topic: ${topic})` : ""} on ${pageSlug}.`;

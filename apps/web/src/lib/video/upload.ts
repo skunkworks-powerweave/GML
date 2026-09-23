@@ -36,7 +36,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { files, videoSubmissions } from "@gml/db/schema";
+import { files, observationEvidence, videoSubmissions } from "@gml/db/schema";
 import { BUCKETS, uploadKey } from "@gml/shared/storage/buckets";
 import { storage } from "@/lib/video/storage";
 import { getSystemSettings } from "@/lib/system-settings";
@@ -200,6 +200,8 @@ export async function completeUpload(opts: {
   submissionId: string;
   userId: string;
   isAdmin: boolean;
+  /** Free-text note from the uploader, stored on the evidence row. */
+  caption?: string | null;
   enqueue: (input: { videoSubmissionId: string; fileId: string; bucket: string; objectKey: string }) => Promise<void>;
 }): Promise<CompleteUploadResult> {
   const [row] = await db
@@ -207,6 +209,8 @@ export async function completeUpload(opts: {
       id: videoSubmissions.id,
       status: videoSubmissions.status,
       submittedBy: videoSubmissions.submittedByUserId,
+      contextType: videoSubmissions.contextType,
+      contextId: videoSubmissions.contextId,
       fileId: files.id,
       bucket: files.bucket,
       objectKey: files.objectKey,
@@ -250,6 +254,38 @@ export async function completeUpload(opts: {
     .update(videoSubmissions)
     .set({ status: "queued" })
     .where(eq(videoSubmissions.id, row.id));
+
+  // LINK THE VIDEO TO THE CYCLE'S EVIDENCE PANEL.
+  //
+  // observation_evidence had exactly one reader -- the Evidence card on
+  // /observation/[cycleId] -- and NO WRITER anywhere in the repository. So a
+  // teacher could record her lesson, upload it against her cycle, watch it
+  // transcode and appear in the video library, and the cycle page would still
+  // say there was no evidence. The one place the observer looks for the video
+  // was the one place it never appeared.
+  //
+  // Written here rather than at reservation time because this is the point at
+  // which the bytes are known to exist: an abandoned upload must not leave a
+  // row promising evidence that was never delivered.
+  //
+  // ON CONFLICT is not available -- there is no unique constraint -- so this
+  // checks first. completeUploadAction is idempotent by the status guard above
+  // (a second call returns early on status !== "received"), which is what keeps
+  // this from double-inserting in practice.
+  if (row.contextType === "observation_cycle" && row.contextId) {
+    const [already] = await db
+      .select({ id: observationEvidence.id })
+      .from(observationEvidence)
+      .where(eq(observationEvidence.videoSubmissionId, row.id))
+      .limit(1);
+    if (!already) {
+      await db.insert(observationEvidence).values({
+        cycleId: row.contextId,
+        videoSubmissionId: row.id,
+        caption: opts.caption?.trim() ? opts.caption.trim().slice(0, 500) : null,
+      });
+    }
+  }
 
   await opts.enqueue({
     videoSubmissionId: row.id,

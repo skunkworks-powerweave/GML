@@ -101,11 +101,49 @@ export default async function AdminIndexPage() {
               </div>
             </Link>
           </li>
+          {/* Forms & quizzes shipped. This was still rendered as a greyed-out
+              dashed placeholder reading "Lands in spec 073" while /admin/forms
+              and /admin/quizzes were both fully implemented and linked from the
+              sidebar -- so the admin index told an administrator a working
+              feature did not exist yet. */}
           <li>
-            <span className="block rounded-md border border-dashed border-neutral-300 bg-neutral-50 p-3 text-neutral-400">
-              <div className="text-sm font-medium">Forms & quizzes</div>
-              <div className="text-xs">Lands in spec 073</div>
-            </span>
+            <Link
+              href="/admin/forms"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">Feedback forms</div>
+              <div className="text-xs text-neutral-500">
+                Form templates and their schemas
+              </div>
+            </Link>
+          </li>
+          {/* Quizzes had NO link anywhere in the product. The only reference to
+              /admin/quizzes was from its own [id] page, which cannot be reached
+              with zero quizzes -- so the surface existed and was unreachable
+              except by typing the URL. */}
+          <li>
+            <Link
+              href="/admin/quizzes"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">Quizzes</div>
+              <div className="text-xs text-neutral-500">
+                Create a quiz and write its questions
+              </div>
+            </Link>
+          </li>
+          {/* /admin/whatsapp-log had no entry here at all, despite being the
+              operator surface for the programme's PRIMARY video ingest path. */}
+          <li>
+            <Link
+              href="/admin/whatsapp-log"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">WhatsApp ingest log</div>
+              <div className="text-xs text-neutral-500">
+                Incoming videos · unmatched submissions
+              </div>
+            </Link>
           </li>
           <li>
             <Link

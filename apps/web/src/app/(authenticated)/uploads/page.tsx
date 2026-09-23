@@ -47,7 +47,6 @@ const STATE_CHIP: Record<string, string> = {
   reviewed: "chip-indigo",
 };
 
-
 const SOURCE_LABEL: Record<string, string> = {
   whatsapp: "WhatsApp",
   direct: "Web",
@@ -69,43 +68,67 @@ const CONTEXT_LABEL: Record<string, string> = {
   generic: "—",
 };
 
-const EXPLAINER_CARDS = [
-  {
-    icon: "wa",
-    title: "Forward via WhatsApp",
-    desc:
-      "Send your video to +91 90600 22013 with caption #c2026-004 (or your active cycle ID). Fastest on 2G/3G.",
-    accent: "var(--lichen)",
-    primary: true,
-    cta: "Open WhatsApp",
-    href: "https://wa.me/919060022013?text=" + encodeURIComponent("#cycle- "),
-  },
-  {
-    icon: "up",
-    title: "Upload here",
-    desc:
-      "Drag a file to this card. Resumes on disconnect. Max file 500 MB. We'll transcode to HLS automatically.",
-    accent: "var(--indigo)",
-    primary: false,
-    cta: "Start",
-    href: "#upload-tray",
-  },
-  {
-    icon: "rec",
-    title: "Record in-app",
-    desc: "Open camera here in the app. Saves to your phone first; uploads when you have wifi.",
-    accent: "var(--saffron)",
-    primary: false,
-    cta: "Start",
-    href: "#upload-tray",
-  },
-] as const;
+/**
+ * Built per request, because two of these cards were lying about the product.
+ *
+ *   WhatsApp   The number and the wa.me link were HARDCODED to
+ *              +91 90600 22013, three lines above the same file's own
+ *              env-driven `whatsappPhone`. Any deployment with a different
+ *              programme number -- which is every deployment but the one this
+ *              was typed on -- sent teachers to a stranger. When no number is
+ *              configured the card is dropped entirely rather than shown with
+ *              a dead link.
+ *
+ *   Drag       "Drag a file to this card" described a feature that does not
+ *              exist: neither the card nor UploadProgress implements a single
+ *              drag or drop handler, so a dropped video made the browser
+ *              navigate away from the page and open the file instead, losing
+ *              whatever was in progress. The copy now describes the button
+ *              that is actually there.
+ */
+function explainerCards(whatsappPhone: string | null) {
+  const dialable = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : null;
+  return [
+    ...(whatsappPhone && dialable
+      ? [
+          {
+            icon: "wa",
+            title: "Forward via WhatsApp",
+            desc: `Send your video to ${whatsappPhone} with the caption for your active cycle ID. Fastest on 2G/3G.`,
+            accent: "var(--lichen)",
+            primary: true,
+            cta: "Open WhatsApp",
+            href: `https://wa.me/${dialable}?text=${encodeURIComponent("#cycle- ")}`,
+          },
+        ]
+      : []),
+    {
+      icon: "up",
+      title: "Upload here",
+      desc: "Choose a file below. Resumes on disconnect. Max file 500 MB. We'll transcode to HLS automatically.",
+      accent: "var(--indigo)",
+      primary: false,
+      cta: "Start",
+      href: "#upload-tray",
+    },
+    {
+      icon: "rec",
+      title: "Record in-app",
+      desc: "Open camera here in the app. Saves to your phone first; uploads when you have wifi.",
+      accent: "var(--saffron)",
+      primary: false,
+      cta: "Start",
+      href: "#upload-tray",
+    },
+  ];
+}
 
 function humanSize(bytes: number | null): string {
   if (bytes == null) return "—";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
@@ -141,10 +164,9 @@ export default async function UploadsPage() {
   // preserved for backwards compatibility with deployments that pre-date
   // the GML_* override.
   const device = await getDeviceType();
-  const whatsappPhone =
-    assertEnv().whatsappNumber.value ??
-    process.env.WHATSAPP_PHONE_NUMBER_ID ??
-    null;
+  // See videos/page.tsx: WHATSAPP_PHONE_NUMBER_ID is Meta's opaque account id,
+  // not a dialable number, and must never be used as a fallback here.
+  const whatsappPhone = assertEnv().whatsappNumber.value ?? null;
 
   const rows = await db
     .select({
@@ -198,73 +220,86 @@ export default async function UploadsPage() {
         ) : null}
 
         {device === "desktop" ? (
-        <>
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 14,
-            marginBottom: 18,
-          }}
-        >
-          {EXPLAINER_CARDS.map((c) => (
-            <article
-              key={c.title}
-              className={`card${c.primary ? " card-hi" : ""}`}
+          <>
+            <section
               style={{
-                padding: 22,
-                border: c.primary ? "2px solid var(--ink)" : undefined,
-                display: "flex",
-                flexDirection: "column",
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 14,
+                marginBottom: 18,
               }}
             >
-              <div
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 10,
-                  background: c.accent,
-                  color: "white",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontFamily: "var(--mono)",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
-                  textTransform: "uppercase",
-                }}
-                aria-hidden
-              >
-                {c.icon}
-              </div>
-              <div style={{ fontFamily: "var(--serif)", fontSize: 18, marginTop: 12 }}>
-                {c.title}
-              </div>
-              <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
-                {c.desc}
-              </p>
-              <a
-                href={c.href}
-                target={c.primary ? "_blank" : undefined}
-                rel={c.primary ? "noopener noreferrer" : undefined}
-                className={`btn${c.primary ? " btn-primary" : ""}`}
-                style={{
-                  marginTop: 12,
-                  alignSelf: "flex-start",
-                  textDecoration: "none",
-                }}
-              >
-                {c.cta}
-              </a>
-            </article>
-          ))}
-        </section>
+              {explainerCards(whatsappPhone).map((c) => (
+                <article
+                  key={c.title}
+                  className={`card${c.primary ? " card-hi" : ""}`}
+                  style={{
+                    padding: 22,
+                    border: c.primary ? "2px solid var(--ink)" : undefined,
+                    display: "flex",
+                    flexDirection: "column",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 10,
+                      background: c.accent,
+                      color: "white",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      letterSpacing: "0.04em",
+                      textTransform: "uppercase",
+                    }}
+                    aria-hidden
+                  >
+                    {c.icon}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--serif)",
+                      fontSize: 18,
+                      marginTop: 12,
+                    }}
+                  >
+                    {c.title}
+                  </div>
+                  <p
+                    style={{
+                      fontSize: 13,
+                      color: "var(--ink-3)",
+                      marginTop: 6,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {c.desc}
+                  </p>
+                  <a
+                    href={c.href}
+                    target={c.primary ? "_blank" : undefined}
+                    rel={c.primary ? "noopener noreferrer" : undefined}
+                    className={`btn${c.primary ? " btn-primary" : ""}`}
+                    style={{
+                      marginTop: 12,
+                      alignSelf: "flex-start",
+                      textDecoration: "none",
+                    }}
+                  >
+                    {c.cta}
+                  </a>
+                </article>
+              ))}
+            </section>
 
-        <section id="upload-tray" style={{ marginBottom: 22 }}>
-          <UploadProgress contextType="generic" />
-        </section>
-        </>
+            <section id="upload-tray" style={{ marginBottom: 22 }}>
+              <UploadProgress contextType="generic" />
+            </section>
+          </>
         ) : null}
 
         <div className="card" style={{ padding: 22 }}>
@@ -278,7 +313,8 @@ export default async function UploadsPage() {
           >
             <div style={{ fontWeight: 600 }}>My recent uploads</div>
             <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-              {rows.length} {rows.length === 1 ? "video" : "videos"} · most recent first
+              {rows.length} {rows.length === 1 ? "video" : "videos"} · most
+              recent first
             </span>
           </div>
 
@@ -294,12 +330,18 @@ export default async function UploadsPage() {
                 background: "var(--paper)",
               }}
             >
-              <div style={{ fontWeight: 500, color: "var(--ink-2)", marginBottom: 4 }}>
+              <div
+                style={{
+                  fontWeight: 500,
+                  color: "var(--ink-2)",
+                  marginBottom: 4,
+                }}
+              >
                 You haven&apos;t uploaded anything yet.
               </div>
               <div style={{ fontSize: 12 }}>
-                Use one of the three options above — WhatsApp is the fastest on a flaky
-                connection.
+                Use one of the three options above — WhatsApp is the fastest on
+                a flaky connection.
               </div>
             </div>
           ) : (
@@ -307,7 +349,14 @@ export default async function UploadsPage() {
               <table className="t">
                 <thead>
                   <tr>
-                    {["File", "Source", "Linked to", "Size", "State", "Date"].map((h) => (
+                    {[
+                      "File",
+                      "Source",
+                      "Linked to",
+                      "Size",
+                      "State",
+                      "Date",
+                    ].map((h) => (
                       <th key={h}>{h}</th>
                     ))}
                   </tr>
@@ -319,8 +368,8 @@ export default async function UploadsPage() {
                     const isPdf = r.mimeType?.startsWith("application/pdf");
                     const linkedTo =
                       r.contextType === "observation_cycle"
-                        ? r.cycleCode ?? "—"
-                        : CONTEXT_LABEL[r.contextType] ?? "—";
+                        ? (r.cycleCode ?? "—")
+                        : (CONTEXT_LABEL[r.contextType] ?? "—");
                     const sourceChipCls = SOURCE_CHIP[r.source] ?? "";
                     const stateChipCls = STATE_CHIP[r.status] ?? "";
                     return (
@@ -351,7 +400,9 @@ export default async function UploadsPage() {
                               {filename}
                             </Link>
                           ) : (
-                            <span style={{ color: "var(--ink-2)" }}>{filename}</span>
+                            <span style={{ color: "var(--ink-2)" }}>
+                              {filename}
+                            </span>
                           )}
                         </td>
                         <td>
@@ -360,12 +411,19 @@ export default async function UploadsPage() {
                           </span>
                         </td>
                         <td
-                          className={r.contextType === "observation_cycle" ? "mono" : undefined}
+                          className={
+                            r.contextType === "observation_cycle"
+                              ? "mono"
+                              : undefined
+                          }
                           style={{ color: "var(--ink-2)" }}
                         >
                           {linkedTo}
                         </td>
-                        <td className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                        <td
+                          className="mono"
+                          style={{ fontSize: 11, color: "var(--ink-3)" }}
+                        >
                           {humanSize(r.sizeBytes)}
                         </td>
                         <td>

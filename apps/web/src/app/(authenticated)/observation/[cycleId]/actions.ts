@@ -52,6 +52,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
+import { assertSectionGate } from "@/lib/gates";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
@@ -149,6 +150,21 @@ async function submitFormAndTransition(opts: {
       // database errored".
       if (updated.length === 0) return null;
 
+      // UPSERT. `.onConflictDoNothing()` was silent DATA LOSS.
+      //
+      // observation_forms has a unique index on (cycle_id, kind)
+      // -- observation_forms_cycle_kind_uq -- so re-submitting a form for a
+      // cycle that already has one of that kind hit the conflict and the row
+      // was DROPPED. The status UPDATE above is in the same transaction and
+      // committed regardless, so the cycle advanced a stage while everything
+      // the user had typed disappeared. No error, no warning: the page came
+      // back showing the OLD submission and a NEW status.
+      //
+      // Re-submission is a legitimate act -- an observer correcting a form
+      // before sign-off is the obvious case -- so the right semantic is that
+      // the latest submission wins. submitted_at and submitted_by are
+      // refreshed with it, otherwise the record would attribute the new
+      // answers to whoever happened to submit first.
       await tx
         .insert(observationForms)
         .values({
@@ -158,7 +174,14 @@ async function submitFormAndTransition(opts: {
           responses: opts.responses,
           submittedByUserId: opts.userId,
         })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+          target: [observationForms.cycleId, observationForms.kind],
+          set: {
+            responses: opts.responses,
+            submittedByUserId: opts.userId,
+            submittedAt: new Date(),
+          },
+        });
 
       return updated[0]!.code;
     });
@@ -222,6 +245,15 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
@@ -269,6 +301,15 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
@@ -317,6 +358,15 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = collectResponses(formData);
@@ -369,6 +419,15 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
   const code = await transitionCycleStatus(cycleId, "post_submitted", "complete");
@@ -417,6 +476,15 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   // remark -- simply by posting a different UUID.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
+  // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
+  // assertSectionGate never executes on a mutation. Every action in this file
+  // was therefore reachable by anyone who had never entered the section
+  // password -- and because rotation works by invalidating grants, an
+  // unasserted action is also an unrevoked one. The section-level rotatable
+  // password is a hard product requirement; a gate that guards only the reading
+  // of a page and none of the writing does not meet it.
+  await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
   if (!note) {
     redirect(`/observation/${cycleId}?error=empty_note`);

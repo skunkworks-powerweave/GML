@@ -233,13 +233,45 @@ test("spec 155 — forms runner imports RoleName and declares the AUDIENCE_ALLOW
   );
   assert.match(
     src,
-    /mentor:\s*\[\s*"mentor"\s*\]/,
+    /mentor:\s*\[\s*"mentor"\s*,/,
     "AUDIENCE_ALLOWED_ROLES must map `mentor` audience to the `mentor` role",
   );
   assert.match(
     src,
-    /mentee:\s*\[\s*"teacher"\s*\]/,
+    /mentee:\s*\[\s*"teacher"\s*,/,
     "AUDIENCE_ALLOWED_ROLES must map `mentee` audience to the `teacher` role (in this codebase a mentee IS a teacher)",
+  );
+
+  // ── WIDENED FROM AN EXACT-LENGTH MATCH ────────────────────────────────────
+  //
+  // These two originally required the arrays to be EXACTLY ["mentor"] and
+  // ["teacher"], closing brackets included. That pinned a real defect in place:
+  // the READ gate admitted only the audience's own role while the SUBMIT path
+  // (audienceAllows() in lib/forms/validate.ts, assertCanAccessPairing()) has
+  // always admitted both admin roles. The same programme_admin account could
+  // POST a form it was redirected away from on GET, with an audit row written
+  // accusing it of a denied access -- and on a fresh deployment the super_admin
+  // is the ONLY account, so every form in the catalogue was unreachable.
+  //
+  // So the assertion is now "the audience role is first, and the admins are
+  // there too", which is the invariant that actually matters.
+  assert.match(
+    src,
+    /const ADMIN_ROLES:\s*RoleName\[\]\s*=\s*\[\s*"programme_admin"\s*,\s*"super_admin"\s*\]/,
+    "the runner must name both admin roles in one ADMIN_ROLES const rather than sprinkling them per audience",
+  );
+  // Regex literals, not a built RegExp: the escaping in a constructed pattern
+  // is one layer too many to get right by eye, and a pattern that silently
+  // fails to match is exactly how a governance test stops guarding anything.
+  assert.match(
+    src,
+    /mentor:\s*\[[^\]]*\.\.\.ADMIN_ROLES/,
+    "AUDIENCE_ALLOWED_ROLES.mentor must include ADMIN_ROLES so the read gate agrees with the submit gate",
+  );
+  assert.match(
+    src,
+    /mentee:\s*\[[^\]]*\.\.\.ADMIN_ROLES/,
+    "AUDIENCE_ALLOWED_ROLES.mentee must include ADMIN_ROLES so the read gate agrees with the submit gate",
   );
 });
 

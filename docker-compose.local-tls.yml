@@ -1,0 +1,75 @@
+# Exercise the TLS and reverse-proxy path WITHOUT a public domain.
+#
+# ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
+#
+# The production compose publishes Caddy on 80 and 443. Two things make that
+# untestable before go-live:
+#
+#   - On a Windows development host, TCP 80 is in the reserved exclusion range
+#     (`netsh interface ipv4 show excludedportrange protocol=tcp`), so Docker
+#     cannot bind it at all. The proxy configuration was therefore never once
+#     exercised in a browser, which is how a Content-Security-Policy that
+#     blocked the application from starting survived review.
+#   - ACME needs a real domain resolving to the box, which does not exist until
+#     DNS is cut over -- normally the last step, after everything else is
+#     already committed.
+#
+# With DOMAIN=localhost, Caddy skips ACME entirely and issues from its own
+# internal CA, so the whole TLS path runs locally: TLS termination, the
+# HTTP->HTTPS redirect, HSTS, the security headers, and the proxy hop that the
+# application's per-request CSP nonce has to survive.
+#
+# ── WHAT THIS PROVES, AND WHAT IT DOES NOT ───────────────────────────────────
+#
+# PROVES   the Caddyfile is valid and loads; TLS terminates; the redirect
+#          fires; HSTS and the security headers are emitted; the app's CSP and
+#          nonce pass through the proxy unmodified; the :2021 health listener
+#          answers inside the container and is NOT exposed to the host; the
+#          webhook route is reachable through the proxy.
+#
+# DOES NOT PROVE   certificate ISSUANCE from Let's Encrypt. That needs a public
+#          domain and inbound :80 from the internet for the HTTP-01 challenge,
+#          which is IT's step on the real instance. Everything Caddy does
+#          AFTER it holds a certificate is identical either way.
+#
+# ── USE ──────────────────────────────────────────────────────────────────────
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local-tls.yml up -d caddy
+#   curl -kIs https://localhost:9443/login | grep -i strict-transport
+#
+# No `DOMAIN=localhost` prefix, and no line continuations. DOMAIN already lives
+# in .env, which Compose reads by itself. The prefix form is bash-only anyway:
+# PowerShell parses `DOMAIN=localhost docker ...` as a command NAME and fails
+# with "The term 'DOMAIN=localhost' is not recognized". To override it for one
+# run in PowerShell it is `$env:DOMAIN = "localhost"` on its own line first.
+#
+# The certificate is self-signed by Caddy's local CA, so `curl -k` (or trusting
+# that CA) is expected. A cert warning here says nothing about production.
+#
+# ── ONE LOCAL ARTEFACT, SO IT IS NOT MISTAKEN FOR A BUG ──────────────────────
+#
+# Caddy redirects to `https://localhost/` -- port 443, not 9443 -- because the
+# site address is what it knows; it has no idea the host remapped the ports.
+# In production the ports ARE standard, so the redirect is correct there. Only
+# the port in the redirect target is a local artefact; that the redirect
+# happens at all, with a 308, is the real behaviour.
+
+services:
+  caddy:
+    # `!override` REPLACES the base file's ports list. Without it Compose MERGES
+    # the two lists, so the base file's "80:80" survives alongside these and the
+    # container still fails to start with:
+    #     bind: An attempt was made to access a socket in a way forbidden by
+    #     its access permissions
+    # which reads like a permissions problem and is actually a merge semantics
+    # problem.
+    ports: !override
+      # Host 9080/9443 -> container 80/443. Not 80:80: unbindable on Windows.
+      # Not 443:443 or 8080:80 either -- both were already in use on the
+      # machine this was written on.
+      - "9080:80"
+      - "9443:443"
+    environment:
+      # Drives the site block. `localhost` is what switches Caddy to its
+      # internal CA instead of ACME.
+      DOMAIN: ${DOMAIN:-localhost}

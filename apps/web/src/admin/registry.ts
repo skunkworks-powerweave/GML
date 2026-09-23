@@ -15,6 +15,7 @@ import { teachersEntity } from "./entities/teachers";
 import { mentorsEntity } from "./entities/mentors";
 import { mentorPairingsEntity } from "./entities/mentor-pairings";
 import { rttAttendanceEntity } from "./entities/rtt-attendance";
+import { rttSessionsEntity } from "./entities/rtt-sessions";
 import { rttSubjectsEntity } from "./entities/rtt-subjects";
 import { subjectsEntity } from "./entities/subjects";
 import { classesEntity } from "./entities/classes";
@@ -32,6 +33,7 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   mentors: mentorsEntity,
   "mentor-pairings": mentorPairingsEntity,
   "rtt-attendance": rttAttendanceEntity,
+  "rtt-sessions": rttSessionsEntity,
   "rtt-subjects": rttSubjectsEntity,
   subjects: subjectsEntity,
   classes: classesEntity,

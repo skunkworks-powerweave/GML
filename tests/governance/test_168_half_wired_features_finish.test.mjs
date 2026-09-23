@@ -142,22 +142,81 @@ test("spec 168 — videos page reads system settings and passes videoDefaultQual
   );
 });
 
-test("spec 168 — chrome-counts filters loadUnreadNotifications by system_settings.notificationsEnabled", () => {
-  const src = read(CHROME_COUNTS);
-  assert.match(
-    src,
-    /from\s+"\.\/system-settings"/,
-    `${CHROME_COUNTS} must import from "./system-settings" so the loader can consult notificationsEnabled`,
+test("spec 168 — the bell AND the inbox apply the same notification-kind filter", () => {
+  // ── REWRITTEN: the original assertions pinned a half-fix in place ──────────
+  //
+  // This used to require chrome-counts.ts to call getSystemSettings() and build
+  // an `inArray(notifications.kind, ...)` itself. It did, and it passed -- while
+  // /inbox, the page the bell links to, applied NO filter at all. The bell could
+  // read 0 with unread rows listed on the page, or the reverse, and the comment
+  // in chrome-counts claimed the filter made "the badge match the inbox
+  // content", which was simply untrue.
+  //
+  // Pinning the filter to one file was what allowed the two to diverge. The
+  // invariant worth guarding is that both surfaces derive from ONE predicate,
+  // so that is what is asserted now.
+  const filterModule = "apps/web/src/lib/notification-kinds.ts";
+  const inbox = "apps/web/src/app/(authenticated)/inbox/page.tsx";
+
+  assert.ok(
+    existsSync(resolve(root, filterModule)),
+    `${filterModule} must exist — it is the single source of the enabled-kinds filter`,
   );
+
+  const shared = read(filterModule);
   assert.match(
-    src,
-    /getSystemSettings\s*\(/,
-    `${CHROME_COUNTS} must call getSystemSettings() inside loadUnreadNotifications so the bell count is filtered`,
-  );
-  assert.match(
-    src,
+    shared,
     /inArray\(\s*notifications\.kind\s*,/,
-    `${CHROME_COUNTS} must filter via inArray(notifications.kind, ...) so the SQL WHERE narrows to enabled kinds — a JS-side filter would still count disabled rows`,
+    `${filterModule} must narrow in SQL via inArray(notifications.kind, ...) — a JS-side filter would still count disabled rows`,
+  );
+  assert.match(
+    shared,
+    /getSystemSettings\s*\(/,
+    `${filterModule} must read the enabled kinds from the system_settings singleton`,
+  );
+  // `null` (settings unreadable) and `[]` (admin disabled everything) mean
+  // opposite things; conflating them either empties an inbox on a DB blip or
+  // ignores a deliberate setting.
+  assert.match(
+    shared,
+    /enabled\s*===\s*null/,
+    `${filterModule} must distinguish "settings unavailable" (no filter) from "nothing enabled" (filter everything out)`,
+  );
+
+  for (const [label, path] of [["bell", CHROME_COUNTS], ["inbox", inbox]]) {
+    const src = read(path);
+    assert.match(
+      src,
+      /notificationKindFilter\s*\(/,
+      `the ${label} (${path}) must call notificationKindFilter() rather than building its own predicate`,
+    );
+  }
+});
+
+test("spec 168 — helpdesk.ticket is in the notification catalogue AND the column default", () => {
+  // The bell filters unread rows by the enabled-kinds array, and
+  // `helpdesk.ticket` is the only kind anything in the application writes. A
+  // default that omits it means a fresh deployment ships a bell that can never
+  // read anything but zero while help requests pile up unseen.
+  const catalogue = read("apps/web/src/lib/notification-kinds.ts");
+  assert.match(
+    catalogue,
+    /key:\s*"helpdesk\.ticket"/,
+    "helpdesk.ticket must be an offerable category — it was not, so no admin could enable it",
+  );
+
+  const schema = read("packages/db/src/schema/systemSettings.ts");
+  assert.match(
+    schema,
+    /notifications_enabled[\s\S]{0,400}helpdesk\.ticket/,
+    "the notifications_enabled column DEFAULT must include helpdesk.ticket",
+  );
+
+  // Existing rows predate the catalogue entry, and a DEFAULT never touches a
+  // row that already exists.
+  assert.ok(
+    existsSync(resolve(root, "packages/db/src/migrations/_post/006_notification_kinds_backfill.sql")),
+    "a _post migration must backfill helpdesk.ticket into the system_settings row already written",
   );
 });
 
@@ -318,10 +377,14 @@ test("spec 168 — /repo/students adds q= search with ilike on learners.name", (
     /ilike\(\s*learners\.name\s*,/,
     `${STUDENTS_PAGE} must call ilike(learners.name, ...) so the search narrows on the canonical learner name column`,
   );
+  // Was: `/function\s+escapeIlike/` -- each page had to DECLARE its own copy.
+  // That requirement is what left /api/quickfind without one, so `?q=%` there
+  // returned the whole staff and school roster. One shared implementation now
+  // lives in @gml/shared/sql/ilike and is pinned in test_158.
   assert.match(
     src,
-    /function\s+escapeIlike/,
-    `${STUDENTS_PAGE} must declare an escapeIlike helper so ILIKE wildcards %, _, \\ in user input don't act as pattern characters`,
+    /import \{ escapeIlike \} from "@gml\/shared\/sql\/ilike"/,
+    `${STUDENTS_PAGE} must import the shared escapeIlike rather than declaring its own`,
   );
   assert.match(
     src,
@@ -413,6 +476,9 @@ test("spec 168 — no TODO / FIXME markers leaked into shipped source", () => {
     AUDIT_LIB,
     UPLOAD_MODAL,
     CHROME_COUNTS,
+    // The kind filter moved out of chrome-counts into its own module when it
+    // turned out /inbox never applied it; the spec reference moves with it.
+    "apps/web/src/lib/notification-kinds.ts",
     ADMIN_HOME,
     FORGOT_PAGE,
     FORGOT_FORM,

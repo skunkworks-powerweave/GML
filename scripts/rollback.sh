@@ -63,9 +63,24 @@ log "restarting ${SERVICES}"
 # shellcheck disable=SC2086
 docker compose up -d --no-deps ${SERVICES}
 
+# The SAME defect deploy.sh had: Caddy answers plaintext with a 308, and
+# `curl -f` does not fail on a 3xx, so this loop exited 0 the moment Caddy was
+# up -- without ever reaching the app. A rollback onto an image that cannot
+# start would have reported "rolled back and healthy".
+#
+#   -L  follow the redirect to HTTPS
+#   -k  the redirect lands on 127.0.0.1 while the certificate names $DOMAIN;
+#       certificate validity is not what this gate is for
+#   grep the body, because /api/health answers 503 with ok:false when the
+#       database, storage or migrations are wrong -- and a rollback is most
+#       often run precisely when something is wrong
+rollback_healthy() {
+  curl -fsSLk -m 10 "http://127.0.0.1/api/health" 2>/dev/null | grep -q '"ok":true'
+}
+
 log "waiting for health"
 elapsed=0
-until curl -fsS -o /dev/null "http://127.0.0.1/api/health"; do
+until rollback_healthy; do
   if [ "${elapsed}" -ge 120 ]; then
     echo "[rollback] still unhealthy after 120s — the previous image may not be compatible" >&2
     echo "[rollback] with the CURRENT schema. Check 'docker compose logs app'." >&2

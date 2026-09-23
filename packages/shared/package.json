@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./api-contracts/*": "./src/api-contracts/*.ts",
     "./auth/*": "./src/auth/*.ts",
-    "./storage/*": "./src/storage/*.ts"
+    "./storage/*": "./src/storage/*.ts",
+    "./sql/*": "./src/sql/*.ts"
   },
   "dependencies": {
     "zod": "^3.23.0",

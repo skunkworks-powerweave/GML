@@ -27,7 +27,7 @@
 // round-trip. The helper is wrapped in React.cache so the variant-builder and
 // the TodayChecklist row builder share one materialisation per request.
 
-import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@gml/db";
 import { getTranslations } from "next-intl/server";
@@ -45,6 +45,7 @@ import {
   quizSubmissions,
   users,
   auditLog,
+  phases,
 } from "@gml/db/schema";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -603,6 +604,22 @@ export default async function DashboardPage() {
 
   const roleLabel = role.replace("_", " ");
 
+  // The phase that contains today, by date. Falls back to null -- and the
+  // subtitle then simply omits the phase -- rather than guessing, because a
+  // programme with no dated phase has no current phase to report.
+  const [currentPhase] = await db
+    .select({ label: phases.label })
+    .from(phases)
+    .where(
+      and(
+        isNotNull(phases.startDate),
+        lte(phases.startDate, new Date()),
+        or(isNull(phases.endDate), gte(phases.endDate, new Date())),
+      ),
+    )
+    .orderBy(desc(phases.sequence))
+    .limit(1);
+
   // FieldMap is only meaningful for programme + super admins.
   const showFieldMap = role === "super_admin" || role === "programme_admin";
   const fieldMapSchools = showFieldMap ? await getFieldMapSchools() : [];
@@ -614,10 +631,22 @@ export default async function DashboardPage() {
         <h1 className="serif" style={{ fontSize: 30, marginTop: 4 }}>
           {greeting}, {firstName}.
         </h1>
+        {/* The phase comes from the phases table, by date.
+            This line used to read "Term 2 Week 7 of 12 · RTT Phase 2" for every
+            user on every date, hardcoded -- so the dashboard confidently
+            reported a programme position that was fixed at whatever was true on
+            the day it was typed, and would still say Week 7 in the middle of
+            Phase 3 two years later.
+
+            The phase IS derivable: phases carries start_date and end_date.
+            "Term 2 Week 7 of 12" is NOT -- the terms table has a name and a
+            sequence and no dates at all, so there is nothing to compute a week
+            number from. Rather than swap one invented number for another, that
+            half is dropped. */}
         <p style={{ color: "var(--ink-3)", marginTop: 6 }}>
           {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
-          {" · Term 2 Week 7 of 12 · "}
-          {role === "teacher" ? "RTT Phase 2" : `${roleLabel} view`}
+          {currentPhase ? ` · RTT ${currentPhase.label}` : ""}
+          {role === "teacher" ? "" : ` · ${roleLabel} view`}
         </p>
       </div>
 

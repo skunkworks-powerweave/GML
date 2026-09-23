@@ -27,6 +27,7 @@ import { signOut } from "@/auth";
 import { formatBellBadge, formatQueueLabel, type QueueDepth } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
 import type { Locale } from "@/i18n/config";
+import { Breadcrumbs } from "./Breadcrumbs";
 import { Icon } from "./Icon";
 import LanguagePicker from "./LanguagePicker";
 import { SignOutButton } from "./SignOutButton";
@@ -86,15 +87,23 @@ export async function Topbar({
         backdropFilter: "blur(8px)",
       }}
     >
-      {/* Breadcrumbs */}
-      <nav style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink-2)" }}>
+      {/* Breadcrumbs. An explicit list still wins; otherwise they are derived
+          from the URL, because the layout that renders this cannot see the page
+          below it and so never supplied any. See Breadcrumbs.tsx. */}
+      <nav
+        aria-label="Breadcrumb"
+        style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink-2)" }}
+      >
         {breadcrumbs.length === 0 ? (
-          <span style={{ color: "var(--ink-3)" }}>—</span>
+          <Breadcrumbs />
         ) : (
           breadcrumbs.map((crumb, i) => (
             <span key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {i > 0 ? <span style={{ color: "var(--ink-4)" }}>›</span> : null}
-              <span style={{ color: i === breadcrumbs.length - 1 ? "var(--ink)" : "var(--ink-3)", fontWeight: i === breadcrumbs.length - 1 ? 500 : 400 }}>
+              {i > 0 ? <span aria-hidden="true" style={{ color: "var(--ink-4)" }}>›</span> : null}
+              <span
+                style={{ color: i === breadcrumbs.length - 1 ? "var(--ink)" : "var(--ink-3)", fontWeight: i === breadcrumbs.length - 1 ? 500 : 400 }}
+                aria-current={i === breadcrumbs.length - 1 ? "page" : undefined}
+              >
                 {crumb}
               </span>
             </span>

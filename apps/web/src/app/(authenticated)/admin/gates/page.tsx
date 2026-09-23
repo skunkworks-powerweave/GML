@@ -43,21 +43,25 @@ const GATES: { slug: string; label: string; description: string }[] = [
     description: "Gates /mentorship/* — mentor + admin only.",
   },
   {
-    slug: "tkt",
-    label: "RTT · TKT",
-    description: "Gates /rtt/tkt/* — TKT phase enrollees.",
-  },
-  {
-    slug: "ttt",
-    label: "RTT · TTT",
-    description: "Gates /rtt/ttt/* — TTT phase enrollees.",
-  },
-  {
     slug: "admin",
-    label: "Admin Console",
-    description: "Gates the audit log surface — super_admin only.",
+    label: "Audit log",
+    description: "Gates /admin/audit — the append-only record of every mutation.",
   },
 ];
+
+// `tkt` and `ttt` are DELIBERATELY ABSENT, though they remain members of the
+// section_gate_slug enum.
+//
+// They described themselves as gating /rtt/tkt/* and /rtt/ttt/*. Neither route
+// has ever existed. So this page offered an administrator a Rotate button and a
+// Share button for two passwords that admitted nobody to anything, and reported
+// grant counts for them -- which is worse than omitting them, because rotating
+// a gate is the revocation action, and an operator rotating these in response
+// to a suspected leak would believe they had revoked something.
+//
+// The enum members stay: removing them is a migration, and section_gate_grants
+// rows may reference them historically. What is removed is the UI that implied
+// they were live.
 
 export default async function AdminGatesPage() {
   await requireRole(["super_admin"]);

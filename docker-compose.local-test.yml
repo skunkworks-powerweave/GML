@@ -1,0 +1,50 @@
+# Run the whole stack on a development machine, for manual testing.
+#
+# Combine with docker-compose.local-tls.yml, which publishes Caddy on ports the
+# host can actually bind:
+#
+#   cd D:/GML/lms-app
+#   docker compose -f docker-compose.yml -f docker-compose.local-tls.yml -f docker-compose.local-test.yml up -d
+#
+#   then open https://localhost:9443
+#
+# One line on purpose: backslash continuations are a bash thing and PowerShell
+# would need backticks instead, so a wrapped example only works in one shell.
+#
+# No `DOMAIN=localhost` prefix. DOMAIN already lives in .env, which Compose
+# reads by itself -- and the prefix form is bash-only: PowerShell parses
+# `DOMAIN=localhost docker ...` as a command NAME and fails with
+# "The term 'DOMAIN=localhost' is not recognized". If you ever do need to
+# override it for one run, PowerShell spells that `$env:DOMAIN = "localhost"`
+# on its own line first.
+#
+# ── WHY THE WORKER NEEDS AN OVERRIDE HERE ────────────────────────────────────
+#
+# docker/worker.Dockerfile installs ffmpeg with apt, and on this network apt
+# cannot fetch a single package:
+#
+#   http   499 Request has been forbidden by antivirus
+#   https  certificate verification failed, issuer unknown
+#
+# A corporate antivirus proxy blocks .deb downloads and intercepts TLS with a CA
+# the container does not trust. It is a property of the network, not of the
+# Dockerfile, and it does not exist on EC2 -- but it means the production worker
+# image cannot be built here at all, and without a worker nothing is ever
+# transcoded, so "end to end" would stop at the upload.
+#
+# docker/worker.local-test.Dockerfile is identical except that ffmpeg comes from
+# a published static build instead of apt. Everything downstream -- the queue
+# claim, the lease heartbeat, ffmpeg's arguments, ffprobe, the poster, HLS
+# segmentation, the uploads and every database write -- is the same code.
+#
+# NOT FOR DEPLOYMENT. CI builds the real docker/worker.Dockerfile, on a runner
+# with no antivirus proxy in the way, and that is what gates the shipped image.
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.local-test.Dockerfile
+    # A distinct tag so this image can never be mistaken for the real one, or
+    # picked up by deploy.sh / rollback.sh, which both work on :current.
+    image: gml-lms-worker:local-test

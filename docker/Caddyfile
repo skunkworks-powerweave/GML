@@ -12,6 +12,25 @@
 	# a cron job or a renewal script.
 }
 
+# CONTAINER HEALTH LISTENER.
+#
+# On its own port, with no host matcher, because the site block below matches on
+# Host. The compose healthcheck used to probe http://127.0.0.1:80, whose Host
+# header is "127.0.0.1" -- which matches no site, so Caddy answered 404 and
+# `wget --spider` treated that as failure. The proxy reported `unhealthy`
+# permanently while serving every real request correctly, which is worse than
+# having no healthcheck: it trains an operator to ignore the one signal that
+# would tell them the proxy is genuinely down.
+#
+# Port 2021, not 80: port 80 redirects to HTTPS, so a probe there would chase a
+# certificate the container cannot validate against itself.
+#
+# Not published in compose, so it is reachable only from inside the container.
+:2021 {
+	respond /healthz "ok" 200
+	respond 404
+}
+
 {$DOMAIN:localhost} {
 	encode gzip zstd
 
@@ -51,27 +70,31 @@
 		X-Frame-Options "SAMEORIGIN"
 		Referrer-Policy "strict-origin-when-cross-origin"
 
-		# CONTENT SECURITY POLICY.
+		# CONTENT SECURITY POLICY -- SET BY THE APPLICATION, NOT HERE.
 		#
-		# This is load-bearing rather than hygiene, for a specific reason: the
-		# Supabase auth cookies are NOT httpOnly (that is the library's own
+		# The policy is load-bearing rather than hygiene, for a specific reason:
+		# the Supabase auth cookies are NOT httpOnly (that is the library's own
 		# default, because the browser client reads them to drive the direct
-		# upload). An XSS on this origin therefore yields the access token. The
-		# CSP is what makes that hard to get in the first place.
+		# upload). An XSS on this origin therefore yields the access token, and the
+		# CSP is what makes injecting script hard in the first place.
 		#
-		# connect-src must include the Supabase project origin: the browser
-		# talks directly to Storage for uploads, and fetches HLS segments from
-		# signed Storage URLs. media-src likewise — segments are <video> sources
-		# loaded cross-origin.
+		# NO Content-Security-Policy HERE -- it is issued by apps/web/src/proxy.ts.
 		#
-		# 'unsafe-inline' on style-src is required by Next.js, which emits inline
-		# <style> for critical CSS, and by this codebase's pervasive inline style
-		# attributes. script-src gets NEITHER 'unsafe-inline' NOR 'unsafe-eval':
-		# a production Next build needs neither, and granting them would defeat
-		# the reason this header exists. VERIFY IN A BROWSER after any Next
-		# upgrade -- a CSP violation is silent server-side and shows only as a
-		# console error and a dead page.
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: {$SUPABASE_ORIGIN:https://*.supabase.co}; media-src 'self' blob: {$SUPABASE_ORIGIN:https://*.supabase.co}; connect-src 'self' {$SUPABASE_ORIGIN:https://*.supabase.co} wss://*.supabase.co; font-src 'self' data:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		# This block used to send `script-src 'self'` with no nonce. A production
+		# Next build delivers its RSC flight payload through inline <script>
+		# tags, which `'self'` forbids, so that policy blocked React from ever
+		# hydrating and left the application a dead static shell. Verified
+		# against the built image: six inline scripts on /login, none of which
+		# carried a nonce.
+		#
+		# A nonce must be minted per request, which a static header cannot do.
+		# proxy.ts now generates one, sets it on the request so Next stamps it
+		# onto every script tag it renders, and sets the matching policy on the
+		# response.
+		#
+		# DO NOT reintroduce a CSP here. Two CSP headers are BOTH enforced, and
+		# the intersection of a nonce policy with a nonce-less one blocks
+		# precisely what the nonce exists to allow.
 
 		# Switch off device APIs this product never uses. Without it, any script
 		# that does get through can ask for the camera or the microphone — on a

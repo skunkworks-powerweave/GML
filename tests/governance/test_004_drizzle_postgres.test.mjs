@@ -38,9 +38,14 @@ test("schema/identity.ts declares users as a Supabase-keyed profile table", () =
   // -- the adapter wrote to them and nothing ever read them back -- and
   // password_reset_tokens backed a flow that bcrypt-scanned every live token on
   // an unthrottled endpoint. All four are dropped by _post/003.
+  //
+  // The `\\b` is doubled deliberately. Inside a template literal a single `\b`
+  // is U+0008 (backspace), not a word boundary, so this loop compiled to
+  // /export const accounts\x08/ and could never match any text file: all four
+  // negated assertions passed unconditionally and guarded nothing.
   for (const gone of ["accounts", "authSessions", "verificationTokens", "passwordResetTokens"]) {
     assert.ok(
-      !new RegExp(`export const ${gone}\b`).test(src),
+      !new RegExp(`export const ${gone}\\b`).test(src),
       `${gone} must not be exported — Supabase Auth owns identity now`,
     );
   }

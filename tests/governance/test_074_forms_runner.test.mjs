@@ -127,7 +127,14 @@ test("spec 074 — thanks page is a force-dynamic server component", () => {
 test("spec 074 — thanks page links back to /inbox", () => {
   const src = read(THANKS_PATH);
   assert.match(src, /href="\/inbox"/);
-  assert.match(src, /\/inbox\?filter=forms/);
+  // Was: also required `/inbox?filter=forms`. /inbox implements exactly one
+  // filter value -- `unread` -- and anything else falls through to the "all"
+  // branch, so `filter=forms` was decoration in the URL bar. The test pinned a
+  // parameter that had never done anything.
+  assert.ok(
+    !/\/inbox\?filter=forms/.test(src),
+    "the thanks page must not advertise an inbox filter the inbox does not implement",
+  );
 });
 
 test("spec 074 — thanks page uses GML design tokens (serif, lichen-soft, paper, ink)", () => {

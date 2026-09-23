@@ -10,6 +10,7 @@
 // automatically rather than each page having to remember it.
 
 import type { ReactNode } from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { assertSectionGate } from "@/lib/gates";
@@ -18,7 +19,13 @@ export default async function ObservationGateLayout({ children }: { children: Re
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  await assertSectionGate(session.user.id, "observation", "/observation");
+  // Return the user to the page they ASKED for after unlocking, not to the
+  // section root. Following a link to a specific cycle, entering the password
+  // and landing on the index instead -- with no indication of why -- reads as
+  // the link having been wrong. x-pathname is set by proxy.ts, which runs on
+  // every request; the "/observation" fallback covers the case where it is absent.
+  const requested = (await headers()).get("x-pathname") ?? "/observation";
+  await assertSectionGate(session.user.id, "observation", requested);
 
   return <>{children}</>;
 }

@@ -22,29 +22,19 @@
 // can't quietly enable them without also touching the zod allow-list.
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
 import { systemSettings, SYSTEM_SETTINGS_ID, auditLog } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { NOTIFICATION_CATEGORIES, NOTIFICATION_KEYS } from "@/lib/notification-kinds";
 
 export const dynamic = "force-dynamic";
 
-// Notification catalog — keep in sync with /api/admin/system-settings route.
-const NOTIFICATION_CATEGORIES: Array<{ key: string; label: string; hint: string }> = [
-  { key: "cycle.assigned", label: "Cycle assigned", hint: "Observer/mentor notified when a new cycle is created" },
-  { key: "cycle.complete", label: "Cycle complete", hint: "All parties notified when a cycle closes" },
-  { key: "video.transcoded", label: "Video transcoded", hint: "Uploader notified when ffmpeg pipeline finishes" },
-  { key: "video.review_pending", label: "Video review pending", hint: "Programme admin alerted on quality flags" },
-  { key: "meeting.scheduled", label: "Meeting scheduled", hint: "Mentor + teacher receive calendar entry" },
-  { key: "meeting.cancelled", label: "Meeting cancelled", hint: "Both parties notified of cancellations" },
-  { key: "digest.weekly", label: "Weekly digest", hint: "Friday roll-up across all activities" },
-];
-
 // Same enums the route enforces — duplicated here for the zod parse on the action side.
 const VIDEO_QUALITIES = ["480p"] as const;
-const NOTIFICATION_KEYS = NOTIFICATION_CATEGORIES.map((c) => c.key) as [string, ...string[]];
 
 const ServerActionSchema = z.object({
   programmeName: z.string().min(1).max(200),
@@ -76,17 +66,28 @@ async function updateSystemSettings(formData: FormData) {
   });
 
   if (!parsed.success) {
-    // Server actions don't have a great error-channel surface in plain forms; the
-    // page re-renders with the previous values via the redirect-back convention.
-    // We still record the failure for the audit trail so an operator can see what
-    // happened.
+    // TELL THE OPERATOR. This used to `return` silently.
+    //
+    // The comment here said server actions have no good error channel and that
+    // the page "re-renders with the previous values" -- which it does, and that
+    // is exactly the problem: a rejected save looked identical to a successful
+    // one. Type 2026 instead of 2026-27, press Save, and the page comes back
+    // with the old value and no message. The only trace was an audit row.
+    // Anyone would conclude the setting had saved.
+    //
+    // A redirect back with a code is the error channel a plain <form action>
+    // does have, and it is what the rest of this codebase already uses.
+    const detail = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "field"}: ${i.message}`)
+      .join("; ")
+      .slice(0, 300);
     void recordAudit({
       action: "system_settings.update",
       entityType: "system_settings",
       entityId: SYSTEM_SETTINGS_ID,
       metadata: { error: "validation_failed", issues: parsed.error.issues },
     });
-    return;
+    redirect(`/admin/system-settings?error=${encodeURIComponent(detail)}`);
   }
 
   await db
@@ -105,7 +106,15 @@ async function updateSystemSettings(formData: FormData) {
   revalidatePath("/admin/system-settings");
 }
 
-export default async function SystemSettingsPage() {
+export default async function SystemSettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ error?: string }>;
+}) {
+  // The reason a save was rejected, echoed back by updateSystemSettings. It
+  // used to return silently and the page redisplayed the old value, so a
+  // refused save was indistinguishable from an accepted one.
+  const settingsError = ((await searchParams) ?? {}).error?.slice(0, 300) ?? null;
   await requireRole(["super_admin"]);
 
   // SM-1 view-side audit — record that an admin opened this surface. The query
@@ -145,7 +154,14 @@ export default async function SystemSettingsPage() {
     academicYear: "2026-27",
     videoDefaultQuality: "480p" as const,
     videoMaxUploadMb: 500,
-    notificationsEnabled: ["cycle.assigned", "video.transcoded", "meeting.scheduled"],
+    // helpdesk.ticket is on by default because it is the only kind the
+    // application emits; omitting it would leave the bell at zero out of the box.
+    notificationsEnabled: [
+      "cycle.assigned",
+      "video.transcoded",
+      "meeting.scheduled",
+      "helpdesk.ticket",
+    ],
     backupRetentionDays: 14,
     updatedAt: null,
   };
@@ -153,6 +169,15 @@ export default async function SystemSettingsPage() {
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
+      {settingsError ? (
+        <div
+          role="alert"
+          data-testid="settings-error"
+          className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
+        >
+          <strong className="font-semibold">Nothing was saved.</strong> {settingsError}
+        </div>
+      ) : null}
       <header>
         <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
           System

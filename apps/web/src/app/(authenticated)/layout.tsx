@@ -2,6 +2,7 @@
 // shell (desktop sidebar or mobile bottom tabs) based on device detection.
 // Routes outside this group (e.g. /login, /gate/[slug]) render without chrome.
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { eq } from "drizzle-orm";
@@ -29,6 +30,7 @@ import {
   loadQueueDepth,
 } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
+import { activeNavIdFor, activeTabIdFor } from "@/config/nav";
 
 // Spec 088 — every authenticated route renders the AntiDownloadGuard alongside
 // the shell. The guard is a 'use client' island that attaches global keydown
@@ -91,23 +93,29 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   const htmlLang = LOCALE_HTML_LANG[locale];
   const ftuxSeenAt = prefRow?.ftuxSeenAt ? prefRow.ftuxSeenAt.toISOString() : null;
 
-  // Spec 122 — helpdesk contact details for the "Talk to a person" card.
-  // We fall back to existing env contracts (WHATSAPP_PHONE_NUMBER_ID,
-  // SMTP_FROM) so no new env vars are required to ship this spec, but a
-  // deployment may set GML_HELPDESK_PHONE / GML_HELPDESK_EMAIL to override.
+  // Helpdesk contact details for the "Talk to a person" card.
   //
-  // Spec 169 — the GML_* overrides are now validated by assertEnv() before
-  // they reach the UI. A set-but-invalid value (typo, missing `+`, stray
-  // whitespace) is logged SEVERE in production and surfaced to consumers
-  // as `null` so the affected affordance hides instead of rendering a
-  // broken wa.me / mailto link. The legacy fallbacks (WHATSAPP_PHONE_NUMBER_ID,
-  // SMTP_FROM) are kept unchanged for backwards compat with deployments
-  // that haven't migrated to the GML_HELPDESK_* names yet.
+  // Spec 169 — the GML_* values are validated by assertEnv() before they reach
+  // the UI. A set-but-invalid value (typo, missing `+`, stray whitespace) is
+  // logged SEVERE in production and surfaced as `null`, so the affordance hides
+  // rather than rendering a broken wa.me / mailto link.
+  //
+  // The SMTP_FROM fallback that used to sit on `email` is GONE. Outbound email
+  // moved to Supabase, so SMTP_FROM is set nowhere in this application's
+  // environment and the fallback could never be satisfied -- it read as a
+  // working default while always resolving to null.
+  //
+  // The WHATSAPP_PHONE_NUMBER_ID fallback is gone for a different reason: it
+  // was never a phone number. It is Meta's opaque account identifier for the
+  // Cloud API -- fifteen digits, which is why it survived every "is this
+  // numeric" check -- and rendering it into a wa.me link sent anyone who
+  // clicked the helpdesk contact to an account that does not exist. Compose
+  // still passes the variable because the WEBHOOK needs it; the UI must not
+  // treat it as dialable.
   const envSummary = assertEnv();
   const helpdeskContact = {
-    whatsappPhone:
-      envSummary.helpdeskPhone.value ?? process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
-    email: envSummary.helpdeskEmail.value ?? process.env.SMTP_FROM ?? null,
+    whatsappPhone: envSummary.helpdeskPhone.value ?? null,
+    email: envSummary.helpdeskEmail.value ?? null,
   };
 
   // Spec 128 — dynamic chrome counts. Each loader is React.cache'd so calling
@@ -120,8 +128,22 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
     loadQueueDepth(),
   ]);
 
+  // WHICH NAV ITEM IS CURRENT.
+  //
+  // Both shells have always accepted an active-item id and forwarded it to
+  // Sidebar / BottomTabs, and no caller ever supplied one -- so `isActive` was
+  // false for every item on every page and nothing in the chrome ever showed
+  // where the user was. A layout cannot read the URL, which is why it was never
+  // wired; proxy.ts now sets x-pathname on every request, so it can.
+  const pathname = (await headers()).get("x-pathname");
+
   const content = device === "mobile" ? (
-    <MobileShell user={user} navCounts={navCounts} unreadCount={unreadCount}>
+    <MobileShell
+      user={user}
+      navCounts={navCounts}
+      unreadCount={unreadCount}
+      activeTab={activeTabIdFor(user.role, pathname)}
+    >
       {children}
     </MobileShell>
   ) : (
@@ -131,6 +153,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       unreadCount={unreadCount}
       queueDepth={queueDepth}
       locale={locale}
+      activeNavId={activeNavIdFor(user.role, pathname)}
     >
       {children}
     </DesktopShell>

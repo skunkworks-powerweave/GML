@@ -35,13 +35,22 @@ export const systemSettings = pgTable(
     academicYear: varchar("academic_year", { length: 16 }).notNull().default("2026-27"),
     videoDefaultQuality: varchar("video_default_quality", { length: 8 }).notNull().default("480p"),
     videoMaxUploadMb: integer("video_max_upload_mb").notNull().default(500),
-    // Categories the admin has enabled for notification delivery. Defaults to the three
-    // operational events the prototype shows pre-checked: cycle nominated, video transcoded,
-    // meeting scheduled. Extra categories (digest, reminders) are off by default.
+    // Categories the admin has enabled for notification delivery. Extra categories
+    // (digest, reminders) are off by default.
+    //
+    // `helpdesk.ticket` MUST be in this default. It is the only kind anything in
+    // the application actually writes, and the bell counts unread rows filtered
+    // by this array -- so a default without it means every fresh deployment
+    // ships a bell that can never be anything but zero, while help requests pile
+    // up unseen in the inbox. See _post/006 for the same fix applied to rows
+    // already written, and apps/web/src/lib/notification-kinds.ts for the
+    // catalogue this must remain a subset of.
     notificationsEnabled: jsonb("notifications_enabled")
       .$type<string[]>()
       .notNull()
-      .default(sql`'["cycle.assigned","video.transcoded","meeting.scheduled"]'::jsonb`),
+      .default(
+        sql`'["helpdesk.ticket","cycle.assigned","video.transcoded","meeting.scheduled"]'::jsonb`,
+      ),
     backupRetentionDays: integer("backup_retention_days").notNull().default(14),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

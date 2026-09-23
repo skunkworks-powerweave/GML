@@ -166,8 +166,15 @@ export default async function TeachBackQueuePage({
             lichen.
           </p>
         </div>
+        {/* Points at THIS queue's pending filter, not /videos?status=review_pending.
+            `review_pending` is a member of the video_status enum that nothing in
+            the codebase has ever written -- the worker writes ready/failed and
+            the webhook writes received -- so /videos filtered on it returned an
+            empty list every time. Review state is a timestamp (reviewed_at,
+            migration 0022), which /videos cannot express and this page already
+            reads correctly. */}
         <Link
-          href="/videos?status=review_pending"
+          href="/rtt/teach-back?status=review_pending"
           style={{
             padding: "7px 12px",
             background: "var(--card-hi)",
@@ -178,7 +185,7 @@ export default async function TeachBackQueuePage({
             textDecoration: "none",
           }}
         >
-          All review-pending videos
+          All pending review
         </Link>
       </header>
 

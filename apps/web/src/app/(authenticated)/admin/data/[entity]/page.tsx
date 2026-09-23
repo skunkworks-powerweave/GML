@@ -50,11 +50,13 @@ import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
+import { ImportCsv } from "./import-csv";
 import {
   BulkDeleteToolbar,
   BulkRowCheckbox,
@@ -182,7 +184,26 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   if (!entity) notFound();
 
   // Role gate — readRoles guards the page; mutateRoles enforced in actions.ts.
-  await requireRole(entity.readRoles);
+  const session = await requireRole(entity.readRoles);
+
+  // Can THIS caller actually export?
+  //
+  // exportCsv re-gates PII-bearing entities to super_admin specifically, per
+  // SM-9 -- but the button was rendered to anyone who could read the grid. So a
+  // programme_admin on /admin/data/learners was shown "Export CSV", clicked it,
+  // and was navigated away to /forbidden. Offering an action and then refusing
+  // it reads as a broken permission rather than a deliberate one.
+  const canExport =
+    !(entity.piiAudited && entity.slug === "learners") ||
+    session.user.role === "super_admin";
+
+  // Same reasoning as canExport, in the other direction: readRoles gets you
+  // onto this page, mutateRoles is what the import endpoint enforces. Rendering
+  // "Import CSV" to an observer who can only read the grid would offer an
+  // action that answers 403.
+  // Mirrors the endpoint's own fallback exactly (mutateRoles ?? readRoles);
+  // if these two ever disagree the button lies about what will happen.
+  const canImport = hasAnyRole(session.user.role, entity.mutateRoles ?? entity.readRoles);
 
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
@@ -202,12 +223,36 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const filters = extractFilters(sp);
   const columnsByKey = new Map(entity.displayColumns.map((c) => [c.key, c]));
   const tableColumns = entity.table as unknown as Record<string, unknown>;
+  // UNWRAP BEFORE READING THE SHAPE.
+  //
+  // `_def.shape` exists on a ZodObject and on nothing else. Three entities --
+  // resources, sessions and subjects -- declare their schema as
+  // `z.object({...}).refine(...)`, which produces a ZodEffects WRAPPING the
+  // object, so `_def.shape` was undefined, `formShape` fell back to `{}`, and
+  // every column filter on those three entities hit the "unknown column type"
+  // branch and was silently discarded. The filter box accepted input, the URL
+  // changed, the audit row recorded the intent -- and the grid returned the
+  // unfiltered table. Exactly the entities whose tables are largest.
+  //
+  // `.refine()` can nest, so this unwraps to a fixed point rather than one
+  // level. ZodDefault / ZodOptional are handled for the same reason.
   const formShape = (() => {
-    const defShape = (entity.formSchema._def as unknown as {
-      shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny>;
-    }).shape;
-    const raw = typeof defShape === "function" ? defShape() : defShape;
-    return (raw ?? {}) as Record<string, z.ZodTypeAny>;
+    let schema: z.ZodTypeAny = entity.formSchema as unknown as z.ZodTypeAny;
+    for (let depth = 0; depth < 10; depth++) {
+      const def = schema._def as unknown as {
+        shape?: (() => Record<string, z.ZodTypeAny>) | Record<string, z.ZodTypeAny>;
+        schema?: z.ZodTypeAny;
+        innerType?: z.ZodTypeAny;
+      };
+      if (def.shape) {
+        const raw = typeof def.shape === "function" ? def.shape() : def.shape;
+        return (raw ?? {}) as Record<string, z.ZodTypeAny>;
+      }
+      const inner = def.schema ?? def.innerType;
+      if (!inner) break;
+      schema = inner;
+    }
+    return {} as Record<string, z.ZodTypeAny>;
   })();
   const whereClauses: SQL[] = [];
   const appliedFilters: Record<string, string> = {};
@@ -343,8 +388,31 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     .map((r) => (r.id != null ? String(r.id) : ""))
     .filter(Boolean);
 
+  // Failures from deleteRowAction / bulkDeleteAction, which used to be
+  // swallowed into console.error while the page revalidated and re-rendered
+  // the undeleted row -- so the button looked broken rather than refused.
+  const rawError = typeof sp.error === "string" ? sp.error : undefined;
+  const GRID_ERRORS: Record<string, string> = {
+    still_referenced:
+      "That row can't be deleted because other records still reference it. Remove or reassign those first.",
+    duplicate: "That change conflicts with an existing row.",
+    delete_failed: "That delete could not be completed. Nothing was changed.",
+  };
+  const gridError = rawError
+    ? (GRID_ERRORS[rawError] ?? "That action could not be completed.")
+    : null;
+
   return (
     <main className="mx-auto max-w-6xl p-6">
+      {gridError ? (
+        <div
+          role="alert"
+          data-testid="grid-error"
+          className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
+        >
+          {gridError}
+        </div>
+      ) : null}
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <p className="text-xs uppercase tracking-wide text-neutral-500">
@@ -352,13 +420,27 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
           </p>
           <h1 className="text-2xl font-semibold">{entity.label}</h1>
         </div>
-        <div className="flex items-center gap-3 text-xs text-neutral-500">
+        <div className="relative flex items-center gap-3 text-xs text-neutral-500">
           <span>Page {pageNum} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>
-          <a
-            href={`/api/admin/data/${slug}/export`}
-            className="rounded-md border border-neutral-300 bg-white px-2 py-1 hover:border-neutral-400"
-            title="Download CSV"
-          >Export CSV</a>
+          {canImport ? (
+            <ImportCsv
+              entitySlug={slug}
+              entityLabel={entity.label}
+              acceptedColumns={[...entity.formFields]}
+            />
+          ) : null}
+          {canExport ? (
+            <a
+              href={`/api/admin/data/${slug}/export`}
+              className="rounded-md border border-neutral-300 bg-white px-2 py-1 hover:border-neutral-400"
+              title="Download CSV"
+            >Export CSV</a>
+          ) : (
+            <span
+              className="rounded-md border border-neutral-200 px-2 py-1 text-neutral-400"
+              title="Exporting learner records requires a super administrator"
+            >Export CSV</span>
+          )}
         </div>
       </header>
 

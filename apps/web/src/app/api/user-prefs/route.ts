@@ -53,7 +53,20 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "validation_failed", issues: parse.error.issues }, { status: 400 });
   }
   const patch = parse.data;
-  const ftuxSeenAt = patch.ftuxSeenAt ? new Date(patch.ftuxSeenAt) : undefined;
+  // NULL MUST SURVIVE AS NULL.
+  //
+  // This read `patch.ftuxSeenAt ? new Date(...) : undefined`, and Drizzle's
+  // mapUpdateSet DROPS undefined entries -- so an explicit null, which is how
+  // the "Replay tour" button asks for the timestamp to be cleared, was turned
+  // into "don't touch this column". The button reported success and the tour
+  // never replayed. Distinguishing "absent" (leave alone) from "null" (clear)
+  // is the whole contract of a PATCH-shaped endpoint.
+  const ftuxSeenAt =
+    patch.ftuxSeenAt === undefined
+      ? undefined
+      : patch.ftuxSeenAt === null
+        ? null
+        : new Date(patch.ftuxSeenAt);
 
   // Upsert
   await db

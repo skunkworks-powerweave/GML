@@ -156,13 +156,52 @@ test("spec 140 — each seed file declares a CANONICAL_FIELD_KINDS allow-list", 
   }
 });
 
-test("spec 140 — each seed file declares an assertCanonicalFieldKinds guard function", () => {
+test("spec 140 — each seed file declares a canonicalising guard function", () => {
+  // Renamed from assertCanonicalFieldKinds in two of the four files, because
+  // those two guards do not assert -- they MAP, or rather they were supposed to
+  // and did not. See the next test for what that cost. The mentor and
+  // observation seeds keep the original name because theirs genuinely only
+  // validates: those files already author their fields in canonical shape.
   for (const path of SEED_PATHS) {
     const src = read(path);
     assert.match(
       src,
-      /function\s+assertCanonicalFieldKinds\b/,
-      `${path} must declare an assertCanonicalFieldKinds(...) guard function`,
+      /function\s+(assertCanonicalFieldKinds|toCanonicalFields)\b/,
+      `${path} must declare a canonical-field guard`,
+    );
+  }
+});
+
+test("spec 140 — a guard that MAPS must apply the mapping, not just compute it", () => {
+  // THE BUG THIS TEST EXISTS FOR.
+  //
+  // seed_forms_mentee.ts and seed_forms_misc.ts each declare a
+  // <own vocabulary> -> canonical lookup, and each guard computed `mapped` for
+  // every field, checked it was non-null, and then returned the rows
+  // UNCHANGED. The mapping was validated and thrown away, so the rows reached
+  // the database still keyed {id, type} / {id, kind}, with kind values like
+  // "boolean-group" that no renderer knows -- while every renderer and
+  // lib/forms/validate.ts read {name, kind}.
+  //
+  // The consequences were total, not partial: `kind` was undefined so the
+  // renderer's ladder fell through to its text fallback (a five-point Likert
+  // rendered as a text box), and `name` was undefined so EVERY input on the
+  // form shared one FormData key and collapsed into a single unnamed textbox.
+  // Required-ness was unenforceable, because validate.ts keys on field.name.
+  //
+  // Every mentee-audience form and both school-visit forms were affected, and
+  // the guard written to prevent exactly this class of drift is what hid it.
+  for (const path of [MENTEE_PATH, MISC_PATH]) {
+    const src = read(path);
+    assert.match(
+      src,
+      /name:\s*field\.id/,
+      `${path} must emit a canonical name from its own id field`,
+    );
+    assert.match(
+      src,
+      /fields:\s*mappedFields/,
+      `${path} must return rows carrying the MAPPED fields, not the originals`,
     );
   }
 });
@@ -175,7 +214,7 @@ test("spec 140 — the guard warns-and-skips invalid rows (console.warn pattern)
     const src = read(path);
     assert.match(
       src,
-      /assertCanonicalFieldKinds[\s\S]*?console\.warn/,
+      /(assertCanonicalFieldKinds|toCanonicalFields)[\s\S]*?console\.warn/,
       `${path} assertCanonicalFieldKinds must log a console.warn for dropped rows`,
     );
   }
@@ -188,9 +227,9 @@ test("spec 140 — each seed file invokes the guard at its top-level array decla
   // insert loop. Each file wires it at the canonical seed-array declaration.
   const wiringExpectations = [
     { path: MENTOR_PATH, regex: /const\s+FORMS[\s\S]{0,100}=\s*assertCanonicalFieldKinds\(/ },
-    { path: MENTEE_PATH, regex: /const\s+ROWS[\s\S]{0,100}=\s*assertCanonicalFieldKinds\(/ },
+    { path: MENTEE_PATH, regex: /const\s+ROWS[\s\S]{0,100}=\s*toCanonicalFields\(/ },
     { path: OBS_PATH, regex: /const\s+TEMPLATES[\s\S]{0,100}=\s*assertCanonicalFieldKinds\(/ },
-    { path: MISC_PATH, regex: /const\s+ROWS[\s\S]{0,100}=\s*assertCanonicalFieldKinds\(/ },
+    { path: MISC_PATH, regex: /const\s+ROWS[\s\S]{0,100}=\s*toCanonicalFields\(/ },
   ];
   for (const { path, regex } of wiringExpectations) {
     const src = read(path);

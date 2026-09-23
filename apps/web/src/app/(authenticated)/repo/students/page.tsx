@@ -23,6 +23,7 @@ import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit, recordAuditDedup } from "@/lib/audit";
+import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
@@ -34,9 +35,6 @@ const PAGE_SIZE = 100;
 // searching for a literal underscore in a learner name doesn't trigger a
 // single-char wildcard match.
 const SEARCH_Q_MAX = 200;
-function escapeIlike(s: string): string {
-  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-}
 
 type PageProps = {
   searchParams: Promise<{ page?: string; school?: string; q?: string }>;

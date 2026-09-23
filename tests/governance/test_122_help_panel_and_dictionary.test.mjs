@@ -223,10 +223,25 @@ test("spec 122 — (authenticated)/layout.tsx mounts <HelpPanel> globally", () =
   const src = read(LAYOUT);
   assert.match(src, /from\s+["']@\/components\/help\/HelpPanel["']/, "layout must import HelpPanel");
   assert.match(src, /<HelpPanel/, "layout must render <HelpPanel> at the route-group root");
-  // The contact prop is built from GML_HELPDESK_* env vars with sensible fallbacks.
-  assert.match(src, /GML_HELPDESK_PHONE/, "layout must read GML_HELPDESK_PHONE");
-  assert.match(src, /GML_HELPDESK_EMAIL/, "layout must read GML_HELPDESK_EMAIL");
+  // The contact prop is built from the GML_HELPDESK_* variables, THROUGH
+  // assertEnv().
+  //
+  // The old assertions matched the literal strings GML_HELPDESK_PHONE and
+  // GML_HELPDESK_EMAIL in the layout's own source. That stopped being the right
+  // place to look once the layout started reading them through assertEnv(),
+  // which validates them: the names now live in lib/env.ts and the layout's
+  // only remaining mention of them was a comment -- so the test was pinning
+  // prose, and would have passed just as happily if the comment were the only
+  // thing left.
+  //
+  // Pinned instead: the layout goes through assertEnv(), and lib/env.ts is
+  // where the variable names are read. Together that is the same contract,
+  // checked where it is actually implemented.
+  assert.match(src, /assertEnv\(\)/, "layout must read helpdesk config through assertEnv()");
   assert.match(src, /helpdeskContact/, "layout must lift the contact object into a local const");
+  const envSrc = read("apps/web/src/lib/env.ts");
+  assert.match(envSrc, /GML_HELPDESK_PHONE/, "lib/env.ts must read GML_HELPDESK_PHONE");
+  assert.match(envSrc, /GML_HELPDESK_EMAIL/, "lib/env.ts must read GML_HELPDESK_EMAIL");
 });
 
 test("spec 122 — useHelpShortcut hook listens for ? and respects input focus", () => {

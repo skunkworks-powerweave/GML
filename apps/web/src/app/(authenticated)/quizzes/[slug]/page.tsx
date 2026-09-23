@@ -182,8 +182,10 @@ export async function submitQuizAttempt(
 
 export default async function QuizRunnerPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<{ error?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -245,6 +247,52 @@ export default async function QuizRunnerPage({
     .values({ quizId: quiz.id, userId: session.user.id })
     .onConflictDoNothing();
 
+  // THE COUNTDOWN MUST CONTINUE THE ATTEMPT, NOT RESTART IT.
+  //
+  // The runner was handed `timeLimitSeconds` and nothing else, so it started a
+  // fresh countdown from the FULL limit on every render -- while the server
+  // measures elapsed time from quiz_attempts.startedAt, which is set once when
+  // the attempt opens. A learner who reloaded the page, lost their connection
+  // and came back, or simply reopened the tab saw the whole time again,
+  // answered in good faith, and was rejected with ?error=time_expired at
+  // submit. On a Ladakh connection a dropped page is ordinary, so this is the
+  // normal path, not an edge case.
+  //
+  // Reading the attempt back and passing what is actually LEFT makes the
+  // countdown agree with the rule it is displaying. Clamped at zero rather
+  // than going negative, and the +30s grace mirrors the submit-side margin so
+  // a learner is never shown less time than the server will honour.
+  let remainingSeconds: number | null = quiz.timeLimitSeconds ?? null;
+  if (remainingSeconds != null) {
+    // Elapsed time comes from POSTGRES, not from this process.
+    //
+    // started_at is a database timestamp, so measuring against the app
+    // server's clock introduces a second source of truth that drifts -- and on
+    // a countdown a learner is being graded against, drift means being cut off
+    // early. now() - started_at uses one clock for both ends. It also keeps
+    // this Server Component free of Date.now(), which React's purity rule
+    // flags in a component body.
+    const [attempt] = await db
+      .select({
+        elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::int`,
+      })
+      .from(quizAttempts)
+      .where(
+        and(
+          eq(quizAttempts.quizId, quiz.id),
+          eq(quizAttempts.userId, session.user.id),
+          isNull(quizAttempts.closedAt),
+        ),
+      )
+      .limit(1);
+    if (attempt) {
+      remainingSeconds = Math.max(
+        0,
+        Math.round(remainingSeconds + 30 - (attempt.elapsedSeconds ?? 0)),
+      );
+    }
+  }
+
   // Spec 134 — device-aware runner. Mobile gets the full-screen
   // one-question-per-screen layout from mobile-runners.jsx::MobQuiz.
   // Same grading contract (submitQuizAttempt) — drop-in replacement.
@@ -260,11 +308,48 @@ export default async function QuizRunnerPage({
   // and the legacy seed quizzes all carry NULL, so this prop is opt-in
   // and existing learners see no change. When set, the runner renders
   // a countdown banner and auto-submits at 00:00.
-  const timeLimitSeconds = quiz.timeLimitSeconds ?? null;
+  // The countdown the runner renders: seconds REMAINING on the open attempt,
+  // not the quiz's full limit. See the attempt read above.
+  const timeLimitSeconds = remainingSeconds;
+
+  // RENDER THE REASON WE BOUNCED THEM BACK.
+  //
+  // submitQuizAttempt redirects here with ?error= when an attempt is refused,
+  // and this page did not read searchParams at all — so a learner who ran out
+  // of time or used their last attempt was silently returned to the quiz with
+  // no explanation, looking at the questions they had just answered. They would
+  // reasonably try again, and be refused again, with no way to find out why.
+  const sp = searchParams ? await searchParams : {};
+  const QUIZ_ERRORS: Record<string, string> = {
+    time_expired:
+      "Your time ran out before the answers reached us, so this attempt was not scored.",
+    attempts_exhausted: "You have used all your attempts at this quiz.",
+    not_found: "That quiz is no longer available.",
+  };
+  const errorMessage = sp.error ? QUIZ_ERRORS[sp.error] ?? null : null;
+
+  const errorBanner = errorMessage ? (
+    <p
+      role="alert"
+      data-testid="quiz-error"
+      style={{
+        margin: "12px 16px 0",
+        padding: "10px 12px",
+        border: "1px solid var(--saffron)",
+        background: "var(--saffron-soft)",
+        borderRadius: "var(--r-2, 8px)",
+        fontSize: 13,
+        lineHeight: 1.5,
+      }}
+    >
+      {errorMessage}
+    </p>
+  ) : null;
 
   if (device === "mobile") {
     return (
       <main>
+        {errorBanner}
         <MobileQuizRunner
           slug={slug}
           title={quiz.title}
@@ -278,6 +363,7 @@ export default async function QuizRunnerPage({
 
   return (
     <main>
+      {errorBanner}
       <div className="page-header" style={{ paddingBottom: 0 }}>
         <Link
           href="/dashboard"
