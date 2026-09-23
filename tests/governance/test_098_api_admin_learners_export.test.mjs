@@ -14,6 +14,17 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
+/**
+ * Comments stripped, so prose about a construct is not evidence the construct
+ * is there. The audit-shape assertion below used to match the comment at
+ * route.ts:95 that records the `void recordAudit(...)` → captured-boolean
+ * upgrade, which meant it could not have failed if the audit call were deleted.
+ * The `[^:]` guard keeps a "https://" inside a string from reading as a
+ * comment start.
+ */
+const code = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
 const ROUTE_PATH = "apps/web/src/app/api/admin/learners/export/route.ts";
 
 test("spec 098 — route file exists at /api/admin/learners/export", () => {
@@ -91,8 +102,16 @@ test("spec 098 — SM-9 audit hook fires learners.bulk_export with rowCount + pi
   assert.match(src, /piiAudited:\s*true/);
   assert.match(src, /rowCount/);
   assert.match(src, /schoolFilter/);
-  // Best-effort `void` so audit failure never blocks the 200.
-  assert.match(src, /void\s+recordAudit/);
+  // Best-effort with respect to the 200: audit failure never blocks the CSV.
+  // Spec 167 replaced the `void recordAudit(...)` shape with a captured-boolean
+  // `const auditOk = await recordAudit(...)` so noteAuditDegraded can flag a
+  // broken channel, so accept either — matched against the comment-stripped
+  // view, because the only `void recordAudit` text left in this route is the
+  // comment describing that upgrade.
+  assert.match(
+    code(src),
+    /(?:void\s+recordAudit|const\s+auditOk\s*=\s*await\s+recordAudit)/,
+  );
 });
 
 test("spec 098 — response is text/csv with attachment Content-Disposition", () => {

@@ -85,7 +85,7 @@ test("spec 111: smoke FAILS when the target is unreachable", () => {
       "without testing a thing.",
   );
   assert.ok(
-    !/t\.skip\s*\(|ctx\.skip\s*\(/.test(src),
+    !/t\.skip\s*\(|ctx\.skip\s*\(/.test(src),
     "no per-test skip path may return -- it is what made the suite unfalsifiable",
   );
 });
@@ -124,15 +124,43 @@ test("spec 111: top-level package.json has a 'test:smoke' script", () => {
 
 test("spec 111: default 'test' script does NOT run the smoke folder", () => {
   const pkg = JSON.parse(read(PKG));
-  const defaultTest = pkg.scripts.test ?? "";
-  // Either the default test glob narrows to governance/, or it explicitly
-  // excludes integration/. We accept either pattern but require one of them
-  // so `pnpm test` doesn't try to hit a live stack.
-  const narrowsToGovernance = /tests\/governance/.test(defaultTest);
-  const excludesIntegration = !/tests\/integration/.test(defaultTest);
+
+  // ── WHY THIS RESOLVES THE SCRIPT CHAIN ────────────────────────────────────
+  //
+  // This used to regex `pkg.scripts.test` for the literal "tests/governance".
+  // That pinned ONE IMPLEMENTATION of the property rather than the property:
+  // the moment `test` became a fan-out (`pnpm run test:governance && pnpm run
+  // test:scripts`) the assertion failed, though the thing it exists to prevent
+  // -- `pnpm test` reaching for a live stack -- was still true.
+  //
+  // Worse, it failed OPEN in the other direction: `test: "pnpm run everything"`
+  // where `everything` ran tests/integration would have passed the old check,
+  // because the forbidden string was not in the `test` field itself.
+  //
+  // So: resolve `pnpm run <name>` / `npm run <name>` transitively and assert
+  // over the whole closure. Following the indirection is what makes this a
+  // guard rather than a spelling check.
+  const scripts = pkg.scripts ?? {};
+  const resolved = new Set();
+  const commands = [];
+  const walk = (name) => {
+    if (resolved.has(name)) return; // cycles and diamonds
+    resolved.add(name);
+    const body = scripts[name] ?? "";
+    commands.push(body);
+    for (const m of body.matchAll(/(?:pnpm|npm|yarn)\s+run\s+([\w:-]+)/g)) walk(m[1]);
+  };
+  walk("test");
+  const closure = commands.join(" ; ");
+
   assert.ok(
-    narrowsToGovernance && excludesIntegration,
-    "default `pnpm test` must not match tests/integration/ (smoke is opt-in via test:smoke). Current: " + defaultTest,
+    /tests\/governance/.test(closure),
+    `\`pnpm test\` must run the governance suite somewhere in its chain. Resolved: ${closure}`,
+  );
+  assert.ok(
+    !/tests\/integration/.test(closure),
+    `\`pnpm test\` must not reach tests/integration -- smoke needs a running deployment and is opt-in via test:smoke. ` +
+      `Resolved chain (${[...resolved].join(" -> ")}): ${closure}`,
   );
 });
 

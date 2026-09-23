@@ -80,7 +80,7 @@ test("spec 145 — nothing mints or verifies a media token any more", () => {
   // future contributor reintroducing "just a small signed URL helper" beside
   // the real authorization check.
   const offenders = sourceFiles(["apps/web/src", "apps/worker/src", "packages/shared/src"])
-    .filter((f) => /(signMediaToken|verifySignedToken|ipToBindKey)/.test(code(read(f))));
+    .filter((f) => /\b(signMediaToken|verifySignedToken|ipToBindKey)\b/.test(code(read(f))));
   assert.deepEqual(
     offenders,
     [],

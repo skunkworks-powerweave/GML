@@ -57,7 +57,44 @@ HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-3}"
 log() { echo "[deploy] $(date -Iseconds) — $*"; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 
+# DRY RUN — resolve configuration, print it, and stop.
+#
+# Deliberately placed before every check below so it needs no .env, no docker
+# and no network: tests/scripts/deploy-sh.test.mjs uses it to prove that every
+# variable this script later dereferences is actually DEFINED. Under
+# `set -euo pipefail` an undefined one aborts here instead of halfway through a
+# production deploy. `bash -n` cannot see that; only running it can.
+if [ -n "${DEPLOY_DRY_RUN:-}" ]; then
+  echo "HEALTH_URL=${HEALTH_URL}"
+  echo "HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS}"
+  echo "HEALTH_INTERVAL_SECONDS=${HEALTH_INTERVAL_SECONDS}"
+  exit 0
+fi
+
 # ── 0. Preflight ─────────────────────────────────────────────────────────────
+
+# THE HOST TOOLCHAIN, CHECKED BEFORE ANYTHING IS BUILT.
+#
+# This script needs three host binaries and used to check for none of them:
+#
+#   docker  obvious, and its absence fails obviously.
+#   node    the SM-5 restore-drill gate below is a plain `node` invocation,
+#           under `set -euo pipefail`, BEFORE the first `docker compose build`.
+#           On a host without node the deploy died there with 127 having built
+#           nothing, for a reason that reads like a missing script.
+#   pnpm    the post-deploy smoke check at the very bottom. That one is worse:
+#           it sits AFTER health, seed and verify-auth, so a host with node but
+#           no pnpm got a fully working stack and THEN a 127 abort — and the
+#           operator was told the deploy had failed when it had in fact worked.
+#
+# Both failure modes become a named blocker here instead. README-deploy.md 2.5
+# ("Prepare the instance") installs all three; nothing in either runbook used to
+# say the host needed any toolchain at all, including Docker.
+for cmd in docker node pnpm; do
+  command -v "${cmd}" >/dev/null 2>&1 \
+    || fail "${cmd} is not installed on this host — see README-deploy.md 2.5, 'Prepare the instance'"
+done
+
 [ -f .env ] || fail ".env not found. Copy .env.example to .env and fill it in."
 
 # Refuse to run with a world-readable secrets file. This holds the Supabase

@@ -19,6 +19,17 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
+/**
+ * Comments stripped, so prose explaining a removal cannot satisfy a presence
+ * check or fail an absence check. Required here: actions.ts:153 names
+ * `.onConflictDoNothing()` in the comment that records why it was removed, and
+ * this suite used to assert that very string was PRESENT — passing on the
+ * comment while the real call was `.onConflictDoUpdate({`. The `[^:]` guard
+ * keeps a "https://" inside a string from reading as a comment start.
+ */
+const code = (src) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
 const ACTIONS_PATH = "apps/web/src/app/(authenticated)/observation/[cycleId]/actions.ts";
 const PAGE_PATH = "apps/web/src/app/(authenticated)/observation/[cycleId]/page.tsx";
 
@@ -117,7 +128,10 @@ test("spec 117 — the form insert and the status flip are ATOMIC", () => {
 
   // Ordering inside the helper is the whole point: the guarded UPDATE has to
   // come first, so the insert is never reached on a rejected transition.
-  const helper = src.slice(src.indexOf("async function submitFormAndTransition("));
+  // Measured on the comment-stripped view so the prose above the insert cannot
+  // move the offsets.
+  const bare = code(src);
+  const helper = bare.slice(bare.indexOf("async function submitFormAndTransition("));
   const updateAt = helper.indexOf(".update(observationCycles)");
   const insertAt = helper.indexOf(".insert(observationForms)");
   assert.ok(updateAt > 0 && insertAt > 0, "the helper must do both");
@@ -131,7 +145,33 @@ test("spec 117 — the form insert and the status flip are ATOMIC", () => {
   for (const kind of ["pre", "post", "observer"]) {
     assert.match(src, new RegExp(`kind: "${kind}"`), `${kind} form must still be submitted`);
   }
-  assert.match(src, /\.onConflictDoNothing\(\)/, "the insert stays idempotent on (cycleId, kind)");
+
+  // INVERTED. This asserted `.onConflictDoNothing()` was PRESENT — the exact
+  // shape removed above as silent data loss — and the only occurrence of that
+  // string in actions.ts is the comment at :153 explaining the removal, so the
+  // assertion passed on prose and stayed green even if the upsert were deleted
+  // outright. Both halves now run against the comment-stripped view.
+  assert.match(
+    helper,
+    /\.onConflictDoUpdate\(\{/,
+    "the insert must UPSERT — a re-submitted form is a correction, not a duplicate",
+  );
+  assert.match(
+    helper,
+    /target:\s*\[observationForms\.cycleId,\s*observationForms\.kind\]/,
+    "the upsert must target observation_forms_cycle_kind_uq",
+  );
+  for (const col of ["responses", "submittedByUserId", "submittedAt"]) {
+    assert.match(
+      helper,
+      new RegExp(`set:\\s*\\{[\\s\\S]*?\\b${col}:`),
+      `the upsert must refresh ${col} — otherwise the new answers keep the first submitter's attribution`,
+    );
+  }
+  assert.ok(
+    !/\.onConflictDoNothing\(\)/.test(bare),
+    ".onConflictDoNothing() must not come back — it DROPPED the re-submitted form while the status UPDATE committed",
+  );
 });
 
 test("spec 117 — each action calls recordAudit with the correct dotted action name", () => {
@@ -174,7 +214,7 @@ test("spec 117 — addNoteAction persists into observation_cycles.remark and rej
   // Appending is done in SQL rather than read-modify-write, so two observers
   // adding notes at the same moment cannot lose one to a lost update.
   assert.ok(
-    !/remark:\s*note/.test(body),
+    !/remark:\s*note\b/.test(body),
     "remark must not be overwritten with the new note",
   );
   assert.match(

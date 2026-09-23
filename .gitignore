@@ -38,3 +38,8 @@ coverage/
 # TypeScript build info
 *.tsbuildinfo
 next-env.d.ts
+
+# Git worktrees. One per plan/PR, per the Superpowers discipline
+# (docs/superpowers/README.md). Ignored so a worktree's contents can never be
+# committed into the repository that contains it.
+.worktrees/
