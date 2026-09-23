@@ -34,22 +34,27 @@
 //       spawns to eight, one of them silent.
 //
 // Both attempts guarded with the ENVIRONMENT. The environment is not a
-// boundary. What follows is structural instead, and rests on two facts about
-// the script rather than about the host:
+// boundary. `runSandboxed()` below is structural instead, and rests on two
+// facts about the script rather than about the host:
 //
 //   1. deploy.sh does `cd "$(dirname "$0")/.."` — it changes to a directory
 //      relative to ITSELF, not to the caller's cwd. A copy under a temp
-//      directory therefore roots itself in that temp directory.
-//   2. `[ -f .env ] || fail` sits at deploy.sh:156. The first destructive
-//      command, `docker tag`, is at :185. So a run that cannot find a .env
-//      aborts 29 lines before it can touch anything.
+//      directory therefore roots itself in that temp directory, and the `.env`
+//      check looks only at cwd; it never searches upward.
+//   2. The `[ -f .env ] || fail` gate sits ABOVE the first destructive command
+//      (`docker tag …:current …:previous`). So a run that cannot find a .env
+//      aborts before it can touch anything.
 //
-// So: copy the script somewhere with no .env above it, and put logging stubs
-// first on PATH. The stubs let the toolchain check pass, and they RECORD every
-// invocation — which is what turns "it should not reach docker" from an
-// assumption into an assertion. If a future edit moves the .env gate below the
-// build, the tripwire fails the test instead of eating someone's rollback
-// image.
+// Deliberately no line numbers here: an edit to this file's own subject shifted
+// two such citations by six lines in the commit that introduced them. The
+// ORDERING is the invariant, and `assertNothingDestructive` enforces it rather
+// than trusting it — if a future edit moves the gate below the build, the
+// tripwire fails the test instead of eating someone's rollback image.
+//
+// `run()` (tests 1-4) is NOT sandboxed: it spawns from the real repo root,
+// which does have a .env, and is safe only because DEPLOY_DRY_RUN=1 exits
+// before the toolchain check. That is a weaker guarantee than the rest of this
+// file has, and it is stated here rather than glossed.
 //
 // ── WHAT THESE TESTS DO AND DO NOT PROVE ─────────────────────────────────────
 //
@@ -80,7 +85,16 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const SCRIPT = "scripts/deploy.sh";
 
-/** Commands that must never be reached by a test. */
+/**
+ * Commands that must never be reached by a test.
+ *
+ * A DENYLIST, and therefore bounded: `docker rmi`, `docker system prune`,
+ * `docker compose stop|kill|restart` and `docker buildx bake` all evade it.
+ * That is tolerable only because of where it is applied — the window between
+ * the toolchain check and the `.env` gate, which today contains exactly one
+ * command (`docker compose version`). Anything new landing in that window is a
+ * deliberate act; this catches the shapes that have actually appeared.
+ */
 const DESTRUCTIVE = /\b(tag|build|up|down|rm)\b/;
 
 function run(extraEnv = {}) {
@@ -258,7 +272,7 @@ test("DEPLOY_DRY_RUN=0 / false / no / off mean OFF, not on", () => {
   // no-op that exited 0.
   //
   // Sandboxed — see the file header. The script roots itself in a temp
-  // directory with no .env and aborts at deploy.sh:156, which is upstream of
+  // directory with no .env and aborts at the `.env` gate, which is upstream of
   // every mutating command, and the stubs record anything it does invoke.
   for (const off of ["0", "false", "no", "off", "", "FALSE", "Off"]) {
     const r = runSandboxed({ DEPLOY_DRY_RUN: off });
@@ -374,9 +388,21 @@ test("every host binary deploy.sh invokes is in the toolchain check", () => {
 });
 
 test("the host-toolchain check names the missing binary instead of failing later", () => {
-  // Sandboxed with NO stubs on PATH at all, so every required binary is absent
-  // and the loop must abort. Uses the temp copy for the same structural reason
-  // as the tests above: whatever happens, it cannot reach a mutating command.
+  // Sandboxed, with an empty bin directory ahead of bash's own directory — so
+  // no stub satisfies the loop and at least one required binary is missing.
+  //
+  // NOT "every binary is absent": bash's directory is /usr/bin on Ubuntu, which
+  // holds docker and curl. That is precisely the assumption this file's header
+  // diagnoses as v2's mistake, and it would be the same mistake to restate it
+  // here. What makes this safe is not PATH but the same structure as the tests
+  // above: the copy roots itself in a temp directory with no .env, and the
+  // toolchain dry-run exits upstream of the .env gate, so it cannot deploy
+  // whatever the PATH happens to contain.
+  //
+  // The test does require a host whose bash directory lacks at least one of the
+  // four — true of Git Bash (no docker/node/pnpm) and of GitHub's runner image
+  // (node lives in the tool cache). A dev box with all four in /usr/bin would
+  // see this go red, not dangerous.
   //
   // The failure this guards is not "docker is missing" (that fails obviously)
   // but node, pnpm and curl, each of which fails late and misleadingly: node
