@@ -1,0 +1,7 @@
+# Design specs live here (see ../README.md).
+#
+# This file exists because git cannot track an empty directory. Twenty-one spec
+# numbers the ledger schedules -- 036-045 (video pipeline) and 057-063 (core
+# pages) -- have no directory in this repository at all, and `git log --all
+# --diff-filter=A -- specs/036*` returns nothing: they were folders only, so
+# they never entered a commit. A .gitkeep is the whole fix.
