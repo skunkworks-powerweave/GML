@@ -57,43 +57,84 @@ HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-3}"
 log() { echo "[deploy] $(date -Iseconds) — $*"; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 
-# DRY RUN — resolve configuration, print it, and stop.
+# DRY RUN — resolve configuration, print it, and stop. Testing hook only.
 #
-# Deliberately placed before every check below so it needs no .env, no docker
-# and no network: tests/scripts/deploy-sh.test.mjs uses it to prove that every
-# variable this script later dereferences is actually DEFINED. Under
-# `set -euo pipefail` an undefined one aborts here instead of halfway through a
-# production deploy. `bash -n` cannot see that; only running it can.
-if [ -n "${DEPLOY_DRY_RUN:-}" ]; then
-  echo "HEALTH_URL=${HEALTH_URL}"
-  echo "HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS}"
-  echo "HEALTH_INTERVAL_SECONDS=${HEALTH_INTERVAL_SECONDS}"
-  exit 0
-fi
+# tests/scripts/deploy-sh.test.mjs uses this to prove that the HEALTH_*
+# variables the health probe dereferences at the bottom of this script are
+# actually DEFINED. Under `set -euo pipefail` an undefined one aborts the
+# deploy, and `bash -n` cannot see that — an undefined variable is a runtime
+# failure, not a syntax error. Only executing the script catches it, and until
+# tests/scripts/ existed nothing executed this script at all.
+#
+# SCOPE, STATED HONESTLY: the echo list below is hand-maintained, and it covers
+# HEALTH_* only. It does NOT prove that every variable anywhere in this file is
+# defined — nothing after the `exit 0` runs, so `set -u` never reaches it. The
+# test asserts exactly what this block demonstrates and no more.
+#
+# OFF MUST MEAN OFF. This used to be `[ -n "${DEPLOY_DRY_RUN:-}" ]`, under which
+# DEPLOY_DRY_RUN=0 and =false are both TRUE — so an operator writing either to
+# mean "not a dry run" would get a no-op that printed three lines and exited 0,
+# and `git pull && ./scripts/deploy.sh` would report success having deployed
+# nothing. The seed scripts in packages/db/src/scripts/ already use the strict
+# `=== "true"` form; this matches them, and the banner goes to stderr so a dry
+# run can never be mistaken for a deploy.
+case "${DEPLOY_DRY_RUN:-}" in
+  ""|0|false|no|off) : ;;
+  toolchain)
+    # Host-toolchain check only: runs the loop below, then stops. Lets the test
+    # drive it with a stripped PATH without needing docker to be installed.
+    DEPLOY_DRY_RUN_TOOLCHAIN=1
+    ;;
+  *)
+    echo "[deploy] DRY RUN — configuration only. NOTHING WAS DEPLOYED." >&2
+    echo "HEALTH_URL=${HEALTH_URL}"
+    echo "HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS}"
+    echo "HEALTH_INTERVAL_SECONDS=${HEALTH_INTERVAL_SECONDS}"
+    exit 0
+    ;;
+esac
 
 # ── 0. Preflight ─────────────────────────────────────────────────────────────
 
 # THE HOST TOOLCHAIN, CHECKED BEFORE ANYTHING IS BUILT.
 #
-# This script needs three host binaries and used to check for none of them:
+# This script needs four host binaries and checks for none of them today:
 #
 #   docker  obvious, and its absence fails obviously.
 #   node    the SM-5 restore-drill gate below is a plain `node` invocation,
 #           under `set -euo pipefail`, BEFORE the first `docker compose build`.
-#           On a host without node the deploy died there with 127 having built
+#           On a host without node the deploy dies there with 127 having built
 #           nothing, for a reason that reads like a missing script.
 #   pnpm    the post-deploy smoke check at the very bottom. That one is worse:
 #           it sits AFTER health, seed and verify-auth, so a host with node but
-#           no pnpm got a fully working stack and THEN a 127 abort — and the
-#           operator was told the deploy had failed when it had in fact worked.
+#           no pnpm gets a fully working stack and THEN a 127 abort — and the
+#           operator is told the deploy failed when it in fact worked.
+#   curl    the health probe. Worst of the four, because curl is used as a LOOP
+#           CONDITION, not a command: without it the probe simply never
+#           succeeds, the script spins the full HEALTH_TIMEOUT_SECONDS and then
+#           reports "not healthy after 180s" and dumps app logs — blaming the
+#           application for a missing host binary.
 #
-# Both failure modes become a named blocker here instead. README-deploy.md 2.5
-# ("Prepare the instance") installs all three; nothing in either runbook used to
-# say the host needed any toolchain at all, including Docker.
-for cmd in docker node pnpm; do
+# All four become a named blocker here instead. README-deploy.md 2.5 ("Prepare
+# the instance") installs them; nothing in either runbook says the host needs
+# any toolchain at all, including Docker.
+#
+# `docker` alone does not prove Compose v2 is present, and `docker compose
+# build` below is the first thing that would fail on it, so probe the plugin.
+for cmd in docker node pnpm curl; do
   command -v "${cmd}" >/dev/null 2>&1 \
     || fail "${cmd} is not installed on this host — see README-deploy.md 2.5, 'Prepare the instance'"
 done
+docker compose version >/dev/null 2>&1 \
+  || fail "the Docker Compose v2 plugin is not available (\`docker compose version\` failed) — see README-deploy.md 2.5"
+
+# See the DEPLOY_DRY_RUN block above: this mode exists so the toolchain check
+# itself is testable without docker being installed on the test machine.
+if [ -n "${DEPLOY_DRY_RUN_TOOLCHAIN:-}" ]; then
+  echo "[deploy] DRY RUN (toolchain) — all required host binaries present. NOTHING WAS DEPLOYED." >&2
+  echo "TOOLCHAIN_OK=1"
+  exit 0
+fi
 
 [ -f .env ] || fail ".env not found. Copy .env.example to .env and fill it in."
 

@@ -140,17 +140,32 @@ test("spec 111: default 'test' script does NOT run the smoke folder", () => {
   // So: resolve `pnpm run <name>` / `npm run <name>` transitively and assert
   // over the whole closure. Following the indirection is what makes this a
   // guard rather than a spelling check.
+  // Four forms a first version of this walker missed, each of which would have
+  // let tests/integration back in silently:
+  //
+  //   pnpm test:smoke            `run` is optional in pnpm -- and this is the
+  //                              form the repo itself uses, at deploy.sh:223
+  //   pnpm -s run test:smoke     flags between the binary and the script name
+  //   posttest                   npm/pnpm lifecycle; runs automatically and
+  //                              appears in no other script's body
+  //   run-s test:smoke           npm-run-all, if it is ever added
+  //
+  // The regex therefore makes `run` optional and tolerates flags, and the walk
+  // is seeded with the lifecycle triple rather than `test` alone.
   const scripts = pkg.scripts ?? {};
   const resolved = new Set();
   const commands = [];
+  const REF =
+    /(?:^|[;&|]|\s)(?:(?:pnpm|npm|yarn)(?:\s+-{1,2}[\w-]+(?:[= ]\S+)?)*\s+(?:run\s+)?|run-[sp]\s+)([\w:-]+)/g;
   const walk = (name) => {
     if (resolved.has(name)) return; // cycles and diamonds
     resolved.add(name);
-    const body = scripts[name] ?? "";
+    const body = scripts[name];
+    if (typeof body !== "string") return;
     commands.push(body);
-    for (const m of body.matchAll(/(?:pnpm|npm|yarn)\s+run\s+([\w:-]+)/g)) walk(m[1]);
+    for (const m of body.matchAll(REF)) walk(m[1]);
   };
-  walk("test");
+  for (const entry of ["pretest", "test", "posttest"]) walk(entry);
   const closure = commands.join(" ; ");
 
   assert.ok(
