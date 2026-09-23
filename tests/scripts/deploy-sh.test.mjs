@@ -9,9 +9,14 @@
 //
 //   bash -n scripts/deploy.sh   exits 0 — an undefined variable is a RUNTIME
 //                               failure, not a syntax error
-//   tests/governance/           regex over source text; "HEALTH_URL" appears
-//                               seven times as a dereference, so a grep for it
-//                               passes whether or not it is ever assigned
+//   tests/governance/           cannot execute anything. It does better here
+//                               than one might expect: test_108:129 pins the
+//                               ASSIGNMENT form and does catch a deleted
+//                               definition. What it cannot catch is a
+//                               definition that is present but unreachable —
+//                               nested inside a branch, or shadowed by a
+//                               default baked into an echo. Only running the
+//                               script distinguishes those.
 //
 // Only running the script distinguishes the two. `DEPLOY_DRY_RUN` resolves the
 // configuration and exits before touching docker, the database or the network,
@@ -62,8 +67,32 @@ function referencedHealthVars() {
   const src = readFileSync(resolve(root, SCRIPT), "utf8");
   const names = new Set();
   for (const m of src.matchAll(/\$\{(HEALTH_[A-Z_]+)[:}]/g)) names.add(m[1]);
-  names.delete("HEALTH_URL_UNUSED"); // placeholder guard; no-op today
   return [...names].sort();
+}
+
+/**
+ * The directory bash itself lives in, as a path the host OS can put on PATH.
+ *
+ * Used to narrow PATH for the tests that must reach the script's own checks
+ * without being able to touch docker. An empty or bogus PATH is not usable:
+ * bash then fails to start and the test measures the launcher instead.
+ *
+ * `dirname $(command -v bash)` yields a POSIX path (/usr/bin), which Windows
+ * cannot use, so cygpath converts it where cygpath exists.
+ */
+function bashOwnDir() {
+  const r = spawnSync(
+    "bash",
+    [
+      "-c",
+      'd="$(dirname "$(command -v bash)")"; if command -v cygpath >/dev/null 2>&1; then cygpath -w "$d"; else printf %s "$d"; fi',
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(r.status, 0, `could not locate bash: ${r.stderr}`);
+  const dir = r.stdout.trim();
+  assert.ok(dir.length > 0, "bash reported no directory for itself");
+  return dir;
 }
 
 function resolvedVars(stdout) {
@@ -168,22 +197,105 @@ test("a dry run announces itself and cannot be mistaken for a deploy", () => {
 test("DEPLOY_DRY_RUN=0 / false / no / off mean OFF, not on", () => {
   // `[ -n "$DEPLOY_DRY_RUN" ]` treats every one of these as TRUE. An operator
   // writing DEPLOY_DRY_RUN=false to disable the dry run would have got a
-  // silent no-op that exited 0. The seed scripts in packages/db/src/scripts/
-  // already use the strict form; this keeps deploy.sh consistent with them.
+  // silent no-op that exited 0.
   //
-  // Each value must fall through to the real script. We cannot run a real
-  // deploy here, so we assert it did NOT take the dry-run exit: no banner, and
-  // it got far enough to fail on something else (a missing binary or .env).
-  for (const off of ["0", "false", "no", "off", ""]) {
-    const r = run({ DEPLOY_DRY_RUN: off });
+  // ── WHY THIS RUNS WITH A NARROWED PATH ────────────────────────────────────
+  //
+  // The first version of this test spawned deploy.sh with the full inherited
+  // environment and assumed it would die on a missing binary or a missing
+  // .env. On a host where neither is missing — a deploy host, and also the
+  // machine this was written on — it does not die. Traced with stub binaries,
+  // `DEPLOY_DRY_RUN=0 bash scripts/deploy.sh` reaches:
+  //
+  //     docker tag gml-lms-app:current gml-lms-app:previous
+  //     docker tag gml-lms-worker:current gml-lms-worker:previous
+  //     docker compose build
+  //     docker compose up -d --remove-orphans
+  //
+  // That re-tags the image scripts/rollback.sh depends on — destroying the
+  // real rollback target — and restarts the live stack. Five times per run.
+  // It was green only because the Docker daemon happened to be down, and on
+  // CI only because .env is gitignored. A test for "a success that isn't"
+  // that silently performs a deploy is the defect it was written to catch.
+  //
+  // Narrowing PATH makes the assertion positive instead of accidental: the
+  // script provably reaches the toolchain check and aborts there, which is
+  // proof it did NOT take the dry-run exit, and it cannot touch docker.
+  const bashDir = bashOwnDir();
+  for (const off of ["0", "false", "no", "off", "", "FALSE", "Off"]) {
+    const r = spawnSync("bash", [SCRIPT], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, DEPLOY_DRY_RUN: off, PATH: bashDir },
+    });
+    const label = `DEPLOY_DRY_RUN=${JSON.stringify(off)}`;
+
     assert.doesNotMatch(
-      r.stderr,
+      r.stderr ?? "",
       /DRY RUN — configuration only/,
-      `DEPLOY_DRY_RUN=${JSON.stringify(off)} took the dry-run path; "off" must mean off`,
+      `${label} took the dry-run path; "off" must mean off`,
     );
     assert.ok(
-      !resolvedVars(r.stdout).has("HEALTH_URL"),
-      `DEPLOY_DRY_RUN=${JSON.stringify(off)} printed the dry-run configuration block`,
+      !resolvedVars(r.stdout ?? "").has("HEALTH_URL"),
+      `${label} printed the dry-run configuration block`,
+    );
+    // Positive evidence that it carried on into the script proper.
+    assert.match(
+      r.stderr ?? "",
+      /is not installed on this host|Compose v2 plugin is not available/,
+      `${label} should have continued to the toolchain check and aborted there. stderr:\n${r.stderr}`,
+    );
+  }
+});
+
+test("an exported DEPLOY_DRY_RUN_TOOLCHAIN cannot silently no-op a deploy", () => {
+  // The toolchain arm sets this variable, and it is read further down as
+  // `${DEPLOY_DRY_RUN_TOOLCHAIN:-}`. If the off arm does not clear it, an
+  // operator who exported it directly gets exit 0 having deployed nothing —
+  // C2's defect reintroduced through a second variable.
+  const bashDir = bashOwnDir();
+  const r = spawnSync("bash", [SCRIPT], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: {
+      ...process.env,
+      DEPLOY_DRY_RUN: "",
+      DEPLOY_DRY_RUN_TOOLCHAIN: "1",
+      PATH: bashDir,
+    },
+  });
+  assert.doesNotMatch(
+    r.stdout ?? "",
+    /TOOLCHAIN_OK=1/,
+    "an inherited DEPLOY_DRY_RUN_TOOLCHAIN took the toolchain exit; the off arm must clear it",
+  );
+});
+
+test("each HEALTH_* variable has a real top-level assignment, not just an echo", () => {
+  // ── WHY ECHOING A VALUE IS NOT PROOF OF A DEFINITION ──────────────────────
+  //
+  // The dry-run block prints `HEALTH_URL=${HEALTH_URL}`, and an earlier version
+  // of this file claimed that "the echo proves the variable". It does not. Two
+  // mutations leave every other test here green while the real health probe
+  // dies with the exact unbound-variable abort this tier exists to catch:
+  //
+  //   echo "HEALTH_URL=${HEALTH_URL:-http://127.0.0.1/api/health}"  + no definition
+  //   move all three definitions INSIDE the dry-run branch
+  //
+  // Both were verified to fail at the live probe. The dry-run `exit 0` sits
+  // upstream of every real dereference, so no amount of echoing can cover them.
+  // What does cover them is requiring the assignment to exist at top level —
+  // column 0, outside any branch — which is the form the probe depends on.
+  const src = readFileSync(resolve(root, SCRIPT), "utf8");
+  for (const name of referencedHealthVars()) {
+    assert.match(
+      src,
+      new RegExp(String.raw`^${name}=`, "m"),
+      `${name} is dereferenced by the health probe but has no top-level assignment in ${SCRIPT}. ` +
+        `A definition nested inside the dry-run branch, or a default baked into its echo, ` +
+        `leaves the real probe aborting on an unbound variable while this suite stays green.`,
     );
   }
 });
@@ -196,8 +308,14 @@ test("every host binary deploy.sh invokes is in the toolchain check", () => {
   // tested first, so removing curl from the list again would go unnoticed.
   //
   // So: scan the body for the tools it actually calls, and require each to be
-  // in the loop. A new dependency added to the script is then covered without
-  // editing this test — which is the only way this guard stays honest.
+  // in the loop.
+  //
+  // BOUNDED, and the bound is the allow-list below — a tool outside it (say
+  // `openssl`) would be invoked and demanded of nobody. Deriving the candidate
+  // set from the script instead is not straightforward: `for cmd in ...` and
+  // `docker compose run ... psql` are both "words followed by arguments", so a
+  // general derivation would demand container-only tools of the host. The
+  // list is the honest compromise; extend it when a dependency is added.
   const src = readFileSync(resolve(root, SCRIPT), "utf8");
   const body = src
     .split(/\r?\n/)
@@ -221,6 +339,21 @@ test("every host binary deploy.sh invokes is in the toolchain check", () => {
         `"the app never became healthy"). Checked: ${[...checked].join(", ")}`,
     );
   }
+
+  // `command -v docker` does not prove the Compose v2 PLUGIN is installed, and
+  // `docker compose build` is the first thing that would fail on a host with
+  // only the v1 `docker-compose` binary. The loop above cannot express that,
+  // so the plugin needs its own probe — derived the same way: if the script
+  // uses `docker compose`, it must check for it.
+  if (/(^|[;&|(\s])docker compose\s/m.test(body)) {
+    assert.match(
+      body,
+      /docker compose version\b/,
+      "deploy.sh runs `docker compose` but never probes `docker compose version`. " +
+        "On a host with only Compose v1 the first failure would be `docker compose build`, " +
+        "mid-deploy, rather than a named blocker in preflight.",
+    );
+  }
 });
 
 test("the host-toolchain check names the missing binary instead of failing later", () => {
@@ -236,24 +369,14 @@ test("the host-toolchain check names the missing binary instead of failing later
   // nothing has been built, pnpm after a WORKING deploy, and curl not at all —
   // curl is a loop condition, so its absence reads as "the app never became
   // healthy" and dumps application logs.
-  // PATH is narrowed to bash's OWN directory. An empty or bogus PATH is not an
-  // option: bash then cannot start at all (on Git Bash it fails to load its
-  // msys DLLs, and the test measures the launcher rather than the script).
-  // Bash's own bin directory is the portable choice — it necessarily contains
-  // bash, and contains none of docker, node or pnpm on either platform.
-  // `dirname $(command -v bash)` yields a POSIX path (/usr/bin). On Windows
-  // that is meaningless to CreateProcess, so PATH would be junk and bash would
-  // not start at all — which looks like a passing assertion about the wrong
-  // thing. cygpath -w converts it where it exists; elsewhere the POSIX path is
-  // already correct.
-  const where = spawnSync(
-    "bash",
-    ["-c", 'd="$(dirname "$(command -v bash)")"; if command -v cygpath >/dev/null 2>&1; then cygpath -w "$d"; else printf %s "$d"; fi'],
-    { encoding: "utf8", timeout: 30_000 },
-  );
-  assert.equal(where.status, 0, `could not locate bash: ${where.stderr}`);
-  const bashDir = where.stdout.trim();
-  assert.ok(bashDir.length > 0, "bash reported no directory for itself");
+  // PATH is narrowed to bash's OWN directory, which necessarily contains bash
+  // and is missing at least one required tool on both platforms — `node` on
+  // ubuntu (it lives in the runner's tool cache, not /usr/bin) and `docker` on
+  // Windows. Which arm trips therefore differs by platform; the assertion below
+  // only requires that SOME required tool is named, not a particular one.
+  // (/usr/bin on ubuntu does contain docker and curl, so an earlier claim here
+  // that it contains none of them was wrong.)
+  const bashDir = bashOwnDir();
 
   const r = spawnSync("bash", [SCRIPT], {
     cwd: root,

@@ -144,7 +144,7 @@ test("spec 111: default 'test' script does NOT run the smoke folder", () => {
   // let tests/integration back in silently:
   //
   //   pnpm test:smoke            `run` is optional in pnpm -- and this is the
-  //                              form the repo itself uses, at deploy.sh:223
+  //                              form the repo itself uses, at deploy.sh:281
   //   pnpm -s run test:smoke     flags between the binary and the script name
   //   posttest                   npm/pnpm lifecycle; runs automatically and
   //                              appears in no other script's body

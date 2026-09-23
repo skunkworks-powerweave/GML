@@ -68,8 +68,11 @@ fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 #
 # SCOPE, STATED HONESTLY: the echo list below is hand-maintained, and it covers
 # HEALTH_* only. It does NOT prove that every variable anywhere in this file is
-# defined — nothing after the `exit 0` runs, so `set -u` never reaches it. The
-# test asserts exactly what this block demonstrates and no more.
+# defined — nothing after the `exit 0` runs, so `set -u` never reaches it. Nor
+# does echoing a value prove a DEFINITION exists: `echo "X=${X:-default}"` in
+# here would print happily while the real dereference below still aborts. The
+# test therefore also requires a top-level `^HEALTH_…=` assignment in this file,
+# which is the part that actually protects the deploy.
 #
 # OFF MUST MEAN OFF. This used to be `[ -n "${DEPLOY_DRY_RUN:-}" ]`, under which
 # DEPLOY_DRY_RUN=0 and =false are both TRUE — so an operator writing either to
@@ -77,12 +80,19 @@ fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 # and `git pull && ./scripts/deploy.sh` would report success having deployed
 # nothing. The seed scripts in packages/db/src/scripts/ already use the strict
 # `=== "true"` form; this matches them, and the banner goes to stderr so a dry
-# run can never be mistaken for a deploy.
-case "${DEPLOY_DRY_RUN:-}" in
-  ""|0|false|no|off) : ;;
+# run can never be mistaken for a deploy. Matching is case-insensitive because
+# FALSE and Off are the same intent as false and off.
+case "$(printf %s "${DEPLOY_DRY_RUN:-}" | tr '[:upper:]' '[:lower:]')" in
+  ""|0|false|no|off)
+    # Clear the toolchain flag too. It is set only by the arm below, but it is
+    # read later as `${DEPLOY_DRY_RUN_TOOLCHAIN:-}`, so an operator who exported
+    # it directly would otherwise get the same silent exit-0 no-op that the
+    # strict parsing above exists to prevent.
+    DEPLOY_DRY_RUN_TOOLCHAIN=
+    ;;
   toolchain)
     # Host-toolchain check only: runs the loop below, then stops. Lets the test
-    # drive it with a stripped PATH without needing docker to be installed.
+    # drive it with a narrowed PATH without needing docker to be installed.
     DEPLOY_DRY_RUN_TOOLCHAIN=1
     ;;
   *)
@@ -115,18 +125,25 @@ esac
 #           reports "not healthy after 180s" and dumps app logs — blaming the
 #           application for a missing host binary.
 #
-# All four become a named blocker here instead. README-deploy.md 2.5 ("Prepare
-# the instance") installs them; nothing in either runbook says the host needs
-# any toolchain at all, including Docker.
+# All four become a named blocker here instead.
+#
+# The failure messages point at README-deploy.md section 2, "Prerequisites",
+# because that section exists. They previously cited a section 2.5, "Prepare the
+# instance", which does NOT: the file runs 2.1, 2.2, 2.3, 2.4 and then straight
+# to "## 3. First deploy". Sending an operator to a heading that was planned but
+# never written is the same defect as a test asserting a file into existence —
+# section 2 genuinely has no host-toolchain step yet, and writing one is its own
+# piece of work rather than something to forward-reference from an error
+# message.
 #
 # `docker` alone does not prove Compose v2 is present, and `docker compose
 # build` below is the first thing that would fail on it, so probe the plugin.
 for cmd in docker node pnpm curl; do
   command -v "${cmd}" >/dev/null 2>&1 \
-    || fail "${cmd} is not installed on this host — see README-deploy.md 2.5, 'Prepare the instance'"
+    || fail "${cmd} is not installed on this host — see README-deploy.md section 2, 'Prerequisites'"
 done
 docker compose version >/dev/null 2>&1 \
-  || fail "the Docker Compose v2 plugin is not available (\`docker compose version\` failed) — see README-deploy.md 2.5"
+  || fail "the Docker Compose v2 plugin is not available (\`docker compose version\` failed) — see README-deploy.md section 2, 'Prerequisites'"
 
 # See the DEPLOY_DRY_RUN block above: this mode exists so the toolchain check
 # itself is testable without docker being installed on the test machine.
