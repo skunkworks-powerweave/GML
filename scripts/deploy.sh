@@ -71,8 +71,14 @@ fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 # defined — nothing after the `exit 0` runs, so `set -u` never reaches it. Nor
 # does echoing a value prove a DEFINITION exists: `echo "X=${X:-default}"` in
 # here would print happily while the real dereference below still aborts. The
-# test therefore also requires a top-level `^HEALTH_…=` assignment in this file,
-# which is the part that actually protects the deploy.
+# test therefore also requires a top-level `^HEALTH_…=` assignment in this file.
+#
+# That assignment check is a SOURCE-PRESENCE test, not a reachability one: an
+# `unset` after it, an assignment inside a function nobody calls, or the same
+# text inside a heredoc would all satisfy it. It catches the two regressions
+# that actually happened here and is not a general guarantee — proving
+# reachability would mean running past the health probe, which is the part a
+# test must not execute.
 #
 # OFF MUST MEAN OFF. This used to be `[ -n "${DEPLOY_DRY_RUN:-}" ]`, under which
 # DEPLOY_DRY_RUN=0 and =false are both TRUE — so an operator writing either to
