@@ -10,11 +10,12 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
-import { observationCycles, teachers, subjects } from "@gml/db/schema";
+import { observationCycles } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
+import { listCycles, parsePage, videoCell } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
 
@@ -60,12 +61,15 @@ const KIND_TABS = [
   { v: "evaluative", l: "Evaluative" },
 ];
 
-type SearchParams = Promise<{ status?: string; kind?: string }>;
+type SearchParams = Promise<{ status?: string; kind?: string; page?: string }>;
 
-function buildHref(status: string, kind: string): string {
+// A chip link carries no page, so changing a filter starts again at page 1;
+// the pager passes one and keeps the filters.
+function buildHref(status: string, kind: string, page = 1): string {
   const qs = new URLSearchParams();
   if (status !== "all") qs.set("status", status);
   if (kind !== "all") qs.set("kind", kind);
+  if (page > 1) qs.set("page", String(page));
   const s = qs.toString();
   return s ? `/observation?${s}` : "/observation";
 }
@@ -119,25 +123,16 @@ export default async function ObservationListPage({
     conds.push(eq(observationCycles.kind, kindValue));
   }
 
-  const rows = await db
-    .select({
-      id: observationCycles.id,
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      status: observationCycles.status,
-      scheduledAt: observationCycles.scheduledAt,
-      topic: observationCycles.topic,
-      videoMin: observationCycles.videoMin,
-      teacherName: teachers.fullName,
-      teacherHindi: teachers.hindiName,
-      subjectName: subjects.name,
-    })
-    .from(observationCycles)
-    .leftJoin(teachers, eq(observationCycles.teacherId, teachers.id))
-    .leftJoin(subjects, eq(observationCycles.subjectId, subjects.id))
-    .where(conds.length === 0 ? undefined : and(...conds))
-    .orderBy(desc(observationCycles.scheduledAt))
-    .limit(80);
+  // ONE PAGE OF EVERYTHING VISIBLE, not the first 80. The row query was capped
+  // at 80 with no page parameter while the chips below counted every visible
+  // cycle, so past 80 the table silently held less than the chips promised
+  // and the rest could not be reached. lib/observation/list.ts pages with a
+  // total order, and the table says what range it is showing. `page` is the
+  // page actually shown: a stale ?page= past the end becomes the last page.
+  const { rows, total, from, to, hasNext, page } = await listCycles(db, {
+    where: conds.length === 0 ? undefined : and(...conds),
+    page: parsePage(sp.page),
+  });
 
   // Per-tab counts run as a single GROUP BY so the chips can show the
   // current totals even when a filter is active. One extra round-trip.
@@ -301,10 +296,12 @@ export default async function ObservationListPage({
                         : <span style={{ color: "var(--ink-4)" }}>—</span>}
                     </td>
                     <td>
-                      {c.videoMin ? (
-                        <span style={{ fontSize: 12 }}>{c.videoMin}m</span>
-                      ) : (
+                      {/* From the cycle's linked videos (lib/observation/list.ts),
+                          not video_min, which only the demo seed ever wrote. */}
+                      {videoCell(c) === "—" ? (
                         <span style={{ color: "var(--ink-4)" }}>—</span>
+                      ) : (
+                        <span style={{ fontSize: 12 }}>{videoCell(c)}</span>
                       )}
                     </td>
                     <td style={{ textAlign: "right" }}>
@@ -320,6 +317,34 @@ export default async function ObservationListPage({
               </tbody>
             </table>
           )}
+          {total > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                borderTop: "1px solid var(--line)",
+                fontSize: 12,
+                color: "var(--ink-3)",
+              }}
+            >
+              <span>{`Showing ${from}–${to} of ${total}`}</span>
+              <span style={{ display: "flex", gap: 8 }}>
+                {page > 1 ? (
+                  <Link href={buildHref(statusFilter, kindFilter, page - 1)} className="btn btn-sm">
+                    ← Previous
+                  </Link>
+                ) : null}
+                {hasNext ? (
+                  <Link href={buildHref(statusFilter, kindFilter, page + 1)} className="btn btn-sm">
+                    Next →
+                  </Link>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

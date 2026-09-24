@@ -29,13 +29,15 @@
 //
 //   4. signOffCycleAction        mentor | programme_admin | super_admin
 //        - transition status post_submitted → complete
+//        - notify the cycle's other parties (`cycle.complete`)
 //        - audit `observation.signed_off` (cycle code + signer in metadata —
 //          this audit row IS the "signed by" record for v1; a dedicated
 //          observation_signoffs table is deferred behind a schema migration).
 //
 //   5. addNoteAction             observer | mentor | programme_admin | super_admin
-//        - UPDATE observation_cycles.remark (free-form mentor note — re-uses
-//          the existing column rather than introducing observation_notes).
+//        - APPEND to observation_cycles.remark ("[stamp] author (role): note"
+//          — re-uses the existing column rather than introducing
+//          observation_notes). Refused once the cycle is complete.
 //        - audit `observation.note.added`
 //
 //   6. (Video upload context wiring) — no server action here; handled inline
@@ -53,11 +55,24 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
+import { formatNoteEntry } from "@/lib/observation/notes";
+import { isUuid } from "@/lib/ids";
+import { notifyCycleParties } from "@/lib/observation/notify";
+
+// Where the gate sends the user after they unlock: back to THIS cycle. Every
+// action here passed "/observation", so a grant lapsing (8 h, or a password
+// rotation) while someone wrote a rubric or a reflection returned them to the
+// list after unlocking, with no way back to what they were doing but to find
+// the cycle again. Only a well-formed id is echoed into the path.
+function cyclePath(cycleId: string): string {
+  return isUuid(cycleId) ? `/observation/${cycleId}` : "/observation";
+}
 
 type CycleStatus =
   | "nominated"
@@ -197,28 +212,22 @@ async function submitFormAndTransition(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// Helper — collect free-form FormData entries into the responses jsonb.
-// Drops internal `__` prefixed keys and the cycleId field (used by the
-// dispatch, not part of the response payload).
+// Helper — the stage's answers, validated, or a redirect naming the question.
+//
+// This was collectResponses(): every non-`__` FormData key stored verbatim,
+// with no required check, no trim, no length cap and no allow-list, ahead of
+// a transition that cannot be undone. An empty pre-form or a blank rubric
+// advanced the cycle for good. Runs after the ownership check (so a refusal
+// reveals nothing about a cycle the caller cannot see) and before the
+// transaction (so a refusal writes nothing).
 // ---------------------------------------------------------------------------
 
-function collectResponses(formData: FormData): Record<string, unknown> {
-  const responses: Record<string, unknown> = {};
-  for (const [key, value] of formData.entries()) {
-    if (key.startsWith("__")) continue;
-    if (key === "cycleId") continue;
-    const cleanKey = key.endsWith("[]") ? key.slice(0, -2) : key;
-    const stringVal = typeof value === "string" ? value : String(value);
-    const existing = responses[cleanKey];
-    if (existing === undefined) {
-      responses[cleanKey] = stringVal;
-    } else if (Array.isArray(existing)) {
-      existing.push(stringVal);
-    } else {
-      responses[cleanKey] = [String(existing), stringVal];
-    }
+function stageResponses(kind: StageKind, cycleId: string, formData: FormData): Record<string, string> {
+  const parsed = parseStageResponses(kind, formData);
+  if (!parsed.ok) {
+    redirect(`/observation/${cycleId}?error=invalid_form&field=${encodeURIComponent(parsed.field)}`);
   }
-  return responses;
+  return parsed.responses;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,10 +262,10 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
-  const responses = collectResponses(formData);
+  const responses = stageResponses("pre", cycleId, formData);
 
   const code = await submitFormAndTransition({
     cycleId,
@@ -309,10 +318,10 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
-  const responses = collectResponses(formData);
+  const responses = stageResponses("observer", cycleId, formData);
 
   const code = await submitFormAndTransition({
     cycleId,
@@ -366,10 +375,10 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
-  const responses = collectResponses(formData);
+  const responses = stageResponses("post", cycleId, formData);
 
   const code = await submitFormAndTransition({
     cycleId,
@@ -427,7 +436,7 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
   const code = await transitionCycleStatus(cycleId, "post_submitted", "complete");
@@ -444,6 +453,10 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
       signedAt: new Date().toISOString(),
     },
   });
+
+  // Everyone else on the cycle hears that it closed; the settings page's
+  // "Cycle complete" toggle had no producer. Best-effort, after the commit.
+  await notifyCycleParties(db, "cycle.complete", cycleId, signedByUserId);
 
   revalidatePath(`/observation/${cycleId}`);
   redirect(`/observation/${cycleId}`);
@@ -484,8 +497,16 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
-  await assertCanAccessCycle(actor, cycleId);
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
+  const cycle = await assertCanAccessCycle(actor, cycleId);
+  // A SIGNED-OFF RECORD IS CLOSED. Sign-off is "final ... locks the cycle"
+  // (above, and spec 117), but nothing enforced it: notes kept being appended
+  // to an evaluative record after the signer had attested to it. Checked here
+  // for the message, and again in the UPDATE's WHERE so a sign-off landing
+  // between the two cannot slip a note in.
+  if (cycle.status === "complete") {
+    redirect(`/observation/${cycleId}?error=cycle_locked`);
+  }
   if (!note) {
     redirect(`/observation/${cycleId}?error=empty_note`);
   }
@@ -500,8 +521,17 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   //
   // Done in SQL rather than read-modify-write so two observers adding notes at
   // the same moment cannot lose one to a lost update.
-  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
-  const entry = `[${stamp} UTC] ${note}`;
+  //
+  // WHO WROTE IT. Entries were "[stamp UTC] text" alone, under a heading that
+  // read "Mentor notes" although observers and administrators write here too,
+  // so a teacher reading two entries from the same minute could not tell who
+  // judged what; the audit row names the actor but not the text. The author
+  // and their role are now part of the entry itself. formatNoteEntry drops
+  // blank lines from the note, since a blank line is what separates entries:
+  // otherwise a note could carry a line shaped like another author's header
+  // and read as their entry (lib/observation/notes.ts).
+  const author = session.user.name?.trim() || session.user.email || "Unknown user";
+  const entry = formatNoteEntry(new Date(), author, actor.role, note);
 
   const updated = await db
     .update(observationCycles)
@@ -515,11 +545,13 @@ export async function addNoteAction(formData: FormData): Promise<void> {
       END`,
       updatedAt: new Date(),
     })
-    .where(eq(observationCycles.id, cycleId))
+    .where(and(eq(observationCycles.id, cycleId), ne(observationCycles.status, "complete")))
     .returning({ code: observationCycles.code });
 
+  // The cycle existed a moment ago (assertCanAccessCycle), so no row means it
+  // was signed off in between.
   if (updated.length === 0) {
-    redirect(`/observation?error=cycle_not_found`);
+    redirect(`/observation/${cycleId}?error=cycle_locked`);
   }
 
   void recordAudit({

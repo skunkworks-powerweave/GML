@@ -18,6 +18,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { mentorRoster } from "@/lib/gated-reads";
 import { mentorshipAccess } from "@/lib/visibility";
@@ -49,7 +50,8 @@ export default async function RepoMentorDetailPage({
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   // The mentor's own profile -- name, base location, expertise -- is directory
   // data and stays visible to any signed-in user, which is the point of /repo.

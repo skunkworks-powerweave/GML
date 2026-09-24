@@ -16,6 +16,7 @@ import {
   subjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
@@ -79,7 +80,8 @@ export default async function RepoSchoolDetailPage({
     redirect("/forbidden");
   }
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [school] = await db
     .select({

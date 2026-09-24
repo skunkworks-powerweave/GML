@@ -27,6 +27,7 @@ import { actorFrom } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
 import { withAudit } from "@/lib/audit";
 import { cycleCodePrefix, nextCycleCode } from "@/lib/observation/cycle-code";
+import { notifyCycleParties } from "@/lib/observation/notify";
 
 const NOMINATE_ROLES = ["programme_admin", "super_admin"] as const;
 
@@ -133,6 +134,11 @@ export async function nominateCycleAction(formData: FormData): Promise<void> {
     }
   }
   if (!createdId) redirect(`/observation/new?error=${failure ?? "failed"}`);
+
+  // Tell the teacher, the observer and her mentor the cycle is theirs. Nothing
+  // did: the settings page offered a "Cycle assigned" toggle that no code
+  // ever wrote. Best-effort -- the cycle is already created.
+  await notifyCycleParties(db, "cycle.assigned", createdId, actor.id);
 
   revalidatePath("/observation");
   redirect(`/observation/${createdId}`);

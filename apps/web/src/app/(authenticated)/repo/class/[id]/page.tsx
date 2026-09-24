@@ -9,6 +9,7 @@ import { and, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, schools, subjects, sessions, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
@@ -32,7 +33,8 @@ const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
 };
 
 export default async function RepoClassDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
   const session = await auth();
   const role = session?.user?.role ?? "teacher";
   const canSeeRoster = role === "super_admin" || role === "programme_admin";

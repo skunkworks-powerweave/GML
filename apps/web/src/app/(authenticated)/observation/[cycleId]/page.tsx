@@ -14,8 +14,15 @@ import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { teachers, subjects, observationForms, observationEvidence } from "@gml/db/schema";
+import { teachers, subjects, observationEvidence } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
+import { Fragment } from "react";
+import { loadSubmittedForms, STAGE_FORMS, stageFieldLabel, type StageKind } from "@/lib/observation/forms";
+import { parseNotes } from "@/lib/observation/notes";
+import { SubmittedForms } from "./SubmittedForms";
+import { DraftTextarea } from "./DraftTextarea";
+import { draftScope } from "@/lib/observation/drafts";
+import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 import {
@@ -41,13 +48,20 @@ export default async function CycleDetailPage({
   searchParams,
 }: {
   params: Promise<{ cycleId: string }>;
-  searchParams?: Promise<{ error?: string }>;
+  searchParams?: Promise<{ error?: string; field?: string }>;
 }) {
   const { cycleId } = await params;
   const sp = (await searchParams) ?? {};
   const error = (sp.error ?? "").trim();
+  // Only a known question's label is echoed back, never the raw parameter.
+  const invalidField = stageFieldLabel((sp.field ?? "").trim());
 
   const CYCLE_ERRORS: Record<string, { message: string; tone: "warn" | "error" }> = {
+    invalid_form: {
+      // The limit is stated: "too long" told nobody how long was allowed.
+      message: `${invalidField ? `"${invalidField}"` : "An answer"} was blank or longer than ${MAX_TEXT_LENGTH.toLocaleString("en-IN")} characters, so nothing was recorded and the cycle has not moved on. Please correct it and submit again.`,
+      tone: "warn",
+    },
     invalid_transition: {
       message:
         "That action can't be performed in the cycle's current status. The page has been refreshed.",
@@ -58,6 +72,10 @@ export default async function CycleDetailPage({
       message:
         "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
       tone: "error",
+    },
+    cycle_locked: {
+      message: "This cycle has been signed off. Its record is closed, so nothing more can be added to it.",
+      tone: "warn",
     },
     invalid_cycle: { message: "That cycle reference was not valid.", tone: "error" },
     cycle_not_found: { message: "That cycle no longer exists.", tone: "error" },
@@ -89,8 +107,17 @@ export default async function CycleDetailPage({
   const [subject] = cycle.subjectId
     ? await db.select().from(subjects).where(eq(subjects.id, cycle.subjectId)).limit(1)
     : [null];
-  const forms = await db.select().from(observationForms).where(eq(observationForms.cycleId, cycleId));
+  // The SUBMITTED forms, with their answers and who submitted each. This used
+  // to be `select *` rendered as a kind chip and a timestamp: the answers were
+  // shown to nobody, so the observer never read the lesson plan, the teacher
+  // never read the rubric, and sign-off happened blind. Seed templates in the
+  // same table are dropped here rather than counted as submissions.
+  const forms = await loadSubmittedForms(db, cycleId, teacher?.userId ?? null);
   const evidence = await db.select().from(observationEvidence).where(eq(observationEvidence.cycleId, cycleId));
+  const notes = parseNotes(cycle.remark);
+  // What each textarea keeps if a submit is refused, keyed to this viewer and
+  // this version of the cycle (lib/observation/drafts.ts).
+  const drafts = { userId: actor.id, cycleId, version: String(cycle.updatedAt.getTime()) };
 
   const currentStageIdx = CYCLE_STAGES.findIndex((s) => s.id === cycle.status);
 
@@ -138,13 +165,14 @@ export default async function CycleDetailPage({
   const canSignOff =
     cycle.status === "post_submitted" &&
     hasAnyRole(viewerRole, ["mentor", "programme_admin", "super_admin"]);
+  // SIGNED OFF IS CLOSED. Sign-off is the locking transition, so a complete
+  // cycle offers no note form and no upload; addNoteAction refuses a note on
+  // the server as well. The upload path's own refusal (beginUploadAction and
+  // finalizeUpload) belongs to the upload plumbing, not to this page.
+  const locked = cycle.status === "complete";
   // addNoteAction: observer, mentor, programme_admin, super_admin.
-  const canAddNote = hasAnyRole(viewerRole, [
-    "observer",
-    "mentor",
-    "programme_admin",
-    "super_admin",
-  ]);
+  const canAddNote =
+    !locked && hasAnyRole(viewerRole, ["observer", "mentor", "programme_admin", "super_admin"]);
 
   // Spec 137 — device-aware adoption of MobileDetailFrame. On mobile the
   // existing single-column flow is wrapped in the thin-header + back-arrow
@@ -259,38 +287,13 @@ export default async function CycleDetailPage({
         <article className="card card-hi" style={{ padding: 16 }}>
           <div className="label" style={{ marginBottom: 6 }}>Forms · {forms.length}</div>
           <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Pre &amp; post-observation</h2>
-          {forms.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No forms submitted yet.</p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              {forms.map((f) => (
-                <li
-                  key={f.id}
-                  className="card"
-                  style={{ padding: 10, fontSize: 12, boxShadow: "none" }}
-                >
-                  <span className="chip chip-ink" style={{ fontSize: 10 }}>{f.kind}</span>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>
-                    Submitted <span className="mono">{new Date(f.submittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <SubmittedForms forms={forms} />
 
           {/* CTA: Submit pre-form */}
           {canSubmitPre ? (
             <form action={submitPreFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <label className="label" style={{ fontSize: 11 }}>Lesson plan summary</label>
-              <textarea
-                name="lessonPlanSummary"
-                rows={3}
-                required
-                className="text"
-                placeholder="What will you teach today?"
-                style={{ fontSize: 13 }}
-              />
+              <StageFields kind="pre" drafts={drafts} />
               <button type="submit" className="btn btn-primary btn-sm">
                 Submit pre-form
               </button>
@@ -301,15 +304,7 @@ export default async function CycleDetailPage({
           {canSubmitObserver ? (
             <form action={submitObserverFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <label className="label" style={{ fontSize: 11 }}>Observer rubric notes</label>
-              <textarea
-                name="narrativeComments"
-                rows={3}
-                required
-                className="text"
-                placeholder="Rubric narrative…"
-                style={{ fontSize: 13 }}
-              />
+              <StageFields kind="observer" drafts={drafts} />
               <button type="submit" className="btn btn-primary btn-sm">
                 Submit observer-form
               </button>
@@ -320,15 +315,7 @@ export default async function CycleDetailPage({
           {canSubmitPost ? (
             <form action={submitPostFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <label className="label" style={{ fontSize: 11 }}>What worked / What didn&apos;t</label>
-              <textarea
-                name="whatWorked"
-                rows={3}
-                required
-                className="text"
-                placeholder="Reflect on the lesson…"
-                style={{ fontSize: 13 }}
-              />
+              <StageFields kind="post" drafts={drafts} />
               <button type="submit" className="btn btn-primary btn-sm">
                 Submit post-form
               </button>
@@ -369,7 +356,13 @@ export default async function CycleDetailPage({
 
           {/* CTA: direct browser video upload — context wired to this cycle. */}
           <div style={{ marginTop: 12 }}>
-            <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+            {locked ? (
+              <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                Signed off — this record is closed and accepts no further evidence.
+              </p>
+            ) : (
+              <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+            )}
           </div>
         </article>
       </section>
@@ -386,29 +379,47 @@ export default async function CycleDetailPage({
           action destructive. */}
       <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
         <div className="label" style={{ marginBottom: 6 }}>Remark</div>
-        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor notes</h2>
-        {cycle.remark ? (
-          // whiteSpace: pre-wrap so the blank line between appended entries,
-          // and the timestamp each one carries, survive rendering.
-          <p
-            style={{
-              fontSize: 13,
-              color: "var(--ink-2)",
-              lineHeight: 1.5,
-              marginBottom: 12,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {cycle.remark}
-          </p>
+        {/* "Notes", not "Mentor notes": observers and administrators write
+            here too, and each entry now names its author and role. */}
+        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Notes</h2>
+        {notes.length > 0 ? (
+          // ENTRY BY ENTRY, not the column printed whole. Printed pre-wrap, a
+          // note holding a blank line and a line shaped like an entry header
+          // read as a separate entry by whoever it named. Each entry's author
+          // is now its own markup; what a body says stays inside it.
+          <ol style={{ listStyle: "none", padding: 0, margin: "0 0 12px", display: "grid", gap: 10 }}>
+            {notes.map((n, i) => (
+              <li key={i} data-note-entry="" style={{ borderLeft: "2px solid var(--line)", paddingLeft: 10 }}>
+                <div data-note-author="" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                  {n.author ? (
+                    <>
+                      <strong style={{ color: "var(--ink)" }}>{n.author}</strong> ({n.role})
+                    </>
+                  ) : (
+                    "Earlier note"
+                  )}
+                  {n.at ? <span className="mono">{` · ${n.at} UTC`}</span> : null}
+                </div>
+                {/* pre-wrap keeps the line breaks inside the note. */}
+                <p
+                  data-note-body=""
+                  style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, margin: "2px 0 0", whiteSpace: "pre-wrap" }}
+                >
+                  {n.body}
+                </p>
+              </li>
+            ))}
+          </ol>
         ) : (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No mentor note yet.</p>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No notes yet.</p>
         )}
         {canAddNote ? (
         <form action={addNoteAction} style={{ display: "grid", gap: 8 }}>
           <input type="hidden" name="cycleId" value={cycleId} />
-          <textarea
+          <DraftTextarea
             name="note"
+            draftScope={draftScope(drafts.userId, drafts.cycleId, "note")}
+            draftVersion={drafts.version}
             rows={3}
             required
             className="text"
@@ -436,5 +447,37 @@ export default async function CycleDetailPage({
     </MobileDetailFrame>
   ) : (
     body
+  );
+}
+
+// A stage's questions, from the same definition the server validates against
+// (lib/observation/forms.ts), so an input the server would drop cannot appear,
+// capped where the server caps them, and kept if a submit is refused.
+function StageFields({
+  kind,
+  drafts,
+}: {
+  kind: StageKind;
+  drafts: { userId: string; cycleId: string; version: string };
+}) {
+  return (
+    <>
+      {STAGE_FORMS[kind].fields.map((f) => (
+        <Fragment key={f.name}>
+          <label className="label" style={{ fontSize: 11 }}>{f.label}</label>
+          <DraftTextarea
+            name={f.name}
+            draftScope={draftScope(drafts.userId, drafts.cycleId, f.name)}
+            draftVersion={drafts.version}
+            rows={3}
+            required={f.required}
+            maxLength={MAX_TEXT_LENGTH}
+            className="text"
+            placeholder={f.placeholder}
+            style={{ fontSize: 13 }}
+          />
+        </Fragment>
+      ))}
+    </>
   );
 }

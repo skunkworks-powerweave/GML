@@ -68,8 +68,12 @@ export type ValidationError = { field: string; message: string };
  * Not a style preference: these land in a jsonb column that administrators
  * read, and without a bound one submission can push an arbitrary payload into
  * a surface someone will later open.
+ *
+ * Exported so an input can carry the same cap as maxLength (the observation
+ * stage forms do): refused on the server, it is a redirect, and the user finds
+ * out only after typing past it.
  */
-const MAX_TEXT_LENGTH = 5000;
+export const MAX_TEXT_LENGTH = 5000;
 
 /**
  * Kinds whose stored answer is a number, not one of `options`.

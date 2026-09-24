@@ -13,12 +13,14 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, learners, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
+import { uuidOrNotFound } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
 export default async function RepoClassLearnersPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   // SM-9 step 1: gate on role. Non-privileged callers never reach the audit hook OR the DB.
   await requireRole(["super_admin", "programme_admin"]);

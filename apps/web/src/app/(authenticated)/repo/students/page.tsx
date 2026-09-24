@@ -23,6 +23,7 @@ import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit, recordAuditDedup } from "@/lib/audit";
+import { isUuid } from "@/lib/ids";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +50,10 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
-  const schoolFilter = typeof sp.school === "string" && sp.school.length > 0 ? sp.school : undefined;
+  // A malformed ?school= is ignored, as /repo/teachers and /repo/sessions do:
+  // passed through, it reached a uuid comparison and Postgres answered 22P02,
+  // a 500 for a truncated link.
+  const schoolFilter = isUuid(sp.school) ? sp.school : undefined;
   // Spec 168 — name search. Empty / whitespace-only queries treat as absent
   // so typing then deleting doesn't leave a no-op filter live.
   const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);

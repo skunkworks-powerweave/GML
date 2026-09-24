@@ -9,12 +9,12 @@
 //   • teacher:         my uploads (7d), my cycles pending pre-form, my
 //                      cycles awaiting video, open quizzes.
 //   • observer:        cycles I am leading (active), pending observer forms
-//                      I owe, cycles awaiting my sign-off.
+//                      I owe, my cycles awaiting the mentor's sign-off.
 //   • mentor:          my active mentees, my pending video reviews (teach_back
 //                      videos that are ready and unreviewed, on my pairings --
 //                      lib/video/pending-review.ts), my scheduled meetings
-//                      this week, Q-progress forms due (proxy: meetings_count
-//                      hit a quarter boundary but no matching feedback row).
+//                      this week, Q-progress forms due (a meeting has been
+//                      held since the pairing's last mentor form).
 //   • programme_admin: active pairings, cycles in flight, recent uploads
 //                      (24h), pending observer forms (programme-wide).
 //   • super_admin:     same as programme_admin + total users + audit events
@@ -23,11 +23,18 @@
 //                      page boundary, so the card shows the SUM(files.sizeBytes)
 //                      proxy in MB instead.
 //
+// SECTION GATES. Counts and to-dos drawn from observation cycles or mentorship
+// pairings are the gated sections' rows, re-served outside them, so they follow
+// lib/visibility.ts's rule exactly as the nav badges do: without the viewer's
+// grant the query does not run, the card reads "— · <Section> locked", and the
+// to-do list offers the unlock instead of claiming "Nothing pending". It used
+// to show them, cycle codes included, to anyone signed in.
+//
 // All counts run as a single Promise.all per variant so the page is a one-shot
 // round-trip. The helper is wrapped in React.cache so the variant-builder and
 // the TodayChecklist row builder share one materialisation per request.
 
-import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@gml/db";
 import { getTranslations } from "next-intl/server";
@@ -41,6 +48,8 @@ import {
   teachers,
   schools,
   mentors,
+  feedbackForms,
+  feedbackResponses,
   quizzes,
   quizSubmissions,
   users,
@@ -50,11 +59,34 @@ import {
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { recordAudit } from "@/lib/audit";
+import { getActiveGrant } from "@/lib/gates";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
 
 type Stat = { label: string; value: string | number; hint?: string };
+
+// ── section gates ────────────────────────────────────────────────────────────
+type GatedSection = "observation" | "mentorship";
+const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation", mentorship: "Mentorship" };
+
+/** Whether the viewer holds a live grant for the section (one lookup per request). */
+const sectionOpen = cache(async (userId: string, section: GatedSection): Promise<boolean> =>
+  (await getActiveGrant(userId, section)) !== null,
+);
+
+/** A count from a gated section: null while that section is locked. */
+type Gated = number | null;
+
+/** Run `q` only when the section is open; a locked section runs no query. */
+async function gatedCount(open: boolean, q: () => PromiseLike<Array<{ c: number }>>): Promise<Gated> {
+  if (!open) return null;
+  return (await q())[0]?.c ?? 0;
+}
+
+function gatedStat(label: string, value: Gated, hint: string, section: GatedSection): Stat {
+  return value === null ? { label, value: "—", hint: `${SECTION_NAME[section]} locked` } : { label, value, hint };
+}
 
 // ── time windows used in multiple counts ─────────────────────────────────────
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -96,8 +128,12 @@ function endOfDayUtc(d = new Date()): Date {
 // ── shared / programme-wide chrome ───────────────────────────────────────────
 // Programme + super admins read the same broad set. Cached to coalesce queries
 // fired from both the stat row and the today-checklist row builders.
-const getProgrammeChrome = cache(async () => {
+const getProgrammeChrome = cache(async (userId: string) => {
   const since24h = new Date(Date.now() - ONE_DAY_MS);
+  const [obsOpen, mentorshipOpen] = await Promise.all([
+    sectionOpen(userId, "observation"),
+    sectionOpen(userId, "mentorship"),
+  ]);
   const [
     pairingsActive,
     cyclesInFlight,
@@ -110,16 +146,22 @@ const getProgrammeChrome = cache(async () => {
     mentorsTotal,
     teachersTotal,
   ] = await Promise.all([
-    db.select({ c: count() }).from(mentorPairings).where(eq(mentorPairings.status, "active")),
-    db
-      .select({ c: count() })
-      .from(observationCycles)
-      .where(inArray(observationCycles.status, ["nominated", "pre_submitted", "observed", "post_submitted"])),
+    gatedCount(mentorshipOpen, () =>
+      db.select({ c: count() }).from(mentorPairings).where(eq(mentorPairings.status, "active")),
+    ),
+    gatedCount(obsOpen, () =>
+      db
+        .select({ c: count() })
+        .from(observationCycles)
+        .where(inArray(observationCycles.status, ["nominated", "pre_submitted", "observed", "post_submitted"])),
+    ),
     db.select({ c: count() }).from(videoSubmissions).where(gte(videoSubmissions.createdAt, since24h)),
-    db
-      .select({ c: count() })
-      .from(observationCycles)
-      .where(eq(observationCycles.status, "pre_submitted")),
+    gatedCount(obsOpen, () =>
+      db
+        .select({ c: count() })
+        .from(observationCycles)
+        .where(eq(observationCycles.status, "pre_submitted")),
+    ),
     db.select({ c: count() }).from(users).where(eq(users.active, true)),
     db.select({ c: count() }).from(auditLog).where(gte(auditLog.createdAt, since24h)),
     db.select({ b: sql<number>`COALESCE(SUM(${files.sizeBytes}), 0)` }).from(files).where(isNull(files.deletedAt)),
@@ -128,10 +170,10 @@ const getProgrammeChrome = cache(async () => {
     db.select({ c: count() }).from(teachers).where(eq(teachers.active, true)),
   ]);
   return {
-    pairingsActive: pairingsActive[0]?.c ?? 0,
-    cyclesInFlight: cyclesInFlight[0]?.c ?? 0,
+    pairingsActive,
+    cyclesInFlight,
     recentUploads: recentUploads[0]?.c ?? 0,
-    pendingObserverForms: pendingObserverForms[0]?.c ?? 0,
+    pendingObserverForms,
     totalUsers: totalUsers[0]?.c ?? 0,
     auditEvents24h: auditEvents24h[0]?.c ?? 0,
     storageMb: Math.round(Number(storageBytes[0]?.b ?? 0) / (1024 * 1024)),
@@ -152,8 +194,19 @@ const getTeacherChrome = cache(async (userId: string) => {
     .limit(1);
   const teacherId = teacherRow?.id ?? null;
   const since7d = new Date(Date.now() - SEVEN_DAYS_MS);
+  const obsOpen = await sectionOpen(userId, "observation");
+  // Her cycles at one stage, or null while observation is locked for her.
+  const myCyclesAt = (status: "nominated" | "pre_submitted" | "observed") =>
+    gatedCount(obsOpen, () =>
+      teacherId
+        ? db
+            .select({ c: count() })
+            .from(observationCycles)
+            .where(and(eq(observationCycles.teacherId, teacherId), eq(observationCycles.status, status)))
+        : Promise.resolve([{ c: 0 }]),
+    );
 
-  const [myUploads7d, pendingPre, awaitingVideo, openQuizzes] = await Promise.all([
+  const [myUploads7d, pendingPre, awaitingVideo, awaitingPost, openQuizzes] = await Promise.all([
     // My uploads this week — every video_submission this user submitted in
     // the trailing 7 days, regardless of context (covers WhatsApp + direct +
     // teach_back). Matches the "My uploads" panel on the teacher dashboard.
@@ -169,30 +222,14 @@ const getTeacherChrome = cache(async (userId: string) => {
     // Cycles pending pre-form — my cycles where I owe the pre-form. status
     // 'nominated' is the upstream gate before the pre-form submit (see
     // /observation/[cycleId]/actions.ts::submitPreFormAction).
-    teacherId
-      ? db
-          .select({ c: count() })
-          .from(observationCycles)
-          .where(
-            and(
-              eq(observationCycles.teacherId, teacherId),
-              eq(observationCycles.status, "nominated"),
-            ),
-          )
-      : Promise.resolve([{ c: 0 }] as Array<{ c: number }>),
+    myCyclesAt("nominated"),
     // Cycles awaiting video — pre-form done, observation upload still owed.
     // 'pre_submitted' is the JSX prototype's "awaiting video" stage.
-    teacherId
-      ? db
-          .select({ c: count() })
-          .from(observationCycles)
-          .where(
-            and(
-              eq(observationCycles.teacherId, teacherId),
-              eq(observationCycles.status, "pre_submitted"),
-            ),
-          )
-      : Promise.resolve([{ c: 0 }] as Array<{ c: number }>),
+    myCyclesAt("pre_submitted"),
+    // Cycles awaiting her post-form — observed, reflection owed. This stage
+    // had no to-do at all, so a teacher whose cycle reached 'observed' was
+    // prompted for nothing and the cycle stalled before sign-off.
+    myCyclesAt("observed"),
     // Open quizzes — active quizzes the teacher has not yet attempted /
     // passed. A submission counts as "done" regardless of score (quiz
     // surface re-attempts are tracked separately).
@@ -214,53 +251,58 @@ const getTeacherChrome = cache(async (userId: string) => {
   return {
     teacherId,
     myUploads7d: myUploads7d[0]?.c ?? 0,
-    pendingPre: pendingPre[0]?.c ?? 0,
-    awaitingVideo: awaitingVideo[0]?.c ?? 0,
+    pendingPre,
+    awaitingVideo,
+    awaitingPost,
     openQuizzes: openQuizzes[0]?.c ?? 0,
   };
 });
 
 // ── observer chrome ──────────────────────────────────────────────────────────
 const getObserverChrome = cache(async (userId: string) => {
+  // Every card here is observation cycles: all null while the section is locked.
+  const obsOpen = await sectionOpen(userId, "observation");
   const [leadingActive, pendingObserverForm, awaitingSignOff] = await Promise.all([
     // Cycles I am leading (active) — assigned observer, not yet complete.
-    db
-      .select({ c: count() })
-      .from(observationCycles)
-      .where(
-        and(
-          eq(observationCycles.observerId, userId),
-          inArray(observationCycles.status, ["nominated", "pre_submitted", "observed", "post_submitted"]),
+    gatedCount(obsOpen, () =>
+      db
+        .select({ c: count() })
+        .from(observationCycles)
+        .where(
+          and(
+            eq(observationCycles.observerId, userId),
+            inArray(observationCycles.status, ["nominated", "pre_submitted", "observed", "post_submitted"]),
+          ),
         ),
-      ),
+    ),
     // Pending observer forms — the cycle is in 'pre_submitted' (teacher
     // shipped the pre-form, observer is up next). Filtered to my cycles.
-    db
-      .select({ c: count() })
-      .from(observationCycles)
-      .where(
-        and(
-          eq(observationCycles.observerId, userId),
-          eq(observationCycles.status, "pre_submitted"),
+    gatedCount(obsOpen, () =>
+      db
+        .select({ c: count() })
+        .from(observationCycles)
+        .where(
+          and(
+            eq(observationCycles.observerId, userId),
+            eq(observationCycles.status, "pre_submitted"),
+          ),
         ),
-      ),
-    // Cycles awaiting sign-off — post-form submitted, observer / mentor
-    // sign-off pending. Mapped to status 'post_submitted'.
-    db
-      .select({ c: count() })
-      .from(observationCycles)
-      .where(
-        and(
-          eq(observationCycles.observerId, userId),
-          eq(observationCycles.status, "post_submitted"),
+    ),
+    // Cycles awaiting sign-off — post-form submitted, the MENTOR's sign-off
+    // pending (observers cannot sign off). Mapped to status 'post_submitted'.
+    gatedCount(obsOpen, () =>
+      db
+        .select({ c: count() })
+        .from(observationCycles)
+        .where(
+          and(
+            eq(observationCycles.observerId, userId),
+            eq(observationCycles.status, "post_submitted"),
+          ),
         ),
-      ),
+    ),
   ]);
-  return {
-    leadingActive: leadingActive[0]?.c ?? 0,
-    pendingObserverForm: pendingObserverForm[0]?.c ?? 0,
-    awaitingSignOff: awaitingSignOff[0]?.c ?? 0,
-  };
+  return { leadingActive, pendingObserverForm, awaitingSignOff };
 });
 
 // ── mentor chrome ────────────────────────────────────────────────────────────
@@ -273,13 +315,17 @@ const getMentorChrome = cache(async (userId: string) => {
     .where(eq(mentors.userId, userId))
     .limit(1);
   const mentorId = mentorRow?.id ?? null;
+  // Pairings, their meetings and their forms are mentorship rows: null while
+  // that section is locked. Teach-back reviews are RTT's and are not gated.
+  const mentorshipOpen = await sectionOpen(userId, "mentorship");
   if (!mentorId) {
+    const none: Gated = mentorshipOpen ? 0 : null;
     return {
       mentorId: null,
-      activeMentees: 0,
+      activeMentees: none,
       pendingVideoReviews: 0,
-      scheduledMeetingsThisWeek: 0,
-      qProgressFormsDue: 0,
+      scheduledMeetingsThisWeek: none,
+      qProgressFormsDue: none,
     };
   }
 
@@ -288,15 +334,17 @@ const getMentorChrome = cache(async (userId: string) => {
 
   const [activeMentees, pendingVideoReviews, scheduledMeetings, qProgressFormsDue] = await Promise.all([
     // Active mentees — pairings where I am the mentor and status='active'.
-    db
-      .select({ c: count() })
-      .from(mentorPairings)
-      .where(
-        and(
-          eq(mentorPairings.mentorId, mentorId),
-          eq(mentorPairings.status, "active"),
+    gatedCount(mentorshipOpen, () =>
+      db
+        .select({ c: count() })
+        .from(mentorPairings)
+        .where(
+          and(
+            eq(mentorPairings.mentorId, mentorId),
+            eq(mentorPairings.status, "active"),
+          ),
         ),
-      ),
+    ),
     // Pending video reviews — teach_back clips on MY active pairings that are
     // playable and nobody has reviewed: the shared predicate in
     // lib/video/pending-review.ts, which the sidebar badge uses too.
@@ -326,47 +374,86 @@ const getMentorChrome = cache(async (userId: string) => {
       .where(pendingTeachBackReviewWhere()),
     // Scheduled meetings this week — mentor_meetings where the pairing is
     // mine and scheduled_at lands in the current Mon-Sun window.
-    db
-      .select({ c: count() })
-      .from(mentorMeetings)
-      .innerJoin(mentorPairings, eq(mentorMeetings.pairingId, mentorPairings.id))
-      .where(
-        and(
-          eq(mentorPairings.mentorId, mentorId),
-          gte(mentorMeetings.scheduledAt, weekStart),
-          lt(mentorMeetings.scheduledAt, weekEnd),
+    gatedCount(mentorshipOpen, () =>
+      db
+        .select({ c: count() })
+        .from(mentorMeetings)
+        .innerJoin(mentorPairings, eq(mentorMeetings.pairingId, mentorPairings.id))
+        .where(
+          and(
+            eq(mentorPairings.mentorId, mentorId),
+            gte(mentorMeetings.scheduledAt, weekStart),
+            lt(mentorMeetings.scheduledAt, weekEnd),
+          ),
         ),
-      ),
-    // Q-progress forms due — pairings where current_quarter is set (i.e. the
-    // pairing has reached a quarter boundary) and the cached meetings_count
-    // shows at least one meeting happened (so the form is owed). Real
-    // "form-due" detection requires joining feedback_responses against the
-    // matching quarter; that join is hot and the proxy is faithful to the
-    // prototype's count. See research.md.
-    db
-      .select({ c: count() })
-      .from(mentorPairings)
-      .where(
-        and(
-          eq(mentorPairings.mentorId, mentorId),
-          eq(mentorPairings.status, "active"),
-          isNotNull(mentorPairings.currentQuarter),
-          gt(mentorPairings.meetingsCount, 0),
+    ),
+    // Q-progress forms due — my active pairings where a meeting has been HELD
+    // (scheduled_at <= now) since the pairing's latest mentor form, or at all
+    // when none has been filed yet, and whose final form is not in.
+    //
+    // NOT "the current quarter's form is missing". Quarters carry no dates;
+    // submitting a form is what closes one: submitFormAction moves
+    // current_quarter on in the same transaction that stores the response
+    // (QUARTER_AFTER), so the current quarter's form is always the unfiled
+    // one, and counting on it made submitting a form push the number UP. What
+    // makes the next form owed is mentoring since the last one. current_quarter
+    // is not read, so a pairing the admin grid created (NULL, i.e. Q1) counts
+    // like any other. A meeting booked for later has not been held. 'final'
+    // opens no quarter (completePairingAction closes the pairing).
+    //
+    // Before that the count was a proxy that never read feedback_responses,
+    // and sat at 4 beside "Nothing pending — your queue is clear".
+    gatedCount(mentorshipOpen, () =>
+      db
+        .select({ c: count() })
+        .from(mentorPairings)
+        .where(
+          and(
+            eq(mentorPairings.mentorId, mentorId),
+            eq(mentorPairings.status, "active"),
+            sql`EXISTS (
+              SELECT 1 FROM ${mentorMeetings} m
+              WHERE m.pairing_id = ${mentorPairings.id}
+                AND m.scheduled_at <= now()
+                AND m.scheduled_at > COALESCE((
+                  SELECT max(r.submitted_at) FROM ${feedbackResponses} r
+                  JOIN ${feedbackForms} f ON f.id = r.form_id
+                  WHERE r.pairing_id = ${mentorPairings.id} AND f.audience = 'mentor'
+                ), '-infinity'::timestamptz)
+            )`,
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${feedbackResponses} r
+              JOIN ${feedbackForms} f ON f.id = r.form_id
+              WHERE r.pairing_id = ${mentorPairings.id} AND f.audience = 'mentor' AND f.kind = 'final'
+            )`,
+          ),
         ),
-      ),
+    ),
   ]);
 
   return {
     mentorId,
-    activeMentees: activeMentees[0]?.c ?? 0,
+    activeMentees,
     pendingVideoReviews: pendingVideoReviews[0]?.c ?? 0,
-    scheduledMeetingsThisWeek: scheduledMeetings[0]?.c ?? 0,
-    qProgressFormsDue: qProgressFormsDue[0]?.c ?? 0,
+    scheduledMeetingsThisWeek: scheduledMeetings,
+    qProgressFormsDue,
   };
 });
 
 // ── today-checklist rows (mentor variant) ────────────────────────────────────
 type TodoRow = { text: string; href: string };
+
+/**
+ * What a locked section puts on the list in place of its to-dos: something may
+ * be waiting there, and this is how to look -- without a count, a code or any
+ * other row escaping the gate. The gate sends the user back to the dashboard.
+ */
+function unlockRow(section: GatedSection): TodoRow {
+  return {
+    text: `Unlock ${SECTION_NAME[section]} to see what is waiting on you`,
+    href: `/gate/${section}?next=${encodeURIComponent("/dashboard")}`,
+  };
+}
 
 async function getMentorTodos(userId: string): Promise<TodoRow[]> {
   const chrome = await getMentorChrome(userId);
@@ -374,23 +461,30 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
   const mentorId = chrome.mentorId;
   const dayStart = startOfDayUtc();
   const dayEnd = endOfDayUtc();
+  const [obsOpen, mentorshipOpen] = await Promise.all([
+    sectionOpen(userId, "observation"),
+    sectionOpen(userId, "mentorship"),
+  ]);
   const [awaitingSignOff, pendingVideo, meetingsToday] = await Promise.all([
     // Cycles awaiting my mentor sign-off — teacher just shipped the post-form.
-    db
-      .select({ id: observationCycles.id, code: observationCycles.code })
-      .from(observationCycles)
-      .innerJoin(teachers, eq(teachers.id, observationCycles.teacherId))
-      .innerJoin(
-        mentorPairings,
-        and(
-          eq(mentorPairings.teacherId, teachers.id),
-          eq(mentorPairings.mentorId, mentorId),
-          eq(mentorPairings.status, "active"),
-        ),
-      )
-      .where(eq(observationCycles.status, "post_submitted"))
-      .orderBy(desc(observationCycles.updatedAt))
-      .limit(1),
+    // A cycle code is an observation row: not read while that gate is locked.
+    obsOpen
+      ? db
+          .select({ id: observationCycles.id, code: observationCycles.code })
+          .from(observationCycles)
+          .innerJoin(teachers, eq(teachers.id, observationCycles.teacherId))
+          .innerJoin(
+            mentorPairings,
+            and(
+              eq(mentorPairings.teacherId, teachers.id),
+              eq(mentorPairings.mentorId, mentorId),
+              eq(mentorPairings.status, "active"),
+            ),
+          )
+          .where(eq(observationCycles.status, "post_submitted"))
+          .orderBy(desc(observationCycles.updatedAt))
+          .limit(1)
+      : Promise.resolve([] as Array<{ id: string; code: string }>),
     // Mentee video ready and not yet reviewed. Same shared predicate as the
     // stat card; the old never-written `review_pending` set meant this to-do
     // row could not fire for a clip the mentor could actually watch.
@@ -410,19 +504,21 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
       .orderBy(desc(videoSubmissions.createdAt))
       .limit(1),
     // Meetings scheduled today.
-    db
-      .select({ id: mentorMeetings.id })
-      .from(mentorMeetings)
-      .innerJoin(mentorPairings, eq(mentorMeetings.pairingId, mentorPairings.id))
-      .where(
-        and(
-          eq(mentorPairings.mentorId, mentorId),
-          gte(mentorMeetings.scheduledAt, dayStart),
-          lt(mentorMeetings.scheduledAt, dayEnd),
-        ),
-      )
-      .orderBy(mentorMeetings.scheduledAt)
-      .limit(1),
+    mentorshipOpen
+      ? db
+          .select({ id: mentorMeetings.id })
+          .from(mentorMeetings)
+          .innerJoin(mentorPairings, eq(mentorMeetings.pairingId, mentorPairings.id))
+          .where(
+            and(
+              eq(mentorPairings.mentorId, mentorId),
+              gte(mentorMeetings.scheduledAt, dayStart),
+              lt(mentorMeetings.scheduledAt, dayEnd),
+            ),
+          )
+          .orderBy(mentorMeetings.scheduledAt)
+          .limit(1)
+      : Promise.resolve([] as Array<{ id: string }>),
   ]);
 
   const todos: TodoRow[] = [];
@@ -444,12 +540,23 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
       href: `/mentorship`,
     });
   }
+  // A form that is due is something waiting on the mentor; the stat card alone
+  // left "Nothing pending" beside a non-zero "forms due".
+  const formsDue = chrome.qProgressFormsDue ?? 0;
+  if (formsDue > 0) {
+    todos.push({
+      text: `Submit ${formsDue} quarterly form${formsDue === 1 ? "" : "s"} for your mentees`,
+      href: `/mentorship`,
+    });
+  }
+  if (!obsOpen) todos.push(unlockRow("observation"));
+  if (!mentorshipOpen) todos.push(unlockRow("mentorship"));
   return todos;
 }
 
 // ── today-checklist rows (programme/super-admin variant) ─────────────────────
-async function getAdminTodos(): Promise<TodoRow[]> {
-  const chrome = await getProgrammeChrome();
+async function getAdminTodos(userId: string): Promise<TodoRow[]> {
+  const chrome = await getProgrammeChrome(userId);
   const todos: TodoRow[] = [];
   if (chrome.recentUploads > 0) {
     todos.push({
@@ -457,18 +564,19 @@ async function getAdminTodos(): Promise<TodoRow[]> {
       href: "/videos",
     });
   }
-  if (chrome.pendingObserverForms > 0) {
+  if (chrome.pendingObserverForms !== null && chrome.pendingObserverForms > 0) {
     todos.push({
       text: `${chrome.pendingObserverForms} cycle${chrome.pendingObserverForms === 1 ? "" : "s"} waiting on observer form`,
       href: "/observation",
     });
   }
-  if (chrome.cyclesInFlight > 0) {
+  if (chrome.cyclesInFlight !== null && chrome.cyclesInFlight > 0) {
     todos.push({
       text: `${chrome.cyclesInFlight} observation cycle${chrome.cyclesInFlight === 1 ? "" : "s"} in flight`,
       href: "/observation",
     });
   }
+  if (chrome.cyclesInFlight === null) todos.push(unlockRow("observation"));
   return todos;
 }
 
@@ -476,16 +584,22 @@ async function getAdminTodos(): Promise<TodoRow[]> {
 async function getTeacherTodos(userId: string): Promise<TodoRow[]> {
   const chrome = await getTeacherChrome(userId);
   const todos: TodoRow[] = [];
-  if (chrome.pendingPre > 0) {
+  if (chrome.pendingPre !== null && chrome.pendingPre > 0) {
     todos.push({
       text: `Submit pre-form for ${chrome.pendingPre} cycle${chrome.pendingPre === 1 ? "" : "s"}`,
       href: "/observation",
     });
   }
-  if (chrome.awaitingVideo > 0) {
+  if (chrome.awaitingVideo !== null && chrome.awaitingVideo > 0) {
     todos.push({
       text: `Upload lesson video for ${chrome.awaitingVideo} cycle${chrome.awaitingVideo === 1 ? "" : "s"}`,
       href: "/uploads",
+    });
+  }
+  if (chrome.awaitingPost !== null && chrome.awaitingPost > 0) {
+    todos.push({
+      text: `Submit post-form for ${chrome.awaitingPost} cycle${chrome.awaitingPost === 1 ? "" : "s"}`,
+      href: "/observation",
     });
   }
   if (chrome.openQuizzes > 0) {
@@ -494,6 +608,7 @@ async function getTeacherTodos(userId: string): Promise<TodoRow[]> {
       href: "/rtt",
     });
   }
+  if (chrome.pendingPre === null) todos.push(unlockRow("observation"));
   return todos;
 }
 
@@ -501,18 +616,19 @@ async function getTeacherTodos(userId: string): Promise<TodoRow[]> {
 async function getObserverTodos(userId: string): Promise<TodoRow[]> {
   const chrome = await getObserverChrome(userId);
   const todos: TodoRow[] = [];
+  if (chrome.pendingObserverForm === null) return [unlockRow("observation")];
   if (chrome.pendingObserverForm > 0) {
     todos.push({
       text: `Fill observer form for ${chrome.pendingObserverForm} cycle${chrome.pendingObserverForm === 1 ? "" : "s"}`,
       href: "/observation",
     });
   }
-  if (chrome.awaitingSignOff > 0) {
-    todos.push({
-      text: `Sign off ${chrome.awaitingSignOff} completed cycle${chrome.awaitingSignOff === 1 ? "" : "s"}`,
-      href: "/observation",
-    });
-  }
+  // NO SIGN-OFF ROW. This list used to offer "Sign off N completed cycles" for
+  // the observer's post_submitted cycles. Sign-off is mentor/admin only
+  // (signOffCycleAction's requireRole; the cycle page shows an observer no such
+  // control), and a post_submitted cycle is not complete -- so the observer
+  // followed the link to find nothing to press, on a to-do they could never
+  // clear. The count stays on the stat card, as information.
   return todos;
 }
 
@@ -542,12 +658,12 @@ export default async function DashboardPage() {
   let todos: TodoRow[] = [];
 
   if (role === "super_admin" || role === "programme_admin") {
-    const chrome = await getProgrammeChrome();
+    const chrome = await getProgrammeChrome(session.user.id);
     const base: Stat[] = [
-      { label: "Active pairings", value: chrome.pairingsActive, hint: `${chrome.mentorsTotal} mentors` },
-      { label: "Cycles in flight", value: chrome.cyclesInFlight, hint: "this term" },
+      gatedStat("Active pairings", chrome.pairingsActive, `${chrome.mentorsTotal} mentors`, "mentorship"),
+      gatedStat("Cycles in flight", chrome.cyclesInFlight, "this term", "observation"),
       { label: "Recent uploads (24h)", value: chrome.recentUploads, hint: "across all sources" },
-      { label: "Pending observer forms", value: chrome.pendingObserverForms, hint: "waiting on observer" },
+      gatedStat("Pending observer forms", chrome.pendingObserverForms, "waiting on observer", "observation"),
     ];
     if (role === "super_admin") {
       base.push(
@@ -557,22 +673,22 @@ export default async function DashboardPage() {
       );
     }
     stats = base;
-    todos = await getAdminTodos();
+    todos = await getAdminTodos(session.user.id);
   } else if (role === "mentor") {
     const chrome = await getMentorChrome(session.user.id);
     stats = [
-      { label: "Active mentees", value: chrome.activeMentees, hint: "paired" },
+      gatedStat("Active mentees", chrome.activeMentees, "paired", "mentorship"),
       { label: "Pending video reviews", value: chrome.pendingVideoReviews, hint: "target: < 48 h" },
-      { label: "Scheduled meetings this week", value: chrome.scheduledMeetingsThisWeek, hint: "Mon-Sun" },
-      { label: "Q-progress forms due", value: chrome.qProgressFormsDue, hint: "quarter boundary reached" },
+      gatedStat("Scheduled meetings this week", chrome.scheduledMeetingsThisWeek, "Mon-Sun", "mentorship"),
+      gatedStat("Q-progress forms due", chrome.qProgressFormsDue, "met since the last form", "mentorship"),
     ];
     todos = await getMentorTodos(session.user.id);
   } else if (role === "observer") {
     const chrome = await getObserverChrome(session.user.id);
     stats = [
-      { label: "Cycles I am leading (active)", value: chrome.leadingActive, hint: "assigned to me" },
-      { label: "Pending observer forms", value: chrome.pendingObserverForm, hint: "I owe" },
-      { label: "Cycles awaiting sign-off", value: chrome.awaitingSignOff, hint: "post-form in" },
+      gatedStat("Cycles I am leading (active)", chrome.leadingActive, "assigned to me", "observation"),
+      gatedStat("Pending observer forms", chrome.pendingObserverForm, "I owe", "observation"),
+      gatedStat("Cycles awaiting sign-off", chrome.awaitingSignOff, "post-form in · mentor signs off", "observation"),
     ];
     todos = await getObserverTodos(session.user.id);
   } else {
@@ -580,8 +696,8 @@ export default async function DashboardPage() {
     const chrome = await getTeacherChrome(session.user.id);
     stats = [
       { label: "My uploads this week", value: chrome.myUploads7d, hint: "last 7 days" },
-      { label: "Cycles pending pre-form", value: chrome.pendingPre, hint: "needs my reflection" },
-      { label: "Cycles awaiting video", value: chrome.awaitingVideo, hint: "ready to upload" },
+      gatedStat("Cycles pending pre-form", chrome.pendingPre, "needs my reflection", "observation"),
+      gatedStat("Cycles awaiting video", chrome.awaitingVideo, "ready to upload", "observation"),
       { label: "Open quizzes", value: chrome.openQuizzes, hint: "active · not yet taken" },
     ];
     todos = await getTeacherTodos(session.user.id);

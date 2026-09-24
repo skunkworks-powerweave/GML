@@ -6,6 +6,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { asc, eq, inArray, desc } from "drizzle-orm";
 import { db } from "@gml/db";
+import { uuidOrNotFound } from "@/lib/ids";
 import {
   courseOutlines,
   outlineLessons,
@@ -34,7 +35,8 @@ const SESSION_STATUS_CHIP: Record<string, string> = {
 };
 
 export default async function RepoOutlineDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [outline] = await db.select().from(courseOutlines).where(eq(courseOutlines.id, id)).limit(1);
   if (!outline) notFound();
