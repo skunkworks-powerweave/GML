@@ -9,8 +9,16 @@ import { ADMIN_ENTITIES } from "@/admin/registry";
 import { exportColumnKeys } from "@/admin/export-columns";
 import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
+import { describeWriteError } from "@/admin/db-errors";
+import { coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
+
+/**
+ * Bind parameters per INSERT statement. Postgres' wire protocol allows
+ * 65,535; staying well under leaves room for the columns Drizzle adds.
+ */
+const IMPORT_PARAMETER_BUDGET = 60_000;
 
 function getEntityOrThrow(slug: string) {
   const e = ADMIN_ENTITIES[slug];
@@ -137,28 +145,35 @@ export async function importCsv(slug: string, csv: string): Promise<{
       ok: false,
       inserted: 0,
       skipped: parsed.data.length,
-      errors: parsed.errors.map((e) => ({ row: e.row ?? -1, message: e.message })),
+      // Papa's `row` is the 0-based data row; the operator's spreadsheet line
+      // is that + 2 (the header is line 1), the same numbering as below.
+      errors: parsed.errors.map((e) => ({ row: e.row != null ? e.row + 2 : -1, message: e.message })),
     };
   }
 
   const errors: { row: number; message: string }[] = [];
-  const validRows: unknown[] = [];
+  // Each valid row keeps its spreadsheet line, so a refusal from the database
+  // can be reported against it.
+  const validRows: Array<{ line: number; data: Record<string, unknown> }> = [];
+  const shape = unwrapShape(entity.formSchema);
 
   for (const [i, raw] of parsed.data.entries()) {
-    // Coerce common scalar shapes; Zod schemas handle the strict validation.
-    const coerced: Record<string, unknown> = {};
-    for (const [k, cell] of Object.entries(raw)) {
-      if (cell === "" || cell == null) continue;
-      // Undo the export's formula escaping (admin/csv-safety.ts).
-      const v = unescapeFormulaCell(cell);
-      if (v === "true") coerced[k] = true;
-      else if (v === "false") coerced[k] = false;
-      else coerced[k] = v;
-    }
+    const line = i + 2; // header is line 1
+    // The SAME coercion as the grid's form (admin/zod-shape.ts). importCsv
+    // used to keep its own, which knew only lowercase true/false: array
+    // columns (expertiseAreas, tags) were "Expected array, received string"
+    // in every format, Excel's TRUE/FALSE was rejected, and dates went
+    // through JS Date guessing (05/10/2026 read as 10 May). An empty cell is
+    // an untouched field, as on create. Cells are un-escaped first
+    // (admin/csv-safety.ts), so an edited export imports as it was.
+    const coerced = coerceFormValues(entity.formFields, shape, (field) => {
+      const cell = raw[field];
+      return typeof cell === "string" && cell !== "" ? unescapeFormulaCell(cell) : null;
+    });
     const parse = entity.formSchema.safeParse(coerced);
     if (!parse.success) {
       const issue = parse.error.issues[0];
-      errors.push({ row: i + 2, message: `${issue?.path.join(".") ?? "row"}: ${issue?.message ?? "invalid"}` });
+      errors.push({ row: line, message: `${issue?.path.join(".") ?? "row"}: ${issue?.message ?? "invalid"}` });
       continue;
     }
     // The entity's database-backed rules, which the grid's form enforces too
@@ -166,37 +181,86 @@ export async function importCsv(slug: string, csv: string): Promise<{
     const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
     if (problems) {
       const [field, message] = Object.entries(problems)[0]!;
-      errors.push({ row: i + 2, message: `${field}: ${message}` });
+      errors.push({ row: line, message: `${field}: ${message}` });
       continue;
     }
-    validRows.push(parse.data);
+    validRows.push({ line, data: parse.data as Record<string, unknown> });
   }
 
   if (validRows.length === 0) {
     return { ok: errors.length === 0, inserted: 0, skipped: parsed.data.length, errors };
   }
 
+  // ROW BY ROW, IN CHUNKS, IN ONE TRANSACTION.
+  //
+  // This was ONE multi-row INSERT for the whole file. So a single duplicate
+  // code or unknown parent id aborted every row -- contradicting the panel's
+  // "rows that fail are reported and skipped, and the rest still land" -- and
+  // the result replaced the per-row validation errors with one
+  // "bulk_insert failed: <raw driver text>" at row -1. And a statement is
+  // limited to 65,535 bind parameters, so any file over rows x columns of
+  // that (about 6,500 learners) always failed with "bind message has N
+  // parameter formats but 0 parameters".
+  //
+  // Now each chunk stays under the parameter limit and runs in its own
+  // savepoint; a chunk the database refuses is retried row by row, each in
+  // its own savepoint, so exactly the offending rows are reported -- by line,
+  // in words (admin/db-errors.ts) -- and every other row lands.
+  const perRow = entity.formFields.length + 1;
+  const chunkSize = Math.max(1, Math.floor(IMPORT_PARAMETER_BUDGET / perRow));
+  const errorsBefore = errors.length;
+
   const audited = withAudit(
-    async () => {
-      await db.insert(entity.table as never).values(validRows as never);
-    },
+    async () =>
+      db.transaction(async (tx) => {
+        let inserted = 0;
+        for (let start = 0; start < validRows.length; start += chunkSize) {
+          const chunk = validRows.slice(start, start + chunkSize);
+          try {
+            await tx.transaction(async (sp) => {
+              await sp.insert(entity.table as never).values(chunk.map((r) => r.data) as never);
+            });
+            inserted += chunk.length;
+            continue;
+          } catch {
+            // Fall through: find the rows the database refuses.
+          }
+          for (const row of chunk) {
+            try {
+              await tx.transaction(async (sp) => {
+                await sp.insert(entity.table as never).values(row.data as never);
+              });
+              inserted += 1;
+            } catch (err) {
+              errors.push({ row: row.line, message: describeWriteError(entity, err) });
+            }
+          }
+        }
+        return inserted;
+      }),
     {
       action: `${entity.slug}.bulk_import`,
       entityType: entity.slug,
-      metadata: { inserted: validRows.length, skipped: errors.length },
+      metadata: {},
+      metadataFrom: (inserted) => ({ inserted, skipped: parsed.data.length - inserted }),
     },
   );
 
+  let inserted: number;
   try {
-    await audited();
+    inserted = await audited();
   } catch (err) {
+    // Not a row's fault (the connection, the transaction itself): nothing
+    // was committed. The driver text goes to the log, not the operator.
+    console.error(`[${entity.slug}.bulk_import] failed`, err);
     return {
       ok: false,
       inserted: 0,
       skipped: parsed.data.length,
-      errors: [{ row: -1, message: `bulk_insert failed: ${String(err)}` }],
+      errors: [...errors.slice(0, errorsBefore), { row: -1, message: "The import could not be completed. Nothing was saved." }],
     };
   }
 
-  return { ok: errors.length === 0, inserted: validRows.length, skipped: errors.length, errors };
+  errors.sort((a, b) => a.row - b.row);
+  return { ok: errors.length === 0, inserted, skipped: parsed.data.length - inserted, errors };
 }

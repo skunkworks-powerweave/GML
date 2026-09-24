@@ -121,8 +121,16 @@ export function coerceFieldValue(kind: FieldKind, raw: string): unknown {
       const n = Number(raw);
       return Number.isFinite(n) ? n : raw;
     }
-    case "boolean":
-      return raw === "true";
+    case "boolean": {
+      // Case-insensitive, and the spellings spreadsheets produce: Excel
+      // rewrites true/false as TRUE/FALSE when a CSV is opened and saved,
+      // which made every row of a round-tripped export fail "Expected
+      // boolean". Anything else is passed on for zod to reject.
+      const v = raw.trim().toLowerCase();
+      if (v === "true" || v === "yes" || v === "1") return true;
+      if (v === "false" || v === "no" || v === "0") return false;
+      return raw;
+    }
     case "date":
       // Strict ISO, unzoned values in IST (admin/dates.ts). An Invalid Date is
       // passed on so zod rejects it instead of z.coerce.date() guessing.
@@ -180,7 +188,7 @@ export function coerceFormValues(
       else if (opts.emptyMeansNull && acceptsNull(shape[field])) raw[field] = null;
       continue;
     }
-    if (kind === "array" || kind === "number" || kind === "date") {
+    if (kind === "array" || kind === "number" || kind === "date" || kind === "boolean") {
       raw[field] = coerceFieldValue(kind, value);
       continue;
     }

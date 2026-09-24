@@ -20,6 +20,7 @@ import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { entityRowProblems } from "@/admin/access";
 import { deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
+import { describeWriteError } from "@/admin/db-errors";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
@@ -54,6 +55,28 @@ async function requireEntityGate(entity: ReturnType<typeof getEntityOrThrow>, us
   if (entity.gate) {
     await assertSectionGate(userId, entity.gate, `/admin/data/${entity.slug}`);
   }
+}
+
+/**
+ * A database refusal as an action state: one sentence naming the field
+ * (admin/db-errors.ts), never the driver's text. Create and update returned
+ * `Insert failed: ${String(err)}` -- constraint and table names, to a page
+ * programme_admin can reach -- which describeDbError below already refused
+ * to do for deletes.
+ */
+function writeErrorState(
+  entity: ReturnType<typeof getEntityOrThrow>,
+  raw: Record<string, unknown>,
+  err: unknown,
+): AdminActionState {
+  const message = describeWriteError(entity, err);
+  const field = message.split(":")[0]!;
+  return {
+    ok: false,
+    error: message,
+    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    ...(entity.formFields.includes(field) ? { fieldErrors: { [field]: message.slice(field.length + 2) } } : {}),
+  };
 }
 
 /** Field errors from the entity's database-backed rules, as an action state. */
@@ -178,7 +201,8 @@ export async function createRowAction(
   try {
     await audited();
   } catch (err) {
-    return { ok: false, error: `Insert failed: ${String(err)}` };
+    console.error("[admin.row.create] failed", err);
+    return writeErrorState(entity, raw, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
@@ -258,7 +282,8 @@ export async function updateRowAction(
     await audited();
   } catch (err) {
     if (err instanceof MutationRefused) return { ok: false, error: err.message };
-    return { ok: false, error: `Update failed: ${String(err)}` };
+    console.error("[admin.row.update] failed", err);
+    return writeErrorState(entity, raw, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
