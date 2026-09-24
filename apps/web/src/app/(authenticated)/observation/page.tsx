@@ -127,11 +127,11 @@ export default async function ObservationListPage({
   // at 80 with no page parameter while the chips below counted every visible
   // cycle, so past 80 the table silently held less than the chips promised
   // and the rest could not be reached. lib/observation/list.ts pages with a
-  // total order, and the table says what range it is showing.
-  const page = parsePage(sp.page);
-  const { rows, total, from, to, hasNext } = await listCycles(db, {
+  // total order, and the table says what range it is showing. `page` is the
+  // page actually shown: a stale ?page= past the end becomes the last page.
+  const { rows, total, from, to, hasNext, page } = await listCycles(db, {
     where: conds.length === 0 ? undefined : and(...conds),
-    page,
+    page: parsePage(sp.page),
   });
 
   // Per-tab counts run as a single GROUP BY so the chips can show the

@@ -45,7 +45,7 @@ export async function listCycles(
   opts: { where: SQL | undefined; page: number; pageSize?: number },
 ) {
   const pageSize = opts.pageSize ?? CYCLE_PAGE_SIZE;
-  const [rows, [total]] = await Promise.all([
+  const pageRows = (page: number) =>
     db
       .select({
         id: observationCycles.id,
@@ -80,18 +80,31 @@ export async function listCycles(
       // id breaks ties, so the order is total and pages cannot overlap.
       .orderBy(desc(observationCycles.scheduledAt), desc(observationCycles.id))
       .limit(pageSize)
-      .offset((opts.page - 1) * pageSize),
+      .offset((page - 1) * pageSize);
+  let page = opts.page;
+  const [requested, [total]] = await Promise.all([
+    pageRows(page),
     db.select({ n: count() }).from(observationCycles).where(opts.where),
   ]);
   const totalRows = total?.n ?? 0;
+  // PAST THE END IS THE LAST PAGE. A stale ?page= -- a link kept across a
+  // filter change or deletions -- rendered "No observation cycles match this
+  // filter." beside "Showing 0–100 of 85". Only that case pays a second query.
+  const lastPage = Math.max(1, Math.ceil(totalRows / pageSize));
+  let rows = requested;
+  if (page > lastPage) {
+    page = lastPage;
+    rows = await pageRows(page);
+  }
   return {
     rows,
     total: totalRows,
-    page: opts.page,
+    /** The page shown: the requested one, or the last page if that was past the end. */
+    page,
     pageSize,
     /** 1-based index of the first row shown, 0 when the page is empty. */
-    from: rows.length === 0 ? 0 : (opts.page - 1) * pageSize + 1,
-    to: (opts.page - 1) * pageSize + rows.length,
-    hasNext: opts.page * pageSize < totalRows,
+    from: rows.length === 0 ? 0 : (page - 1) * pageSize + 1,
+    to: rows.length === 0 ? 0 : (page - 1) * pageSize + rows.length,
+    hasNext: page * pageSize < totalRows,
   };
 }

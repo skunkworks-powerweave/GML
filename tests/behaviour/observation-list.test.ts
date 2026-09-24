@@ -141,3 +141,29 @@ test("a chip keeps its filter across pages, and changing a chip starts again at 
     await w.cleanup();
   }
 });
+
+// A ?page= past the end -- a stale link after a filter change or deletions --
+// rendered "No observation cycles match this filter." beside
+// "Showing 0–100 of 85", because `to` was computed from the requested page
+// even when it held no rows.
+test("a page past the end shows the last page, not an empty table", { skip }, async () => {
+  const w = await observationWorld("obslistend");
+  try {
+    await w.c.query(
+      `INSERT INTO observation_cycles (code, teacher_id, kind, status, scheduled_at)
+       SELECT $1 || '-E' || g, $2, 'baseline', 'complete', now() - make_interval(days => g)
+         FROM generate_series(1, 85) g`,
+      [w.T, w.teacherId],
+    );
+    await w.grant(w.teacher.id);
+    const last = await listPage(w.teacher, { page: "2" });
+    const stale = await listPage(w.teacher, { page: "9" });
+    assert.doesNotMatch(stale.text, /No observation cycles match/, "85 cycles match; the page number was stale");
+    assert.match(stale.text, /Showing 51–85 of 85/);
+    assert.deepEqual(stale.ids, last.ids, "the last page's rows");
+    assert.match(stale.html, /href="\/observation"[^>]*>\s*← Previous/, "Previous goes to page 1 from the last page");
+    assert.doesNotMatch(stale.html, /Next →/);
+  } finally {
+    await w.cleanup();
+  }
+});
