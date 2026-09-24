@@ -7,7 +7,8 @@
 
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { quizzes, quizQuestions, quizSubmissions } from "@gml/db/schema";
+import { quizzes, quizQuestions, quizSubmissions, rttSubjects } from "@gml/db/schema";
+import { isUuid } from "@/lib/ids";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 
@@ -32,6 +33,10 @@ type IncomingPayload = {
   // cap. The runner and submit action enforced a cap nothing could set --
   // this editor was the only admin surface for a quiz and did not accept it.
   maxAttempts?: number | null;
+  // The RTT subject the quiz belongs to. A quiz must have exactly one scope
+  // (quizzes_one_scope), so this can be changed but not cleared; the create
+  // form sets it, and this is how a wrong choice there is corrected.
+  rttSubjectId?: string;
   active?: boolean;
   questions?: IncomingQuestion[];
 };
@@ -195,6 +200,25 @@ export async function saveQuizSchema(
     }
     updateSet.maxAttempts = parsed.maxAttempts;
   }
+  if (parsed.rttSubjectId !== undefined) {
+    const [subject] = isUuid(parsed.rttSubjectId)
+      ? await db
+          .select({ id: rttSubjects.id })
+          .from(rttSubjects)
+          .where(eq(rttSubjects.id, parsed.rttSubjectId))
+          .limit(1)
+      : [];
+    if (!subject) {
+      return {
+        ok: false,
+        error: "invalid_rtt_subject",
+        message: "rttSubjectId must be the id of an existing RTT subject.",
+      };
+    }
+    updateSet.rttSubjectId = subject.id;
+    // One scope only: a quiz moved to an RTT subject leaves any curriculum one.
+    updateSet.subjectId = null;
+  }
   if (typeof parsed.active === "boolean") {
     updateSet.active = parsed.active;
   }
@@ -280,6 +304,7 @@ export async function saveQuizSchema(
       // metadata when undefined per JSON serialization rules).
       timeLimitSeconds: updateSet.timeLimitSeconds,
       maxAttempts: updateSet.maxAttempts,
+      rttSubjectId: updateSet.rttSubjectId,
       active: updateSet.active,
     },
   });

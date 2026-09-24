@@ -52,6 +52,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     passThreshold: row.passThreshold,
     timeLimitSeconds: row.timeLimitSeconds,
     maxAttempts: row.maxAttempts,
+    rttSubjectId: row.rttSubjectId,
     active: row.active,
     questions: qs.map((q) => ({
       prompt: q.prompt,
@@ -206,7 +207,9 @@ export default async function AdminQuizDetailPage({ params }: Props) {
           (Spec 159; <code>null</code> = untimed; otherwise an integer
           between 60 and 7200 = 1 min to 2 h), an optional{" "}
           <code>maxAttempts</code> (<code>null</code> = unlimited; otherwise a
-          whole number from 1 to 20 — attempts each learner may submit), and a{" "}
+          whole number from 1 to 20 — attempts each learner may submit),{" "}
+          <code>rttSubjectId</code> (the RTT subject the quiz belongs to; it can be
+          changed, not removed), and a{" "}
           <code>questions[]</code> array. Each question must have{" "}
           <code>prompt</code> (string), <code>options</code> (array of ≥ 2
           strings), <code>correctIndex</code> (0-based integer into options),

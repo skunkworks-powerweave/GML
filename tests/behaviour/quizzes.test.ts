@@ -223,6 +223,29 @@ test("F32: with no RTT subjects the create form says what to do instead of faili
   assert.match(html, /RTT subject/);
 });
 
+test("F32: the quiz editor can move a quiz to another RTT subject, and refuses one that does not exist", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(randomUUID(), "programme_admin");
+    const { saveQuizSchema } = await editorActions();
+    const other = await rttSubject(w.c, tag("qmove"));
+    try {
+      const moved = await saveQuizSchema(w.quizId, JSON.stringify({ rttSubjectId: other }));
+      assert.equal(moved.ok, true, JSON.stringify(moved));
+      assert.equal((await w.q<{ s: string }>(`SELECT rtt_subject_id AS s FROM quizzes WHERE id = $1`, [w.quizId]))[0]!.s, other);
+      for (const bad of [randomUUID(), "nope", null]) {
+        const res = await saveQuizSchema(w.quizId, JSON.stringify({ rttSubjectId: bad }));
+        assert.equal(res.ok, false, `accepted rttSubjectId=${JSON.stringify(bad)}`);
+      }
+      const { default: Editor } = await editorPage();
+      const html = renderSync(withAppRouter(await Editor({ params: Promise.resolve({ id: w.quizId }) })));
+      assert.match(html, new RegExp(`&quot;rttSubjectId&quot;: &quot;${other}&quot;`));
+    } finally {
+      await w.q(`UPDATE quizzes SET rtt_subject_id = $2 WHERE id = $1`, [w.quizId, w.subjectId]);
+      await w.q(`DELETE FROM phases WHERE id = (SELECT t.phase_id FROM rtt_subjects s JOIN terms t ON t.id = s.term_id WHERE s.id = $1)`, [other]);
+    }
+  });
+});
+
 // ── Driving the runner as a browser does ─────────────────────────────────────
 
 type AnyEl = { type: unknown; props: Record<string, unknown> };
