@@ -13,11 +13,25 @@
 // page. Database as a parameter (tests/behaviour runs it); the visibility
 // predicate is the caller's and must be passed in.
 
-import { count, desc, eq, type SQL } from "drizzle-orm";
-import { observationCycles, subjects, teachers } from "@gml/db/schema";
+import { count, desc, eq, sql, type SQL } from "drizzle-orm";
+import { observationCycles, subjects, teachers, videoSubmissions } from "@gml/db/schema";
 import type { Db } from "../visibility";
 
 export const CYCLE_PAGE_SIZE = 50;
+
+/**
+ * The list's Video cell: minutes of ready video, the number of videos when
+ * their duration is unknown, "processing" while one is still in the pipeline,
+ * and "—" when there is none.
+ */
+export function videoCell(v: { videosReady: number; videosReadySec: number; videosProcessing: number }): string {
+  if (v.videosReady > 0) {
+    if (v.videosReadySec > 0) return `${Math.max(1, Math.round(v.videosReadySec / 60))}m`;
+    return `${v.videosReady} video${v.videosReady === 1 ? "" : "s"}`;
+  }
+  if (v.videosProcessing > 0) return "processing";
+  return "—";
+}
 
 /** ?page= as a page number: 1 for anything missing, malformed or absurd. */
 export function parsePage(raw: unknown): number {
@@ -40,7 +54,21 @@ export async function listCycles(
         status: observationCycles.status,
         scheduledAt: observationCycles.scheduledAt,
         topic: observationCycles.topic,
-        videoMin: observationCycles.videoMin,
+        // THE CYCLE'S VIDEOS, not observation_cycles.video_min. That column is
+        // written only by the demo seed -- no nomination, upload, webhook or
+        // transcode sets it -- so a real cycle with a ready lesson video showed
+        // "—" and a demo cycle with no video showed minutes. Keyed on the
+        // video's context (as uploads and the WhatsApp webhook both record
+        // it), covered by video_submissions_context_idx.
+        videosReady: sql<number>`(SELECT count(*)::int FROM ${videoSubmissions} v
+          WHERE v.context_type = 'observation_cycle' AND v.context_id = ${observationCycles.id}
+            AND v.status = 'ready')`,
+        videosReadySec: sql<number>`(SELECT coalesce(sum(v.duration_sec), 0)::int FROM ${videoSubmissions} v
+          WHERE v.context_type = 'observation_cycle' AND v.context_id = ${observationCycles.id}
+            AND v.status = 'ready')`,
+        videosProcessing: sql<number>`(SELECT count(*)::int FROM ${videoSubmissions} v
+          WHERE v.context_type = 'observation_cycle' AND v.context_id = ${observationCycles.id}
+            AND v.status IN ('received', 'queued', 'transcoding'))`,
         teacherName: teachers.fullName,
         teacherHindi: teachers.hindiName,
         subjectName: subjects.name,

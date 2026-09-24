@@ -71,6 +71,58 @@ test("every one of 85 visible cycles is reachable from the list, each exactly on
   }
 });
 
+// ── F31: the Video column reports the cycle's actual videos ──────────────────
+//
+// The column rendered observation_cycles.video_min, which only the demo seed
+// ever wrote: no nomination, upload, webhook or transcode sets it. So a real
+// cycle with a ready lesson video showed "—", and a demo cycle with no video at
+// all showed "30m".
+
+test("the Video column comes from the cycle's linked videos, not from video_min", { skip }, async () => {
+  const w = await observationWorld("obsvid");
+  const fileIds: string[] = [];
+  try {
+    const withVideo = await w.cycle({ code: `${w.T}-A`, scheduledAt: "2026-06-03T10:00:00Z" });
+    const inventedMinutes = await w.cycle({ code: `${w.T}-B`, scheduledAt: "2026-06-02T10:00:00Z" });
+    const stillProcessing = await w.cycle({ code: `${w.T}-C`, scheduledAt: "2026-06-01T10:00:00Z" });
+    await w.c.query(`UPDATE observation_cycles SET video_min = 30 WHERE id = $1`, [inventedMinutes.id]);
+    const video = async (cycleId: string, status: string, durationSec: number | null) => {
+      const fileId = (
+        await w.c.query(
+          `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos', $1, 'video/mp4', 'video_original', 'stored') RETURNING id`,
+          [`test/${w.T}/${cycleId}/${status}`],
+        )
+      ).rows[0].id as string;
+      fileIds.push(fileId);
+      await w.c.query(
+        // A ready video has its HLS master and was verified (a table CHECK).
+        `INSERT INTO video_submissions (file_id, source, status, duration_sec, context_type, context_id, hls_master_key, verified_at)
+         VALUES ($1, 'direct', $2::video_status, $3, 'observation_cycle', $4,
+                 CASE WHEN $2 = 'ready' THEN 'hls/test/master.m3u8' END,
+                 CASE WHEN $2 = 'ready' THEN now() END)`,
+        [fileId, status, durationSec, cycleId],
+      );
+    };
+    await video(withVideo.id, "ready", 1800);
+    await video(stillProcessing.id, "queued", null);
+    await w.grant(w.teacher.id);
+
+    const { html } = await listPage(w.teacher, {});
+    const cell = (code: string) => {
+      const row = html.match(new RegExp(`<tr>(?:(?!</tr>).)*?${code}<(?:(?!</tr>).)*</tr>`, "s"))?.[0] ?? "";
+      const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]!.replace(/<[^>]*>/g, "").trim());
+      return cells[6]; // Cycle, Teacher, Subject/Topic, Kind, Stage, Date, Video, ›
+    };
+    assert.equal(cell(`${w.T}-A`), "30m", "a ready 30-minute lesson video");
+    assert.equal(cell(`${w.T}-B`), "—", "video_min is not a video");
+    assert.equal(cell(`${w.T}-C`), "processing", "a video still in the pipeline");
+  } finally {
+    await w.c.query(`DELETE FROM video_submissions WHERE file_id = ANY($1::uuid[])`, [fileIds]);
+    await w.c.query(`DELETE FROM files WHERE id = ANY($1::uuid[])`, [fileIds]);
+    await w.cleanup();
+  }
+});
+
 test("a chip keeps its filter across pages, and changing a chip starts again at page 1", { skip }, async () => {
   const w = await observationWorld("obslistf");
   try {

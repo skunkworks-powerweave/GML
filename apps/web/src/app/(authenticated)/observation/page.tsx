@@ -15,7 +15,7 @@ import { db } from "@gml/db";
 import { observationCycles } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
-import { listCycles, parsePage } from "@/lib/observation/list";
+import { listCycles, parsePage, videoCell } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
 
@@ -296,10 +296,12 @@ export default async function ObservationListPage({
                         : <span style={{ color: "var(--ink-4)" }}>—</span>}
                     </td>
                     <td>
-                      {c.videoMin ? (
-                        <span style={{ fontSize: 12 }}>{c.videoMin}m</span>
-                      ) : (
+                      {/* From the cycle's linked videos (lib/observation/list.ts),
+                          not video_min, which only the demo seed ever wrote. */}
+                      {videoCell(c) === "—" ? (
                         <span style={{ color: "var(--ink-4)" }}>—</span>
+                      ) : (
+                        <span style={{ fontSize: 12 }}>{videoCell(c)}</span>
                       )}
                     </td>
                     <td style={{ textAlign: "right" }}>
