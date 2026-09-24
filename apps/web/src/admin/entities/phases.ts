@@ -44,5 +44,7 @@ export const phasesEntity: AdminEntity = {
       path: ["endDate"],
     }),
   formFields: ["label", "sequence", "startDate", "endDate"],
+  // Calendar days, stored as IST midnight: a phase starts on a date, not at a time.
+  fields: { startDate: { input: "date" }, endDate: { input: "date" } },
   describeRow: (r) => `phase:${r.label ?? r.id}`,
 };

@@ -13,7 +13,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { z } from "zod";
-import { unwrapShape, fieldKind, coerceFieldValue } from "@/admin/zod-shape";
+import { unwrapShape, coerceFormValues } from "@/admin/zod-shape";
 import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -94,34 +94,22 @@ function coerceFormData(
   // press Save" silently kept the old value while the UI reported "Row
   // updated." -- the operator was told the write succeeded and shown the stale
   // value, with no way to tell the difference from a display bug.
+  //
+  // ...but only where the column takes null. A REQUIRED field emptied on
+  // update is left out, so zod reports it; sending null to z.coerce.date()
+  // produced new Date(0) and saved 1970-01-01 with "Row updated."
   opts: { emptyMeansNull?: boolean } = {},
 ): Record<string, unknown> {
-  const raw: Record<string, unknown> = {};
-  for (const field of fields) {
-    const value = formData.get(field);
-    if (value === null) continue;
-    if (typeof value === "string") {
-      const kind = fieldKind(shape[field]);
-      if (value === "") {
-        // An empty ARRAY box means an empty list, which is a real value -- not
-        // "leave this column alone" and not null. `.default([])` cannot cover
-        // this: a default only fires on undefined.
-        if (kind === "array") raw[field] = [];
-        else if (opts.emptyMeansNull) raw[field] = null;
-        continue;
-      }
-      if (kind === "array" || kind === "number") {
-        raw[field] = coerceFieldValue(kind, value);
-        continue;
-      }
-      if (value === "true") raw[field] = true;
-      else if (value === "false") raw[field] = false;
-      else raw[field] = value;
-    } else {
-      raw[field] = value;
-    }
-  }
-  return raw;
+  // The shared implementation (admin/zod-shape.ts), also used by CSV import.
+  return coerceFormValues(
+    fields,
+    shape,
+    (field) => {
+      const value = formData.get(field);
+      return typeof value === "string" ? value : null;
+    },
+    opts,
+  );
 }
 
 /**

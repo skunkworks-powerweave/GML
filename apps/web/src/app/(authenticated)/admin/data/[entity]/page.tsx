@@ -43,9 +43,10 @@
 //   Sort + bulk delete are role-gated identically to the existing single-row
 //   delete (entity.mutateRoles via mutateRolesFor in actions.ts).
 
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { and, asc, desc, eq, getTableName, ilike, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableName, gte, ilike, lt, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
@@ -57,6 +58,8 @@ import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { referenceLabels, referenceOptions } from "@/admin/references";
 import { exportRolesFor } from "@/admin/access";
+import { istDayRange, toIstDate, toIstDateTime } from "@/admin/dates";
+import { dateInputType, enumOptions } from "@/admin/zod-shape";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
 import { ImportCsv } from "./import-csv";
@@ -127,57 +130,107 @@ function unwrapZod(zodType: z.ZodTypeAny): z.ZodTypeAny {
  * only when the dispatcher returns an SQL fragment. The skipped-key list is
  * surfaced in `appliedFilters._skipped` so the SM-9 audit row records the
  * user's intent even when the filter didn't reach the DB.
+ *
+ * DISPATCH ON THE SQL COLUMN, NOT THE ZOD TYPE. Every foreign key is
+ * z.string().uuid(), so the ZodString branch sent School, Mentor, Class ...
+ * filters through `uuid ILIKE text`: Postgres has no such operator, and the
+ * whole grid 500'd into the error boundary -- 28 filter boxes on 17 of 20
+ * entities, a complete valid UUID included. sessions.scheduledDate
+ * (z.string() over a DATE) did the same, and date/timestamp columns with no
+ * string schema were dropped silently, returning the unfiltered table. The
+ * Drizzle column's own type decides the operator now; zod only contributes
+ * an enum's allowed values. A value the column cannot hold is skipped and
+ * `note` records why, which the page shows.
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `%value%` for ILIKE, with the operator's own wildcards taken literally. */
+function containsPattern(value: string): string {
+  return `%${value.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+}
+
 function buildColumnFilter(
   zodType: z.ZodTypeAny | undefined,
   col: unknown,
   value: string,
+  note: (why: string) => void = () => undefined,
 ): SQL | null {
-  if (!zodType) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn(`[admin-grid] filter skipped — no Zod schema for column`);
-    }
-    return null;
-  }
-  const inner = unwrapZod(zodType);
-  const typeName = ((inner as unknown as { _def?: { typeName?: string } })._def
-    ?.typeName) as string | undefined;
+  const column = col as { columnType?: string; enumValues?: readonly string[] };
+  const inner = zodType ? unwrapZod(zodType) : undefined;
+  const typeName = (inner as unknown as { _def?: { typeName?: string } } | undefined)?._def?.typeName;
 
-  if (typeName === "ZodString") {
-    return ilike(col as never, `%${value}%`);
-  }
-  if (typeName === "ZodEnum") {
-    const options = ((inner as unknown as { options?: readonly string[] })
-      .options) ?? [];
+  // An enum -- a ZodEnum over a varchar, or a Postgres enum column -- matches
+  // exactly, and only one of its values.
+  const options =
+    typeName === "ZodEnum"
+      ? (((inner as unknown as { options?: readonly string[] }).options) ?? [])
+      : column.columnType === "PgEnumColumn"
+        ? (column.enumValues ?? [])
+        : null;
+  if (options) {
     if (!options.includes(value)) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(
-          `[admin-grid] filter skipped — enum value "${value}" not in ${JSON.stringify(options)}`,
-        );
-      }
+      note(`not one of ${options.join(", ")}`);
       return null;
     }
     return eq(col as never, value as never);
   }
-  if (typeName === "ZodBoolean") {
-    return eq(col as never, (value === "true") as never);
-  }
-  if (typeName === "ZodNumber") {
-    const n = Number(value);
-    if (!Number.isFinite(n)) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`[admin-grid] filter skipped — "${value}" is not numeric`);
+
+  switch (column.columnType) {
+    case "PgUUID":
+      // A link to another row: the filter's picker submits its id.
+      if (!UUID_RE.test(value)) {
+        note("pick a value from the list");
+        return null;
       }
-      return null;
+      return eq(col as never, value as never);
+    case "PgText":
+    case "PgVarchar":
+    case "PgChar":
+      // ZodString's case: case-insensitive "contains".
+      return ilike(col as never, containsPattern(value));
+    case "PgBoolean": {
+      // ZodBoolean's case.
+      const v = value.toLowerCase();
+      if (v !== "true" && v !== "false" && v !== "yes" && v !== "no") {
+        note("yes or no");
+        return null;
+      }
+      return eq(col as never, (v === "true" || v === "yes") as never);
     }
-    return eq(col as never, n as never);
+    case "PgInteger":
+    case "PgSmallInt":
+    case "PgBigInt53":
+    case "PgNumeric":
+    case "PgReal":
+    case "PgDoublePrecision": {
+      // ZodNumber's case.
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+        note("not a number");
+        return null;
+      }
+      return eq(col as never, n as never);
+    }
+    case "PgDate":
+    case "PgDateString":
+      if (!istDayRange(value)) {
+        note("not a date (YYYY-MM-DD)");
+        return null;
+      }
+      return eq(col as never, value.trim() as never);
+    case "PgTimestamp": {
+      // That calendar day in the programme's timezone.
+      const day = istDayRange(value);
+      if (!day) {
+        note("not a date (YYYY-MM-DD)");
+        return null;
+      }
+      return and(gte(col as never, day[0] as never), lt(col as never, day[1] as never))!;
+    }
+    default:
+      note("this column cannot be filtered");
+      return null;
   }
-  if (process.env.NODE_ENV !== "production") {
-    console.warn(
-      `[admin-grid] filter skipped — unsupported Zod type "${typeName}"`,
-    );
-  }
-  return null;
 }
 
 export default async function AdminGridPage({ params, searchParams }: PageProps) {
@@ -266,11 +319,16 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const whereClauses: SQL[] = [];
   const appliedFilters: Record<string, string> = {};
   const skippedFilters: Record<string, string> = {};
+  // Why each skipped filter did not apply, shown above the grid: a filter
+  // that is quietly dropped reads as "these are the matching rows".
+  const skippedWhy: Record<string, string> = {};
   for (const [key, value] of Object.entries(filters)) {
     if (!columnsByKey.has(key)) continue; // ignore unknown columns
     const col = tableColumns[key];
     if (!col) continue;
-    const clause = buildColumnFilter(formShape[key], col, value);
+    const clause = buildColumnFilter(formShape[key], col, value, (why) => {
+      skippedWhy[key] = why;
+    });
     if (clause === null) {
       skippedFilters[key] = value;
       continue;
@@ -359,6 +417,15 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     for (const [field, labels] of Object.entries(refLabels)) {
       const v = r[field];
       if (typeof v === "string" && labels[v]) out[field] = labels[v];
+    }
+    // Timestamps in the programme's timezone, with their time: the cells used
+    // to show the UTC date alone, so a webinar at 10:30 IST and one at 23:00
+    // IST the day before looked identical (admin/dates.ts).
+    for (const [field, v] of Object.entries(r)) {
+      if (v instanceof Date && !Number.isNaN(v.getTime())) {
+        out[field] =
+          dateInputType(entity, field) === "date" ? toIstDate(v) : toIstDateTime(v).replace("T", " ");
+      }
     }
     return out;
   });
@@ -513,18 +580,77 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       {/* Spec 114: column-filter toolbar. URL-driven (`?filter[<col>]=<value>`).
           Mirrors admin.jsx::AdminTable toolbar (lines 111-114). */}
       <section className="mb-4 rounded-lg border border-neutral-200 bg-white p-3">
+        {Object.keys(skippedFilters).length > 0 ? (
+          <p
+            role="status"
+            data-testid="grid-filters-skipped"
+            className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900"
+          >
+            Not applied:{" "}
+            {Object.entries(skippedFilters)
+              .map(([k, v]) => `${columnsByKey.get(k)?.label ?? k} "${v}" (${skippedWhy[k] ?? "unusable"})`)
+              .join("; ")}
+            . The rows below are not narrowed by {Object.keys(skippedFilters).length === 1 ? "it" : "them"}.
+          </p>
+        ) : null}
         <form method="get" className="flex flex-wrap items-end gap-2" data-filter-form="true">
-          {entity.displayColumns.map((c) => (
-            <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">
-              <span className="font-medium">{c.label}</span>
-              <input
-                name={`filter[${c.key}]`}
-                defaultValue={appliedFilters[c.key] ?? ""}
-                placeholder="contains…"
-                className="rounded-md border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-900 focus:outline-none"
-              />
-            </label>
-          ))}
+          {entity.displayColumns.map((c) => {
+            // Each column's filter is the control its type needs: a picker of
+            // the linked rows for a foreign key, the allowed values for an
+            // enum or a flag, a date picker for a date -- a "contains…" box on
+            // a UUID column was what crashed the page.
+            const name = `filter[${c.key}]`;
+            const current = filters[c.key] ?? "";
+            const cls =
+              "rounded-md border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-900 focus:outline-none";
+            const col = tableColumns[c.key] as { columnType?: string; enumValues?: readonly string[] } | undefined;
+            const refs = refOptions[c.key];
+            const choices =
+              enumOptions(formShape[c.key]) ??
+              (col?.columnType === "PgEnumColumn" ? [...(col.enumValues ?? [])] : null);
+            let control: ReactNode;
+            if (Array.isArray(refs)) {
+              control = (
+                <select name={name} defaultValue={current} className={cls}>
+                  <option value="">any</option>
+                  {refs.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              );
+            } else if (choices) {
+              control = (
+                <select name={name} defaultValue={current} className={cls}>
+                  <option value="">any</option>
+                  {choices.map((v) => (
+                    <option key={v} value={v}>
+                      {v.replace(/_/g, " ")}
+                    </option>
+                  ))}
+                </select>
+              );
+            } else if (col?.columnType === "PgBoolean") {
+              control = (
+                <select name={name} defaultValue={current} className={cls}>
+                  <option value="">any</option>
+                  <option value="true">yes</option>
+                  <option value="false">no</option>
+                </select>
+              );
+            } else if (col?.columnType === "PgTimestamp" || col?.columnType === "PgDate" || col?.columnType === "PgDateString") {
+              control = <input type="date" name={name} defaultValue={current} className={cls} />;
+            } else {
+              control = <input name={name} defaultValue={current} placeholder="contains…" className={cls} />;
+            }
+            return (
+              <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">
+                <span className="font-medium">{c.label}</span>
+                {control}
+              </label>
+            );
+          })}
           <div className="flex gap-2 pb-1">
             <button
               type="submit"

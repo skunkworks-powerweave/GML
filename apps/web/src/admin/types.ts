@@ -27,6 +27,11 @@ export type AdminFieldMeta = {
   help?: string;
   /** For a link to a login account: only accounts with these roles are offered. */
   userRoles?: RoleName[];
+  /**
+   * A timestamp column that means a calendar DAY (a phase's start): edited
+   * with a date picker instead of date-and-time. Stored as IST midnight.
+   */
+  input?: "date";
 };
 
 export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {

@@ -16,6 +16,7 @@ import {
   fieldLabel,
   isLongText,
   isOptionalField,
+  dateInputType,
 } from "@/admin/zod-shape";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import {
@@ -99,12 +100,13 @@ export function RowForm({
       ) : null}
       {entity.formFields.map((field) => {
         const kind = fieldKind(shape[field]);
+        const dateInput = dateInputType(entity, field);
         // Priority: prior failed-submit echo → initial row value → "".
         const echo = state?.fields?.[field];
         const initial =
           echo !== undefined && echo !== ""
             ? echo
-            : toInputValue(kind, initialValues?.[field]);
+            : toInputValue(kind, initialValues?.[field], dateInput);
         const fieldError = state?.fieldErrors?.[field];
         const optional = isOptionalField(shape[field]);
         const refs = options[field];
@@ -176,7 +178,9 @@ export function RowForm({
               <>
                 <input
                   name={field}
-                  type={kind === "number" ? "number" : "text"}
+                  // A timestamp gets date AND time (IST), a date column a date
+                  // picker: a text box cut timestamps to 00:00 UTC on save.
+                  type={dateInput ?? (kind === "number" ? "number" : "text")}
                   defaultValue={initial}
                   aria-invalid={fieldError ? "true" : undefined}
                   className={inputClass(Boolean(fieldError))}
