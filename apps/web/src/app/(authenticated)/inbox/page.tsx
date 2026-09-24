@@ -17,6 +17,7 @@ const KIND_ICON: Record<string, string> = {
   "cycle.assigned": "📋",
   "video.transcoded": "🎥",
   "meeting.scheduled": "📅",
+  "meeting.cancelled": "🚫",
   "quiz.due": "❓",
 };
 

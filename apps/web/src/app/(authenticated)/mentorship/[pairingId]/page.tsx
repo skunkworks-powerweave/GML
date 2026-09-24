@@ -32,6 +32,7 @@ import { QUARTER_TO_KIND, quarterlyVersionByKind } from "@/lib/forms/quarterly";
 import { MobileDetailFrame } from "@/components/shells";
 import {
   logMeetingAction,
+  cancelMeetingAction,
   completePairingAction,
   toggleCommitmentAction,
   addCommitmentAction,
@@ -98,6 +99,8 @@ export default async function PairingDetailPage({
       "This pairing already has the maximum of 50 commitments. Mark some done before adding more.",
     meetings_mentor_only: "Meetings are logged by the mentor. Nothing was saved.",
     invalid_duration: "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
+    meeting_not_found: "That meeting is not on this pairing any more.",
+    meeting_has_recording: "That meeting has a recording attached, so it was kept.",
   };
   const pairingError = sp.error
     ? (PAIRING_ERRORS[sp.error] ?? "That action could not be completed. Please try again.")
@@ -559,6 +562,21 @@ export default async function PairingDetailPage({
                           >
                             Open recording →
                           </Link>
+                        ) : canLogMeeting ? (
+                          // A meeting logged by mistake, or called off, could
+                          // never be removed. Kept when a recording is attached.
+                          <form action={cancelMeetingAction} style={{ marginTop: 4 }}>
+                            <input type="hidden" name="pairingId" value={pairingId} />
+                            <input type="hidden" name="meetingId" value={m.id} />
+                            <button
+                              type="submit"
+                              className="btn btn-sm btn-ghost"
+                              style={{ fontSize: 11 }}
+                              aria-label={`Cancel the meeting on ${d.toLocaleDateString("en-IN", { day: "numeric", month: "long" })}`}
+                            >
+                              Cancel meeting
+                            </button>
+                          </form>
                         ) : null}
                       </div>
                     </div>

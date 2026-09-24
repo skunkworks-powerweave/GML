@@ -26,15 +26,43 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentorPairings, mentorMeetings } from "@gml/db/schema";
+import { notify } from "@gml/db/notify";
+import { mentorPairings, mentorMeetings, mentors, teachers, videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit } from "@/lib/audit";
+import { isUuid } from "@/lib/ids";
+
+/**
+ * The two people on a pairing, as users, for notify(). Either may be null: a
+ * mentor record need not have a login, nor a teacher's.
+ */
+async function pairingParties(pairing: { mentorId: string; teacherId: string }) {
+  const [m] = await db.select({ userId: mentors.userId, name: mentors.name }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+  const [t] = await db
+    .select({ userId: teachers.userId, name: teachers.fullName })
+    .from(teachers)
+    .where(eq(teachers.id, pairing.teacherId))
+    .limit(1);
+  return { mentor: m ?? null, mentee: t ?? null };
+}
+
+/** "Thu 2 Oct, 10:30 am", in the programme's timezone. */
+function meetingWhen(d: Date): string {
+  return d.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Log a meeting against a pairing.
@@ -99,7 +127,7 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
   await assertSectionGate(actor.id, "mentorship", "/mentorship");
-  await assertCanAccessPairing(actor, pairingId);
+  const pairing = await assertCanAccessPairing(actor, pairingId);
 
   let newMeetingId = "";
   await db.transaction(async (tx) => {
@@ -138,6 +166,117 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
     entityId: newMeetingId,
     metadata: { pairingId, scheduledAt: scheduledAt.toISOString() },
   });
+
+  // TELL THE OTHER PARTY. The settings page offers "Meeting scheduled --
+  // Mentor + teacher receive calendar entry", on by default, and nothing ever
+  // wrote it: the mentee's bell stayed at 0. Both parties, minus whoever
+  // logged it; the row opens the pairing. notify() never throws, so the
+  // meeting stands whatever happens to the bell.
+  const parties = await pairingParties(pairing);
+  const subject = `Mentorship meeting ${meetingWhen(scheduledAt)} — ${parties.mentor?.name ?? "Mentor"} and ${parties.mentee?.name ?? "mentee"}`;
+  await notify(
+    db,
+    [parties.mentor?.userId, parties.mentee?.userId]
+      .filter((u): u is string => Boolean(u))
+      .map((userId) => ({
+        userId,
+        kind: "meeting.scheduled",
+        subject,
+        body: notes.length > 0 ? notes.slice(0, 500) : null,
+        entityType: "mentor_pairing",
+        entityId: pairingId,
+      })),
+    { excludeUserId: actor.id },
+  );
+
+  revalidatePath(`/mentorship/${pairingId}`);
+  redirect(`/mentorship/${pairingId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Cancel (remove) a logged meeting.
+//
+// There was no way to remove a meeting at all: a mistaken or called-off entry
+// stayed on the pairing and in meetings_count -- the list page and the
+// dashboard's stale-pairing view read it -- for good. The mentor (or an
+// administrator) removes it here; the counters are recomputed from what is
+// left, and the other party is told (meeting.cancelled).
+//
+// A meeting with a recording attached is kept: video_submissions points at it
+// by id with no foreign key, and removing the meeting would orphan the video.
+//
+// Form fields: pairingId, meetingId (both uuids).
+// ---------------------------------------------------------------------------
+
+export async function cancelMeetingAction(formData: FormData): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+
+  const pairingId = String(formData.get("pairingId") ?? "").trim();
+  const meetingId = String(formData.get("meetingId") ?? "").trim();
+  if (!pairingId || !meetingId) redirect(`/mentorship/${pairingId || ""}?error=invalid_meeting`);
+  if (!hasAnyRole(actor.role, ["mentor", "programme_admin", "super_admin"])) {
+    redirect(`/mentorship/${pairingId}?error=meetings_mentor_only`);
+  }
+  // SECTION GATE, in the action for the reason every action in this file
+  // asserts it (see logMeetingAction).
+  await assertSectionGate(actor.id, "mentorship", "/mentorship");
+  const pairing = await assertCanAccessPairing(actor, pairingId);
+
+  // The meeting must be THIS pairing's: a meeting id from another pairing, or
+  // a malformed one (never sent to a uuid column), is treated as absent.
+  const [meeting] = isUuid(meetingId)
+    ? await db
+        .select({ id: mentorMeetings.id, scheduledAt: mentorMeetings.scheduledAt, recordingVideoId: mentorMeetings.recordingVideoId })
+        .from(mentorMeetings)
+        .where(and(eq(mentorMeetings.id, meetingId), eq(mentorMeetings.pairingId, pairingId)))
+        .limit(1)
+    : [];
+  if (!meeting) redirect(`/mentorship/${pairingId}?error=meeting_not_found`);
+
+  const [attached] = await db
+    .select({ id: videoSubmissions.id })
+    .from(videoSubmissions)
+    .where(and(eq(videoSubmissions.contextType, "mentor_meeting"), eq(videoSubmissions.contextId, meetingId)))
+    .limit(1);
+  if (meeting.recordingVideoId || attached) redirect(`/mentorship/${pairingId}?error=meeting_has_recording`);
+
+  await db.transaction(async (tx) => {
+    await tx.delete(mentorMeetings).where(eq(mentorMeetings.id, meetingId));
+    // Recomputed from the meetings that remain, not decremented blind: the
+    // cached counters are what the list page and the dashboard read.
+    await tx
+      .update(mentorPairings)
+      .set({
+        meetingsCount: sql`(SELECT count(*)::int FROM ${mentorMeetings} WHERE ${mentorMeetings.pairingId} = ${pairingId})`,
+        lastMeetingAt: sql`(SELECT max(${mentorMeetings.scheduledAt}) FROM ${mentorMeetings} WHERE ${mentorMeetings.pairingId} = ${pairingId})`,
+      })
+      .where(eq(mentorPairings.id, pairingId));
+  });
+
+  void recordAudit({
+    action: "mentor.meeting.cancelled",
+    entityType: "mentor_meeting",
+    entityId: meetingId,
+    metadata: { pairingId, scheduledAt: new Date(meeting.scheduledAt).toISOString() },
+  });
+
+  const parties = await pairingParties(pairing);
+  await notify(
+    db,
+    [parties.mentor?.userId, parties.mentee?.userId]
+      .filter((u): u is string => Boolean(u))
+      .map((userId) => ({
+        userId,
+        kind: "meeting.cancelled",
+        subject: `Mentorship meeting ${meetingWhen(new Date(meeting.scheduledAt))} cancelled`,
+        entityType: "mentor_pairing",
+        entityId: pairingId,
+      })),
+    { excludeUserId: actor.id },
+  );
 
   revalidatePath(`/mentorship/${pairingId}`);
   redirect(`/mentorship/${pairingId}`);
