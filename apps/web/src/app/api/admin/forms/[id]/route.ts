@@ -20,7 +20,7 @@
 // only records successful version bumps.
 
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -32,23 +32,38 @@ export const dynamic = "force-dynamic";
 const ALLOWED_ROLES = ["programme_admin", "super_admin"] as const;
 
 /**
- * Pure version-bump helper. Exported for the governance test.
+ * Pure version-bump helper. Exported for the governance and behaviour tests.
  *
  *   "1"   → "2"
  *   "2"   → "3"
  *   "1.0" → "1.1"
  *   "2.7" → "2.8"
- *   "draft-Q2" → "draft-Q2+1"  (non-numeric path)
+ *   "endline-1" → "endline-2"   (trailing number incremented)
+ *   "draft-Q2"  → "draft-Q3"
+ *   "draft"     → "draft-2"     (no trailing number)
+ *
+ * THE VERSION IS PART OF A URL. The runner's slug is
+ * `${kind}-${audience}-${version}`, and the non-numeric path used to return
+ * `${prev}+1`: editing the seeded "endline-1" or "schoolvisit-1" produced
+ * "endline-1+1", the runner received that segment percent-encoded, its lookup
+ * never matched, and the form vanished for every user with no way back short
+ * of SQL. The result is always drawn from [A-Za-z0-9._-]; any other character
+ * already in a stored version becomes "-".
  */
 export function bumpVersion(prev: string): string {
   const m = /^(\d+)(?:\.(\d+))?$/.exec(prev);
-  if (!m) return `${prev}+1`;
-  const major = Number(m[1]);
-  if (m[2] === undefined) {
-    return String(major + 1);
+  if (m) {
+    const major = Number(m[1]);
+    if (m[2] === undefined) {
+      return String(major + 1);
+    }
+    const minor = Number(m[2]);
+    return `${major}.${minor + 1}`;
   }
-  const minor = Number(m[2]);
-  return `${major}.${minor + 1}`;
+  const safe = prev.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "v";
+  const trailing = /^(.*?)(\d+)$/.exec(safe);
+  if (trailing) return `${trailing[1]}${Number(trailing[2]) + 1}`;
+  return `${safe}-2`;
 }
 
 export async function PUT(
@@ -102,7 +117,12 @@ export async function PUT(
       // holds a row-level lock until commit. Drizzle's pg query builder
       // exposes this via `.for("update")` on the select chain.
       const locked = await tx
-        .select({ id: feedbackForms.id, version: feedbackForms.version })
+        .select({
+          id: feedbackForms.id,
+          version: feedbackForms.version,
+          kind: feedbackForms.kind,
+          audience: feedbackForms.audience,
+        })
         .from(feedbackForms)
         .where(eq(feedbackForms.id, id))
         .limit(1)
@@ -112,7 +132,27 @@ export async function PUT(
         notFound = true;
         return null;
       }
-      const nextVersion = bumpVersion(existing.version);
+      // Step past a version another row of this (kind, audience) already
+      // holds -- "endline-1" -> "endline-2" when an "endline-2" was published
+      // separately -- rather than hitting feedback_forms_kind_audience_version_uq
+      // and answering 500.
+      let nextVersion = bumpVersion(existing.version);
+      for (let i = 0; i < 20; i++) {
+        const [taken] = await tx
+          .select({ id: feedbackForms.id })
+          .from(feedbackForms)
+          .where(
+            and(
+              eq(feedbackForms.kind, existing.kind),
+              eq(feedbackForms.audience, existing.audience),
+              eq(feedbackForms.version, nextVersion),
+              ne(feedbackForms.id, id),
+            ),
+          )
+          .limit(1);
+        if (!taken) break;
+        nextVersion = bumpVersion(nextVersion);
+      }
       await tx
         .update(feedbackForms)
         .set({ schema: parsed, version: nextVersion })

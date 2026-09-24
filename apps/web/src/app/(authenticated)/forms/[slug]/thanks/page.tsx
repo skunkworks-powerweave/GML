@@ -10,6 +10,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { decodeFormSlug } from "@/lib/forms/catalogue-links";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,7 @@ export default async function FormThanksPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const { slug } = await params;
+  const slug = decodeFormSlug((await params).slug);
   const parsed = parseSlug(slug);
 
   let title = "Submitted";

@@ -38,6 +38,21 @@ const PAIRING_LIST = "/mentorship";
 /** The mentorship password prompt, returning to the catalogue once unlocked. */
 export const UNLOCK_FORMS_HREF = `/gate/mentorship?next=${encodeURIComponent("/forms")}`;
 
+/**
+ * A /forms/[slug] path segment as Next hands it over -- still percent-encoded
+ * -- turned back into the `${kind}-${audience}-${version}` it names. Without
+ * this a version holding any character a URL encodes (the "endline-1+1" the
+ * old version bump produced) could never match its own row. A malformed
+ * escape is returned as-is, and simply matches nothing.
+ */
+export function decodeFormSlug(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export function formRunnerHref(slug: string, pairingId: string): string {
   return `/forms/${slug}?pairingId=${encodeURIComponent(pairingId)}`;
 }

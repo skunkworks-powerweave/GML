@@ -96,22 +96,16 @@ test("spec 073 — bumpVersion helper has correct contract (regex + behavior cas
   // Documented cases must appear in the JSDoc — locks the contract in source.
   assert.match(src, /"1"\s*→\s*"2"/);
   assert.match(src, /"2\.7"\s*→\s*"2\.8"/);
-  assert.match(src, /"draft-Q2"\s*→\s*"draft-Q2\+1"/);
-
-  // Reference reimplementation — must match the contract exactly.
-  const bump = (prev) => {
-    const m = /^(\d+)(?:\.(\d+))?$/.exec(prev);
-    if (!m) return `${prev}+1`;
-    const major = Number(m[1]);
-    if (m[2] === undefined) return String(major + 1);
-    return `${major}.${Number(m[2]) + 1}`;
-  };
-  assert.equal(bump("1"), "2");
-  assert.equal(bump("2"), "3");
-  assert.equal(bump("1.0"), "1.1");
-  assert.equal(bump("2.7"), "2.8");
-  assert.equal(bump("draft-Q2"), "draft-Q2+1");
-  assert.equal(bump("v2"), "v2+1");
+  // The non-numeric case USED to be pinned as "draft-Q2" → "draft-Q2+1". That
+  // was the defect: the version is part of the runner's URL, and editing the
+  // seeded "endline-1" produced "endline-1+1", which the runner (handed the
+  // segment percent-encoded) could never match -- the form vanished for every
+  // user. The trailing number is incremented instead. The function itself is
+  // executed by tests/behaviour/admin-forms-route.test.ts; this only keeps the
+  // documented contract in step with it.
+  assert.match(src, /"endline-1"\s*→\s*"endline-2"/);
+  assert.match(src, /"draft-Q2"\s*→\s*"draft-Q3"/);
+  assert.doesNotMatch(src, /return\s+`\$\{prev\}\+1`/, "a '+' in a version is a URL the runner cannot open");
 });
 
 test("spec 073 — inline styles use CSS variable tokens (no Tailwind classNames for chrome)", () => {

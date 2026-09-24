@@ -42,7 +42,7 @@ import {
   type FormField,
   type FormFieldOption,
 } from "@/lib/forms/validate";
-import { formRunnerHref } from "@/lib/forms/catalogue-links";
+import { decodeFormSlug, formRunnerHref } from "@/lib/forms/catalogue-links";
 import { templateDraftWhere } from "@/lib/forms/drafts";
 import { isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
 import { getDeviceType } from "@/lib/device";
@@ -432,7 +432,8 @@ export default async function FormRunnerPage({
   if (!session?.user?.id) redirect("/login");
   const userId = session.user.id;
 
-  const { slug } = await params;
+  // Decoded: Next passes the segment still percent-encoded (decodeFormSlug).
+  const slug = decodeFormSlug((await params).slug);
   const sp = await searchParams;
   // Spec 133 — pick renderer by device cookie. Mobile gets one-field-per-screen
   // with sticky Prev/Next + review; desktop keeps the stacked FormRenderer.
