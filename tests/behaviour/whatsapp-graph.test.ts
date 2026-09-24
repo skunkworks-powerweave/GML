@@ -19,11 +19,20 @@ import {
   DEFAULT_GRAPH_API_VERSION,
   graphApiVersion,
   mediaMetadataUrl,
+  type EnvLike,
 } from "@gml/shared/whatsapp/graph";
 
-/** A fresh env each time, so these tests cannot leak into each other. */
-const env = (over: Record<string, string | undefined> = {}) =>
-  ({ ...over }) as NodeJS.ProcessEnv;
+/**
+ * A fresh env each time, so these tests cannot leak into each other — and so
+ * nothing here touches the real `process.env`.
+ *
+ * `EnvLike`, not `NodeJS.ProcessEnv`: `packages/shared` declares no `@types/node`
+ * and must not, because it is imported by browser-bound code. The first version
+ * of the module used the Node type, typechecked on this machine where the types
+ * happen to be reachable through the pnpm store, and failed CI on a clean
+ * install with TS2503/TS2591.
+ */
+const env = (over: EnvLike = {}): EnvLike => ({ ...over });
 
 test("the media URL carries the pinned version, not a literal", () => {
   const url = mediaMetadataUrl("MEDIA123", env());

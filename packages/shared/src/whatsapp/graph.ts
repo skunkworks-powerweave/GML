@@ -60,6 +60,43 @@ export const DEFAULT_GRAPH_API_VERSION = "v25.0";
 const VERSION_SHAPE = /^v\d+\.\d+$/;
 
 /**
+ * An environment bag, without depending on Node's type definitions.
+ *
+ * ── WHY NOT `NodeJS.ProcessEnv` ──────────────────────────────────────────────
+ *
+ * The first version of this file typed the parameter as `NodeJS.ProcessEnv` and
+ * defaulted it to `process.env`. `packages/shared` declares no `@types/node`
+ * dependency and no other file in it referenced a Node global, so this was the
+ * first — and CI rejected it on a clean install:
+ *
+ *   error TS2503: Cannot find namespace 'NodeJS'.
+ *   error TS2591: Cannot find name 'process'.
+ *
+ * It typechecked on the machine it was written on, where `@types/node` happens
+ * to be reachable through the pnpm store, which is exactly the shape of defect
+ * this branch keeps finding: green locally, red on the platform CI runs.
+ *
+ * Adding `@types/node` to this package would have silenced it and been wrong.
+ * `packages/shared` is imported by `apps/web`, including by code that reaches
+ * the browser, where there is no `process` to speak of. A shared package that
+ * asserts a Node runtime in its TYPES is claiming something about every consumer
+ * of it. So the dependency is dropped rather than declared.
+ */
+export type EnvLike = Record<string, string | undefined>;
+
+/**
+ * The ambient environment if there is one, and an empty bag if there is not.
+ *
+ * Reached through `globalThis` rather than the bare `process` identifier so that
+ * this module neither needs Node's types nor throws in a runtime without it —
+ * a browser bundle, a Worker, an edge runtime. Callers that want determinism
+ * pass their own bag, which is what every test here does.
+ */
+function ambientEnv(): EnvLike {
+  return (globalThis as { process?: { env?: EnvLike } }).process?.env ?? {};
+}
+
+/**
  * The version to call, from the environment or the pin.
  *
  * `WHATSAPP_GRAPH_API_VERSION` exists so that an expiry can be survived by
@@ -74,7 +111,7 @@ const VERSION_SHAPE = /^v\d+\.\d+$/;
  * prevent one. Falling back to the pin keeps the deployment working and says why
  * on stderr.
  */
-export function graphApiVersion(env: NodeJS.ProcessEnv = process.env): string {
+export function graphApiVersion(env: EnvLike = ambientEnv()): string {
   const override = env.WHATSAPP_GRAPH_API_VERSION?.trim();
   if (!override) return DEFAULT_GRAPH_API_VERSION;
   if (!VERSION_SHAPE.test(override)) {
@@ -106,7 +143,7 @@ export function graphApiVersion(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function mediaMetadataUrl(
   mediaId: string,
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvLike = ambientEnv(),
 ): string {
   return `https://${GRAPH_HOST}/${graphApiVersion(env)}/${encodeURIComponent(mediaId)}`;
 }
