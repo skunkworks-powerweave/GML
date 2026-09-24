@@ -113,8 +113,9 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   if (!actor) redirect("/login");
   // THE MENTOR LOGS MEETINGS (or an administrator). The page says "Mentor logs
   // every contact", yet the mentee was offered the button and her posts were
-  // accepted -- and nothing can remove a meeting row, so a mistaken entry
-  // inflated meetings_count on the list and the dashboard for good.
+  // accepted -- and nothing could remove a meeting row, so a mistaken entry
+  // inflated meetings_count on the list and the dashboard for good. (The
+  // mentor can now remove one: cancelMeetingAction.)
   if (!hasAnyRole(actor.role, ["mentor", "programme_admin", "super_admin"])) {
     redirect(`/mentorship/${pairingId}?error=meetings_mentor_only`);
   }
@@ -465,20 +466,24 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   };
 
   // Append in SQL. A read-modify-write would lose a concurrent addition.
-  // Capped at 50 so the column cannot grow without bound on a row that is read
-  // on every visit to the pairing page.
   //
-  // THE CAP NOW REPORTS ITSELF. The CASE returns the array unchanged once the
-  // limit is reached, and the action then redirected as though it had
-  // succeeded -- so past 50 commitments the Add button silently did nothing,
-  // forever, with no message. Returning the resulting length lets the caller
-  // tell "appended" from "refused", which is the whole difference between a
-  // cap and a bug.
+  // THE CAP IS ON OPEN COMMITMENTS: at most 50 not yet done. It used to count
+  // every entry, done ones included, and nothing removes a commitment -- so
+  // "mark some done before adding more" could never free a place, and a
+  // weekly-meeting pairing filled up within the year for good. A hard ceiling
+  // of 500 entries still bounds a row read on every visit to the page.
+  //
+  // WHETHER IT WAS APPENDED is read back from the row -- is the new entry's id
+  // in the array? -- rather than inferred from its length: the old
+  // `length >= 50` check after the update reported the 50th commitment as
+  // refused while saving it.
+  const openCount = sql`(SELECT count(*) FROM jsonb_array_elements(${mentorPairings.commitments}) AS c(e)
+    WHERE NOT COALESCE((e->>'done')::boolean, false))`;
   const updated = await db
     .update(mentorPairings)
     .set({
       commitments: sql`CASE
-        WHEN jsonb_array_length(${mentorPairings.commitments}) >= 50
+        WHEN ${openCount} >= 50 OR jsonb_array_length(${mentorPairings.commitments}) >= 500
         THEN ${mentorPairings.commitments}
         ELSE ${mentorPairings.commitments} || ${JSON.stringify([entry])}::jsonb
       END`,
@@ -486,13 +491,13 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
     .where(eq(mentorPairings.id, pairingId))
     .returning({
       id: mentorPairings.id,
-      count: sql<number>`jsonb_array_length(${mentorPairings.commitments})`,
+      appended: sql<boolean>`EXISTS (SELECT 1 FROM jsonb_array_elements(${mentorPairings.commitments}) AS c(e) WHERE e->>'id' = ${entry.id})`,
     });
 
   if (updated.length === 0) {
     redirect(`/mentorship/${pairingId}?error=pairing_not_found`);
   }
-  if ((updated[0]?.count ?? 0) >= 50) {
+  if (!updated[0]?.appended) {
     redirect(`/mentorship/${pairingId}?error=commitments_full`);
   }
 

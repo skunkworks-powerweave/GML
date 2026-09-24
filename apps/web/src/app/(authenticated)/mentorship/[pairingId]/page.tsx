@@ -95,8 +95,10 @@ export default async function PairingDetailPage({
     pairing_not_found: "That pairing no longer exists.",
     invalid_commitment: "That commitment reference was not valid.",
     empty_commitment: "A commitment needs some text before it can be added.",
+    // The rule the action applies: 50 OPEN commitments (done ones do not
+    // count), within a record of at most 500.
     commitments_full:
-      "This pairing already has the maximum of 50 commitments. Mark some done before adding more.",
+      "This pairing already has 50 open commitments. Mark some done before adding more.",
     meetings_mentor_only: "Meetings are logged by the mentor. Nothing was saved.",
     invalid_duration: "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
     meeting_not_found: "That meeting is not on this pairing any more.",
