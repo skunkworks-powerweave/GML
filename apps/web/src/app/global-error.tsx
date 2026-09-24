@@ -17,6 +17,12 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // lang="en" is deliberate and correct HERE, unlike the root layout it
+  // replaces: every string on this page is hardcoded English (it cannot load
+  // the message bundles -- the layout that provides them is what failed), and
+  // lang describes the language of the content. It is also prerendered to a
+  // static _global-error.html, so it cannot read the locale cookie at render
+  // time without a hydration mismatch on the one page that must not fail.
   return (
     <html lang="en">
       <body

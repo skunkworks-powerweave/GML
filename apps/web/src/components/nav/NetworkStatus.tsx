@@ -49,10 +49,19 @@ export function NetworkStatus({
   labelOnline,
   labelOffline,
   labelChecking,
+  hintOnline,
+  hintOffline,
+  hintChecking,
 }: {
   labelOnline: string;
   labelOffline: string;
   labelChecking: string;
+  /** Tooltip text per state. Translated by the caller like the labels: these
+   *  were English literals for every locale, including Hindi, whose bundle
+   *  was otherwise complete. */
+  hintOnline: string;
+  hintOffline: string;
+  hintChecking: string;
 }) {
   // Server-rendered as "checking" rather than "online": we genuinely do not
   // know yet, and starting at a confident green is how the old one lied. It
@@ -138,13 +147,7 @@ export function NetworkStatus({
       // cannot distinguish these two.
       role="status"
       aria-live="polite"
-      title={
-        status === "offline"
-          ? "The server cannot be reached. Anything you save will fail until this clears."
-          : status === "online"
-            ? "The server is reachable."
-            : "Checking whether the server is reachable…"
-      }
+      title={status === "offline" ? hintOffline : status === "online" ? hintOnline : hintChecking}
       style={{
         marginTop: "auto",
         padding: "8px 8px 4px",

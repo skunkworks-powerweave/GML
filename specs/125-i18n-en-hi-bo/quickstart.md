@@ -30,7 +30,7 @@
    error.
 
 6. **Pre-auth picker on /login.** Sign out, then visit `/login`. The
-   3-button picker (EN / हिन्दी / لد) lives in the top-right. Click
+   3-button picker (EN / हिन्दी / བོད་) lives in the top-right. Click
    "हिन्दी"; the page refreshes and the "Sign in" button + "Welcome
    back." headline render in Hindi. Pick is persisted via a
    `gml-locale` cookie that the login layout reads on each render.

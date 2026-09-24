@@ -32,7 +32,17 @@
   --sans: "Inter Tight", ui-sans-serif, system-ui, sans-serif;
   --serif: "Crimson Pro", ui-serif, Georgia, serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --deva: "Noto Sans Devanagari", var(--sans);
+  /* --font-deva / --font-tibetan are the self-hosted faces app/layout.tsx
+     loads onto <html> with next/font. Before they existed, --deva named a
+     family that nothing loaded, and there was no Tibetan face at all. The
+     fallbacks inside var() keep the stacks valid on the one page that renders
+     without the root layout (global-error.tsx).
+     --tib keeps the Latin faces FIRST: the Tibetan webfont also carries Latin
+     glyphs, in a serif design, and mixed strings such as "RTT དུས་རིམ།" should
+     keep their Latin in the UI sans. Per-glyph fallback reaches the Tibetan
+     face for Tibetan characters only. */
+  --deva: var(--font-deva, "Noto Sans Devanagari"), var(--sans);
+  --tib: "Inter Tight", ui-sans-serif, system-ui, var(--font-tibetan, "Noto Serif Tibetan"), "Microsoft Himalaya", sans-serif;
 
   /* Geometry */
   --r-1: 3px;
@@ -172,6 +182,7 @@ body.a11y-reduced-motion *, body.a11y-reduced-motion ::before, body.a11y-reduced
 .mono { font-family: var(--mono); }
 .serif { font-family: var(--serif); }
 .deva { font-family: var(--deva); }
+.tib { font-family: var(--tib); }
 
 /* Eyebrow label */
 .label {

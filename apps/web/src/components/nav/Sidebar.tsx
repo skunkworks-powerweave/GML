@@ -224,6 +224,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
         labelOnline={tStatus("online")}
         labelOffline={tStatus("offline")}
         labelChecking={tStatus("checking")}
+        hintOnline={tStatus("onlineHint")}
+        hintOffline={tStatus("offlineHint")}
+        hintChecking={tStatus("checkingHint")}
       />
     </aside>
   );

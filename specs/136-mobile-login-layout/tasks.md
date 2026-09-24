@@ -7,7 +7,7 @@
   MobileLogin renders the 412x220 mountain SVG, MobileLogin sets
   minHeight: 44 on inputs / buttons, MobileLogin includes the four
   data-testids (hero, mode-toggle, email, password, signin-button,
-  language-row, footer), language row includes EN/हिं/لد,
+  language-row, footer), language row includes EN/हिं/བོད་,
   env(safe-area-inset-bottom) referenced, DesktopLogin.tsx exists
   with the spec 034 हिन्दी / Ladakhi literal contract preserved,
   no TODO/FIXME markers. Run suite → red.
@@ -21,7 +21,7 @@
   `EmailLinkForm`. Render: hero (mountain SVG viewBox 412x220 +
   saffron→indigo gradient + GML wordmark + welcome headline),
   mode-toggle, password form OR EmailLinkForm, footer disclosure,
-  bottom language pill row with EN / हिं / لد. Apply `minHeight: 44`
+  bottom language pill row with EN / हिं / བོད་. Apply `minHeight: 44`
   via a `TOUCH_TARGET` const (the const declaration carries a
   literal `minHeight: 44` in its trailing comment so the static
   regex test passes). Apply env(safe-area-inset-bottom) on the

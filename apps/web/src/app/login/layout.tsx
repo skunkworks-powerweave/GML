@@ -6,7 +6,13 @@
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import { NextIntlClientProvider } from "next-intl";
-import { loadMessages, normalizeLocale, LOCALE_COOKIE, LOCALE_FONT_FAMILY } from "@/i18n/config";
+import {
+  loadMessages,
+  normalizeLocale,
+  LOCALE_COOKIE,
+  LOCALE_FONT_FAMILY,
+  LOCALE_HTML_LANG,
+} from "@/i18n/config";
 
 export default async function LoginLayout({ children }: { children: ReactNode }) {
   const cookieJar = await cookies();
@@ -17,7 +23,14 @@ export default async function LoginLayout({ children }: { children: ReactNode })
 
   return (
     <NextIntlClientProvider locale={locale} messages={messages}>
-      <div data-locale={locale} style={fontFamily ? { fontFamily } : undefined}>
+      {/* lang, not only data-locale: a data attribute reaches neither the
+          browser nor assistive tech. The root layout already sets <html lang>
+          from the same cookie; this keeps the segment self-describing. */}
+      <div
+        data-locale={locale}
+        lang={LOCALE_HTML_LANG[locale]}
+        style={fontFamily ? { fontFamily } : undefined}
+      >
         {children}
       </div>
     </NextIntlClientProvider>

@@ -107,6 +107,20 @@ in HelpPanel; the direct-browser-upload path remains in UploadModal.
 
 ### D. i18n coverage extension
 
+> **SUPERSEDED (2026-09 freeze, fix brief D_ui #8).** The keys below were
+> never read by any page: `login/forgot`, `login/reset` and `forbidden`
+> hardcode their copy, and neither they nor their form islands call
+> `getTranslations` / `useTranslations`. The copy had also drifted from the
+> product: `forbidden.locked` describes a 15-minute account lock that was
+> deliberately removed; `smtp_unavailable` uses the SMTP framing
+> `forgot/page.tsx` rejects in favour of `AUTH_EMAIL_ENABLED`; a single
+> `forbidden.title` cannot express the page's four distinct reasons. The
+> `login` and `forbidden` namespaces were deleted from en/hi/bo so the
+> bundles stop advertising translations of three pages that have none.
+> Localising those pages is still possible: wire the translator in the page
+> first, then add keys whose copy matches what the page says. The
+> nested-object support in `loadMessages` described below remains.
+
 `apps/web/src/i18n/locales/en.json` gains two new namespaces and
 keys for the password-reset (spec 161) and forbidden-page surfaces:
 

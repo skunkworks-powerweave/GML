@@ -25,14 +25,14 @@ Manual smoke (4 minutes):
    - Footer disclosure ("Goldenmile programme · audited" + build
      version).
    - Language pill row at the bottom — three 44×44 buttons:
-     EN / हिं / لد.
+     EN / हिं / བོད་.
 4. Tap the Password / Magic link toggle. The form swaps to
    `EmailLinkForm`. Switch back. Both flows are gated by the same
    server action contracts the desktop shell uses, so a successful
    sign-in lands at `/dashboard` either way.
 5. Tap हिं in the bottom pill row. The page refreshes; the hero
    headline and form labels render in Devanagari (the spec 125
-   bundle). Tap لد — Ladakhi script. Tap EN to return.
+   bundle). Tap བོད་ — Bhoti / Ladakhi, in Tibetan script. Tap EN to return.
 6. On a real iPhone, open Safari, navigate to the LAN dev URL
    (e.g. `http://192.168.1.10:3000/login` after running the dev
    server with `--host 0.0.0.0`). Verify:

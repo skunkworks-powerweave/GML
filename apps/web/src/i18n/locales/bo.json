@@ -33,7 +33,8 @@
     "forms": "ཤོག་བྱང་དང་རྩིས་སློབ།",
     "settings": "སྒྲིག་འགོད།",
     "inbox": "ཡིག་སྡུད།",
-    "data": "གཞི་གྲངས།"
+    "data": "གཞི་གྲངས།",
+    "primary": "དཀར་ཆག་གཙོ་བོ།"
   },
   "navSection": {
     "programme": "ལས་གཞི།",
@@ -65,7 +66,9 @@
     "password": "གསང་ཨང༌།",
     "welcomeBack": "ཕྱིར་ལོག་པར་དགའ་བསུ།",
     "rememberMe": "ངེད་དྲན་པར་ཞུ།",
-    "forgotPassword": "བརྗེད་སོང༌།"
+    "forgotPassword": "བརྗེད་སོང༌།",
+    "help": "རོགས་རམ།",
+    "skipToContent": "ནང་དོན་གཙོ་བོར་མཆོངས།"
   },
   "status": {
     "pending": "སྒུག་བཞིན།",
@@ -74,7 +77,12 @@
     "failed": "མ་ཐུབ།",
     "ready": "ཡར་ལོངས།",
     "online": "དྲ་ཐོག་ཟུང་འབྲེལ།",
-    "loading": "ལོངས་བཞིན།…"
+    "loading": "ལོངས་བཞིན།…",
+    "offline": "དྲ་ཐོག་མེད། — ཉར་ཚགས་མི་འགྲུབ།",
+    "checking": "ཞིབ་བཤེར་བཞིན།…",
+    "onlineHint": "ཞབས་ཞུའི་འཕྲུལ་ཆས་དང་འབྲེལ་བ་ཡོད།",
+    "offlineHint": "ཞབས་ཞུའི་འཕྲུལ་ཆས་དང་འབྲེལ་བ་མེད། འདི་མ་སེལ་བར་དུ་ཉར་ཚགས་གང་བྱས་ཀྱང་མི་འགྲུབ།",
+    "checkingHint": "ཞབས་ཞུའི་འཕྲུལ་ཆས་དང་འབྲེལ་བ་ཡོད་མེད་ཞིབ་བཤེར་བཞིན།…"
   },
   "gate": {
     "title": "ས་ཁོངས་སྒོ།",
@@ -106,26 +114,5 @@
     "bhoti": "བོད་ཡིག",
     "pickerLabel": "སྐད་ཡིག",
     "ladakhi": "ལ་དྭགས་སྐད།"
-  },
-  "login": {
-    "forgot": {
-      "title": "",
-      "email_label": "",
-      "submit_label": "",
-      "smtp_unavailable": ""
-    },
-    "reset": {
-      "title": "",
-      "new_password_label": "",
-      "submit_label": "",
-      "token_expired": ""
-    }
-  },
-  "forbidden": {
-    "title": "",
-    "locked": "",
-    "smtp_unconfigured": "",
-    "session_expired": "",
-    "default": ""
   }
 }

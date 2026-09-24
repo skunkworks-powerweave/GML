@@ -128,6 +128,17 @@ test("spec 125 — authenticated layout reads user_prefs.uiLanguage and provides
   assert.match(src, /loadMessages/, "authenticated layout must call loadMessages for the resolved locale");
 });
 
+// 2026-09 freeze (fix brief D_ui #2). The layout computed LOCALE_HTML_LANG and
+// spent it on `data-html-lang`, a data attribute the browser and assistive tech
+// ignore, under a root <html lang="en">. Source-text pin only, because this
+// layout needs a session and a database to render; the root and login layouts
+// are rendered for real in tests/behaviour/ui-i18n.test.ts.
+test("spec 125 — authenticated layout DECLARES the language on its locale wrapper", () => {
+  const src = read(AUTH_LAYOUT);
+  assert.match(src, /\slang=\{htmlLang\}/, "the locale wrapper must carry lang={htmlLang}");
+  assert.doesNotMatch(src, /^\s*data-html-lang=\{[^}]*\}\s*$/m, "data-html-lang is invisible to the browser; it must not stand in for lang");
+});
+
 test("spec 125 — Topbar is an async server component with next-intl/server translations", () => {
   const src = read(TOPBAR);
   assert.match(

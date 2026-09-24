@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
+import { Geist, Geist_Mono, Noto_Sans_Devanagari, Noto_Serif_Tibetan } from "next/font/google";
+import { DEFAULT_LOCALE, LOCALE_COOKIE, LOCALE_HTML_LANG, normalizeLocale, type Locale } from "@/i18n/config";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -11,6 +13,51 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+// NON-LATIN SCRIPTS NEED A FACE THE APP SHIPS. Two of the three UI locales are
+// Hindi (Devanagari) and Bhoti (Tibetan), and until now neither face was loaded
+// anywhere: --deva named "Noto Sans Devanagari" with no @font-face behind it,
+// and there was no Tibetan face at all. Rendering depended entirely on what the
+// client machine happened to have installed -- and a school Windows machine in
+// Leh with no Tibetan font draws བོད་ཡིག as empty boxes.
+//
+// next/font self-hosts these (downloaded at build time and served from this
+// origin, so nothing is fetched from Google at runtime). preload is OFF: the
+// @font-face rules carry unicode-range, so a browser downloads the Tibetan or
+// Devanagari file only on a page that actually contains those characters. An
+// English-only session pays nothing. globals.css builds --deva and --tib on
+// these variables.
+const notoDevanagari = Noto_Sans_Devanagari({
+  variable: "--font-deva",
+  preload: false,
+  display: "swap",
+});
+
+const notoTibetan = Noto_Serif_Tibetan({
+  variable: "--font-tibetan",
+  preload: false,
+  display: "swap",
+});
+
+/**
+ * The locale the page will be rendered in, for <html lang>.
+ *
+ * Read from the same gml-locale cookie i18n/request.ts reads for every
+ * server-rendered string, so the declared language always matches the text
+ * next-intl actually produced. Both writers keep it in sync: the pre-auth
+ * picker (login/language-picker.tsx) and the post-auth preference API
+ * (api/user-prefs/route.ts). The authenticated layout re-declares lang on its
+ * subtree from the database preference, which wins on a fresh device where the
+ * cookie has not been written yet.
+ */
+async function documentLocale(): Promise<Locale> {
+  try {
+    return normalizeLocale((await cookies()).get(LOCALE_COOKIE)?.value);
+  } catch {
+    // Outside a request scope (static prerender) there are no cookies.
+    return DEFAULT_LOCALE;
+  }
+}
 
 export const metadata: Metadata = {
   // Still the create-next-app default until now: every browser tab, every
@@ -27,15 +74,19 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false, nocache: true },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Was hardcoded "en": every Hindi and Bhoti page was announced to a screen
+  // reader as English, and the browser applied English line-breaking to
+  // Tibetan, which does not break on spaces.
+  const locale = await documentLocale();
   return (
     <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      lang={LOCALE_HTML_LANG[locale]}
+      className={`${geistSans.variable} ${geistMono.variable} ${notoDevanagari.variable} ${notoTibetan.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
