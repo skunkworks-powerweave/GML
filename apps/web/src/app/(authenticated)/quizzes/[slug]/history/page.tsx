@@ -56,11 +56,21 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
   // somewhere useful (their past scores) rather than a dead end. This page
   // read no searchParams, so they arrived at their history with no idea why
   // the quiz would not open.
+  //
+  // submitQuizAttempt sends every refused submission here too, rather than
+  // back to the runner: rendering the runner opens a fresh attempt, and after
+  // a time-out that let the still-mounted runner submit the same answers into
+  // it. From here nothing starts until the learner presses "Take quiz again".
   const sp = searchParams ? await searchParams : {};
-  const historyError =
-    sp.error === "attempts_exhausted"
-      ? "You have used all your attempts at this quiz. Your previous scores are below."
-      : null;
+  const HISTORY_ERRORS: Record<string, string> = {
+    attempts_exhausted:
+      "You have used all your attempts at this quiz. Your previous scores are below.",
+    time_expired:
+      "Your time ran out before the answers reached us, so that attempt was not scored.",
+    attempt_closed:
+      "That attempt had already been submitted or closed, so those answers were not recorded again. Your attempts are below.",
+  };
+  const historyError = sp.error ? HISTORY_ERRORS[sp.error] ?? null : null;
 
   // Resolve the quiz first so we 404 cleanly for bad slugs (rather than
   // rendering an empty history page for a non-existent quiz).

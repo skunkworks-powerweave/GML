@@ -94,14 +94,26 @@ export function QuizRunner({
   });
 
   // Spec 159 — countdown effect. Mounted ONCE on first render; reads the
-  // initial `timeLimitSeconds` prop. Ticks once per second; when remaining
-  // hits 0 it fires the auto-submit (idempotent via submittedRef so a
-  // race between the tick and a manual click can't double-submit). The
-  // cleanup function clears the interval so navigating away tears the
-  // timer down. Empty dep array is intentional: we don't want a parent
-  // re-render to reset the timer mid-attempt.
+  // initial `timeLimitSeconds` prop. When the time is up it fires the
+  // auto-submit (idempotent via submittedRef so a race between the tick and
+  // a manual click can't double-submit). The cleanup function clears the
+  // interval so navigating away tears the timer down. Empty dep array is
+  // intentional: we don't want a parent re-render to reset the timer
+  // mid-attempt (a NEW attempt remounts the runner -- the page keys it).
+  //
+  // COUNTED AGAINST A DEADLINE, NOT BY TICKS. It used to subtract one per
+  // interval callback, but a phone with its screen locked, or a background
+  // tab, runs no callbacks -- so it came back showing more time than the
+  // server allows. The remaining time is now recomputed from the deadline on
+  // every tick, so a suspended timer catches up the moment it runs again.
+  //
+  // FIRES ONCE. The interval is cleared when the auto-submit goes. It used to
+  // keep ticking at 00:00 and re-arm on a refused submit, so after the server
+  // bounced a late attempt the runner POSTed the same answers again one second
+  // later. If the auto-submit fails, the error is shown and Submit still works.
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
+    const deadline = Date.now() + timeLimitSeconds * 1000;
     // Auto-submit closure — reads from refs so it always sees the latest
     // selection map and the latest question list, even though the effect
     // captured the initial values.
@@ -118,22 +130,16 @@ export function QuizRunner({
       // callback, not a render path).
       submitAction(slug, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
-        submittedRef.current = false; // permit retry if the server bounced
+        submittedRef.current = false; // a manual Submit may retry
       });
     };
     const id = setInterval(() => {
-      setRemaining((prev) => {
-        if (prev === null) return prev;
-        const next = prev - 1;
-        if (next <= 0) {
-          // Defer the submit to a microtask so React finishes this state
-          // update before the redirect fires. `queueMicrotask` is enough —
-          // we don't need setTimeout's macrotask delay.
-          queueMicrotask(autoSubmit);
-          return 0;
-        }
-        return next;
-      });
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setRemaining(left);
+      if (left === 0) {
+        clearInterval(id);
+        autoSubmit();
+      }
     }, 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
