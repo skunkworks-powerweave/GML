@@ -192,6 +192,57 @@ test("173. the version is overridable by environment, with a default", () => {
   );
 });
 
+test("173. packages/shared does not reach for Node-only globals", () => {
+  // ── THE DEFECT THIS CATCHES, WHICH CI CAUGHT FIRST ────────────────────────
+  //
+  // The first version of the shared module typed its parameter as
+  // `NodeJS.ProcessEnv` and defaulted it to `process.env`. packages/shared
+  // declares no @types/node dependency and no other file in it referenced a
+  // Node global, so this was the first one. It typechecked on the machine it
+  // was written on -- where @types/node is reachable through the pnpm store --
+  // and failed CI on a clean install:
+  //
+  //   error TS2503: Cannot find namespace 'NodeJS'.
+  //   error TS2591: Cannot find name 'process'.
+  //
+  // Declaring @types/node here would silence it and be wrong: this package is
+  // imported by apps/web including code that reaches the browser, where there
+  // is no process. A shared package asserting a Node runtime in its TYPES is
+  // making a claim about every consumer of it.
+  //
+  // Checked on comment-stripped source, so the module can explain the defect
+  // in prose without tripping the rule that forbids it.
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(resolve(root, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist") continue;
+        walk(rel);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry.name)) continue;
+      const src = code(readText(rel));
+      // `NodeJS.` is the namespace; the second pattern is a BARE `process.`,
+      // which excludes the deliberate `(globalThis as {...}).process?.env`
+      // because that one is preceded by a dot.
+      const bad =
+        /\bNodeJS\./.exec(src)?.[0] ??
+        /(?:^|[^.\w])(process\s*\.)/m.exec(src)?.[1];
+      if (bad) offenders.push(`${rel} (${bad.trim()})`);
+    }
+  };
+  walk("packages/shared/src");
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `packages/shared declares no @types/node and is imported by browser-bound code, so it ` +
+      `cannot reference Node-only globals. Reach the environment through ` +
+      `globalThis, or take it as a parameter. Offenders: ${offenders.join(", ")}`,
+  );
+});
+
 test("173. the override variable is documented and plumbed into the container", () => {
   // The failure this prevents is the one .env.example already has elsewhere: a
   // variable the code reads that an operator has no way to discover.
