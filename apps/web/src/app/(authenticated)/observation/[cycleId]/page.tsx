@@ -14,8 +14,11 @@ import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { teachers, subjects, observationForms, observationEvidence } from "@gml/db/schema";
+import { teachers, subjects, observationEvidence } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
+import { Fragment } from "react";
+import { loadSubmittedForms, STAGE_FORMS, stageFieldLabel, type StageKind } from "@/lib/observation/forms";
+import { SubmittedForms } from "./SubmittedForms";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 import {
@@ -41,13 +44,19 @@ export default async function CycleDetailPage({
   searchParams,
 }: {
   params: Promise<{ cycleId: string }>;
-  searchParams?: Promise<{ error?: string }>;
+  searchParams?: Promise<{ error?: string; field?: string }>;
 }) {
   const { cycleId } = await params;
   const sp = (await searchParams) ?? {};
   const error = (sp.error ?? "").trim();
+  // Only a known question's label is echoed back, never the raw parameter.
+  const invalidField = stageFieldLabel((sp.field ?? "").trim());
 
   const CYCLE_ERRORS: Record<string, { message: string; tone: "warn" | "error" }> = {
+    invalid_form: {
+      message: `${invalidField ? `"${invalidField}"` : "An answer"} was blank or too long, so nothing was recorded and the cycle has not moved on. Please fill it in and submit again.`,
+      tone: "warn",
+    },
     invalid_transition: {
       message:
         "That action can't be performed in the cycle's current status. The page has been refreshed.",
@@ -89,7 +98,12 @@ export default async function CycleDetailPage({
   const [subject] = cycle.subjectId
     ? await db.select().from(subjects).where(eq(subjects.id, cycle.subjectId)).limit(1)
     : [null];
-  const forms = await db.select().from(observationForms).where(eq(observationForms.cycleId, cycleId));
+  // The SUBMITTED forms, with their answers and who submitted each. This used
+  // to be `select *` rendered as a kind chip and a timestamp: the answers were
+  // shown to nobody, so the observer never read the lesson plan, the teacher
+  // never read the rubric, and sign-off happened blind. Seed templates in the
+  // same table are dropped here rather than counted as submissions.
+  const forms = await loadSubmittedForms(db, cycleId, teacher?.userId ?? null);
   const evidence = await db.select().from(observationEvidence).where(eq(observationEvidence.cycleId, cycleId));
 
   const currentStageIdx = CYCLE_STAGES.findIndex((s) => s.id === cycle.status);
@@ -259,38 +273,13 @@ export default async function CycleDetailPage({
         <article className="card card-hi" style={{ padding: 16 }}>
           <div className="label" style={{ marginBottom: 6 }}>Forms · {forms.length}</div>
           <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Pre &amp; post-observation</h2>
-          {forms.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>No forms submitted yet.</p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-              {forms.map((f) => (
-                <li
-                  key={f.id}
-                  className="card"
-                  style={{ padding: 10, fontSize: 12, boxShadow: "none" }}
-                >
-                  <span className="chip chip-ink" style={{ fontSize: 10 }}>{f.kind}</span>
-                  <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>
-                    Submitted <span className="mono">{new Date(f.submittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          <SubmittedForms forms={forms} />
 
           {/* CTA: Submit pre-form */}
           {canSubmitPre ? (
             <form action={submitPreFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <label className="label" style={{ fontSize: 11 }}>Lesson plan summary</label>
-              <textarea
-                name="lessonPlanSummary"
-                rows={3}
-                required
-                className="text"
-                placeholder="What will you teach today?"
-                style={{ fontSize: 13 }}
-              />
+              <StageFields kind="pre" />
               <button type="submit" className="btn btn-primary btn-sm">
                 Submit pre-form
               </button>
@@ -301,15 +290,7 @@ export default async function CycleDetailPage({
           {canSubmitObserver ? (
             <form action={submitObserverFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <label className="label" style={{ fontSize: 11 }}>Observer rubric notes</label>
-              <textarea
-                name="narrativeComments"
-                rows={3}
-                required
-                className="text"
-                placeholder="Rubric narrative…"
-                style={{ fontSize: 13 }}
-              />
+              <StageFields kind="observer" />
               <button type="submit" className="btn btn-primary btn-sm">
                 Submit observer-form
               </button>
@@ -320,15 +301,7 @@ export default async function CycleDetailPage({
           {canSubmitPost ? (
             <form action={submitPostFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <label className="label" style={{ fontSize: 11 }}>What worked / What didn&apos;t</label>
-              <textarea
-                name="whatWorked"
-                rows={3}
-                required
-                className="text"
-                placeholder="Reflect on the lesson…"
-                style={{ fontSize: 13 }}
-              />
+              <StageFields kind="post" />
               <button type="submit" className="btn btn-primary btn-sm">
                 Submit post-form
               </button>
@@ -436,5 +409,27 @@ export default async function CycleDetailPage({
     </MobileDetailFrame>
   ) : (
     body
+  );
+}
+
+// A stage's questions, from the same definition the server validates against
+// (lib/observation/forms.ts), so an input the server would drop cannot appear.
+function StageFields({ kind }: { kind: StageKind }) {
+  return (
+    <>
+      {STAGE_FORMS[kind].fields.map((f) => (
+        <Fragment key={f.name}>
+          <label className="label" style={{ fontSize: 11 }}>{f.label}</label>
+          <textarea
+            name={f.name}
+            rows={3}
+            required={f.required}
+            className="text"
+            placeholder={f.placeholder}
+            style={{ fontSize: 13 }}
+          />
+        </Fragment>
+      ))}
+    </>
   );
 }

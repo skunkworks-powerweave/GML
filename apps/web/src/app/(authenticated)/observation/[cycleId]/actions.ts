@@ -58,6 +58,7 @@ import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
 
 type CycleStatus =
   | "nominated"
@@ -197,28 +198,22 @@ async function submitFormAndTransition(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// Helper — collect free-form FormData entries into the responses jsonb.
-// Drops internal `__` prefixed keys and the cycleId field (used by the
-// dispatch, not part of the response payload).
+// Helper — the stage's answers, validated, or a redirect naming the question.
+//
+// This was collectResponses(): every non-`__` FormData key stored verbatim,
+// with no required check, no trim, no length cap and no allow-list, ahead of
+// a transition that cannot be undone. An empty pre-form or a blank rubric
+// advanced the cycle for good. Runs after the ownership check (so a refusal
+// reveals nothing about a cycle the caller cannot see) and before the
+// transaction (so a refusal writes nothing).
 // ---------------------------------------------------------------------------
 
-function collectResponses(formData: FormData): Record<string, unknown> {
-  const responses: Record<string, unknown> = {};
-  for (const [key, value] of formData.entries()) {
-    if (key.startsWith("__")) continue;
-    if (key === "cycleId") continue;
-    const cleanKey = key.endsWith("[]") ? key.slice(0, -2) : key;
-    const stringVal = typeof value === "string" ? value : String(value);
-    const existing = responses[cleanKey];
-    if (existing === undefined) {
-      responses[cleanKey] = stringVal;
-    } else if (Array.isArray(existing)) {
-      existing.push(stringVal);
-    } else {
-      responses[cleanKey] = [String(existing), stringVal];
-    }
+function stageResponses(kind: StageKind, cycleId: string, formData: FormData): Record<string, string> {
+  const parsed = parseStageResponses(kind, formData);
+  if (!parsed.ok) {
+    redirect(`/observation/${cycleId}?error=invalid_form&field=${encodeURIComponent(parsed.field)}`);
   }
-  return responses;
+  return parsed.responses;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +251,7 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
   await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
-  const responses = collectResponses(formData);
+  const responses = stageResponses("pre", cycleId, formData);
 
   const code = await submitFormAndTransition({
     cycleId,
@@ -312,7 +307,7 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
   await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
-  const responses = collectResponses(formData);
+  const responses = stageResponses("observer", cycleId, formData);
 
   const code = await submitFormAndTransition({
     cycleId,
@@ -369,7 +364,7 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
   await assertSectionGate(actor.id, "observation", "/observation");
   await assertCanAccessCycle(actor, cycleId);
 
-  const responses = collectResponses(formData);
+  const responses = stageResponses("post", cycleId, formData);
 
   const code = await submitFormAndTransition({
     cycleId,
