@@ -1,6 +1,7 @@
 // Geography hierarchy: districts → zones → schools → teachers.
 // Seeded with Leh + Kargil (districts) and the 6 Kargil zones in spec 086.
 
+import { sql } from "drizzle-orm";
 import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { phases } from "./rtt";
 import { users } from "./identity";
@@ -60,6 +61,9 @@ export const teachers = pgTable(
     index("teachers_school_idx").on(t.schoolId),
     // Resolved whenever a signed-in user is mapped to their teacher record.
     index("teachers_user_idx").on(t.userId),
+    // One teacher record per login (migration 0031): teacherIdFor() resolves
+    // a signed-in teacher by user_id, and two records made that arbitrary.
+    uniqueIndex("teachers_user_id_uq").on(t.userId).where(sql`${t.userId} IS NOT NULL`),
   ],
 );
 

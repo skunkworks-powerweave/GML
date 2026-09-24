@@ -16,15 +16,19 @@
 import { revalidatePath } from "next/cache";
 import { eq, and, ne, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { users, teachers, mentors } from "@gml/db/schema";
+import { users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
+import { linkAccountToRecord } from "./link";
 
 export type UserActionState = { error?: string; ok?: string };
 
 const MIN_PASSWORD_LENGTH = 8;
+
+/** The "Link to" record was claimed by another login first. */
+class AlreadyLinked extends Error {}
 
 /**
  * Which roles may the caller hand out?
@@ -177,10 +181,23 @@ export async function createUserAction(
     `);
 
     if (linkId && (linkKind === "teacher" || linkKind === "mentor")) {
-      const table = linkKind === "teacher" ? teachers : mentors;
-      await db.update(table).set({ userId: newId }).where(eq(table.id, linkId));
+      // Claim the record only if nobody holds it (./link.ts). Losing the race
+      // is not an overwrite: the new account is undone below and the admin is
+      // told, rather than silently taking someone else's programme data.
+      if (!(await linkAccountToRecord(db as never, linkKind, linkId, newId))) {
+        throw new AlreadyLinked();
+      }
     }
   } catch (err) {
+    if (err instanceof AlreadyLinked) {
+      // Profile first: public.users.id references auth.users ON DELETE
+      // RESTRICT (_post/003), so the auth record cannot go while it exists.
+      await db.execute(sql`DELETE FROM public.users WHERE id = ${newId}::uuid`).catch(() => undefined);
+      await admin.auth.admin.deleteUser(newId).catch(() => undefined);
+      return {
+        error: `That ${linkKind} record is already linked to another login. Nothing was created; reload the page for the current list.`,
+      };
+    }
     // The auth record exists but the profile is wrong. Leaving it would produce
     // an account that can authenticate and then be refused a token forever,
     // with no row in this list to fix it from -- so undo the auth record and
@@ -193,7 +210,9 @@ export async function createUserAction(
     action: "admin.user.create",
     entityType: "user",
     entityId: newId,
-    metadata: { email, role, linkKind: linkKind || null },
+    // The linked record too: "which login became which teacher" is exactly
+    // what an investigation of a mis-link needs.
+    metadata: { email, role, linkKind: linkKind || null, linkId: linkId || null },
   });
   if (!wrote) noteAuditDegraded("admin/users/createUserAction");
 

@@ -36,7 +36,11 @@ export const mentors = pgTable(
   },
   // Resolved on every page that maps a signed-in user to their mentor record.
   // This table previously declared no indexes whatsoever.
-  (t) => [index("mentors_user_idx").on(t.userId)],
+  (t) => [
+    index("mentors_user_idx").on(t.userId),
+    // One mentor record per login (migration 0031), as for teachers.
+    uniqueIndex("mentors_user_id_uq").on(t.userId).where(sql`${t.userId} IS NOT NULL`),
+  ],
 );
 
 export const mentorPairings = pgTable(
