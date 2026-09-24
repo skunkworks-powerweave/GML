@@ -223,7 +223,8 @@ warning that `OBS-2026-001` is gone and carries on — that warning is expected.
 **Quizzes are not seeded.** Every RTT subject page links a mid-unit and an
 endline assessment by the fixed slugs `mid-unit` and `endline`; until someone
 creates and activates quizzes with those slugs at `/admin/quizzes`, both read
-"not published yet" on every subject. That is a task for the programme team
+"not published yet" on every subject. Each quiz is bound to an RTT subject when
+it is created, so the RTT subjects must exist first. That is a task for the programme team
 before teachers reach the RTT subject pages. Neither the seed nor the purge
 touches the quiz tables.
 

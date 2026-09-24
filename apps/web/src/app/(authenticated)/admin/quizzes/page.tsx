@@ -4,9 +4,9 @@
 // framing) at the navigation layer.
 
 import Link from "next/link";
-import { asc, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { quizzes, quizQuestions } from "@gml/db/schema";
+import { phases, quizzes, quizQuestions, rttSubjects, terms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { NewQuizForm } from "./new-quiz-form";
 
@@ -32,6 +32,22 @@ export default async function AdminQuizzesIndexPage() {
     .from(quizzes)
     .orderBy(asc(quizzes.title));
 
+  // The subjects a new quiz can be bound to. Labelled with phase and term
+  // because subject names repeat across terms ("English" in every one).
+  const subjectRows = await db
+    .select({
+      id: rttSubjects.id,
+      name: rttSubjects.name,
+      term: terms.name,
+      phase: phases.label,
+    })
+    .from(rttSubjects)
+    .innerJoin(terms, eq(terms.id, rttSubjects.termId))
+    .innerJoin(phases, eq(phases.id, terms.phaseId))
+    .where(eq(rttSubjects.active, true))
+    .orderBy(asc(phases.sequence), asc(terms.sequence), asc(rttSubjects.name));
+  const subjects = subjectRows.map((s) => ({ id: s.id, label: `${s.phase} · ${s.term} · ${s.name}` }));
+
   return (
     <main>
       <div className="page-header">
@@ -55,7 +71,7 @@ export default async function AdminQuizzesIndexPage() {
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <NewQuizForm />
+            <NewQuizForm subjects={subjects} />
             <Link
               href="/admin/forms"
               className="chip"

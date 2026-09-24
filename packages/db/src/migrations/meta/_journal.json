@@ -204,6 +204,13 @@
       "when": 1780730000000,
       "tag": "0028_audit_log_created_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780731000000,
+      "tag": "0029_quizzes_scope_fk_restrict",
+      "breakpoints": true
     }
   ]
 }

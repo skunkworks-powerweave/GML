@@ -36,8 +36,11 @@ export const quizzes = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     slug: varchar("slug", { length: 60 }).notNull().unique(),
     title: varchar("title", { length: 200 }).notNull(),
-    subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "set null" }),
-    rttSubjectId: uuid("rtt_subject_id").references(() => rttSubjects.id, { onDelete: "set null" }),
+    // RESTRICT, not SET NULL (migration 0029): nulling the only scope column
+    // writes a row quizzes_one_scope forbids, so a SET NULL delete could never
+    // succeed -- it failed as a CHECK violation the admin grid cannot explain.
+    subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "restrict" }),
+    rttSubjectId: uuid("rtt_subject_id").references(() => rttSubjects.id, { onDelete: "restrict" }),
     passThreshold: smallint("pass_threshold").notNull().default(60),
     // Spec 159 — Workflow Run 15 audit-closure MISS: optional time limit on
     // the quiz attempt. NULL = untimed (the default for every legacy quiz);
