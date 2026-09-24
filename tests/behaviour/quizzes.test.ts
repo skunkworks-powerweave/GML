@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { registerHooks } from "node:module";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { h, renderSync, openingTags, attr } from "./_ui.js";
+import { h, renderSync, openingTags, attr, React, hostElements, textOf, withAppRouter } from "./_ui.js";
 import { needsDatabase, withClient, tag, DATABASE_URL } from "./_harness.js";
 
 const skip = needsDatabase();
@@ -44,6 +44,9 @@ registerHooks({
 const createModule = () => import("../../apps/web/src/app/(authenticated)/admin/quizzes/create-quiz.ts");
 const runnerModule = () => import("../../apps/web/src/app/(authenticated)/quizzes/[slug]/page.tsx");
 const resultModule = () => import("../../apps/web/src/app/(authenticated)/quizzes/[slug]/result/[submissionId]/page.tsx");
+const historyModule = () => import("../../apps/web/src/app/(authenticated)/quizzes/[slug]/history/page.tsx");
+const editorActions = () => import("../../apps/web/src/app/(authenticated)/admin/quizzes/[id]/actions.ts");
+const editorPage = () => import("../../apps/web/src/app/(authenticated)/admin/quizzes/[id]/page.tsx");
 
 // The pages hold the app's pool open; end it so the file exits promptly.
 after(async () => {
@@ -356,4 +359,263 @@ test("F92: the limit is still enforced -- a submit arriving after limit + grace 
     const [row] = await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_submissions WHERE quiz_id = $1`, [w.quizId]);
     assert.equal(row!.n, 0);
   });
+});
+
+// ── F37: the attempt is what a submission belongs to ─────────────────────────
+
+const submissionCount = async (w: QuizWorld) =>
+  (await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_submissions WHERE quiz_id = $1`, [w.quizId]))[0]!.n;
+const openAttempts = async (w: QuizWorld) =>
+  (await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_attempts WHERE quiz_id = $1 AND closed_at IS NULL`, [w.quizId]))[0]!.n;
+
+test("F37: submitting the same attempt twice records one submission", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    assert.match((await submit(runner, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    const again = await submit(runner, answerAll(w, 1));
+    assert.doesNotMatch(again.redirect ?? "", /\/result\//, "a closed attempt produced a second result");
+    assert.match(again.redirect ?? "", /\/history\?error=attempt_closed$/);
+    assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("F37: a timed quiz cannot be submitted around its clock from a second tab", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    // Two tabs render the runner; both share the one open attempt.
+    const tabA = (await openRunner(w)).runner;
+    const tabB = (await openRunner(w)).runner;
+    assert.match((await submit(tabB, answerAll(w, 1))).redirect ?? "", /\/result\//);
+    // Tab A keeps going long past the limit. There is no open attempt left
+    // for it -- which used to mean no time check at all.
+    const late = await submit(tabA, answerAll(w, 0));
+    assert.doesNotMatch(late.redirect ?? "", /\/result\//, "an unbounded second sitting was scored");
+    assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("F37: concurrent submits of one attempt record one submission, under the cap", { skip }, async () => {
+  await withQuiz({ maxAttempts: 1 }, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    const results = await Promise.all(Array.from({ length: 6 }, () => submit(runner, answerAll(w, 1))));
+    const accepted = results.filter((r) => /\/result\//.test(r.redirect ?? "")).length;
+    assert.equal(accepted, 1, `accepted ${accepted} of 6 concurrent submits against max_attempts=1`);
+    assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("F37: the cap holds across attempts: max_attempts submissions, then the history page", { skip }, async () => {
+  await withQuiz({ maxAttempts: 2 }, async (w) => {
+    signIn(w.userId);
+    await takeQuiz(w, answerAll(w, 1));
+    await takeQuiz(w, answerAll(w, 1));
+    const third = await openRunner(w);
+    assert.equal(third.redirect, `/quizzes/${w.slug}/history?error=attempts_exhausted`);
+    assert.equal(await submissionCount(w), 2);
+  });
+});
+
+test("F37: an overtime submit lands on the history page with the reason, and starts no new attempt", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    await backdateOpenAttempt(w, 600);
+    const res = await submit(runner, answerAll(w, 0));
+    // It used to redirect back to the runner, whose render opened a FRESH
+    // attempt with the full limit under a runner still holding the answers --
+    // and the runner's next tick submitted them into it, scored.
+    assert.equal(res.redirect, `/quizzes/${w.slug}/history?error=time_expired`);
+    const { default: History } = await historyModule();
+    const html = renderSync(
+      await History({ params: Promise.resolve({ slug: w.slug }), searchParams: Promise.resolve({ error: "time_expired" }) }),
+    );
+    assert.match(html, /time ran out/i);
+    assert.equal(await openAttempts(w), 0, "following the redirect must not start the clock on a new attempt");
+    assert.equal(await submissionCount(w), 0);
+  });
+});
+
+test("F37: an administrator can set the attempt cap in the quiz editor", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(randomUUID(), "programme_admin");
+    const { saveQuizSchema } = await editorActions();
+    const saved = await saveQuizSchema(w.quizId, JSON.stringify({ maxAttempts: 2 }));
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    assert.equal((await w.q<{ m: number | null }>(`SELECT max_attempts AS m FROM quizzes WHERE id = $1`, [w.quizId]))[0]!.m, 2);
+    const bad = await saveQuizSchema(w.quizId, JSON.stringify({ maxAttempts: 50 }));
+    assert.equal(bad.ok, false, "the DB allows 1..20; the editor must say so rather than fail the UPDATE");
+    // The editor shows the current value, so it can be changed back.
+    const { default: Editor } = await editorPage();
+    const html = renderSync(withAppRouter(await Editor({ params: Promise.resolve({ id: w.quizId }) })));
+    assert.match(html, /&quot;maxAttempts&quot;: 2/);
+  });
+});
+
+// ── F37: the runner's clock, driven with real effects and mocked timers ─────
+//
+// _ui.ts's mount() does not run effects, and the countdown is an effect. This
+// is the same minimal hook dispatcher with effects recorded, so a test can run
+// them and then drive setInterval and Date with node:test's mock timers.
+
+function mountLive<P>(component: (props: P) => unknown, props: P) {
+  const internals = (React as unknown as Record<string, { H: unknown } | undefined>)
+    .__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE!;
+  const slots: unknown[] = [];
+  const effects: Array<{ fn: () => unknown; deps?: unknown[]; ran?: unknown[] | true; cleanup?: unknown }> = [];
+  let cursor = 0;
+  const slot = <T,>(init: () => T): [number, T] => {
+    const k = cursor++;
+    if (!(k in slots)) slots[k] = init();
+    return [k, slots[k] as T];
+  };
+  const effect = (fn: () => unknown, deps?: unknown[]) => {
+    const k = cursor++;
+    effects[k] = { ...(effects[k] ?? {}), fn, deps };
+  };
+  const dispatcher = {
+    useState<T>(initial: T | (() => T)) {
+      const [k, value] = slot(() => (typeof initial === "function" ? (initial as () => T)() : initial));
+      return [value, (next: T | ((p: T) => T)) => {
+        slots[k] = typeof next === "function" ? (next as (p: T) => T)(slots[k] as T) : next;
+      }];
+    },
+    useRef<T>(initial: T) { return slot(() => ({ current: initial }))[1]; },
+    useEffect: effect,
+    useLayoutEffect: effect,
+    useInsertionEffect() { cursor++; },
+    useCallback<T>(fn: T) { cursor++; return fn; },
+    useMemo<T>(fn: () => T) { cursor++; return fn(); },
+    useTransition() { cursor++; return [false, (fn: () => void) => fn()]; },
+    useContext(ctx: { _currentValue: unknown }) { return ctx._currentValue; },
+    useId() { return `live-${cursor++}`; },
+    useDebugValue() {},
+  };
+  let tree: unknown;
+  const render = () => {
+    const previous = internals.H;
+    internals.H = dispatcher;
+    cursor = 0;
+    try {
+      tree = component(props);
+    } finally {
+      internals.H = previous;
+    }
+    // Commit: run each effect whose deps changed (all of them, the first time).
+    for (const e of effects) {
+      if (!e) continue;
+      const changed = e.ran === undefined || !e.deps || e.deps.some((d, i) => d !== (e.ran as unknown[])[i]);
+      if (!changed) continue;
+      if (typeof e.cleanup === "function") (e.cleanup as () => void)();
+      e.cleanup = e.fn();
+      e.ran = e.deps ?? true;
+    }
+    return tree;
+  };
+  render();
+  return {
+    rerender: render,
+    text: () => hostElements(tree).map((el) => textOf(el)).join(" "),
+    unmount: () => effects.forEach((e) => typeof e?.cleanup === "function" && (e.cleanup as () => void)()),
+  };
+}
+
+const RUNNER_QUESTIONS = [{ id: "q1", prompt: "One?", options: ["a", "b"] }];
+async function runners() {
+  const { QuizRunner } = await import("../../apps/web/src/components/quiz/QuizRunner.tsx");
+  const { MobileQuizRunner } = await import("../../apps/web/src/components/quiz/MobileQuizRunner.tsx");
+  return [["QuizRunner", QuizRunner], ["MobileQuizRunner", MobileQuizRunner]] as const;
+}
+const flush = () => new Promise<void>((r) => setImmediate(r));
+
+/**
+ * Date.now and setInterval under the test's hand. `tick` advances the clock
+ * and runs intervals that fall due, as a browser does; `sleep` advances the
+ * clock and holds every interval back by the same amount, which is what a
+ * locked phone screen or a throttled background tab does to timers. (node:test
+ * mock.timers can do neither: setting its clock runs every due timer, and its
+ * intervals ignore a clearInterval from inside their own callback.)
+ */
+function fakeClock() {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const real = { now: Date.now, setInterval: g.setInterval, clearInterval: g.clearInterval };
+  let now = 1_000_000;
+  let seq = 0;
+  const timers = new Map<number, { fn: () => void; every: number; next: number }>();
+  Date.now = () => now;
+  g.setInterval = (fn: () => void, every: number) => {
+    timers.set(++seq, { fn, every, next: now + every });
+    return seq;
+  };
+  g.clearInterval = (id: number) => void timers.delete(id);
+  return {
+    tick(ms: number) {
+      const end = now + ms;
+      for (;;) {
+        const due = [...timers.entries()].filter(([, t]) => t.next <= end).sort((a, b) => a[1].next - b[1].next)[0];
+        if (!due) break;
+        const [id, t] = due;
+        now = t.next;
+        t.fn();
+        if (timers.has(id)) t.next += t.every;
+      }
+      now = end;
+    },
+    sleep(ms: number) {
+      now += ms;
+      for (const t of timers.values()) t.next += ms;
+    },
+    restore() {
+      Date.now = real.now;
+      g.setInterval = real.setInterval;
+      g.clearInterval = real.clearInterval;
+    },
+  };
+}
+
+test("F37: the runner auto-submits once at 00:00 and does not fire again when that submit is refused", async () => {
+  for (const [name, Runner] of await runners()) {
+    const clock = fakeClock();
+    try {
+      const calls: unknown[] = [];
+      // A refused auto-submit: the action's promise rejects (as it does when
+      // the server redirects the learner away).
+      const submitAction = async (_slug: string, answers: unknown) => {
+        calls.push(answers);
+        throw new Error("refused");
+      };
+      const live = mountLive(Runner as never, { slug: "s", title: "T", questions: RUNNER_QUESTIONS, timeLimitSeconds: 2, submitAction } as never);
+      for (let i = 0; i < 6; i++) {
+        clock.tick(1000);
+        await flush();
+        live.rerender();
+      }
+      assert.equal(calls.length, 1, `${name} re-sent the answers ${calls.length} times after its auto-submit was refused`);
+      live.unmount();
+    } finally {
+      clock.restore();
+    }
+  }
+});
+
+test("F37: the countdown follows the deadline, so a phone that slept shows the time actually left", async () => {
+  for (const [name, Runner] of await runners()) {
+    const clock = fakeClock();
+    try {
+      const live = mountLive(Runner as never, { slug: "s", title: "T", questions: RUNNER_QUESTIONS, timeLimitSeconds: 60, submitAction: async () => undefined } as never);
+      clock.tick(1000);
+      live.rerender();
+      assert.match(live.text(), /00:59/, `${name} after one second`);
+      // The screen locks for 30 s: the interval does not run, the clock does.
+      clock.sleep(30_000);
+      clock.tick(1000);
+      live.rerender();
+      // 1 s + 30 s asleep + 1 s = 32 s of a 60 s limit.
+      assert.match(live.text(), /00:28/, `${name} counted ticks instead of time: ${live.text().match(/\d\d:\d\d/)?.[0]}`);
+      live.unmount();
+    } finally {
+      clock.restore();
+    }
+  }
 });

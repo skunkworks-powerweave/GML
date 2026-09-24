@@ -26,6 +26,11 @@ type IncomingPayload = {
   // (no change to the existing value). A finite integer between 60 and
   // 7200 = the new time limit in seconds.
   timeLimitSeconds?: number | null;
+  // Attempts allowed per learner: `null` = unlimited, `undefined` = no
+  // change, an integer 1..20 (the quizzes_max_attempts_range CHECK) = the
+  // cap. The runner and submit action enforced a cap nothing could set --
+  // this editor was the only admin surface for a quiz and did not accept it.
+  maxAttempts?: number | null;
   active?: boolean;
   questions?: IncomingQuestion[];
 };
@@ -144,6 +149,23 @@ export async function saveQuizSchema(
     }
     updateSet.timeLimitSeconds = parsed.timeLimitSeconds;
   }
+  if (parsed.maxAttempts === null) {
+    updateSet.maxAttempts = null;
+  } else if (parsed.maxAttempts !== undefined) {
+    if (
+      typeof parsed.maxAttempts !== "number" ||
+      !Number.isInteger(parsed.maxAttempts) ||
+      parsed.maxAttempts < 1 ||
+      parsed.maxAttempts > 20
+    ) {
+      return {
+        ok: false,
+        error: "invalid_max_attempts",
+        message: "maxAttempts must be null (unlimited) or a whole number between 1 and 20.",
+      };
+    }
+    updateSet.maxAttempts = parsed.maxAttempts;
+  }
   if (typeof parsed.active === "boolean") {
     updateSet.active = parsed.active;
   }
@@ -217,6 +239,7 @@ export async function saveQuizSchema(
       // this key being present at all (the key is dropped from the
       // metadata when undefined per JSON serialization rules).
       timeLimitSeconds: updateSet.timeLimitSeconds,
+      maxAttempts: updateSet.maxAttempts,
       active: updateSet.active,
     },
   });

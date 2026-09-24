@@ -113,9 +113,14 @@ export function MobileQuizRunner({
 
   // Spec 159 — countdown effect. Empty dep array (timer mounts once and
   // tears down on unmount). Same shape as the desktop runner so the two
-  // surfaces have identical auto-submit semantics.
+  // surfaces have identical auto-submit semantics: counted against a
+  // deadline (a locked phone runs no interval callbacks, so counting ticks
+  // showed more time than the server allows), and fired ONCE (it used to
+  // re-send the same answers every second after a refused auto-submit).
+  // See QuizRunner for the full reasoning.
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
+    const deadline = Date.now() + timeLimitSeconds * 1000;
     const autoSubmit = () => {
       if (submittedRef.current) return;
       submittedRef.current = true;
@@ -126,19 +131,16 @@ export function MobileQuizRunner({
       }));
       submitAction(slug, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
-        submittedRef.current = false;
+        submittedRef.current = false; // a manual Submit may retry
       });
     };
     const id = setInterval(() => {
-      setRemaining((prev) => {
-        if (prev === null) return prev;
-        const next = prev - 1;
-        if (next <= 0) {
-          queueMicrotask(autoSubmit);
-          return 0;
-        }
-        return next;
-      });
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setRemaining(left);
+      if (left === 0) {
+        clearInterval(id);
+        autoSubmit();
+      }
     }, 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps

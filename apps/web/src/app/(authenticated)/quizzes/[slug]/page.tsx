@@ -93,78 +93,96 @@ export async function submitQuizAttempt(
   // Both were enforced only in the browser, and the time limit could not have
   // been enforced anywhere else: quiz_submissions recorded submitted_at and
   // nothing else, so the server had no attempt start to measure against. The
-  // countdown is a setTimeout in a component; this action is a URL.
+  // countdown is an interval in a component; this action is a URL.
   //
   // The cap is checked against COMPLETED submissions, not attempts, because an
   // abandoned attempt (closed the tab, lost connectivity on the way home from
   // school) must not consume one of a learner's tries.
-  if (quiz.maxAttempts != null) {
-    const prior = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(quizSubmissions)
-      .where(and(eq(quizSubmissions.quizId, quiz.id), eq(quizSubmissions.userId, userId)));
-    if ((prior[0]?.n ?? 0) >= quiz.maxAttempts) {
-      redirect(`/quizzes/${slug}?error=attempts_exhausted`);
-    }
-  }
-
-  // The open attempt this submission belongs to, if any.
-  // Elapsed time is measured by Postgres, the clock that wrote started_at --
-  // as the page does below -- not by this process's Date.now().
-  const [openAttempt] = await db
-    .select({
-      id: quizAttempts.id,
-      elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::float8`,
-    })
-    .from(quizAttempts)
-    .where(
-      and(
-        eq(quizAttempts.quizId, quiz.id),
-        eq(quizAttempts.userId, userId),
-        isNull(quizAttempts.closedAt),
-      ),
-    )
-    .limit(1);
-
-  let overtime = false;
-  if (quiz.timeLimitSeconds != null && openAttempt) {
-    overtime = openAttempt.elapsedSeconds > quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS;
-  }
-  if (overtime) {
-    // The attempt is closed and recorded, not silently discarded: an
-    // over-time submission is a fact about the learner's attempt, and dropping
-    // it would leave them with no record of having sat the quiz at all.
-    await db
+  //
+  // ── ONE OPEN ATTEMPT, ONE SUBMISSION, IN ONE TRANSACTION ──────────────────
+  //
+  // This was four separate statements -- count, look up the open attempt,
+  // insert, close -- and a submission without an open attempt was scored with
+  // no time check at all. So six concurrent POSTs (a double tap on a slow
+  // link, two tabs) all passed a cap of two, and a second tab submitted after
+  // the first had closed the attempt was accepted however long it had been
+  // open.
+  //
+  // Now the FIRST statement closes the learner's open attempt and returns it.
+  // The row lock makes concurrent submits queue behind it; each one after the
+  // first finds the attempt closed and is refused. No open attempt, no
+  // submission. The cap is counted inside the same transaction, and cannot be
+  // raced across attempts either: quiz_attempts_one_open_uq makes a new
+  // attempt wait for this transaction before it can open.
+  const result = await db.transaction(async (tx) => {
+    const [attempt] = await tx
       .update(quizAttempts)
-      .set({ closedAt: new Date() })
-      .where(eq(quizAttempts.id, openAttempt!.id));
+      .set({ closedAt: sql`now()` })
+      .where(
+        and(
+          eq(quizAttempts.quizId, quiz.id),
+          eq(quizAttempts.userId, userId),
+          isNull(quizAttempts.closedAt),
+        ),
+      )
+      // Elapsed time is measured by Postgres, the clock that wrote
+      // started_at -- as the page does below -- not by this process's clock.
+      .returning({
+        id: quizAttempts.id,
+        elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::float8`,
+      });
+    if (!attempt) return { kind: "attempt_closed" } as const;
+
+    // Over time: the attempt stays closed (this transaction commits), so it
+    // is recorded rather than silently discarded -- an over-time submission
+    // is a fact about the learner's attempt.
+    if (
+      quiz.timeLimitSeconds != null &&
+      attempt.elapsedSeconds > quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS
+    ) {
+      return { kind: "time_expired" } as const;
+    }
+
+    if (quiz.maxAttempts != null) {
+      const [prior] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(quizSubmissions)
+        .where(and(eq(quizSubmissions.quizId, quiz.id), eq(quizSubmissions.userId, userId)));
+      if ((prior?.n ?? 0) >= quiz.maxAttempts) return { kind: "attempts_exhausted" } as const;
+    }
+
+    const [inserted] = await tx
+      .insert(quizSubmissions)
+      .values({
+        quizId: quiz.id,
+        userId,
+        answers,
+        score,
+        passed,
+      })
+      .returning({ id: quizSubmissions.id });
+    await tx
+      .update(quizAttempts)
+      .set({ submissionId: inserted!.id })
+      .where(eq(quizAttempts.id, attempt.id));
+    return { kind: "submitted", submissionId: inserted!.id } as const;
+  });
+
+  // Refusals land on the history page, NOT back on the runner. Rendering the
+  // runner opens a fresh attempt with the full limit, and after a time_expired
+  // the still-mounted runner submitted the same answers into it on its next
+  // tick -- scored. The history page says why, shows past scores, and starts
+  // nothing until the learner chooses "Take quiz again".
+  if (result.kind === "time_expired") {
     void recordAudit({
       action: "quiz.attempt.expired",
       entityType: "quiz",
       entityId: quiz.id,
       metadata: { quizSlug: slug, limitSeconds: quiz.timeLimitSeconds },
     });
-    redirect(`/quizzes/${slug}?error=time_expired`);
   }
-
-  const [inserted] = await db
-    .insert(quizSubmissions)
-    .values({
-      quizId: quiz.id,
-      userId,
-      answers,
-      score,
-      passed,
-    })
-    .returning({ id: quizSubmissions.id });
-  const submissionId = inserted?.id ?? "";
-
-  if (openAttempt) {
-    await db
-      .update(quizAttempts)
-      .set({ closedAt: new Date(), submissionId })
-      .where(eq(quizAttempts.id, openAttempt.id));
-  }
+  if (result.kind !== "submitted") redirect(`/quizzes/${slug}/history?error=${result.kind}`);
+  const submissionId = result.submissionId;
 
   void recordAudit({
     action: "quiz.submit",
@@ -276,35 +294,35 @@ export default async function QuizRunnerPage({
   // server's cut-off, so the auto-submit, arriving a page-load and an upload
   // later, was refused as time_expired and every answer was discarded. The
   // learner sees the limit; the grace covers the latency they cannot see.
+  //
+  // Elapsed time comes from POSTGRES, not from this process.
+  //
+  // started_at is a database timestamp, so measuring against the app
+  // server's clock introduces a second source of truth that drifts -- and on
+  // a countdown a learner is being graded against, drift means being cut off
+  // early. now() - started_at uses one clock for both ends. It also keeps
+  // this Server Component free of Date.now(), which React's purity rule
+  // flags in a component body.
+  const [attempt] = await db
+    .select({
+      id: quizAttempts.id,
+      elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::int`,
+    })
+    .from(quizAttempts)
+    .where(
+      and(
+        eq(quizAttempts.quizId, quiz.id),
+        eq(quizAttempts.userId, session.user.id),
+        isNull(quizAttempts.closedAt),
+      ),
+    )
+    .limit(1);
   let remainingSeconds: number | null = quiz.timeLimitSeconds ?? null;
-  if (remainingSeconds != null) {
-    // Elapsed time comes from POSTGRES, not from this process.
-    //
-    // started_at is a database timestamp, so measuring against the app
-    // server's clock introduces a second source of truth that drifts -- and on
-    // a countdown a learner is being graded against, drift means being cut off
-    // early. now() - started_at uses one clock for both ends. It also keeps
-    // this Server Component free of Date.now(), which React's purity rule
-    // flags in a component body.
-    const [attempt] = await db
-      .select({
-        elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::int`,
-      })
-      .from(quizAttempts)
-      .where(
-        and(
-          eq(quizAttempts.quizId, quiz.id),
-          eq(quizAttempts.userId, session.user.id),
-          isNull(quizAttempts.closedAt),
-        ),
-      )
-      .limit(1);
-    if (attempt) {
-      remainingSeconds = Math.max(
-        0,
-        Math.round(remainingSeconds - (attempt.elapsedSeconds ?? 0)),
-      );
-    }
+  if (remainingSeconds != null && attempt) {
+    remainingSeconds = Math.max(
+      0,
+      Math.round(remainingSeconds - (attempt.elapsedSeconds ?? 0)),
+    );
   }
 
   // Spec 134 — device-aware runner. Mobile gets the full-screen
@@ -328,16 +346,12 @@ export default async function QuizRunnerPage({
 
   // RENDER THE REASON WE BOUNCED THEM BACK.
   //
-  // submitQuizAttempt redirects here with ?error= when an attempt is refused,
-  // and this page did not read searchParams at all — so a learner who ran out
-  // of time or used their last attempt was silently returned to the quiz with
-  // no explanation, looking at the questions they had just answered. They would
-  // reasonably try again, and be refused again, with no way to find out why.
+  // submitQuizAttempt redirects here with ?error= when the quiz itself has
+  // gone. Refused ATTEMPTS (out of time, no attempts left, already submitted)
+  // go to the history page instead, which explains them without opening a new
+  // attempt -- see the redirect in submitQuizAttempt.
   const sp = searchParams ? await searchParams : {};
   const QUIZ_ERRORS: Record<string, string> = {
-    time_expired:
-      "Your time ran out before the answers reached us, so this attempt was not scored.",
-    attempts_exhausted: "You have used all your attempts at this quiz.",
     not_found: "That quiz is no longer available.",
   };
   const errorMessage = sp.error ? QUIZ_ERRORS[sp.error] ?? null : null;
@@ -360,11 +374,18 @@ export default async function QuizRunnerPage({
     </p>
   ) : null;
 
+  // Keyed by the attempt: a different attempt is a different runner, with
+  // fresh selections and a fresh clock. Without the key React kept the old
+  // runner's state -- answers and a countdown already at zero -- across a
+  // re-render that brought a new attempt.
+  const runnerKey = attempt?.id ?? "no-attempt";
+
   if (device === "mobile") {
     return (
       <main>
         {errorBanner}
         <MobileQuizRunner
+          key={runnerKey}
           slug={slug}
           title={quiz.title}
           questions={mappedQuestions}
@@ -388,6 +409,7 @@ export default async function QuizRunnerPage({
         </Link>
       </div>
       <QuizRunner
+        key={runnerKey}
         slug={slug}
         title={quiz.title}
         questions={mappedQuestions}
