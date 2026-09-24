@@ -31,6 +31,18 @@ fail() { echo "[rollback] ERROR: $*" >&2; exit 1; }
 
 SERVICES="${SERVICES:-app worker}"
 
+# The health probe's target, resolved exactly as scripts/deploy.sh resolves it
+# (see the note there): the site Caddy serves, pinned to this box. DOMAIN from
+# the shell wins over .env, as it does when Compose interpolates it for caddy.
+DOMAIN_VALUE="${DOMAIN:-}"
+if [ -z "${DOMAIN_VALUE}" ] && [ -f .env ]; then
+  DOMAIN_VALUE="$(grep -E '^DOMAIN=' .env | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' [:cntrl:]' || true)"
+fi
+DOMAIN_VALUE="${DOMAIN_VALUE:-localhost}"
+HEALTH_URL="${HEALTH_URL:-https://${DOMAIN_VALUE}/api/health}"
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
+HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-3}"
+
 log "images currently available"
 docker images --format '{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}' \
   | grep -E '^gml-lms-(app|worker)' || fail "no gml-lms images found — nothing to roll back to"
@@ -63,31 +75,37 @@ log "restarting ${SERVICES}"
 # shellcheck disable=SC2086
 docker compose up -d --no-deps ${SERVICES}
 
-# The SAME defect deploy.sh had: Caddy answers plaintext with a 308, and
-# `curl -f` does not fail on a 3xx, so this loop exited 0 the moment Caddy was
-# up -- without ever reaching the app. A rollback onto an image that cannot
-# start would have reported "rolled back and healthy".
+# The SAME defects deploy.sh had, twice over. First the probe exited 0 on
+# whatever the proxy answered, never reaching the app. Then it was made strict
+# but kept a hard-coded http://127.0.0.1/api/health -- and Host 127.0.0.1
+# matches no Caddy site block, so it could NEVER read the app's `"ok":true`.
+# Every rollback therefore ended "still unhealthy after 120s", AFTER the
+# containers had already been restarted from :previous: the rollback happened
+# and only the verdict was wrong, which trains an operator to distrust a
+# rollback that worked.
 #
-#   -L  follow the redirect to HTTPS
-#   -k  the redirect lands on 127.0.0.1 while the certificate names $DOMAIN;
-#       certificate validity is not what this gate is for
+#   --resolve  the site name Caddy serves, pinned to this box
+#   -k         certificate validity is not what this gate is for
 #   grep the body, because /api/health answers 503 with ok:false when the
-#       database, storage or migrations are wrong -- and a rollback is most
-#       often run precisely when something is wrong
+#              database, storage or migrations are wrong -- and a rollback is
+#              most often run precisely when something is wrong
+#
+# tests/scripts/rollback-sh.test.mjs runs this script against a curl stub that
+# answers the way this stack's Caddy does.
 rollback_healthy() {
-  curl -fsSLk -m 10 "http://127.0.0.1/api/health" 2>/dev/null | grep -q '"ok":true'
+  curl -fsSk -m 10 --resolve "${DOMAIN_VALUE}:443:127.0.0.1" "${HEALTH_URL}" 2>/dev/null | grep -q '"ok":true'
 }
 
-log "waiting for health"
+log "waiting for health at ${HEALTH_URL} via this box's Caddy"
 elapsed=0
 until rollback_healthy; do
-  if [ "${elapsed}" -ge 120 ]; then
-    echo "[rollback] still unhealthy after 120s — the previous image may not be compatible" >&2
+  if [ "${elapsed}" -ge "${HEALTH_TIMEOUT_SECONDS}" ]; then
+    echo "[rollback] still unhealthy after ${HEALTH_TIMEOUT_SECONDS}s — the previous image may not be compatible" >&2
     echo "[rollback] with the CURRENT schema. Check 'docker compose logs app'." >&2
     exit 1
   fi
-  sleep 3
-  elapsed=$((elapsed + 3))
+  sleep "${HEALTH_INTERVAL_SECONDS}"
+  elapsed=$((elapsed + HEALTH_INTERVAL_SECONDS))
 done
 
 log "rolled back and healthy after ${elapsed}s"
