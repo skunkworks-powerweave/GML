@@ -111,6 +111,10 @@ services:
       GATE_PASSWORD_MENTORSHIP: ${GATE_PASSWORD_MENTORSHIP:-}
       GATE_PASSWORD_ADMIN: ${GATE_PASSWORD_ADMIN:-}
       SEED_DRY_RUN: ${SEED_DRY_RUN:-}
+      # The Supabase pooler CA -- see the note on the app service.
+      SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
+    volumes:
+      - ./docker/supabase-ca.crt:/etc/gml/supabase-ca.crt:ro
     networks:
       - lms_net
 
@@ -161,6 +165,19 @@ services:
       # turned on during an incident without editing this file.
       HEALTH_DEBUG: ${HEALTH_DEBUG:-}
       TZ: ${TZ:-Asia/Kolkata}
+      # THE SUPABASE POOLER CA. packages/db/src/client.ts verifies the pooler
+      # only when SUPABASE_CA_CERT is set IN THE CONTAINER, and this file used to
+      # forward it to no service -- so every container ran encrypted but
+      # unauthenticated while preflight.sh reported the certificate "will be
+      # verified" from a .env value nothing read. One fixed file now: replace
+      # the empty docker/supabase-ca.crt with the PEM from Project Settings ->
+      # Database -> SSL Configuration and redeploy. Left empty it reads as ""
+      # and client.ts keeps today's warn-and-continue. A fixed path, not
+      # `${SUPABASE_CA_CERT}:...`, because that expands to `::ro` when unset and
+      # breaks `docker compose config` for everyone who has not opted in.
+      SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
+    volumes:
+      - ./docker/supabase-ca.crt:/etc/gml/supabase-ca.crt:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -211,6 +228,8 @@ services:
       # with. Queue depth absorbs bursts -- that is what a queue is for.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       TZ: ${TZ:-Asia/Kolkata}
+      # The Supabase pooler CA -- see the note on the app service.
+      SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -235,6 +254,7 @@ services:
       # both failed on a source larger than ~1 GB (which has to coexist with its
       # own HLS output) and spent 2 GiB of RAM on a box with 8.
       - worker_scratch:/tmp
+      - ./docker/supabase-ca.crt:/etc/gml/supabase-ca.crt:ro
 
   caddy:
     image: caddy:2.8-alpine

@@ -8,8 +8,10 @@
 //   REAL      2 districts (Leh, Kargil) and 11 zones (Nubra, Drass, Zangskar,
 //             Khaltsi, Sankoo, Shargole ...). These are actual Ladakh
 //             administrative divisions and a real programme wants them.
-//             Phases, terms, subjects, the form and quiz catalogues and the
-//             section gates are likewise genuine structure.
+//             Phases, terms, subjects, the form catalogue and the section
+//             gates are likewise genuine structure. (Quizzes are not among
+//             them: nothing seeds quizzes, and this script does not touch the
+//             quiz tables, so admin-authored quizzes survive a purge.)
 //
 //   INVENTED  10 schools with sequential contact numbers (+91 1985 200001..),
 //             10 teachers with sequential mobiles (+91 9419100001..), 2

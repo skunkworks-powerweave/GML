@@ -124,11 +124,47 @@ test("spec 108: deploy.sh waits on /api/health AFTER the migrate gate, through c
     "the health probe must not target port 3000 — only caddy publishes ports (80/443), " +
       "so polling 3000 could never succeed and timed the deploy out every single run",
   );
+
+  // INVERTED. This used to pin the LITERAL default
+  //     HEALTH_URL:-http://127.0.0.1/api/health
+  // as "what is actually listening". It is what is listening, and it can never
+  // reach the app: docker/Caddyfile has one site block, {$DOMAIN:localhost},
+  // so Caddy matches on Host, and Host 127.0.0.1 matches no site. Every deploy
+  // timed out at the health step and never seeded an administrator — and this
+  // assertion held that address under governance protection, so fixing it
+  // turned the suite red. Pinning a literal address is how a URL that cannot
+  // work stayed protected; what is pinned now is the PROPERTY: the probe asks
+  // for the site Caddy serves (derived from DOMAIN), pinned to this box.
+  // tests/scripts/deploy-flow.test.mjs proves it behaviourally.
+  assert.ok(
+    !/127\.0\.0\.1\/api\/health/.test(src),
+    "the probe must not address Caddy by raw loopback IP — Host 127.0.0.1 matches no site block",
+  );
   assert.match(
     src,
-    /HEALTH_URL:-http:\/\/127\.0\.0\.1\/api\/health/,
-    "the health probe must go through caddy on port 80, which is what is actually listening",
+    /HEALTH_URL="\$\{HEALTH_URL:-https:\/\/\$\{DOMAIN_VALUE\}\/api\/health\}"/,
+    "the probe target must be derived from DOMAIN, the name Caddy's site block matches",
   );
+  assert.match(
+    src,
+    /curl[^\n]*--resolve "\$\{DOMAIN_VALUE\}:443:127\.0\.0\.1"[^\n]*"\$\{HEALTH_URL\}"/,
+    "the probe must pin DOMAIN to this box (--resolve), so it neither depends on the box's DNS nor leaves it",
+  );
+  assert.match(
+    read("docker/Caddyfile"),
+    /^\{\$DOMAIN:localhost\} \{/m,
+    "deriving the probe from DOMAIN is only right while DOMAIN is the Caddyfile's site address",
+  );
+});
+
+test("spec 108: rollback.sh's health verdict can reach the app too", () => {
+  // Same defect, worse: rollback.sh hard-coded http://127.0.0.1/api/health with
+  // no override, so every rollback ended "still unhealthy after 120s" AFTER
+  // the containers had been restarted — a wrong verdict on a rollback that
+  // worked. tests/scripts/rollback-sh.test.mjs proves the fix behaviourally.
+  const src = code(read("scripts/rollback.sh"));
+  assert.ok(!/127\.0\.0\.1\/api\/health/.test(src), "rollback.sh must not probe Caddy by raw loopback IP");
+  assert.match(src, /curl[^\n]*--resolve "\$\{DOMAIN_VALUE\}:443:127\.0\.0\.1"[^\n]*"\$\{HEALTH_URL\}"/);
 });
 
 test("spec 108: migrations run in the migrate service, and the seed runs in the migrate IMAGE", () => {

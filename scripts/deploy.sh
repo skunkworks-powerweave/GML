@@ -19,7 +19,14 @@
 #
 # ── WHAT IT DOES NOW ─────────────────────────────────────────────────────────
 #
-#   preflight -> build -> up (migrate gates app) -> health via caddy -> seed
+#   host toolchain + .env checks + SM-5 restore-drill gate -> tag :previous
+#   -> build -> up (migrate gates app) -> health via caddy -> seed
+#   -> verify auth -> post-deploy smoke
+#
+# It does NOT run scripts/preflight.sh. That script is the read-only,
+# run-it-yourself check before a FIRST deploy (README-deploy.md section 3): it
+# fails when ports 80/443 are already bound, which is the normal state of every
+# upgrade, so wiring it in here would make a re-deploy impossible.
 #
 # Idempotent. Safe to re-run: the migration ledgers make a re-run a no-op, and
 # the seed never rotates a live account's password or an existing gate.
@@ -32,27 +39,51 @@ cd "$(dirname "$0")/.."
 # Two signals: the app container's own healthcheck, and an HTTP probe that must
 # actually reach the application and read ok:true out of its body.
 #
-# THE PROBE USED TO BE INERT. It was:
+# ── THE PROBE HAS BEEN WRONG TWICE ───────────────────────────────────────────
 #
-#     HEALTH_URL=http://127.0.0.1/api/health
-#     until curl -fsS -o /dev/null "$HEALTH_URL"; do ...
+# First it was inert:
 #
-# Caddy answers plaintext with a 308 redirect to HTTPS, and `curl -f` only
-# fails on 4xx and 5xx -- a 3xx exits 0. So the loop succeeded the moment CADDY
-# came up, with an empty body, having never contacted the app. Measured:
+#     until curl -fsS -o /dev/null http://127.0.0.1/api/health; do ...
 #
-#     $ curl -fsS -o /dev/null http://127.0.0.1/api/health ; echo $?
-#     0                        # http_code=308, body empty
+# and exited 0 on whatever the proxy answered first, having never contacted
+# the app. Then it was made strict -- `curl -fsSLk ... | grep -q '"ok":true'`
+# -- and kept the same ADDRESS, which can never reach the app at all:
 #
-# A deploy with a crash-looping app, an unreachable database or failed
-# migrations would have reported "healthy after 3s" and gone on to seed. The
-# gate whose entire purpose is to catch that was the thing that could not.
+#   docker/Caddyfile has exactly one site block, {$DOMAIN:localhost}, so Caddy
+#   attaches a Host matcher to it. A request to http://127.0.0.1 carries
+#   Host: 127.0.0.1, which matches no site. Whatever Caddy then answers -- the
+#   Caddyfile and docker-compose.yml record a 404 for that Host; an earlier
+#   version of this comment recorded a 308 to https://127.0.0.1, where there is
+#   still no site and no certificate for that name -- it is never the app's
+#   JSON. So the strict probe timed out after HEALTH_TIMEOUT_SECONDS on every
+#   deploy, blamed the application, and seed, verify-auth and smoke never ran:
+#   a fresh host ended with no administrator and nobody able to sign in.
 #
-# The comment above it also claimed the container healthcheck was the primary
-# signal. No part of the script read it. Both are fixed below.
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
+# The probe now asks for the site Caddy actually serves, https://$DOMAIN, and
+# pins that name to this box with `curl --resolve DOMAIN:443:127.0.0.1` -- the
+# technique scripts/verify-tls-local.sh already exercises -- so it neither
+# depends on the box's own DNS nor leaves it. tests/scripts/deploy-flow.test.mjs
+# runs this whole script against a curl stub that answers the way that Caddy
+# does.
+#
+# DOMAIN as Caddy will see it: Compose gives an exported shell variable
+# precedence over .env when it interpolates DOMAIN for the caddy service, so
+# this does the same; `localhost` is the Caddyfile's own default.
+DOMAIN_VALUE="${DOMAIN:-}"
+if [ -z "${DOMAIN_VALUE}" ] && [ -f .env ]; then
+  DOMAIN_VALUE="$(grep -E '^DOMAIN=' .env | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' [:cntrl:]' || true)"
+fi
+DOMAIN_VALUE="${DOMAIN_VALUE:-localhost}"
+
+HEALTH_URL="${HEALTH_URL:-https://${DOMAIN_VALUE}/api/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-3}"
+
+# The smoke suite targets the same site. Node's fetch has no --resolve, so this
+# one step needs DOMAIN to resolve to this instance from this instance -- the A
+# record preflight.sh checks, and the one Caddy needed to obtain a certificate
+# at all. Override when that does not hold (split-horizon DNS, a test box).
+SMOKE_BASE_URL="${SMOKE_BASE_URL:-https://${DOMAIN_VALUE}}"
 
 log() { echo "[deploy] $(date -Iseconds) — $*"; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
@@ -103,9 +134,11 @@ case "$(printf %s "${DEPLOY_DRY_RUN:-}" | tr '[:upper:]' '[:lower:]')" in
     ;;
   *)
     echo "[deploy] DRY RUN — configuration only. NOTHING WAS DEPLOYED." >&2
+    echo "DOMAIN_VALUE=${DOMAIN_VALUE}"
     echo "HEALTH_URL=${HEALTH_URL}"
     echo "HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS}"
     echo "HEALTH_INTERVAL_SECONDS=${HEALTH_INTERVAL_SECONDS}"
+    echo "SMOKE_BASE_URL=${SMOKE_BASE_URL}"
     exit 0
     ;;
 esac
@@ -133,23 +166,20 @@ esac
 #
 # All four become a named blocker here instead.
 #
-# The failure messages point at README-deploy.md section 2, "Prerequisites",
-# because that section exists. They previously cited a section 2.5, "Prepare the
-# instance", which does NOT: the file runs 2.1, 2.2, 2.3, 2.4 and then straight
-# to "## 3. First deploy". Sending an operator to a heading that was planned but
-# never written is the same defect as a test asserting a file into existence —
-# section 2 genuinely has no host-toolchain step yet, and writing one is its own
-# piece of work rather than something to forward-reference from an error
-# message.
+# The failure messages point at README-deploy.md section 2.5, "Prepare the
+# instance", which installs every one of them with copy-pasteable commands.
+# (An earlier version of these messages pointed at a 2.5 that had not been
+# written yet; tests/governance/test_180_deploy_runbook.test.mjs now requires
+# the section to exist and to install what this loop checks.)
 #
 # `docker` alone does not prove Compose v2 is present, and `docker compose
 # build` below is the first thing that would fail on it, so probe the plugin.
 for cmd in docker node pnpm curl; do
   command -v "${cmd}" >/dev/null 2>&1 \
-    || fail "${cmd} is not installed on this host — see README-deploy.md section 2, 'Prerequisites'"
+    || fail "${cmd} is not installed on this host — see README-deploy.md section 2.5, 'Prepare the instance'"
 done
 docker compose version >/dev/null 2>&1 \
-  || fail "the Docker Compose v2 plugin is not available (\`docker compose version\` failed) — see README-deploy.md section 2, 'Prerequisites'"
+  || fail "the Docker Compose v2 plugin is not available (\`docker compose version\` failed) — see README-deploy.md section 2.5, 'Prepare the instance'"
 
 # See the DEPLOY_DRY_RUN block above: this mode exists so the toolchain check
 # itself is testable without docker being installed on the test machine.
@@ -177,10 +207,29 @@ for var in DOMAIN ACME_EMAIL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL \
 done
 [ -z "${missing}" ] || fail "these variables are unset or empty in .env:${missing}"
 
-# SM-5: refuse to deploy on a stale restore drill. Self-skips outside
-# production, so this is a no-op on a staging box.
-log "restore-drill preflight"
-node scripts/check-restore-drill.mjs
+# SM-5: refuse to deploy on a stale or failed restore drill.
+#
+# THE GATE HAD NEVER RUN. check-restore-drill.mjs self-skips unless
+# NODE_ENV=production, and this script never set NODE_ENV or sourced .env --
+# so on the production box it printed "non-production env -- skipped" on every
+# deploy, and a month of missing backups was exactly as invisible as SM-5
+# exists to prevent. The stack this deploys is production by construction
+# (docker-compose.yml pins NODE_ENV=production for app and worker), so the
+# gate arms unless the operator deliberately exports another NODE_ENV.
+#
+# THE FIRST DEPLOY ON A HOST IS THE EXCEPTION. Before it there is nothing to
+# back up and no drill can have passed, so an armed gate would make a fresh
+# instance undeployable. The signal is the same one the tagging step below
+# uses: no gml-lms-app:current image means this host has never completed a
+# build. The skip is loud and says what to run before the next deploy.
+if docker image inspect gml-lms-app:current >/dev/null 2>&1; then
+  log "restore-drill preflight (SM-5)"
+  NODE_ENV="${NODE_ENV:-production}" node scripts/check-restore-drill.mjs
+else
+  log "FIRST DEPLOY ON THIS HOST (no gml-lms-app:current image): the SM-5 restore-drill gate is not armed yet -- nothing can have been backed up."
+  log "  Before the NEXT deploy run:  bash scripts/backup.sh && bash scripts/restore.sh   (README-deploy.md section 7)."
+  log "  From then on a deploy is refused without a passing drill less than 30 days old."
+fi
 
 # ── 1. Build ─────────────────────────────────────────────────────────────────
 # Tag whatever is running now as ':previous' FIRST, so scripts/rollback.sh has
@@ -236,30 +285,35 @@ app_container_health() {
 # Reaches the APPLICATION and reads its verdict, rather than whatever the proxy
 # says first.
 #
-#   -L  follow Caddy's 308 to HTTPS. Without it curl stops at the redirect and
-#       exits 0 -- the defect described above.
-#   -k  the redirect lands on https://127.0.0.1 while the certificate is issued
-#       for $DOMAIN, so the name will not match from the box itself. Certificate
-#       validity is not what this check is for; scripts/verify-tls-local.sh and
-#       any browser cover that. What is being checked here is the application.
+#   --resolve  send the request to this box's Caddy under the site name Caddy
+#              serves ($DOMAIN), so its Host matches the one site block. See
+#              the note beside HEALTH_URL above for why 127.0.0.1 never could.
+#   -k         the certificate is for $DOMAIN and, on a first deploy, may be
+#              seconds old; certificate validity is not what this check is
+#              for (scripts/verify-tls-local.sh and any browser cover that).
+#              What is being checked here is the application.
 #   grep the body, because /api/health answers 503 with ok:false when the
-#       database, storage or migrations are not right, and a status code alone
-#       would not distinguish "app is up" from "app is up and working".
+#              database, storage or migrations are not right, and a status
+#              code alone would not distinguish "app is up" from "app is up
+#              and working".
 app_http_healthy() {
-  curl -fsSLk -m 10 "${HEALTH_URL}" 2>/dev/null | grep -q '"ok":true'
+  curl -fsSk -m 10 --resolve "${DOMAIN_VALUE}:443:127.0.0.1" "${HEALTH_URL}" 2>/dev/null | grep -q '"ok":true'
 }
 
-log "waiting for health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
+log "waiting for health at ${HEALTH_URL} via this box's Caddy (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
 elapsed=0
 until app_http_healthy; do
   if [ "${elapsed}" -ge "${HEALTH_TIMEOUT_SECONDS}" ]; then
     echo "[deploy] not healthy after ${HEALTH_TIMEOUT_SECONDS}s." >&2
     echo "[deploy] /api/health returns 503 until db, storage AND migrations all pass." >&2
+    echo "[deploy] If there is no body at all, Caddy may have no certificate for ${DOMAIN_VALUE} yet" >&2
+    echo "[deploy] (the A record does not point here, or port 80 is blocked): see the caddy log below." >&2
     echo "[deploy] app container health: $(app_container_health)" >&2
     echo "[deploy] last /api/health body:" >&2
-    curl -sLk -m 10 "${HEALTH_URL}" || true
+    curl -sk -m 10 --resolve "${DOMAIN_VALUE}:443:127.0.0.1" "${HEALTH_URL}" >&2 || true
     echo >&2
     docker compose logs --no-color --tail 40 app >&2
+    docker compose logs --no-color --tail 20 caddy >&2
     exit 1
   fi
   sleep "${HEALTH_INTERVAL_SECONDS}"
@@ -283,8 +337,17 @@ docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
 # skip itself on an unreachable app AND be run with `|| true`, so it was
 # structurally incapable of failing and reported green whether the deploy had
 # worked or not.
-log "post-deploy smoke check"
-SMOKE_BASE_URL="http://127.0.0.1" pnpm test:smoke
+#
+# It used to target http://127.0.0.1 -- the same Host that matches no Caddy
+# site -- so it could not have passed even had the health step let it run.
+log "post-deploy smoke check against ${SMOKE_BASE_URL}"
+if ! SMOKE_BASE_URL="${SMOKE_BASE_URL}" pnpm test:smoke; then
+  echo "[deploy] post-deploy smoke FAILED against ${SMOKE_BASE_URL}." >&2
+  echo "[deploy] The stack IS running: health passed and seed and verify-auth completed." >&2
+  echo "[deploy] This is a failed acceptance check, not a failed rollout -- read the failures above." >&2
+  echo "[deploy] If every test failed to connect, ${DOMAIN_VALUE} does not resolve to this instance" >&2
+  echo "[deploy] from this instance; set SMOKE_BASE_URL and re-run 'pnpm test:smoke'." >&2
+  exit 1
+fi
 
-DOMAIN_VALUE="$(grep -E '^DOMAIN=' .env | cut -d= -f2- | tr -d '"'"'"' ')"
 log "done. Sign in at https://${DOMAIN_VALUE}/"

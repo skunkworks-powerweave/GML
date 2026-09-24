@@ -23,6 +23,8 @@
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=lib/pg-major.sh
+. scripts/lib/pg-major.sh
 
 pass=0
 warn=0
@@ -125,16 +127,29 @@ esac
 # is AUTHENTICATED as well as encrypted depends on having its CA, because
 # Supavisor presents a certificate from "Supabase Inc" -- a private root that is
 # not in Node's trust store.
-if [ -n "${SUPABASE_CA_CERT:-}" ]; then
-  if [ -f "${SUPABASE_CA_CERT}" ] || printf '%s' "${SUPABASE_CA_CERT}" | grep -q "BEGIN CERTIFICATE"; then
-    ok "SUPABASE_CA_CERT set -- the pooler certificate will be verified"
+#
+# CHECK WHAT THE CONTAINERS SEE, NOT WHAT .env SAYS. This used to PASS
+# "the pooler certificate will be verified" whenever SUPABASE_CA_CERT was set
+# in .env -- a variable no compose service forwarded, naming a host path no
+# container could read. Every container ran unverified while this said
+# otherwise. docker-compose.yml now mounts ONE file, docker/supabase-ca.crt, at
+# /etc/gml/supabase-ca.crt in migrate, app and worker and points
+# SUPABASE_CA_CERT there; the file ships empty, which client.ts treats as
+# "no CA" (today's warn-and-continue). So that file is what is checked.
+CA_FILE="docker/supabase-ca.crt"
+if [ -s "${CA_FILE}" ]; then
+  if grep -q "BEGIN CERTIFICATE" "${CA_FILE}"; then
+    ok "${CA_FILE} holds a certificate -- the pooler certificate will be verified in every container"
   else
-    no "SUPABASE_CA_CERT points at a readable file or contains a PEM" \
-       "it is neither an existing file nor a PEM -- the app will fall back to unverified TLS"
+    no "${CA_FILE} holds a PEM certificate" \
+       "it is non-empty but not a PEM -- replace it with the CA from Project Settings -> Database -> SSL Configuration, or empty it"
   fi
 else
-  nb "SUPABASE_CA_CERT unset -- TLS to Postgres is ENCRYPTED but the certificate is NOT verified."
-  nb "  Download it: Project Settings -> Database -> SSL Configuration."
+  nb "${CA_FILE} is empty -- TLS to Postgres is ENCRYPTED but the certificate is NOT verified."
+  nb "  Download it: Project Settings -> Database -> SSL Configuration; save it as ${CA_FILE}; redeploy."
+fi
+if [ -n "${SUPABASE_CA_CERT:-}" ]; then
+  nb "SUPABASE_CA_CERT is set in .env, but no container reads it from there -- they read ${CA_FILE} (docker-compose.yml)."
 fi
 
 if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
@@ -144,7 +159,7 @@ if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
     no "database accepts a connection" "check the password, and that this box may reach the pooler"
   fi
 else
-  nb "psql not installed -- connectivity not checked (apt-get install -y postgresql-client-16)"
+  nb "psql not installed -- connectivity not checked (install postgresql-client-<your project's Postgres major> from PGDG -- README-deploy.md section 7)"
 fi
 
 # ---- Supabase API -----------------------------------------------------------
@@ -193,7 +208,8 @@ sect "Storage upload limit"
 if [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SECRET_KEY:-}" ] && command -v curl >/dev/null 2>&1; then
   probe_size=$((600 * 1024 * 1024))   # 600 MB: a realistic lesson recording
   meta="bucketName $(printf 'videos-original' | base64 | tr -d '\n'),objectName $(printf 'preflight/probe.bin' | base64 | tr -d '\n')"
-  code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST \
+  probe_hdr="$(mktemp 2>/dev/null || echo "/tmp/gml-preflight-$$.hdr")"
+  code="$(curl -s -o /dev/null -D "${probe_hdr}" -w '%{http_code}' -m 20 -X POST \
             -H "authorization: Bearer ${SUPABASE_SECRET_KEY}" \
             -H "tus-resumable: 1.0.0" \
             -H "upload-length: ${probe_size}" \
@@ -202,7 +218,24 @@ if [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SECRET_KEY:-}" ] &
   case "$code" in
     201|200)
       ok "a 600 MB upload is accepted by Storage"
-      # Clean up the reservation we just made. Harmless if it 404s.
+      # Terminate the reservation just made (tus DELETE on the upload URL the
+      # server returned in Location). No bytes were sent, but the reservation
+      # would otherwise sit in the bucket's upload table until Storage expires
+      # it -- this comment used to promise the cleanup without doing it.
+      probe_loc="$(sed -n 's/^[Ll]ocation:[[:space:]]*//p' "${probe_hdr}" 2>/dev/null | head -n 1 | tr -d '[:cntrl:]')"
+      case "${probe_loc}" in
+        /*) probe_loc="${NEXT_PUBLIC_SUPABASE_URL%/}${probe_loc}" ;;
+      esac
+      if [ -n "${probe_loc}" ]; then
+        del="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X DELETE \
+                 -H "authorization: Bearer ${SUPABASE_SECRET_KEY}" \
+                 -H "tus-resumable: 1.0.0" \
+                 "${probe_loc}" 2>/dev/null)"
+        case "${del}" in
+          200|204|404|410) : ;;
+          *) nb "could not delete the probe's upload reservation (HTTP ${del:-none}) -- harmless; Storage expires it" ;;
+        esac
+      fi
       ;;
     413)
       no "a 600 MB upload is accepted by Storage (got 413)" \
@@ -212,6 +245,7 @@ if [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SECRET_KEY:-}" ] &
       nb "could not probe the upload limit (HTTP ${code:-none}) -- check it by hand in Storage -> Settings"
       ;;
   esac
+  rm -f "${probe_hdr}"
 fi
 
 # ---- DNS --------------------------------------------------------------------
@@ -264,7 +298,51 @@ if command -v docker >/dev/null 2>&1; then
     no "docker daemon reachable by this user" "sudo usermod -aG docker \$USER, then log out and back in"
   fi
 else
-  no "docker present" "install Docker Engine and the compose plugin"
+  no "docker present" "install Docker Engine and the compose plugin -- README-deploy.md 2.5"
+fi
+
+# deploy.sh runs two things on the HOST, not in a container, and neither was
+# checked here:
+#
+#   node  the SM-5 restore-drill gate, BEFORE anything is built. Missing, the
+#         deploy dies with `node: command not found` having built nothing.
+#   pnpm  the post-deploy smoke suite, AFTER migrate, health, seed and
+#         verify-auth. Missing, a WORKING deploy ends in exit 127 and reads as a
+#         failed one.
+#
+# The floor is package.json's `engines.node` (>=22).
+if command -v node >/dev/null 2>&1; then
+  node_v="$(node --version 2>/dev/null)"
+  node_major="${node_v#v}"
+  node_major="${node_major%%.*}"
+  case "${node_major}" in
+    ""|*[!0-9]*) no "node is at least 22 (found '${node_v}')" "install Node 22 -- README-deploy.md 2.5" ;;
+    *)
+      if [ "${node_major}" -ge 22 ]; then
+        ok "node present (${node_v})"
+      else
+        no "node is at least 22 (found ${node_v}; package.json engines)" "install Node 22 from NodeSource -- README-deploy.md 2.5"
+      fi
+      ;;
+  esac
+else
+  no "node present" "deploy.sh runs the SM-5 gate with host node before building anything -- install Node 22 per README-deploy.md 2.5"
+fi
+if command -v pnpm >/dev/null 2>&1; then
+  ok "pnpm present ($(pnpm --version 2>/dev/null))"
+else
+  no "pnpm present" "deploy.sh runs the post-deploy smoke suite with host pnpm -- 'sudo corepack enable' per README-deploy.md 2.5"
+fi
+if command -v curl >/dev/null 2>&1; then
+  ok "curl present"
+else
+  no "curl present" "deploy.sh's health probe is a curl -- sudo apt-get install -y curl"
+fi
+# Not needed by any script; the runbooks pipe /api/health through it.
+if command -v jq >/dev/null 2>&1; then
+  ok "jq present"
+else
+  nb "jq not installed -- the runbooks pipe /api/health through it (sudo apt-get install -y jq)"
 fi
 
 # Caddy has to BIND these, so anything already listening is a blocker.
@@ -302,7 +380,15 @@ sect "Disaster recovery"
 # Supabase has NO backup product for Storage. Without these three the videos are
 # backed up by nobody -- and unlike most misconfigurations, that one is
 # discovered only when they are needed.
-if [ -n "${SUPABASE_S3_ENDPOINT:-}" ] && [ -n "${SUPABASE_S3_ACCESS_KEY:-}" ] && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+#
+# The SAME condition backup.sh uses. This used to demand SUPABASE_S3_ENDPOINT
+# (which backup.sh derives, so it is optional) and only the short credential
+# names (backup.sh accepts the dashboard's too), so it warned on a working
+# configuration -- and never checked the secret, without which backup.sh
+# skips the mirror.
+S3_KEY="${SUPABASE_S3_ACCESS_KEY_ID:-${SUPABASE_S3_ACCESS_KEY:-}}"
+S3_SECRET="${SUPABASE_S3_SECRET_ACCESS_KEY:-${SUPABASE_S3_SECRET_KEY:-}}"
+if [ -n "${S3_KEY}" ] && [ -n "${S3_SECRET}" ] && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   ok "Storage mirror configured -- the videos will be backed up"
   if command -v rclone >/dev/null 2>&1; then
     ok "rclone installed"
@@ -311,13 +397,38 @@ if [ -n "${SUPABASE_S3_ENDPOINT:-}" ] && [ -n "${SUPABASE_S3_ACCESS_KEY:-}" ] &&
   fi
 else
   nb "Storage mirror NOT configured -- THE VIDEOS WILL NOT BE BACKED UP BY ANYONE."
-  nb "  Set SUPABASE_S3_ENDPOINT, SUPABASE_S3_ACCESS_KEY, SUPABASE_S3_SECRET_KEY, BACKUP_S3_BUCKET."
+  nb "  Set SUPABASE_S3_ACCESS_KEY_ID, SUPABASE_S3_SECRET_ACCESS_KEY and BACKUP_S3_BUCKET."
+  nb "  SUPABASE_S3_ENDPOINT is optional: backup.sh derives it from NEXT_PUBLIC_SUPABASE_URL."
 fi
-if command -v pg_dump >/dev/null 2>&1; then
-  ok "pg_dump installed"
-else
-  nb "pg_dump not installed -- backup.sh cannot dump the database (apt-get install -y postgresql-client-16)"
+if [ -n "${BACKUP_S3_BUCKET:-}" ] && ! command -v aws >/dev/null 2>&1; then
+  nb "aws CLI not installed -- backup.sh will keep the database dump ON THIS HOST ONLY (README-deploy.md section 7)"
 fi
+
+# Is pg_dump NEW ENOUGH for this server? pg_dump aborts against a newer server
+# major ("server version mismatch"), so a client that is merely INSTALLED used
+# to PASS here and then write no dump, every night. The server's major is asked
+# (scripts/lib/pg-major.sh), never assumed, and a mismatch BLOCKS: a WARN would
+# be exactly as invisible as the defect it replaces.
+pg_rc=0
+pg_check_dump_client "${DATABASE_URL:-}" || pg_rc=$?
+case "${pg_rc}" in
+  0) ok "pg_dump ${PG_CLIENT_MAJOR} can dump this PostgreSQL ${PG_SERVER_MAJOR} server" ;;
+  1)
+    no "pg_dump ${PG_CLIENT_MAJOR} can dump this PostgreSQL ${PG_SERVER_MAJOR} server" \
+       "install postgresql-client-${PG_SERVER_MAJOR} from the PGDG repository (README-deploy.md section 7) -- as is, every nightly backup.sh run aborts"
+    ;;
+  *)
+    if ! command -v pg_dump >/dev/null 2>&1; then
+      srv_major=""
+      if command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
+        srv_major="$(pg_major "$(psql "${DATABASE_URL}" -XtAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]')" 2>/dev/null || true)"
+      fi
+      nb "pg_dump not installed -- backup.sh cannot dump the database (install postgresql-client-${srv_major:-<server major>} from PGDG -- README-deploy.md section 7)"
+    else
+      nb "pg_dump present, but its compatibility with the server was NOT checked: ${PG_CHECK_ERROR}"
+    fi
+    ;;
+esac
 
 # ---- summary ----------------------------------------------------------------
 printf '\n  %d passed, %d warnings, %d failed\n\n' "$pass" "$warn" "$fail"
