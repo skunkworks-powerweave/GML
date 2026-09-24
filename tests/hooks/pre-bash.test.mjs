@@ -253,6 +253,109 @@ test("0. reading .env is untouched, and .env.example stays writable", () => {
   }
 });
 
+// ─── B1 · B2 · B3 · N-f: what the FIRST fix for N1/rule 0 got wrong ──────────
+//
+// The N1 tests above all put the backslash at the END of a word (`rm \⏎-rf`),
+// where the first fix's inserted space was harmless — so six tests passed over a
+// hole that was the whole of N1 again. Bash removes the backslash and the newline
+// and inserts NOTHING, and these are the cases that prove it, measured from
+// script files in a throwaway directory:
+//
+//   r\⏎m -rf victim      DELETED the directory
+//   rm -r\⏎f victim      DELETED
+//   gi\⏎t --version      printed `git version 2.52.0`
+//   echo --forc\⏎e       printed `--force`
+//   r m -rf victim       `r: command not found` — the non-command the gate saw
+
+test("1. B1: a continuation INSIDE a word joins it, and is not a word boundary", () => {
+  for (const command of [
+    `r${BS}${NL}m -rf node_modules`,
+    `rm -r${BS}${NL}f node_modules`,
+    `dock${BS}${NL}er volume rm pgdata`,
+    `git rese${BS}${NL}t --hard HEAD~1`,
+    `docker volume p${BS}${NL}rune`,
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. B1: the same mid-word join reaches the push, commit and merge rules", () => {
+  assertBlocked(run(`git push --forc${BS}${NL}e origin feat/x`), /force/i);
+  assertBlocked(run(`git push origin ma${BS}${NL}in`), /main/);
+  assertBlocked(run(`psql -c "DROP TAB${BS}${NL}LE users"`), /DROP TABLE/i);
+  assertBlocked(run(`echo FOO=1 > .e${BS}${NL}nv`), /protected file/i);
+});
+
+test("1. B1: a CR before the newline is read BOTH ways", () => {
+  // On Linux bash a CR is an ordinary character, so `\`+CR+LF is NOT a
+  // continuation and the newline still ends the command. Git-for-Windows bash
+  // strips the CR and DOES join. Either single choice is a hole on one platform:
+  // joining hides a real second command on Linux, not joining misses a real
+  // continuation on Windows. Both readings are scanned.
+  assertBlocked(run(`r${BS}${CRLF}m -rf node_modules`), /destructive/i); // Windows reading
+  assertBlocked(run(`echo a ${BS}${CRLF}rm -rf node_modules`), /destructive/i); // Linux reading
+});
+
+test("1. N-f: a long backslash run does not stall the gate", () => {
+  // The first version matched /(\\+)(\r?\n)/, which backtracks through every
+  // run length when no newline follows: 8k backslashes took 0.8s, 32k took 8.8s,
+  // and 100k had not finished after 60s — which is this hook's registered
+  // timeout, so the gate would have answered nothing at all.
+  const started = Date.now();
+  assertAllowed(run(`echo ${BS.repeat(100_000)}`));
+  const ms = Date.now() - started;
+  assert.ok(ms < 15_000, `100k backslashes took ${ms}ms; the hook's registered timeout is 60s`);
+});
+
+test("0. B2: every redirection operator that writes is caught", () => {
+  // `>|` (noclobber override) and `>&` both contain a character segments()
+  // splits on, so per-segment matching left the `>` with no operand; and a
+  // GLUED source (`echo x>.env`) failed the leading-whitespace requirement.
+  // All four replaced a real .env's bytes.
+  for (const command of [
+    "echo FOO=1>.env",
+    "echo FOO=1 >| .env",
+    "echo FOO=1 >& .env",
+    "echo FOO=1 &> .env",
+    "echo FOO=1 &>> .env",
+    "echo x 1>.env",
+    "node x.js 2>>.env",
+    "echo x >'.env'",
+  ]) {
+    assertBlocked(run(command), /protected file/i);
+  }
+});
+
+test("0. B2: a writer's EVERY operand is checked, not just the last", () => {
+  // `tee .env other.txt` writes both. mv and cp write only their last operand,
+  // but taking .env away or copying its secrets elsewhere are both things this
+  // session should not do to that file.
+  for (const command of [
+    "echo x | tee .env other.txt",
+    "echo x | tee other.txt .env",
+    "echo x | tee -a .env o.txt",
+    "sed -i s/a/b/ README.md .env",
+    "mv .env /tmp/x",
+    "cp .env backup",
+  ]) {
+    assertBlocked(run(command), /protected file/i);
+  }
+});
+
+test("0. B2: ordinary redirection and .env.example are untouched", () => {
+  for (const command of [
+    "pnpm build 2>&1",
+    "pnpm build > build.log",
+    "pnpm build >> build.log",
+    "echo x | tee out.txt",
+    "echo $((1>>2))",
+    "cp .env.example /tmp/x",
+    "echo X= > .env.example",
+  ]) {
+    assertAllowed(run(command));
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. DESTRUCTIVE COMMANDS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -391,6 +494,7 @@ test("1. C4: -R is a documented synonym for -r, so rm -Rf is rm -rf", () => {
 // payload is not the payload it appears to be is worse than no test.
 const BS = String.fromCharCode(92);
 const NL = "\n";
+const CRLF = "\r\n";
 
 test("1. N1: a line continuation is not a command boundary", () => {
   // `rm \<newline>-rf x` is ONE command in bash. segments() split on the newline

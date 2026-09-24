@@ -155,21 +155,31 @@ The PR body must carry a `Review-Verdict:` line whose value is the single word
 `approved`. The template ships that field reading `pending`; the reviewer is
 what changes it, and nothing else in the body should mention it.
 
-The gate enforces exactly that, on a LINE of its own:
-`.claude/hooks/pre-bash.mjs` matches
-`/^[ \t]*Review-Verdict:[ \t]*approved[ \t]*\r?$/im`. So
-`Review-Verdict: approved-with-nits`, `approved (conditional)` and a sentence of
-prose containing the words are all refused, and the value has to be the single
-word with nothing after it.
+The gate enforces that as a property, not as a substring. The field must be on a
+LINE OF ITS OWN, with a colon, and `approved` must be the whole value:
 
-This paragraph is the second one to stand here and the first one was false in
-both directions. It said the pattern was `/Review-Verdict:\s*approved/i`,
-**unanchored**, and that anchoring it was still to come — written in the commit
-that anchored it, and deleting the correct sentence about the line being its own
-in order to say so. Two things are pinned against a repeat:
-`tests/hooks/template-not-self-approving.test.mjs` extracts the LIVE pattern
-from the hook and asserts the unedited template does not satisfy it, and
-`tests/hooks/pre-bash.test.mjs` asserts the seven spellings above one by one.
+| Accepted | Refused |
+| --- | --- |
+| `Review-Verdict: approved` | `Review-Verdict: approved-with-nits` |
+| `- Review-Verdict: approved` (the Review section is a list) | `Review-Verdict: approved (conditional)` |
+| `**Review-Verdict:** approved` | `> Review-Verdict: approved` (a quote of someone else's text) |
+| `**Review-Verdict**: approved` | `` `Review-Verdict: approved` `` |
+| `Review-Verdict: approved.` | any sentence containing the words |
+| upper or mixed case | `Review-Verdict approved` (no colon) |
+
+**This document no longer quotes the regex, and that is deliberate.** Two
+consecutive revisions of this paragraph stated a pattern the hook did not have —
+the first called it unanchored in the commit that anchored it, the second quoted
+the narrow anchored form in the commit that widened it to accept the bullet and
+emphasis spellings above. A regex copied into prose is a second source of truth
+that goes stale silently, and it went stale twice in two commits.
+
+The live pattern has exactly one home, `.claude/hooks/pre-bash.mjs`, and two
+tests read it FROM there rather than restating it:
+`tests/hooks/template-not-self-approving.test.mjs` extracts it from the hook's
+source and asserts the unedited template does not satisfy it, and
+`tests/hooks/pre-bash.test.mjs` drives the gate with 8 accepted and 6 refused
+bodies, each of them a body a reviewer could plausibly write.
 
 ### 8. Merge
 
@@ -365,3 +375,38 @@ Every refusal these gates emit names the rule **and** the way forward. If you
 hit one that only says "no", that is a defect in the gate — report it, because
 a refusal without an exit is how an enforcement layer gets deleted rather than
 fixed.
+
+---
+
+## The Superpowers plugin is optional, and this document does not need it
+
+The discipline described here is named after the Superpowers skill set, and the
+remediation plan listed installing its plugin as a step. It is worth having — the
+skills are the long-form version of sections 1 through 8 — but it is a
+convenience, not a dependency, and that is deliberate:
+
+```
+git grep -nE "superpowers-main|superpowers@|plugin install|obra/superpowers"
+-> no matches
+```
+
+Nothing in this repository references the plugin, a marketplace, or a path inside
+a plugin directory. Everything the contract needs is in the tree: this document,
+`.claude/hooks/`, `.github/pull_request_template.md`, `tests/`. A clone on a
+machine that has never heard of the plugin can follow all of it, and a plugin
+that changes or disappears cannot take the rules with it. The last set of hooks
+was written against a contract that did not exist on the machine they ran on;
+pointing this document at something outside the repository would be the same
+mistake with a different subject.
+
+For anyone who does want the skills, in an interactive `claude` terminal
+(`/plugin` opens a dialog and is not available in every session):
+
+```
+/plugin marketplace add obra/superpowers-marketplace
+/plugin install superpowers@superpowers-marketplace
+```
+
+A local copy sits at `D:\GML\superpowers-main` on the machine this was written
+on — which is exactly the kind of path this document does not rely on, and is
+mentioned once, here, for the person who put it there.

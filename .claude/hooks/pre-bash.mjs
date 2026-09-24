@@ -111,9 +111,14 @@
 //     every edit target to a file identity rather than a path, which neither
 //     hook does today.
 //   • checkProtectedWrites() below covers the shell spellings of a write to
-//     `.env` that were open until N4's round — redirection, `tee`, `sed -i`,
-//     `mv`/`cp`, `dd of=`, `truncate`. It covers those spellings and no others;
-//     a script that opens the file itself is not seen.
+//     `.env`: `>`, `>>`, `>|`, `>&`, `&>` with or without a numbered fd, glued or
+//     spaced, and `tee`, `sed -i`, `mv`, `cp`, `install`, `dd of=`, `truncate`
+//     with EVERY operand checked. It covers those and no others: a program that
+//     opens the file itself is not seen, and neither is a hard link to it.
+//     This entry previously read "those spellings and no others" while listing
+//     six of them and covering four -- `>|`, `>&`, a glued `x>.env` and `tee`
+//     with `.env` in any position but the last all wrote to the file (B2). A
+//     known-gaps list that overstates its own coverage is worse than no list.
 //
 // And the receipt the commit gate reads is a file anyone can write; see
 // checkReceipt() for exactly what the hardening there buys and what it does not.
@@ -442,28 +447,124 @@ function stripHeredocs(text) {
  *
  * is `rm -rf node_modules`, while this gate saw the two segments `rm` and
  * `-rf node_modules`, neither of which is anything. Verified against a real
- * shell on `main`: the directory was really deleted, `git \`+newline+`commit`
- * really committed (7a7d03c), and `gh \`+newline+`pr merge 1 --squash` never
- * reached the merge rule. Exactly the shape of C4 and C5 — the parser believing
- * a fragment was the whole command — and it survived the round that fixed both.
+ * shell: the directory was really deleted, and `gh \`+newline+`pr merge 1
+ * --squash` never reached the merge rule. Exactly the shape of C4 and C5 — the
+ * parser believing a fragment was the whole command — and it survived the round
+ * that fixed both.
+ *
+ * ── B1: AND THE FIRST FIX PUT A SPACE WHERE BASH PUTS NOTHING ────────────────
+ *
+ * The first version substituted `"<remaining backslashes> "`. Bash removes the
+ * backslash and the newline and inserts NOTHING, so a continuation INSIDE a word
+ * joins the halves. The space turned every mid-word continuation into a word
+ * boundary and handed back the whole hole:
+ *
+ *     r\<newline>m -rf node_modules      seen as `r m -rf …`, ran as `rm -rf …`
+ *     gi\<newline>t commit -m x          seen as `gi t commit`
+ *     dock\<newline>er volume rm pgdata  seen as `dock er volume rm`
+ *     git push --forc\<newline>e origin  seen as `--forc` and `e`
+ *     psql -c "DROP TAB\<newline>LE u"   seen as `DROP TAB LE`
+ *     echo x > .e\<newline>nv            target seen as `.e`
+ *
+ * `r\`+newline+`m -rf victim` deleted the directory in a real shell. The six N1
+ * tests all put the backslash at END of word, where an inserted space is
+ * harmless, so all six passed over the hole. The space is gone; the space in
+ * `rm \`+newline+`-rf` was always in the SOURCE text, which is why that case
+ * looked right.
  *
  * ODD runs only. `echo a\\` + newline is an escaped backslash and then a NEW
  * command; joining there would pull the next command into an argument position
  * and hide it, which is the one direction a gate must never be wrong in. So the
  * run length decides: odd, the last `\` ate the newline; even, the newline
- * stands and the split happens.
+ * stands and the split happens. Measured in bash, from a script file: 1
+ * backslash joins, 2 are two commands, 3 join.
+ *
+ * ── N-f: WHY THIS IS A SCAN AND NOT A REGEX ──────────────────────────────────
+ *
+ * It was `/(\\+)(\r?\n)/g`. On a long run of backslashes NOT followed by a
+ * newline, `(\\+)` backtracks through every length: measured through the hook,
+ * 8k backslashes took 0.8s, 32k took 8.8s, and 100k had not finished after 60s
+ * — which is this hook's registered timeout, so a stall is a gate that answers
+ * nothing. The scan below is one pass.
+ *
+ * `crlf` decides whether `\` + CR + LF counts. It has to be BOTH, which is why
+ * segments() asks for both: on Linux bash a CR is an ordinary character, so
+ * `\`+CR+LF is not a continuation and joining there would merge two real
+ * commands and hide the second; Git-for-Windows bash strips the CR and does
+ * join, so NOT joining there would miss a real continuation. Each choice is a
+ * hole on one platform, so both readings are scanned and anything destructive in
+ * either is refused.
  */
-function joinContinuations(text) {
-  return String(text).replace(/(\\+)(\r?\n)/g, (whole, slashes) =>
-    slashes.length % 2 === 1 ? `${slashes.slice(1)} ` : whole,
-  );
+function joinContinuations(text, { crlf = true } = {}) {
+  const s = String(text);
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] !== "\\") {
+      out += s[i];
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < s.length && s[j] === "\\") j += 1;
+    const run = j - i;
+    const eol = s[j] === "\n" ? 1 : crlf && s[j] === "\r" && s[j + 1] === "\n" ? 2 : 0;
+    if (eol && run % 2 === 1) {
+      out += "\\".repeat(run - 1); // the even remainder survives as literal text
+      i = j + eol; // the escaping backslash AND the newline go, nothing replaces them
+      continue;
+    }
+    out += "\\".repeat(run);
+    i = j;
+  }
+  return out;
 }
 
+/** Everything a segment can be split on, as one pattern. */
+const SEPARATORS = /\r?\n|&&|\|\||[;|&]/;
+
+/**
+ * Both readings of the command text, heredoc bodies removed.
+ *
+ * ORDER MATTERS, and getting it wrong made the CRLF reading dead code. The first
+ * version was `joinContinuations(stripHeredocs(text))`, and stripHeredocs
+ * rejoins its kept lines with "\n" — so every CR was gone before
+ * joinContinuations could see one, both readings were identical for every real
+ * input, and the Linux-only `\`+CRLF hole this was written to close stayed open.
+ * Caught by a probe asserting a refusal, not by reading the code.
+ *
+ * Continuations are therefore joined FIRST, on the raw text. The cost is at the
+ * edge: a heredoc BODY line ending in an odd backslash run, immediately before
+ * the delimiter, joins the delimiter onto it, and stripHeredocs then finds no
+ * terminator and strips to the end of input — less text scanned, which is the
+ * wrong direction. It needs the backslash to fall on exactly that line, and the
+ * alternative is a reading that cannot see CRs at all.
+ */
+function readings(text) {
+  const out = [];
+  for (const crlf of [true, false]) {
+    const form = stripHeredocs(joinContinuations(String(text), { crlf }));
+    if (!out.includes(form)) out.push(form);
+  }
+  return out;
+}
+
+/**
+ * The command text split into individually-executed segments.
+ *
+ * Both CRLF readings are split and their segments unioned. When the text holds
+ * no CR the two readings are identical and only one is kept, so the ordinary
+ * case costs one extra string compare.
+ */
 function segments(text) {
-  return joinContinuations(stripHeredocs(text))
-    .split(/\r?\n|&&|\|\||[;|&]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const out = new Set();
+  for (const form of readings(text)) {
+    for (const part of form.split(SEPARATORS)) {
+      const trimmed = part.trim();
+      if (trimmed) out.add(trimmed);
+    }
+  }
+  return [...out];
 }
 
 /**
@@ -775,23 +876,69 @@ function isProtectedEnvTarget(token) {
   return /^\.env(\..+)?$/.test(name) && name !== ".env.example";
 }
 
-/** Programs whose LAST operand is a file they overwrite. */
-const LAST_ARG_WRITERS = new Set(["tee", "mv", "cp", "install", "truncate"]);
+/**
+ * Programs that overwrite files named as operands. EVERY operand is checked.
+ *
+ * `tee .env other.txt` writes both, and a version of this that looked only at the
+ * LAST operand let that spelling through — verified clobbering a real `.env`.
+ *
+ * For `mv` and `cp` the last operand is the one written, so checking all of them
+ * also refuses `mv .env /tmp/x` and `cp .env backup`. That is deliberate: the
+ * first takes `.env` away from the deployment and the second makes a second copy
+ * of its secrets somewhere unprotected, and neither is something this session
+ * should be doing to that file. It is also what the comment here claimed while
+ * the code did the opposite — a sentence describing a rule the implementation did
+ * not have, which is the failure this whole round is about.
+ *
+ * `.env.example` is excluded by isProtectedEnvTarget, so `cp .env.example x` is
+ * untouched.
+ */
+const OPERAND_WRITERS = new Set(["tee", "mv", "cp", "install", "truncate"]);
+
+/**
+ * Every redirection target in a piece of shell text.
+ *
+ * ── B2: THREE OPERATORS AND A GLUED SOURCE WALKED PAST THE FIRST VERSION ─────
+ *
+ * It was `/(?:^|\s)\d?>{1,2}\s*(…)/` applied per segment, which missed:
+ *
+ *   echo FOO=1>.env        no space before `>` — the `(?:^|\s)` required one
+ *   echo FOO=1 >| .env     `>|` is noclobber-override; segments() split on `|`
+ *                          and left `>` with no operand
+ *   echo FOO=1 >& .env     `>&word` redirects both streams; split on `&`
+ *
+ * All three replaced a real `.env`'s bytes in a real shell. `&>` was caught only
+ * by accident — the `&` split left `> .env` as its own segment — which is the
+ * kind of pass that stops being true the next time the splitter changes.
+ *
+ * So this runs on the whole (heredoc-stripped, continuation-joined) TEXT rather
+ * than on segments, because a redirection is not a segment-level fact and the
+ * separators this file splits on are themselves part of two of the operators.
+ */
+function redirectTargets(text) {
+  const out = [];
+  const pattern = /(?:\d+|&)?>{1,2}[|&]?[ \t]*("[^"]*"|'[^']*'|[^\s;|&<>]+)/g;
+  for (const m of text.matchAll(pattern)) out.push(m[1]);
+  return out;
+}
 
 function checkProtectedWrites(command) {
+  // Heredoc bodies gone (a body is data, not a redirection) and continuations
+  // joined under both CRLF readings, so `> .e\<newline>nv` is seen as `> .env`.
+  for (const text of readings(command)) {
+    for (const target of redirectTargets(text)) {
+      if (isProtectedEnvTarget(target)) denyProtectedWrite("a redirection", target);
+    }
+  }
+
   for (const segment of segments(command)) {
     const argv = argvOf(segment);
     const prog = program(argv);
     let how = null;
 
-    // `> .env` and `>> .env`, glued or spaced, with an optional fd number.
-    const redirect = segment.match(/(?:^|\s)\d?>{1,2}\s*("[^"]*"|'[^']*'|\S+)/);
-    if (redirect && isProtectedEnvTarget(redirect[1])) how = "a redirection";
-
-    if (!how && LAST_ARG_WRITERS.has(prog)) {
+    if (OPERAND_WRITERS.has(prog)) {
       const operands = argv.slice(1).filter((a) => !a.startsWith("-"));
-      const last = operands[operands.length - 1];
-      if (last && isProtectedEnvTarget(last)) how = `\`${prog}\``;
+      if (operands.some((a) => isProtectedEnvTarget(a))) how = `\`${prog}\``;
     }
 
     // `sed -i` edits every file it is given, not just the last. Both spellings:
@@ -809,20 +956,22 @@ function checkProtectedWrites(command) {
       if (of && isProtectedEnvTarget(unquote(of).slice(3))) how = "`dd of=`";
     }
 
-    if (how) {
-      deny(
-        `[gate: protected file] Refused — ${how} writing to a .env file.\n` +
-          `  in: ${segment}\n` +
-          `.env holds this deployment's real credentials and is the one file in ` +
-          `this tree that no commit can restore. The Edit/Write gate has always ` +
-          `refused it; the shell spellings were open until they were measured, ` +
-          `and this closes them. This rule has no override.\n` +
-          `Way forward: edit .env yourself, outside this session. If you are ` +
-          `adding a NEW variable, put it in .env.example — which is committed, is ` +
-          `not secret, and is what the env-completeness test reads.`,
-      );
-    }
+    if (how) denyProtectedWrite(how, segment);
   }
+}
+
+function denyProtectedWrite(how, where) {
+  deny(
+    `[gate: protected file] Refused — ${how} writing to a .env file.\n` +
+      `  in: ${where}\n` +
+      `.env holds this deployment's real credentials and is the one file in ` +
+      `this tree that no commit can restore. The Edit/Write gate has always ` +
+      `refused it; the shell spellings were open until they were measured, ` +
+      `and this closes them. This rule has no override.\n` +
+      `Way forward: edit .env yourself, outside this session. If you are ` +
+      `adding a NEW variable, put it in .env.example — which is committed, is ` +
+      `not secret, and is what the env-completeness test reads.`,
+  );
 }
 
 /** Run git for its EXIT STATUS. git() in _lib returns "" for both outcomes. */
@@ -1163,8 +1312,13 @@ function checkWorktree(command) {
 // verdicts (`approved-with-nits`, `approved (conditional)`), the word inside a
 // sentence, and a blockquoted line — `> …` is how people quote SOMEONE ELSE'S
 // text, which is exactly the ambiguity this pattern exists to remove.
+// B3: the colon is REQUIRED. The first widening wrote `Review-Verdict:?…:?` to
+// admit both `**Review-Verdict:**` (colon inside the emphasis) and
+// `**Review-Verdict**:` (colon outside it), and the side effect was that
+// `Review-Verdict approved` — no colon at all — satisfied the gate. One colon,
+// on either side of the closing emphasis, and nowhere else.
 const VERDICT =
-  /^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Review-Verdict:?(?:\*\*|__)?:?[ \t]*approved[ \t]*[.,;]?[ \t]*\r?$/im;
+  /^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Review-Verdict(?:\*\*|__)?:(?:\*\*|__)?[ \t]*approved[ \t]*[.,;]?[ \t]*\r?$/im;
 
 /**
  * The PR body, straight from gh.

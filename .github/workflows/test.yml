@@ -104,14 +104,21 @@ jobs:
     # declares migrate, app, worker and caddy and no postgres at all -- its own
     # comment says Supabase IS the database.
     #
-    # `git grep -nEi "postgres(ql)?[-:]?(client-)?1[5-9]"` finds nine places and
-    # not one of them is a reading of production: this CI service; the
+    # NINE places in this tree record a Postgres version, and not one of them is
+    # a reading of production: this CI service; the
     # 16.4-alpine probe in docs/verification.md and the same probe cited in
     # docs/substrate-moats.md; postgresql-client-16 in scripts/backup.sh, in
     # scripts/preflight.sh (twice) and in README-deploy.md; and 16.4 / 16-alpine
-    # in two specs/*/research.md files. An earlier version of this comment listed
-    # three of the nine and said "only", while the CLAUDE.md passage making the
-    # same point was complete -- so the two disagreed inside one commit.
+    # in two specs/*/research.md files.
+    #
+    # The count is of RECORDS, not of grep hits: the command above returns 17
+    # lines across 10 files, the extra eight being this comment's own line, three
+    # in CLAUDE.md and four in tests/hooks/settings-wiring.test.mjs, none of which
+    # records a version of anything. An earlier version of this comment quoted
+    # that command and said it "finds nine places", which is the kind of number
+    # attached to the wrong evidence that this file complains about elsewhere; and
+    # the version before THAT listed three of the nine and said "only", while the
+    # CLAUDE.md passage making the same point was complete.
     #
     # The client pin is the sharpest evidence AGAINST 17, not for it: pg_dump 16
     # refuses to dump a 17 server, so a production already on 17 would mean the
