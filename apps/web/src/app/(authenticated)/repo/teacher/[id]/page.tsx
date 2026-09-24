@@ -17,6 +17,7 @@ import {
   classes,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { teacherCycleHistory, teacherPairingHistory } from "@/lib/gated-reads";
 import { mentorshipAccess, observationAccess } from "@/lib/visibility";
@@ -73,7 +74,8 @@ export default async function RepoTeacherDetailPage({
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [teacher] = await db
     .select()

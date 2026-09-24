@@ -6,6 +6,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { linkedCycle } from "@/lib/gated-reads";
 import { observationAccess } from "@/lib/visibility";
@@ -53,7 +54,8 @@ export default async function RepoSessionPage({
   const actor = actorFrom(authSession);
   if (!actor) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [s] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
   if (!s) notFound();
