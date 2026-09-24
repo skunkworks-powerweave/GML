@@ -89,7 +89,14 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://gml:gml@127.0.0.1:5432/gml_ci
+      # sslmode=disable because this service container has no TLS. Without it
+      # the application's pool (packages/db/src/client.ts) forces TLS -- the
+      # right default for the Supabase pooler -- and every test that goes
+      # through the app's own connection fails with "The server does not
+      # support SSL connections". An explicit sslmode is the override that
+      # pool honours; tests/behaviour/health-probe.test.ts relies on exactly
+      # that distinction.
+      DATABASE_URL: postgres://gml:gml@127.0.0.1:5432/gml_ci?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
