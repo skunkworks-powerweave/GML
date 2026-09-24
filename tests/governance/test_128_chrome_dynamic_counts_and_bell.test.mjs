@@ -92,7 +92,13 @@ test("spec 128 — chrome-counts.ts wraps each loader in React.cache", () => {
 });
 
 test("spec 128 — chrome-counts.ts queries the right tables", () => {
-  const src = read(COUNTS);
+  // loadNavCounts' queries moved to lib/nav-counts.ts, which takes the db as a
+  // parameter so tests/behaviour/nav-counts.test.ts can execute them (the
+  // observation badge counted the whole programme for teachers and mentors,
+  // and nothing could run this module to notice). chrome-counts.ts delegates
+  // to it, so the tables are pinned across the pair.
+  const src = read(COUNTS) + read("apps/web/src/lib/nav-counts.ts");
+  assert.match(read(COUNTS), /navCounts\(db, userId, role\)/, "loadNavCounts must delegate to lib/nav-counts.ts");
   // The mentor branch resolves the mentors row by userId so the pairings
   // count is keyed on the correct mentor.id.
   assert.match(

@@ -13,8 +13,8 @@
 //   • mentor:          my active mentees, my pending video reviews (teach_back
 //                      videos that are ready and unreviewed, on my pairings --
 //                      lib/video/pending-review.ts), my scheduled meetings
-//                      this week, Q-progress forms due (proxy: meetings_count
-//                      hit a quarter boundary but no matching feedback row).
+//                      this week, Q-progress forms due (the pairing's current
+//                      quarter has no submitted mentor form yet).
 //   • programme_admin: active pairings, cycles in flight, recent uploads
 //                      (24h), pending observer forms (programme-wide).
 //   • super_admin:     same as programme_admin + total users + audit events
@@ -41,6 +41,8 @@ import {
   teachers,
   schools,
   mentors,
+  feedbackForms,
+  feedbackResponses,
   quizzes,
   quizSubmissions,
   users,
@@ -338,11 +340,15 @@ const getMentorChrome = cache(async (userId: string) => {
         ),
       ),
     // Q-progress forms due — pairings where current_quarter is set (i.e. the
-    // pairing has reached a quarter boundary) and the cached meetings_count
-    // shows at least one meeting happened (so the form is owed). Real
-    // "form-due" detection requires joining feedback_responses against the
-    // matching quarter; that join is hot and the proxy is faithful to the
-    // prototype's count. See research.md.
+    // pairing has reached a quarter boundary), the cached meetings_count shows
+    // at least one meeting happened (so the form is owed), AND that quarter's
+    // mentor form has not been submitted for the pairing.
+    //
+    // The last clause was missing: the count was a proxy that never read
+    // feedback_responses, so it could not go down when the mentor submitted
+    // the form and sat at 4 beside "Nothing pending — your queue is clear".
+    // The quarter -> kind mapping is the one the pairing page links by
+    // (mentorship/[pairingId]/page.tsx QUARTER_TO_KIND).
     db
       .select({ c: count() })
       .from(mentorPairings)
@@ -352,6 +358,15 @@ const getMentorChrome = cache(async (userId: string) => {
           eq(mentorPairings.status, "active"),
           isNotNull(mentorPairings.currentQuarter),
           gt(mentorPairings.meetingsCount, 0),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${feedbackResponses} r
+            JOIN ${feedbackForms} f ON f.id = r.form_id
+            WHERE r.pairing_id = ${mentorPairings.id}
+              AND f.audience = 'mentor'
+              AND f.kind::text = CASE ${mentorPairings.currentQuarter}
+                WHEN 1 THEN 'baseline' WHEN 2 THEN 'progress_1'
+                WHEN 3 THEN 'progress_2' WHEN 4 THEN 'final' END
+          )`,
         ),
       ),
   ]);
@@ -441,6 +456,14 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
   if (meetingsToday.length > 0) {
     todos.push({
       text: `Mentor meeting scheduled today`,
+      href: `/mentorship`,
+    });
+  }
+  // A form that is due is something waiting on the mentor; the stat card alone
+  // left "Nothing pending" beside a non-zero "forms due".
+  if (chrome.qProgressFormsDue > 0) {
+    todos.push({
+      text: `Submit ${chrome.qProgressFormsDue} quarterly form${chrome.qProgressFormsDue === 1 ? "" : "s"} for your mentees`,
       href: `/mentorship`,
     });
   }
@@ -564,7 +587,7 @@ export default async function DashboardPage() {
       { label: "Active mentees", value: chrome.activeMentees, hint: "paired" },
       { label: "Pending video reviews", value: chrome.pendingVideoReviews, hint: "target: < 48 h" },
       { label: "Scheduled meetings this week", value: chrome.scheduledMeetingsThisWeek, hint: "Mon-Sun" },
-      { label: "Q-progress forms due", value: chrome.qProgressFormsDue, hint: "quarter boundary reached" },
+      { label: "Q-progress forms due", value: chrome.qProgressFormsDue, hint: "this quarter's form not yet submitted" },
     ];
     todos = await getMentorTodos(session.user.id);
   } else if (role === "observer") {

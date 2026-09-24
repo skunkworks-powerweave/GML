@@ -34,6 +34,44 @@ async function dashboard(user: TestUser): Promise<{ todos: string; stats: string
 // observer followed the link to find nothing to press -- on a cycle that is not
 // "completed" either. The mentor's own to-do for the same cycle is correct.
 
+// ── F23: "Q-progress forms due" counts forms that are actually due ───────────
+//
+// The card counted active pairings with current_quarter set and at least one
+// meeting -- a proxy that never looked at feedback_responses, so it could not
+// go down when the mentor submitted the quarter's form, and sat at 4 beside
+// "Nothing pending -- your queue is clear".
+
+test("a mentor's quarterly form stops being 'due' once it is submitted", { skip }, async () => {
+  const w = await observationWorld("dashforms");
+  let formId: string | null = null;
+  try {
+    const due = (s: string) => Number((s.match(/Q-progress forms due (\d+)/) ?? [])[1]);
+
+    let d = await dashboard(w.mentor);
+    assert.equal(due(d.stats), 1, "the Q1 baseline form is owed for the one active pairing");
+    assert.match(d.todos, /quarterly form/i, "a form that is due is a thing waiting on the mentor");
+
+    formId = (
+      await w.c.query(
+        `INSERT INTO feedback_forms (kind, audience, schema, version) VALUES ('baseline', 'mentor', '{"fields":[]}', $1) RETURNING id`,
+        [w.T],
+      )
+    ).rows[0].id;
+    await w.c.query(
+      `INSERT INTO feedback_responses (form_id, pairing_id, respondent_user_id, responses) VALUES ($1, $2, $3, '{}')`,
+      [formId, w.pairingId, w.mentor.id],
+    );
+
+    d = await dashboard(w.mentor);
+    assert.equal(due(d.stats), 0, "the baseline form was submitted; nothing is due for this pairing");
+    assert.doesNotMatch(d.todos, /quarterly form/i);
+  } finally {
+    await w.c.query(`DELETE FROM feedback_responses WHERE pairing_id = $1`, [w.pairingId]);
+    if (formId) await w.c.query(`DELETE FROM feedback_forms WHERE id = $1`, [formId]);
+    await w.cleanup();
+  }
+});
+
 test("an observer's to-do list never asks them to sign off a cycle", { skip }, async () => {
   const w = await observationWorld("dashobs");
   try {
