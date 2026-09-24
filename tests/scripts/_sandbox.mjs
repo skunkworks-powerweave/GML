@@ -146,13 +146,11 @@ export function makeSandbox({ files = [], prefix = "gml-sh-" } = {}) {
     },
 
     /**
-     * Install a stub. Every call is appended to the invocation log as
-     * "<name> <args>" before `body` (POSIX sh) runs.
+     * Install a stub (replacing any passthrough of the same name). Every call
+     * is appended to the invocation log as "<name> <args>" before `body`
+     * (POSIX sh) runs.
      */
     stub(name, body = "exit 0") {
-      if (!DANGEROUS.includes(name)) {
-        throw new Error(`stub(${name}): only DANGEROUS names are stubbed; add it there first`);
-      }
       const p = join(bin, name);
       writeFileSync(p, `#!/bin/sh\nprintf '%s\\n' "${name} $*" >> "$SANDBOX_LOG"\n${body}\n`, {
         mode: 0o755,
