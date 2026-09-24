@@ -35,7 +35,13 @@ import {
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
-import { validateResponses, audienceAllows, type FormField } from "@/lib/forms/validate";
+import {
+  validateResponses,
+  audienceAllows,
+  type FormField,
+  type FormFieldOption,
+} from "@/lib/forms/validate";
+import { formRunnerHref } from "@/lib/forms/catalogue-links";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -115,7 +121,11 @@ type FormSchemaShape = {
     label?: string;
     hindiLabel?: string;
     required?: boolean;
-    options?: string[];
+    // Strings OR {value,label,hindiLabel} objects -- seed_forms_mentee.ts writes
+    // the latter. Declaring `string[]` here let the `as FormField[]` cast below
+    // hide that validate.ts compared submitted values against object
+    // references, which made the mentee final form unsubmittable.
+    options?: string[] | Array<Extract<FormFieldOption, object> & { label: string }>;
     min?: number;
     max?: number;
     helpText?: string;
@@ -314,8 +324,12 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       .slice(0, 3)
       .map((e) => e.message)
       .join(" ");
+    // KEEP THE PAIRING. This redirect used to drop it, so the page came back
+    // with no pairingId and the corrected resubmission was refused as
+    // missing_pairing -- one wrong answer turned into a dead end. pairingId
+    // was already checked by assertCanAccessPairing above.
     redirect(
-      `/forms/${slug}?error=invalid&detail=${encodeURIComponent(summary)}`,
+      `${formRunnerHref(slug, pairingId)}&error=invalid&detail=${encodeURIComponent(summary)}`,
     );
   }
 
@@ -653,12 +667,19 @@ export default async function FormRunnerPage({
           >
             {error === "missing_pairing" ? (
               <>
-                This form must be opened from your inbox so we can attach the
-                response to the right mentorship pairing. Head back to{" "}
-                <Link href="/inbox" style={{ color: "var(--indigo)" }}>
-                  your inbox
+                {/* Pointed at /inbox, which has no feedback-form card: the
+                    advice was a dead end. The pairing pages and /forms both
+                    carry per-pairing links now. */}
+                This form has to be opened for a specific mentorship pairing so we
+                can attach your answers to it. Choose the pairing from{" "}
+                <Link href="/mentorship" style={{ color: "var(--indigo)" }}>
+                  Mentorship
                 </Link>{" "}
-                and click the form card.
+                or pick the name under the form on{" "}
+                <Link href="/forms" style={{ color: "var(--indigo)" }}>
+                  Forms
+                </Link>
+                .
               </>
             ) : error === "wrong_audience" ? (
               <>
