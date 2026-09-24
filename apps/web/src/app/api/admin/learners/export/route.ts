@@ -40,6 +40,7 @@
 
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
+import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
@@ -129,7 +130,8 @@ export async function GET(req: Request) {
   }));
 
   const headers = ["id", "name", "age", "grade", "school_code", "class_label", "guardian", "attendance_pct"];
-  const csv = Papa.unparse({ fields: headers, data });
+  // Escaped: a spreadsheet evaluates a cell starting with = + - @ (admin/csv-safety.ts).
+  const csv = Papa.unparse({ fields: headers, data }, CSV_EXPORT_OPTIONS);
 
   // YYYYMMDD in UTC — strip dashes from the ISO date prefix.
   const filename = `learners-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;

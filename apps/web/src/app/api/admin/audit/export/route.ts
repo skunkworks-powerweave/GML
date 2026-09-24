@@ -47,6 +47,7 @@
 
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
+import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
 import { and, desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
@@ -220,7 +221,11 @@ export async function GET(req: Request) {
     "user_agent",
     "metadata",
   ];
-  const csv = Papa.unparse({ fields, data });
+  // ESCAPED. user_agent is whatever any caller sent -- the unsigned WhatsApp
+  // webhook audits anonymous internet requests -- and entity_id carries
+  // helpdesk topics; a cell starting with = + - @ is evaluated by the
+  // spreadsheet this file is opened in, during an incident (admin/csv-safety.ts).
+  const csv = Papa.unparse({ fields, data }, CSV_EXPORT_OPTIONS);
 
   // YYYYMMDD in UTC — strip dashes from the ISO date prefix.
   const filename = `audit-log-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;

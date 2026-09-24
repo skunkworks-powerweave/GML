@@ -8,6 +8,7 @@ import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { exportColumnKeys } from "@/admin/export-columns";
 import { entityRowProblems, exportRolesFor } from "@/admin/access";
+import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 
@@ -91,7 +92,7 @@ export async function exportCsv(slug: string): Promise<Response> {
     data.push(marker);
   }
 
-  const csv = Papa.unparse({ fields: headers, data });
+  const csv = Papa.unparse({ fields: headers, data }, CSV_EXPORT_OPTIONS);
   const filename = `${entity.slug}-${new Date().toISOString().slice(0, 10)}.csv`;
 
   // Fire-and-forget audit row.
@@ -146,8 +147,10 @@ export async function importCsv(slug: string, csv: string): Promise<{
   for (const [i, raw] of parsed.data.entries()) {
     // Coerce common scalar shapes; Zod schemas handle the strict validation.
     const coerced: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      if (v === "" || v == null) continue;
+    for (const [k, cell] of Object.entries(raw)) {
+      if (cell === "" || cell == null) continue;
+      // Undo the export's formula escaping (admin/csv-safety.ts).
+      const v = unescapeFormulaCell(cell);
       if (v === "true") coerced[k] = true;
       else if (v === "false") coerced[k] = false;
       else coerced[k] = v;
