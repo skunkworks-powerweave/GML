@@ -217,3 +217,91 @@ test("F32: with no RTT subjects the create form says what to do instead of faili
   assert.ok(submit && /\sdisabled(=|\s|>)/.test(submit), "submit must be disabled when there is nothing to bind the quiz to");
   assert.match(html, /RTT subject/);
 });
+
+// ── Driving the runner as a browser does ─────────────────────────────────────
+
+type AnyEl = { type: unknown; props: Record<string, unknown> };
+type RunnerProps = {
+  slug: string;
+  timeLimitSeconds?: number | null;
+  submitAction: (slug: string, answers: Array<{ questionId: string; selectedIndex: number | null }>) => Promise<void>;
+};
+
+function findElement(node: unknown, match: (el: AnyEl) => boolean): AnyEl | undefined {
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = findElement(n, match);
+      if (hit) return hit;
+    }
+  } else if (node && typeof node === "object" && "props" in (node as object)) {
+    const el = node as AnyEl;
+    if (match(el)) return el;
+    return findElement(el.props.children, match);
+  }
+  return undefined;
+}
+
+/** GET /quizzes/<slug> as the signed-in learner: the page, its HTML, and the runner's props. */
+async function openRunner(w: QuizWorld, searchParams: Record<string, string> = {}) {
+  const { default: Page } = await runnerModule();
+  const res = await outcome(() =>
+    Page({ params: Promise.resolve({ slug: w.slug }), searchParams: Promise.resolve(searchParams) }),
+  );
+  if (!res.value) return { redirect: res.redirect, notFound: res.notFound };
+  const runner = findElement(res.value, (el) => typeof el.props.submitAction === "function");
+  return { html: renderSync(res.value), runner: runner?.props as RunnerProps | undefined };
+}
+
+/** What the runner's Submit button does: call the action the page handed it. */
+function submit(runner: RunnerProps | undefined, answers: Array<{ questionId: string; selectedIndex: number | null }>) {
+  assert.ok(runner, "the runner page rendered no runner");
+  return outcome(() => runner!.submitAction(runner!.slug, answers));
+}
+
+/** Take the quiz start to finish; returns the result page's submission id. */
+async function takeQuiz(w: QuizWorld, answers: Array<{ questionId: string; selectedIndex: number | null }>): Promise<string> {
+  const { runner } = await openRunner(w);
+  const res = await submit(runner, answers);
+  const m = res.redirect?.match(/\/result\/([0-9a-f-]{36})$/);
+  assert.ok(m, `the submission was not accepted: ${JSON.stringify(res)}`);
+  return m![1]!;
+}
+
+async function resultHtml(w: QuizWorld, submissionId: string): Promise<string> {
+  const { default: Result } = await resultModule();
+  return renderSync(await Result({ params: Promise.resolve({ slug: w.slug, submissionId }) }));
+}
+
+// ── F34: the answer key on the result page ───────────────────────────────────
+
+test("F34: a failed attempt with attempts left does not reveal the answer key or the explanations", { skip }, async () => {
+  await withQuiz({ maxAttempts: 3 }, async (w) => {
+    signIn(w.userId);
+    const html = await resultHtml(w, await takeQuiz(w, answerAll(w, 1)));
+    assert.match(html, /wrong-1-a/, "the learner's own answer is shown");
+    assert.doesNotMatch(html, /KEY-\d-/, "the correct option is printed next to a Retake button");
+    assert.doesNotMatch(html, /EXPLAIN-\d-/, "the explanation gives the answer away too");
+    assert.match(html, /Retake/, "attempts remain, so retaking is offered");
+  });
+});
+
+test("F34: on an uncapped quiz the key stays hidden until the learner passes", { skip }, async () => {
+  await withQuiz({ maxAttempts: null }, async (w) => {
+    signIn(w.userId);
+    const failed = await takeQuiz(w, answerAll(w, 2));
+    assert.doesNotMatch(await resultHtml(w, failed), /KEY-\d-/);
+    const passed = await takeQuiz(w, answerAll(w, 0));
+    assert.match(await resultHtml(w, passed), /EXPLAIN-1-/, "once passed, the explanations are the point of the page");
+    assert.match(await resultHtml(w, failed), /KEY-1-/, "and the earlier attempt can be reviewed in full");
+  });
+});
+
+test("F34: the key is shown once the last attempt is used, and Retake is no longer offered", { skip }, async () => {
+  await withQuiz({ maxAttempts: 1 }, async (w) => {
+    signIn(w.userId);
+    const html = await resultHtml(w, await takeQuiz(w, answerAll(w, 1)));
+    assert.match(html, /KEY-1-/);
+    assert.match(html, /EXPLAIN-1-/);
+    assert.doesNotMatch(html, />Retake</, "a Retake link would only bounce to the history page");
+  });
+});
