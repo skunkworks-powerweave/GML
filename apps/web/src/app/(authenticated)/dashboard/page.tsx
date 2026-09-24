@@ -155,7 +155,7 @@ const getTeacherChrome = cache(async (userId: string) => {
   const teacherId = teacherRow?.id ?? null;
   const since7d = new Date(Date.now() - SEVEN_DAYS_MS);
 
-  const [myUploads7d, pendingPre, awaitingVideo, openQuizzes] = await Promise.all([
+  const [myUploads7d, pendingPre, awaitingVideo, awaitingPost, openQuizzes] = await Promise.all([
     // My uploads this week — every video_submission this user submitted in
     // the trailing 7 days, regardless of context (covers WhatsApp + direct +
     // teach_back). Matches the "My uploads" panel on the teacher dashboard.
@@ -195,6 +195,20 @@ const getTeacherChrome = cache(async (userId: string) => {
             ),
           )
       : Promise.resolve([{ c: 0 }] as Array<{ c: number }>),
+    // Cycles awaiting her post-form — observed, reflection owed. This stage
+    // had no to-do at all, so a teacher whose cycle reached 'observed' was
+    // prompted for nothing and the cycle stalled before sign-off.
+    teacherId
+      ? db
+          .select({ c: count() })
+          .from(observationCycles)
+          .where(
+            and(
+              eq(observationCycles.teacherId, teacherId),
+              eq(observationCycles.status, "observed"),
+            ),
+          )
+      : Promise.resolve([{ c: 0 }] as Array<{ c: number }>),
     // Open quizzes — active quizzes the teacher has not yet attempted /
     // passed. A submission counts as "done" regardless of score (quiz
     // surface re-attempts are tracked separately).
@@ -218,6 +232,7 @@ const getTeacherChrome = cache(async (userId: string) => {
     myUploads7d: myUploads7d[0]?.c ?? 0,
     pendingPre: pendingPre[0]?.c ?? 0,
     awaitingVideo: awaitingVideo[0]?.c ?? 0,
+    awaitingPost: awaitingPost[0]?.c ?? 0,
     openQuizzes: openQuizzes[0]?.c ?? 0,
   };
 });
@@ -509,6 +524,12 @@ async function getTeacherTodos(userId: string): Promise<TodoRow[]> {
     todos.push({
       text: `Upload lesson video for ${chrome.awaitingVideo} cycle${chrome.awaitingVideo === 1 ? "" : "s"}`,
       href: "/uploads",
+    });
+  }
+  if (chrome.awaitingPost > 0) {
+    todos.push({
+      text: `Submit post-form for ${chrome.awaitingPost} cycle${chrome.awaitingPost === 1 ? "" : "s"}`,
+      href: "/observation",
     });
   }
   if (chrome.openQuizzes > 0) {

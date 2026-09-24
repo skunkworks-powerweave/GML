@@ -29,6 +29,7 @@
 //
 //   4. signOffCycleAction        mentor | programme_admin | super_admin
 //        - transition status post_submitted → complete
+//        - notify the cycle's other parties (`cycle.complete`)
 //        - audit `observation.signed_off` (cycle code + signer in metadata —
 //          this audit row IS the "signed by" record for v1; a dedicated
 //          observation_signoffs table is deferred behind a schema migration).
@@ -61,6 +62,7 @@ import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
 import { isUuid } from "@/lib/ids";
+import { notifyCycleParties } from "@/lib/observation/notify";
 
 // Where the gate sends the user after they unlock: back to THIS cycle. Every
 // action here passed "/observation", so a grant lapsing (8 h, or a password
@@ -450,6 +452,10 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
       signedAt: new Date().toISOString(),
     },
   });
+
+  // Everyone else on the cycle hears that it closed; the settings page's
+  // "Cycle complete" toggle had no producer. Best-effort, after the commit.
+  await notifyCycleParties(db, "cycle.complete", cycleId, signedByUserId);
 
   revalidatePath(`/observation/${cycleId}`);
   redirect(`/observation/${cycleId}`);
