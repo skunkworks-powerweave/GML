@@ -258,6 +258,38 @@ export default async function QuizRunnerPage({
     .limit(1);
 
   if (!quiz || !quiz.active) {
+    // submitQuizAttempt sends a learner here with ?error=not_found when the
+    // quiz was switched off (or removed) while they were answering it. This
+    // check used to run first and 404 them, so the message written for
+    // exactly that case could never be shown: they lost their answers to a
+    // bare "page not found". Say what happened; serve nothing else.
+    const sp = searchParams ? await searchParams : {};
+    if (sp.error === "not_found") {
+      return (
+        <main>
+          <p
+            role="alert"
+            data-testid="quiz-error"
+            style={{
+              margin: "12px 16px 0",
+              padding: "10px 12px",
+              border: "1px solid var(--saffron)",
+              background: "var(--saffron-soft)",
+              borderRadius: "var(--r-2, 8px)",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            That quiz is no longer available, so these answers could not be recorded.
+          </p>
+          <div className="page-header">
+            <Link href="/dashboard" className="btn btn-sm" style={{ textDecoration: "none" }}>
+              ← Dashboard
+            </Link>
+          </div>
+        </main>
+      );
+    }
     notFound();
   }
 
@@ -377,35 +409,11 @@ export default async function QuizRunnerPage({
   // not the quiz's full limit. See the attempt read above.
   const timeLimitSeconds = remainingSeconds;
 
-  // RENDER THE REASON WE BOUNCED THEM BACK.
-  //
-  // submitQuizAttempt redirects here with ?error= when the quiz itself has
-  // gone. Refused ATTEMPTS (out of time, no attempts left, already submitted)
-  // go to the history page instead, which explains them without opening a new
-  // attempt -- see the redirect in submitQuizAttempt.
-  const sp = searchParams ? await searchParams : {};
-  const QUIZ_ERRORS: Record<string, string> = {
-    not_found: "That quiz is no longer available.",
-  };
-  const errorMessage = sp.error ? QUIZ_ERRORS[sp.error] ?? null : null;
-
-  const errorBanner = errorMessage ? (
-    <p
-      role="alert"
-      data-testid="quiz-error"
-      style={{
-        margin: "12px 16px 0",
-        padding: "10px 12px",
-        border: "1px solid var(--saffron)",
-        background: "var(--saffron-soft)",
-        borderRadius: "var(--r-2, 8px)",
-        fontSize: 13,
-        lineHeight: 1.5,
-      }}
-    >
-      {errorMessage}
-    </p>
-  ) : null;
+  // WHERE A REFUSED SUBMIT IS EXPLAINED. This page no longer carries error
+  // banners for an active quiz: refused attempts (out of time, no attempts
+  // left, already submitted) go to the history page, which explains them
+  // without opening a new attempt, and a quiz that has gone is explained by
+  // the inactive-quiz branch above. See the redirects in submitQuizAttempt.
 
   // Keyed by the attempt: a different attempt is a different runner, with
   // fresh selections and a fresh clock. Without the key React kept the old
@@ -416,7 +424,6 @@ export default async function QuizRunnerPage({
   if (device === "mobile") {
     return (
       <main>
-        {errorBanner}
         <MobileQuizRunner
           key={runnerKey}
           slug={slug}
@@ -431,7 +438,6 @@ export default async function QuizRunnerPage({
 
   return (
     <main>
-      {errorBanner}
       <div className="page-header" style={{ paddingBottom: 0 }}>
         <Link
           href="/dashboard"

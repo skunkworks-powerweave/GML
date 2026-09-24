@@ -823,6 +823,22 @@ test("F46: a submission stores one answer per quiz question, whatever the client
   });
 });
 
+test("F47: a submit to a quiz switched off mid-attempt says so instead of a bare 404", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    await w.q(`UPDATE quizzes SET active = false WHERE id = $1`, [w.quizId]);
+    const res = await submit(runner, answerAll(w, 0));
+    assert.equal(res.redirect, `/quizzes/${w.slug}?error=not_found`);
+    const landing = await openRunner(w, { error: "not_found" });
+    assert.ok(!landing.notFound, "the redirect target 404s before it can read ?error=not_found");
+    assert.match(landing.html ?? "", /That quiz is no longer available/);
+    assert.equal(landing.runner, undefined, "an inactive quiz must not be served");
+    // Without the error, an inactive quiz is still simply not there.
+    assert.equal((await openRunner(w)).notFound, true);
+  });
+});
+
 test("F46: an answers value that is not an array is graded as no answers, not a server error", { skip }, async () => {
   await withQuiz({}, async (w) => {
     signIn(w.userId);
