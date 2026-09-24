@@ -42,7 +42,32 @@ fail() { echo "[backup] ERROR: $*" >&2; exit 1; }
 trap 'echo "[backup] FAILED at line ${LINENO}" >&2' ERR
 
 [ -n "${DATABASE_URL:-}" ] || fail "DATABASE_URL not set"
-command -v pg_dump >/dev/null || fail "pg_dump not installed (apt-get install postgresql-client-16)"
+
+# IS pg_dump NEW ENOUGH FOR THIS SERVER — not merely "is it on PATH".
+#
+# pg_dump aborts against a server whose major is newer than its own, and this
+# check used to be `command -v pg_dump` alone, with a hint naming
+# postgresql-client-16. A client-16 box against a Supabase project on 17 passed
+# it and then wrote no dump, every night, with only a bare pg_dump error in
+# /var/lib/gml/backup.log to show for it.
+#
+# The server's major is ASKED, not assumed (scripts/lib/pg-major.sh), so the
+# failure below names both majors and the package that fixes it.
+# shellcheck source=lib/pg-major.sh
+. scripts/lib/pg-major.sh
+pg_rc=0
+pg_check_dump_client "${DATABASE_URL}" || pg_rc=$?
+case "${pg_rc}" in
+  0) log "pg_dump ${PG_CLIENT_MAJOR} can dump this PostgreSQL ${PG_SERVER_MAJOR} server" ;;
+  2)
+    case "${PG_CHECK_ERROR}" in
+      "pg_dump is not installed"*|"psql is not installed"*)
+        fail "${PG_CHECK_ERROR}. Install the PostgreSQL client from the PGDG repository (postgresql-client-<server major>) -- see README-deploy.md section 7" ;;
+      *) fail "${PG_CHECK_ERROR}. Refusing to attempt a dump whose client/server compatibility is unknown." ;;
+    esac
+    ;;
+  *) fail "${PG_CHECK_ERROR}" ;;
+esac
 
 mkdir -p "${DB_DIR}"
 
@@ -89,16 +114,32 @@ S3_SECRET_KEY="${SUPABASE_S3_SECRET_ACCESS_KEY:-${SUPABASE_S3_SECRET_KEY:-}}"
 # far more prominently than an endpoint, and the endpoint is a fixed function
 # of the project URL:
 #     https://<ref>.supabase.co  ->  https://<ref>.storage.supabase.co/storage/v1/s3
+#
+# THE DERIVATION NEVER WORKED. The sed replacement below had been written
+# through a heredoc that turned its backreference into a literal 0x01 control
+# byte, so `ref` was always that one byte and the "derived" endpoint was
+# https://<0x01>.storage.supabase.co/... -- rclone then failed on the first
+# bucket, and `set -e` ended the run after the dump but before it was shipped
+# off the box. With the backreference emitted, a URL that does not match
+# passes through unchanged, which is exactly what the `!=` comparison rejects.
+# tests/scripts/backup-sh.test.mjs executes this and checks the endpoint that
+# rclone is actually handed; tests/scripts/scripts-hygiene.test.mjs rejects a
+# control byte in any shell script.
 S3_ENDPOINT="${SUPABASE_S3_ENDPOINT:-}"
 if [ -z "${S3_ENDPOINT}" ] && [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ]; then
-  ref="$(printf '%s' "${NEXT_PUBLIC_SUPABASE_URL}" | sed -E 's#^https?://([^.]+)\..*##')"
+  ref="$(printf '%s' "${NEXT_PUBLIC_SUPABASE_URL}" | sed -E 's#^https?://([^.]+)\..*#\1#')"
   if [ -n "${ref}" ] && [ "${ref}" != "${NEXT_PUBLIC_SUPABASE_URL}" ]; then
     S3_ENDPOINT="https://${ref}.storage.supabase.co/storage/v1/s3"
     log "derived Storage S3 endpoint for project ${ref}"
   fi
 fi
 
-if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+# The SECRET is part of the condition. Without it the script entered this
+# branch with a key and no secret, rclone failed on the first bucket, and
+# `set -e` ended the run before step 3 shipped the dump off the box -- so a
+# missing secret cost the off-site dump as well as the mirror.
+if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY}" ] \
+   && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   command -v rclone >/dev/null || fail "rclone not installed but SUPABASE_S3_* is configured"
 
   # `copy`, NOT `sync`.
@@ -141,7 +182,8 @@ else
   echo "[backup] WARNING: Storage mirror SKIPPED. Needs an access key" >&2
   echo "[backup]          (SUPABASE_S3_ACCESS_KEY_ID), a secret" >&2
   echo "[backup]          (SUPABASE_S3_SECRET_ACCESS_KEY) and BACKUP_S3_BUCKET." >&2
-  echo "[backup]          The endpoint is derived from NEXT_PUBLIC_SUPABASE_URL." >&2
+  echo "[backup]          The endpoint is derived from NEXT_PUBLIC_SUPABASE_URL;" >&2
+  echo "[backup]          set SUPABASE_S3_ENDPOINT to override it (e.g. a custom domain)." >&2
   echo "[backup] WARNING: The videos are NOT being backed up. Supabase has no backup product for Storage." >&2
 fi
 
