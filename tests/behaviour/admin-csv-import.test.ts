@@ -69,22 +69,25 @@ test("one bad row does not sink the file: the rest land and each failure names i
   });
 });
 
-test("a file larger than one statement's 65,535 parameters imports", { skip, timeout: 120_000 }, async () => {
+test("a file larger than one statement's 65,535 parameters imports", { skip, timeout: 180_000 }, async () => {
   const { importCsv } = await csvModule();
   await withClient(async (c) => {
     const t = tag("imp-big");
     const f = fixture(c, t);
     try {
-      const z = await zone(f, t);
-      const prefix = t.slice(-6);
-      f.defer(`DELETE FROM schools WHERE code LIKE $1`, [`${prefix}-%`]);
+      // RTT readings: a table no picker lists, so thousands of rows here do
+      // not change what a concurrently running grid test renders.
+      const phase = await f.row("phases", { label: `PB ${t}`.slice(0, 24), sequence: 908 });
+      const term = await f.row("terms", { phase_id: phase, name: "Term 1", sequence: 1 });
+      const subject = await f.row("rtt_subjects", { term_id: term, name: `Big ${t}` });
+      f.defer(`DELETE FROM rtt_readings WHERE rtt_subject_id = $1`, [subject]);
       actAs(await f.user("super_admin", "sadmin"), "super_admin");
-      const lines = ["name,code,zoneId,address,contactPhone,headTeacherName,active"];
-      const N = 9_500; // x 7 columns = 66,500 parameters
-      for (let i = 0; i < N; i++) lines.push(`School ${i},${prefix}-${i},${z},Addr ${i},+91 ${i},Head ${i},true`);
-      const r = await importCsv("schools", lines.join("\n"));
+      const lines = ["rttSubjectId,sequence,title,externalUrl"];
+      const N = 17_000; // x 4 columns = 68,000 parameters
+      for (let i = 0; i < N; i++) lines.push(`${subject},${i % 999},Reading ${i},https://example.org/r/${i}`);
+      const r = await importCsv("rtt-readings", lines.join("\n"));
       assert.equal(r.inserted, N, JSON.stringify({ ...r, errors: r.errors.slice(0, 3) }));
-      const { rows: [n] } = await c.query(`SELECT count(*)::int AS n FROM schools WHERE code LIKE $1`, [`${prefix}-%`]);
+      const { rows: [n] } = await c.query(`SELECT count(*)::int AS n FROM rtt_readings WHERE rtt_subject_id = $1`, [subject]);
       assert.equal(n.n, N);
     } finally {
       await f.cleanup();
