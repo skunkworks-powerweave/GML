@@ -2,11 +2,11 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
 import bcrypt from "bcryptjs";
 import { db } from "@gml/db";
 import { sectionGateGrants } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { clientIp } from "@/lib/request-ip";
 import { rateLimit } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
 import { getCurrentGate, type GateSlug } from "@/lib/gates";
@@ -58,12 +58,15 @@ export async function verifyGate(
   if (!VALID.includes(slug)) return { error: "Unknown section." };
   if (!password) return { error: "Enter a password." };
 
-  // Rate limit.
-  const hdr = await headers();
-  const ip =
-    hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    hdr.get("x-real-ip") ??
-    "unknown";
+  // Rate limit. The ip part of the key comes from lib/request-ip, which trusts
+  // only the hop Caddy adds. This used to read the FIRST X-Forwarded-For element
+  // -- a value the client sends, since Caddy appends to that header rather than
+  // replacing it -- so a signed-in user could rotate one header value per
+  // attempt and guess the shared section password past the limit below. The
+  // same value is inserted into section_gate_grants.ip (varchar 64) further
+  // down; an over-long header used to make that INSERT throw after a CORRECT
+  // password had been accepted. clientIp() returns only an IP literal.
+  const ip = await clientIp();
 
   // Spec 141: track whether the attempt was throttled (or would have been
   // had the channel been up) so the audit row captures the degraded state.
