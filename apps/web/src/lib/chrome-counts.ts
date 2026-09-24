@@ -32,6 +32,7 @@ import {
 import type { RoleName } from "@gml/shared/auth/roles";
 import { transcodeQueueDepth } from "@/lib/queue";
 import { notificationKindFilter } from "./notification-kinds";
+import { pendingTeachBackReviewWhere } from "./video/pending-review";
 
 /**
  * Per-role badge counts. Each role gets only the counts that map to nav
@@ -109,9 +110,9 @@ export const loadNavCounts = cache(async function loadNavCounts(
           .from(videoSubmissions)
           .where(
             and(
-              eq(videoSubmissions.contextType, "teach_back"),
-              eq(videoSubmissions.status, "ready"),
-              isNull(videoSubmissions.reviewedAt),
+              // The one definition of "owed a review", shared with the
+              // dashboard card and /rtt/teach-back (lib/video/pending-review.ts).
+              pendingTeachBackReviewWhere(),
               gte(videoSubmissions.createdAt, cutoff30d),
             ),
           ),

@@ -11,8 +11,8 @@
 //   • observer:        cycles I am leading (active), pending observer forms
 //                      I owe, cycles awaiting my sign-off.
 //   • mentor:          my active mentees, my pending video reviews (teach_back
-//                      videos in {received,queued,transcoding,review_pending}
-//                      within last 48h on my pairings), my scheduled meetings
+//                      videos that are ready and unreviewed, on my pairings --
+//                      lib/video/pending-review.ts), my scheduled meetings
 //                      this week, Q-progress forms due (proxy: meetings_count
 //                      hit a quarter boundary but no matching feedback row).
 //   • programme_admin: active pairings, cycles in flight, recent uploads
@@ -50,6 +50,7 @@ import {
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { recordAudit } from "@/lib/audit";
+import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +58,8 @@ type Stat = { label: string; value: string | number; hint?: string };
 
 // ── time windows used in multiple counts ─────────────────────────────────────
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const TWO_DAYS_MS = 48 * 60 * 60 * 1000;
+// (No 48-hour constant: the mentor review card used one as a FILTER, which hid
+// every overdue review. "< 48 h" is the card's hint, not its predicate.)
 const SEVEN_DAYS_MS = 7 * ONE_DAY_MS;
 
 // startOfWeek(monday-anchored) — keeps the "Scheduled meetings this week"
@@ -283,7 +285,6 @@ const getMentorChrome = cache(async (userId: string) => {
 
   const weekStart = startOfWeekUtc();
   const weekEnd = endOfWeekUtc();
-  const since48h = new Date(Date.now() - TWO_DAYS_MS);
 
   const [activeMentees, pendingVideoReviews, scheduledMeetings, qProgressFormsDue] = await Promise.all([
     // Active mentees — pairings where I am the mentor and status='active'.
@@ -296,9 +297,20 @@ const getMentorChrome = cache(async (userId: string) => {
           eq(mentorPairings.status, "active"),
         ),
       ),
-    // Pending video reviews — teach_back videos for teachers I'm paired
-    // with, status in the unreviewed set, within the last 48h. Same
-    // 48-hour SLA as the JSX prototype's "Target: < 48 hours" subtitle.
+    // Pending video reviews — teach_back clips on MY active pairings that are
+    // playable and nobody has reviewed: the shared predicate in
+    // lib/video/pending-review.ts, which the sidebar badge uses too.
+    //
+    // This was `status IN (received, queued, transcoding, review_pending) AND
+    // created_at >= now() - 48h`. `review_pending` is written by nothing, so it
+    // counted only clips a mentor cannot watch yet, and each clip left the count
+    // the moment it became reviewable; the card read 0 while the badge and
+    // /rtt/teach-back showed the backlog. The 48h window is gone rather than
+    // corrected: it made an overdue review vanish from the card whose hint is
+    // "target: < 48 h". The hint is a target, not a filter.
+    //
+    // The pairing joins stay: this card is for one mentor, the badge is
+    // programme-wide. Test: tests/behaviour/pending-review.test.ts.
     db
       .select({ c: count() })
       .from(videoSubmissions)
@@ -311,13 +323,7 @@ const getMentorChrome = cache(async (userId: string) => {
           eq(mentorPairings.status, "active"),
         ),
       )
-      .where(
-        and(
-          eq(videoSubmissions.contextType, "teach_back"),
-          inArray(videoSubmissions.status, ["received", "queued", "transcoding", "review_pending"]),
-          gte(videoSubmissions.createdAt, since48h),
-        ),
-      ),
+      .where(pendingTeachBackReviewWhere()),
     // Scheduled meetings this week — mentor_meetings where the pairing is
     // mine and scheduled_at lands in the current Mon-Sun window.
     db
@@ -385,7 +391,9 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
       .where(eq(observationCycles.status, "post_submitted"))
       .orderBy(desc(observationCycles.updatedAt))
       .limit(1),
-    // Mentee video uploaded but not yet reviewed.
+    // Mentee video ready and not yet reviewed. Same shared predicate as the
+    // stat card; the old never-written `review_pending` set meant this to-do
+    // row could not fire for a clip the mentor could actually watch.
     db
       .select({ id: videoSubmissions.id })
       .from(videoSubmissions)
@@ -398,12 +406,7 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
           eq(mentorPairings.status, "active"),
         ),
       )
-      .where(
-        and(
-          eq(videoSubmissions.contextType, "teach_back"),
-          inArray(videoSubmissions.status, ["received", "queued", "transcoding", "review_pending"]),
-        ),
-      )
+      .where(pendingTeachBackReviewWhere())
       .orderBy(desc(videoSubmissions.createdAt))
       .limit(1),
     // Meetings scheduled today.

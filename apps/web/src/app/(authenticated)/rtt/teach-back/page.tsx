@@ -11,6 +11,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions, teachers, users } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { isPendingTeachBackReview } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
 
@@ -107,13 +108,21 @@ export default async function TeachBackQueuePage({
   // ever wrote -- the worker writes ready/failed and the webhook writes received
   // -- so "Pending review" was permanently zero while every unreviewed clip sat
   // in the queue uncounted. See migration 0022.
+  //
+  // "Pending review" is the shared definition in lib/video/pending-review.ts
+  // (playable AND unreviewed), the same one the dashboard card and the sidebar
+  // badge count. It used to be `reviewedAt === null` alone, which also counted
+  // clips still uploading or transcoding -- clips nobody can review yet -- so
+  // this tab disagreed with both of them. Those clips still appear under "All".
   const isReviewed = (r: Row) => r.reviewedAt !== null;
+  const isPending = (r: Row) =>
+    isPendingTeachBackReview({ contextType: "teach_back", status: r.status, reviewedAt: r.reviewedAt });
   const rows = filter
-    ? baseRows.filter((r) => (filter === "reviewed" ? isReviewed(r) : !isReviewed(r)))
+    ? baseRows.filter((r) => (filter === "reviewed" ? isReviewed(r) : isPending(r)))
     : baseRows;
   const counts = {
     all: baseRows.length,
-    review_pending: baseRows.filter((r) => !isReviewed(r)).length,
+    review_pending: baseRows.filter(isPending).length,
     reviewed: baseRows.filter(isReviewed).length,
   };
 

@@ -12,9 +12,9 @@
 //   3. The teacher variant scopes counts to session.user.id with the four
 //      labels the JSX prototype ships (My uploads / Cycles pending pre-form /
 //      Cycles awaiting video / Open quizzes).
-//   4. The mentor variant enforces the prototype's <48-hour SLA filter on
-//      pending video reviews (context=teach_back AND status in 4-state set
-//      AND created_at >= now() - 48h).
+//   4. The mentor variant counts pending video reviews with the SHARED
+//      reviewable predicate (teach_back AND ready AND reviewed_at IS NULL,
+//      no time window) -- INVERTED from the old 4-state + 48h pin.
 //   5. The observer variant scopes to observer_id and surfaces the three
 //      labels the brief lists.
 //   6. The super_admin variant adds the three extended cards (total users /
@@ -173,30 +173,44 @@ test("spec 127 — teacher open-quizzes filter uses NOT IN subquery against quiz
   );
 });
 
-test("spec 127 — mentor variant enforces the <48-hour SLA + 4-state status filter", () => {
+// INVERTED. This test used to REQUIRE the defect: a status set of
+// received/queued/transcoding/review_pending, an explicit "must NOT include
+// 'ready'", and a created_at >= now()-48h window. `review_pending` is written
+// by nothing and review is a timestamp (migration 0022), so that count held
+// only clips a mentor cannot watch yet, dropped each clip the moment it became
+// reviewable, and the window hid overdue reviews from the card whose hint is
+// "target: < 48 h". The card read 0 while the sidebar badge showed the backlog.
+//
+// The predicate's BEHAVIOUR is proven in tests/behaviour/pending-review.test.ts
+// (rendered with Drizzle's dialect, and executed against Postgres rows). This
+// file can only pin that the dashboard actually USES it, in both places.
+test("spec 127 — mentor pending-review card and to-do use the shared reviewable predicate", () => {
   const src = read(PAGE_PATH);
-  // 48-hour window — TWO_DAYS_MS is the canonical constant.
   assert.match(
     src,
-    /TWO_DAYS_MS\s*=\s*48\s*\*\s*60\s*\*\s*60\s*\*\s*1000/,
-    "page must declare TWO_DAYS_MS = 48 hours so the mentor pending-review SLA is explicit",
+    /import\s*\{[^}]*\bpendingTeachBackReviewWhere\b[^}]*\}\s*from\s*"@\/lib\/video\/pending-review"/,
+    "the dashboard must import the one shared definition of 'owed a review'",
   );
-  // The four-state filter — received / queued / transcoding / review_pending.
-  const m = src.match(/inArray\(videoSubmissions\.status,\s*\[([^\]]+)\]/);
-  assert.ok(m, "mentor pending-review count must use inArray(videoSubmissions.status, [...])");
-  const list = m[1];
-  assert.match(list, /"received"/, "status set must include 'received'");
-  assert.match(list, /"queued"/, "status set must include 'queued'");
-  assert.match(list, /"transcoding"/, "status set must include 'transcoding'");
-  assert.match(list, /"review_pending"/, "status set must include 'review_pending'");
-  assert.doesNotMatch(list, /"ready"/, "status set must NOT include 'ready' — those are reviewed-ready, not pending");
-  assert.doesNotMatch(list, /"reviewed"/, "status set must NOT include 'reviewed'");
-  // Context type filter — only teach_back videos count toward the mentor queue.
-  assert.match(
-    src,
-    /eq\(videoSubmissions\.contextType,\s*"teach_back"\)/,
-    "mentor pending-review count must filter context_type = 'teach_back' per the brief",
+  // The mentor code runs from getMentorChrome through getMentorTodos; the
+  // teacher/programme cards legitimately window on created_at, so the
+  // negative checks are scoped to the mentor section.
+  const start = src.indexOf("const getMentorChrome");
+  const end = src.indexOf("return todos;", start);
+  assert.ok(start >= 0 && end > start, "could not locate the mentor chrome + to-do helpers");
+  const mentor = src.slice(start, end);
+  const uses = mentor.match(/pendingTeachBackReviewWhere\(\)/g) ?? [];
+  assert.equal(uses.length, 2, "both the stat card and the to-do row must use the shared predicate");
+  assert.doesNotMatch(
+    mentor,
+    /inArray\(videoSubmissions\.status/,
+    "no hand-rolled video status set: the old one counted only unwatchable clips",
   );
+  assert.doesNotMatch(
+    mentor,
+    /gte\(videoSubmissions\.createdAt/,
+    "no created_at window on the review count: an overdue review must stay on the card",
+  );
+  assert.doesNotMatch(mentor, /review_pending"/, "review_pending is written by nothing");
 });
 
 test("spec 127 — mentor variant joins through teachers → mentor_pairings (mentor scoped)", () => {
