@@ -7,6 +7,7 @@ import Papa from "papaparse";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { exportColumnKeys } from "@/admin/export-columns";
+import { entityRowProblems } from "@/admin/access";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 
@@ -154,6 +155,14 @@ export async function importCsv(slug: string, csv: string): Promise<{
     if (!parse.success) {
       const issue = parse.error.issues[0];
       errors.push({ row: i + 2, message: `${issue?.path.join(".") ?? "row"}: ${issue?.message ?? "invalid"}` });
+      continue;
+    }
+    // The entity's database-backed rules, which the grid's form enforces too
+    // (a cycle's observer must be a live observer account).
+    const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
+    if (problems) {
+      const [field, message] = Object.entries(problems)[0]!;
+      errors.push({ row: i + 2, message: `${field}: ${message}` });
       continue;
     }
     validRows.push(parse.data);

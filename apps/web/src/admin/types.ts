@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { AnyPgTable } from "drizzle-orm/pg-core";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { RoleName } from "@gml/shared/auth/roles";
+import type { GateSlug } from "@/lib/gates";
+
+export type AdminDb = NodePgDatabase<Record<string, unknown>>;
 
 export type AdminColumn = {
   /** Drizzle column key on the table (same as the JS field name). */
@@ -49,4 +53,18 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
    * `recordAudit` after the DB fetch.
    */
   piiAudited?: boolean;
+  /**
+   * The section whose password guards these rows everywhere, not only under
+   * /observation or /mentorship. lib/visibility.ts: a surface that re-serves a
+   * gated section's rows must apply the gate too. When set, the grid page, all
+   * four row actions and the CSV import/export require an active grant for it
+   * (admin/access.ts), on top of the role check.
+   */
+  gate?: GateSlug;
+  /**
+   * Rules zod cannot check because they need the database (an observer id must
+   * belong to a live observer account). Returns field -> message, or null.
+   * Run by the create and update actions and by CSV import, after zod.
+   */
+  validate?: (db: AdminDb, row: Record<string, unknown>) => Promise<Record<string, string> | null>;
 };

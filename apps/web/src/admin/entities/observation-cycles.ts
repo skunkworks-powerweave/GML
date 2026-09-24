@@ -1,6 +1,25 @@
 import { z } from "zod";
-import { observationCycles } from "@gml/db/schema";
-import type { AdminEntity } from "../types";
+import { and, eq, isNull } from "drizzle-orm";
+import { observationCycles, users } from "@gml/db/schema";
+import type { AdminDb, AdminEntity } from "../types";
+
+/**
+ * The observer must be a live observer account -- the rule
+ * /observation/new's nominateCycleAction applies. lib/authz.ts scopes an
+ * observer to observer_id = me, so a cycle pointed at a mentor, a teacher or a
+ * deactivated account is one nobody can run. The grid and CSV import skipped
+ * it and accepted a mentor's id.
+ */
+async function liveObserver(db: AdminDb, row: Record<string, unknown>): Promise<Record<string, string> | null> {
+  const id = row.observerId;
+  if (typeof id !== "string") return null; // zod already required it
+  const [found] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, id), eq(users.role, "observer"), eq(users.active, true), isNull(users.deletedAt)))
+    .limit(1);
+  return found ? null : { observerId: "must be an active observer account" };
+}
 
 // Observation cycles — the nomination record every classroom observation hangs off.
 //
@@ -20,6 +39,10 @@ export const observationCyclesEntity: AdminEntity = {
   table: observationCycles,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
+  // These are the rows /observation keeps behind its password; the grid must
+  // not be the way round it. Test: tests/behaviour/admin-section-gate.test.ts.
+  gate: "observation",
+  validate: liveObserver,
   displayColumns: [
     { key: "code", label: "Code" },
     { key: "teacherId", label: "Teacher" },

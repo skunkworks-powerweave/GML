@@ -2,6 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import { entityGateOpen } from "@/admin/access";
 import { importCsv } from "@/app/(authenticated)/admin/data/[entity]/csv";
 import { requireApiRole } from "@/lib/api-guards";
 
@@ -22,6 +23,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ entity: string
 
   if (!registered) {
     return NextResponse.json({ error: "unknown_entity" }, { status: 404 });
+  }
+
+  // Same section-password rule as the export (admin/access.ts): an import is
+  // a bulk write into the gated rows.
+  if (!(await entityGateOpen(registered, gate.session.user.id))) {
+    return NextResponse.json({ error: "gate_required", gate: registered.gate }, { status: 403 });
   }
 
   const csv = await req.text();

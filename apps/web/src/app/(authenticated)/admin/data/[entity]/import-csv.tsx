@@ -99,11 +99,13 @@ export function ImportCsv({
       // 200 all-good, 207 partial. Both carry the same body; anything else is
       // a refusal (403/404) and has no per-row detail to show.
       if (res.status !== 200 && res.status !== 207) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        const body = (await res.json().catch(() => null)) as { error?: string; gate?: string } | null;
         setError(
           body?.error === "unknown_entity"
             ? "That table does not accept imports."
-            : res.status === 403
+            : body?.error === "gate_required"
+              ? `Unlock the ${body.gate ?? "section"} section first, then import again.`
+              : res.status === 403
               ? "You do not have permission to import into this table."
               : `The import failed (HTTP ${res.status}).`,
         );

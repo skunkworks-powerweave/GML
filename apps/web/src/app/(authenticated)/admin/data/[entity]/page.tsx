@@ -50,6 +50,7 @@ import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
+import { assertSectionGate } from "@/lib/gates";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
@@ -186,6 +187,12 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
 
   // Role gate — readRoles guards the page; mutateRoles enforced in actions.ts.
   const session = await requireRole(entity.readRoles);
+  // Section gate, for entities whose rows a section password protects
+  // (observation-cycles, mentor-pairings): without it the grid was a way to
+  // read and export them round /observation's own gate. admin/access.ts.
+  if (entity.gate) {
+    await assertSectionGate(session.user.id, entity.gate, `/admin/data/${slug}`);
+  }
 
   // Can THIS caller actually export?
   //

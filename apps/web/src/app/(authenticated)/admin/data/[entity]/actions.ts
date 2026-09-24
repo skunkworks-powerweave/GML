@@ -18,7 +18,9 @@ import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import { entityRowProblems } from "@/admin/access";
 import { requireRole } from "@/lib/guards";
+import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
 
 export type AdminActionState = {
@@ -37,6 +39,35 @@ function getEntityOrThrow(slug: string) {
 
 function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
   return entity.mutateRoles ?? entity.readRoles;
+}
+
+/**
+ * The section gate, after the role check. A server action runs before any
+ * layout or page, so the grid page's own gate check never sees these
+ * requests: each action has to make it. Redirects to the unlock page when the
+ * grant is missing (admin/access.ts explains which entities are gated).
+ */
+async function requireEntityGate(entity: ReturnType<typeof getEntityOrThrow>, userId: string) {
+  if (entity.gate) {
+    await assertSectionGate(userId, entity.gate, `/admin/data/${entity.slug}`);
+  }
+}
+
+/** Field errors from the entity's database-backed rules, as an action state. */
+async function rowProblemsState(
+  entity: ReturnType<typeof getEntityOrThrow>,
+  raw: Record<string, unknown>,
+  data: Record<string, unknown>,
+): Promise<AdminActionState | null> {
+  const problems = await entityRowProblems(entity, data);
+  if (!problems) return null;
+  const [field, message] = Object.entries(problems)[0]!;
+  return {
+    ok: false,
+    error: `${field}: ${message}`,
+    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    fieldErrors: problems,
+  };
 }
 
 /**
@@ -125,13 +156,16 @@ export async function createRowAction(
 ): Promise<AdminActionState> {
   const slug = String(formData.get("entitySlug") ?? "");
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema));
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
   }
+  const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
+  if (refused) return refused;
 
   const audited = withAudit(
     async () => {
@@ -178,7 +212,8 @@ export async function updateRowAction(
     return { ok: false, error: "Missing rowId" };
   }
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema), {
     emptyMeansNull: true,
@@ -187,6 +222,8 @@ export async function updateRowAction(
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
   }
+  const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
+  if (refused) return refused;
 
   const audited = withAudit(
     async () => {
@@ -230,7 +267,8 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
   if (!slug || !rowId) return;
 
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const audited = withAudit(
     async () => {
@@ -329,7 +367,8 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
   if (!slug || rowIds.length === 0) return;
 
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const idCol = (entity.table as unknown as { id: unknown }).id;
   let deletedCount = 0;
