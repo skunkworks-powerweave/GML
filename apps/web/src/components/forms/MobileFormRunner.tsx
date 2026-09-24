@@ -46,9 +46,11 @@ import {
   optionText,
   validateAll,
   validateField,
+  useSubmittingUntilServerAnswers,
   type FormField,
   type FormSchema,
 } from "./FormRenderer";
+import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -161,6 +163,7 @@ function BigTextLike({
       placeholder={field.placeholder}
       min={field.min}
       max={field.max}
+      maxLength={type === "text" ? MAX_TEXT_LENGTH : undefined}
       inputMode={field.kind === "number" ? "numeric" : undefined}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -190,6 +193,7 @@ function BigTextArea({
       name={field.name}
       autoFocus={autoFocus}
       rows={field.rows ?? 5}
+      maxLength={MAX_TEXT_LENGTH}
       placeholder={field.placeholder}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -532,7 +536,10 @@ export function MobileFormRunner({
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  // Ends when the server answers, not only on unmount: a rejected submission
+  // redirects back to this route and leaves the runner mounted
+  // (FormRenderer.tsx useSubmittingUntilServerAnswers).
+  const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
 
   // Autosave bookkeeping — mirrors FormRenderer exactly so a draft saved on
   // mobile is byte-identical to one saved on desktop.
@@ -691,7 +698,7 @@ export function MobileFormRunner({
     } finally {
       setSubmitting(false);
     }
-  }, [action, autosaveEnabled, fields, flushSave, onSubmit, submitting, values]);
+  }, [action, autosaveEnabled, fields, flushSave, onSubmit, setSubmitting, submitting, values]);
 
   // ---- Progress dots ----
   // One pill per step (field screens + review). Active is a wide pill,

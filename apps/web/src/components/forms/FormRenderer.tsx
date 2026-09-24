@@ -14,6 +14,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearDraft, saveDraft, type DraftKey } from "@/lib/form-draft";
+import {
+  MAX_TEXT_LENGTH,
+  validateResponses,
+  type FormField as ServerFormField,
+} from "@/lib/forms/validate";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -116,6 +121,34 @@ const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 // ---------- Helpers ----------
 
+const NO_INITIAL_RESPONSES: Record<string, unknown> = {};
+
+/**
+ * `submitting`, ended by the server's answer.
+ *
+ * A server-action submission ends one of two ways: success redirects to
+ * /forms/[slug]/thanks and this component unmounts; a rejection
+ * (?error=invalid, missing_pairing, wrong_audience) redirects back to the SAME
+ * route. The code used to assume that second case remounted the form too. It
+ * does not: Next 16's layout router keys the page segment without its search
+ * params, so the runner stays mounted with its `submitting` still true -- a
+ * red banner above a disabled "Submitting…" button that only a reload cleared.
+ *
+ * What the rejection does bring is a fresh server render, and with it a NEW
+ * `initialResponses` object. So "submitting" is recorded against the props
+ * the submission was made from, and stops being true the moment different
+ * ones arrive. Derived during render rather than reset in an effect, so there
+ * is no frame in which a stale busy state shows.
+ */
+export function useSubmittingUntilServerAnswers(
+  initialResponses: Record<string, unknown> | undefined,
+): [boolean, (on: boolean) => void] {
+  const current = initialResponses ?? NO_INITIAL_RESPONSES;
+  const [submittedFrom, setSubmittedFrom] = useState<Record<string, unknown> | null>(null);
+  const setSubmitting = useCallback((on: boolean) => setSubmittedFrom(on ? current : null), [current]);
+  return [submittedFrom !== null && submittedFrom === current, setSubmitting];
+}
+
 // Spec 133 — MobileFormRunner reuses these helpers verbatim. They're exported
 // so the mobile renderer doesn't duplicate the validation contract (a drift
 // between the two would make a draft saved on mobile fail on desktop submit).
@@ -130,21 +163,17 @@ export function isHindiNameField(name: string): boolean {
   return /_(hi|hindi)$/i.test(name);
 }
 
+/**
+ * THE SERVER'S RULES, run in the browser. This checked only `required` and a
+ * number's min/max, while submitFormAction also refuses text over 5000
+ * characters, choices that are not options, too many selections and scale
+ * answers off the scale -- so an answer could pass here, travel over a slow
+ * link, and come back refused. lib/forms/validate.ts is dependency-free, so
+ * both sides now run the one validator.
+ */
 export function validateField(field: FormField, raw: unknown): string | null {
-  const empty =
-    raw === undefined ||
-    raw === null ||
-    (typeof raw === "string" && raw.trim() === "") ||
-    (Array.isArray(raw) && raw.length === 0);
-  if (field.required && empty) return "This field is required.";
-  if (empty) return null;
-  if (field.kind === "number") {
-    const n = typeof raw === "number" ? raw : Number(raw);
-    if (Number.isNaN(n)) return "Must be a number.";
-    if (typeof field.min === "number" && n < field.min) return `Must be ≥ ${field.min}.`;
-    if (typeof field.max === "number" && n > field.max) return `Must be ≤ ${field.max}.`;
-  }
-  return null;
+  const [first] = validateResponses([field as ServerFormField], { [field.name]: raw });
+  return first?.message ?? null;
 }
 
 /**
@@ -260,6 +289,7 @@ function TextLike({
       placeholder={field.placeholder}
       min={field.min}
       max={field.max}
+      maxLength={type === "text" ? MAX_TEXT_LENGTH : undefined}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
       onChange={(e) => onChange(e.target.value)}
@@ -285,6 +315,7 @@ function TextArea({
       id={field.name}
       name={field.name}
       rows={field.rows ?? 4}
+      maxLength={MAX_TEXT_LENGTH}
       placeholder={field.placeholder}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -626,7 +657,7 @@ export function FormRenderer({
 
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Autosave bookkeeping
@@ -798,7 +829,7 @@ export function FormRenderer({
         setSubmitting(false);
       }
     },
-    [action, autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, values],
+    [action, autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, values],
   );
 
   // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
