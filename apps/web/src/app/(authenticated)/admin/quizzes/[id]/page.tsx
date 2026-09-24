@@ -94,8 +94,9 @@ export default async function AdminQuizDetailPage({ params }: Props) {
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6 }}>
               Edit the JSON below. <strong>Save</strong> validates the payload and
-              replaces all questions for this quiz in a single transaction. The
-              change is recorded in the audit log.
+              replaces this quiz&apos;s questions with the <code>questions</code> array
+              in a single transaction; leave the array out to change only the
+              settings. The change is recorded in the audit log.
             </p>
           </div>
           <div style={{ textAlign: "right" }}>

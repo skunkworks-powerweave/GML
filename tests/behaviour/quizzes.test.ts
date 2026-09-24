@@ -619,3 +619,32 @@ test("F37: the countdown follows the deadline, so a phone that slept shows the t
     }
   }
 });
+
+// ── F38: the editor and a payload without questions ──────────────────────────
+
+const questionCount = async (w: QuizWorld) =>
+  (await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_questions WHERE quiz_id = $1`, [w.quizId]))[0]!.n;
+
+test("F38: saving settings without a questions array leaves the questions alone", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(randomUUID(), "programme_admin");
+    const { saveQuizSchema } = await editorActions();
+    // Taking a quiz offline is exactly this payload.
+    const saved = await saveQuizSchema(w.quizId, JSON.stringify({ active: false }));
+    assert.deepEqual(saved, { ok: true, questionCount: 3 }, "the editor reported the questions it deleted as saved");
+    assert.equal(await questionCount(w), 3);
+    assert.equal((await w.q<{ active: boolean }>(`SELECT active FROM quizzes WHERE id = $1`, [w.quizId]))[0]!.active, false);
+  });
+});
+
+test("F38: an explicit empty questions array is refused once learners have submitted", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    await takeQuiz(w, answerAll(w, 0));
+    signIn(randomUUID(), "programme_admin");
+    const { saveQuizSchema } = await editorActions();
+    const saved = await saveQuizSchema(w.quizId, JSON.stringify({ questions: [] }));
+    assert.equal(saved.ok, false, "emptying a quiz learners have sat orphans every result's review");
+    assert.equal(await questionCount(w), 3);
+  });
+});
