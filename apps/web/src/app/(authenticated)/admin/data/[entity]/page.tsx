@@ -54,6 +54,7 @@ import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
+import { referenceLabels, referenceOptions } from "@/admin/references";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
 import { ImportCsv } from "./import-csv";
@@ -338,6 +339,24 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     });
   }
 
+  // FOREIGN KEYS BY NAME. Every link to another row used to render as its
+  // UUID, in the grid and on the mobile cards alike, so "which school is this
+  // teacher at?" meant copying a UUID into another grid's filter. displayRows
+  // carries the referenced row's label in place of the id for rendering only;
+  // `rows` keeps the ids for edit links, selection and delete.
+  // (admin/references.ts derives the FK fields from the table itself.)
+  const refLabels = await referenceLabels(db, entity, rows);
+  const displayRows = rows.map((r) => {
+    const out: Record<string, unknown> = { ...r };
+    for (const [field, labels] of Object.entries(refLabels)) {
+      const v = r[field];
+      if (typeof v === "string" && labels[v]) out[field] = labels[v];
+    }
+    return out;
+  });
+  // The form's pickers: every row each FK field may point at, by name.
+  const refOptions = await referenceOptions(db, entity);
+
   const fmt = (col: { key: string; format?: (v: unknown) => string }, row: Record<string, unknown>) => {
     const v = row[col.key];
     if (col.format) return col.format(v);
@@ -463,12 +482,18 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               Close
             </Link>
           </div>
-          <RowForm entitySlug={slug} mode="edit" rowId={editRowId} initialValues={editRow} />
+          <RowForm
+            entitySlug={slug}
+            mode="edit"
+            rowId={editRowId}
+            initialValues={editRow}
+            options={refOptions}
+          />
         </section>
       ) : (
         <section className="mb-8 rounded-lg border border-neutral-200 bg-white p-4">
           <h2 className="mb-3 text-sm font-medium text-neutral-700">Add new</h2>
-          <RowForm entitySlug={slug} mode="create" />
+          <RowForm entitySlug={slug} mode="create" options={refOptions} />
         </section>
       )}
 
@@ -512,7 +537,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             <MobileEntityCardList
               entitySlug={slug}
               entityLabel={entity.label}
-              rows={rows}
+              rows={displayRows}
               columns={entity.displayColumns.map((c) => ({
                 key: c.key,
                 label: c.label,
@@ -604,7 +629,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                   </td>
                 </tr>
               ) : (
-                rows.map((row, i) => {
+                displayRows.map((row, i) => {
                   const rowId = row.id != null ? String(row.id) : "";
                   const rowLabel = entity.describeRow?.(row);
                   return (

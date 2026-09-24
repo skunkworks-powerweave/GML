@@ -31,9 +31,9 @@ export const mentorsEntity: AdminEntity = {
     // unlinked teacher sees an empty programme and 404s on the cycle that is
     // about her. WhatsApp attribution rides on the same column.
     //
-    // A uuid field rather than a picker, matching schoolId. Copy the id from
-    // /admin/users. Nullable, because somebody on the roster who has not been
-    // given an account yet is a legitimate state.
+    // Picked from the mentor accounts by name (admin/references.ts; the value
+    // submitted is still the uuid). Nullable, because somebody on the roster
+    // who has not been given an account yet is a legitimate state.
     userId: z.string().uuid().optional().nullable(),
     name: z.string().min(2).max(160),
     bio: z.string().max(2000).optional().nullable(),
@@ -41,6 +41,11 @@ export const mentorsEntity: AdminEntity = {
     expertiseAreas: z.array(z.string()).default([]),
     active: z.boolean().default(true),
   }),
+  fields: {
+    photoUrl: { label: "Photo URL" },
+    expertiseAreas: { label: "Expertise areas" },
+    userId: { label: "Login account", userRoles: ["mentor"] },
+  },
   formFields: ["name", "bio", "photoUrl", "expertiseAreas", "active", "userId"],
   describeRow: (r) => `mentor:${r.name ?? r.id}`,
 };

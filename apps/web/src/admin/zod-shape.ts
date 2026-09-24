@@ -126,6 +126,68 @@ export function coerceFieldValue(kind: FieldKind, raw: string): unknown {
   }
 }
 
+/** Peel optional/nullable/default wrappers off a field. */
+function innermost(zodType: z.ZodTypeAny): z.ZodTypeAny {
+  let inner = zodType;
+  for (let depth = 0; depth < 10; depth += 1) {
+    const next = (inner as unknown as { _def?: { innerType?: z.ZodTypeAny } })._def?.innerType;
+    if (!next) break;
+    inner = next;
+  }
+  return inner;
+}
+
+/**
+ * The allowed values of an enum field, or null for anything else. The grid
+ * renders these as a <select>: a free text box for `status` accepted any
+ * spelling and then failed validation with "Invalid enum value".
+ */
+export function enumOptions(zodType: z.ZodTypeAny | undefined): string[] | null {
+  if (!zodType) return null;
+  const inner = innermost(zodType) as unknown as { _def?: { typeName?: string; values?: readonly string[] } };
+  return inner._def?.typeName === "ZodEnum" ? [...(inner._def.values ?? [])] : null;
+}
+
+/** True when the field may be left empty (optional, nullable or defaulted). */
+export function isOptionalField(zodType: z.ZodTypeAny | undefined): boolean {
+  if (!zodType) return true;
+  return zodType.safeParse(undefined).success;
+}
+
+/**
+ * Free text long enough to deserve a multi-line box: lesson bodies, notes,
+ * descriptions (all max 5,000-20,000). URLs and bios stay single-line.
+ */
+export function isLongText(zodType: z.ZodTypeAny | undefined): boolean {
+  if (!zodType) return false;
+  const inner = innermost(zodType) as unknown as {
+    _def?: { typeName?: string; checks?: Array<{ kind: string; value?: number }> };
+  };
+  if (inner._def?.typeName !== "ZodString") return false;
+  const max = inner._def.checks?.find((c) => c.kind === "max")?.value;
+  return typeof max === "number" && max > 2000;
+}
+
+/**
+ * What the form calls a field: the entity's own label if it gives one, else
+ * the grid column's label, else the key spelled out ("rttSubjectId" ->
+ * "Rtt subject"). The form used to print the raw key -- `mentorId`,
+ * `classTeacherName` -- which is a column name, not a question.
+ */
+export function fieldLabel(
+  entity: { fields?: Record<string, { label?: string }>; displayColumns: Array<{ key: string; label: string }> },
+  field: string,
+): string {
+  const own = entity.fields?.[field]?.label ?? entity.displayColumns.find((c) => c.key === field)?.label;
+  if (own) return own;
+  const words = field
+    .replace(/Id$/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/\b(rtt|url)\b/g, (w) => w.toUpperCase());
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** Render a stored value into the string an <input> should show. */
 export function toInputValue(kind: FieldKind, v: unknown): string {
   if (v === null || v === undefined) return "";

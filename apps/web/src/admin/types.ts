@@ -10,6 +10,21 @@ export type AdminColumn = {
   format?: (v: unknown) => string;
 };
 
+/**
+ * Optional presentation for one form field. Everything here has a working
+ * default: foreign keys are found from the table itself (admin/references.ts)
+ * and enums from the zod schema, so an entity only says what cannot be
+ * derived.
+ */
+export type AdminFieldMeta = {
+  /** Form label. Defaults to the grid column's label, then the key spelled out. */
+  label?: string;
+  /** One line of guidance shown under the input. */
+  help?: string;
+  /** For a link to a login account: only accounts with these roles are offered. */
+  userRoles?: RoleName[];
+};
+
 export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
   slug: string;
   label: string;
@@ -23,6 +38,8 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
   formSchema: z.ZodTypeAny;
   /** Field names included in the form (in this order). */
   formFields: string[];
+  /** Per-field labels and hints; see AdminFieldMeta. */
+  fields?: Record<string, AdminFieldMeta>;
   /** Optional human-friendly identifier function for row labels in audit log. */
   describeRow?: (row: Record<string, unknown>) => string;
   /**

@@ -57,5 +57,9 @@ export const observationCyclesEntity: AdminEntity = {
     // column default, "nominated".
   }),
   formFields: ["code", "teacherId", "observerId", "kind", "scheduledAt", "subjectId", "topic"],
+  fields: {
+    observerId: { label: "Observer", userRoles: ["observer"] },
+    subjectId: { label: "Subject" },
+  },
   describeRow: (r) => `observation-cycle:${r.code ?? r.id}`,
 };
