@@ -214,7 +214,9 @@ export function ImportCsv({
             <ul className="mt-1 max-h-40 list-disc space-y-0.5 overflow-auto pl-4">
               {result.errors.map((e, i) => (
                 <li key={`${e.row}-${i}`}>
-                  {e.row >= 0 ? `Row ${e.row + 2}: ` : ""}
+                  {/* The server already reports the spreadsheet line (header =
+                      line 1); adding 2 again sent the operator two lines too far. */}
+                  {e.row >= 0 ? `Row ${e.row}: ` : ""}
                   {e.message}
                 </li>
               ))}
