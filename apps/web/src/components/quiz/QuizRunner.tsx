@@ -281,6 +281,12 @@ export function QuizRunner({
                   key={i}
                   type="button"
                   onClick={() => onPick(i)}
+                  // The ink/paper inversion is the only visual cue; this is
+                  // the one assistive tech hears, so a screen-reader user can
+                  // verify an answer before submitting a graded quiz.
+                  // Deliberately NOT role="radio": a radiogroup obliges roving
+                  // tabindex + arrow keys, and without them Tab traversal breaks.
+                  aria-pressed={isSel}
                   style={{
                     textAlign: "left",
                     padding: "12px 14px",

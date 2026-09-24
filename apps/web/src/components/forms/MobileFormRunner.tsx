@@ -39,8 +39,11 @@ import {
 import { saveDraft, type DraftKey } from "@/lib/form-draft";
 import { useSwipe } from "@/lib/use-swipe";
 import {
+  HindiText,
+  isGroupKind,
   isHindiNameField,
   normalizeOptions,
+  optionText,
   validateAll,
   validateField,
   type FormField,
@@ -222,7 +225,7 @@ function BigSelect({
       <option value="">Choose…</option>
       {normalizeOptions(field.options).map((o) => (
         <option key={o.value} value={o.value}>
-          {o.label}
+          {optionText(o)}
         </option>
       ))}
     </select>
@@ -279,7 +282,10 @@ function BigRadio({
               onChange={() => onChange(o.value)}
               style={{ width: 20, height: 20 }}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.85 }} />
+            </span>
           </label>
         );
       })}
@@ -310,7 +316,9 @@ function BigCheckboxGroup({
     onChange(next);
   };
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    // Named group (the field heading above is not a <label for>; there is no
+    // single control for it to point at). Mirrors FormRenderer.
+    <div role="group" aria-label={field.label} style={{ display: "grid", gap: 10 }}>
       {normalizeOptions(field.options).map((o) => {
         const checked = selected.includes(o.value);
         return (
@@ -338,7 +346,10 @@ function BigCheckboxGroup({
               onChange={() => toggle(o.value)}
               style={{ width: 20, height: 20 }}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.85 }} />
+            </span>
           </label>
         );
       })}
@@ -375,7 +386,12 @@ function BigLikert({
   // path.
   const current = coerceScaleValue(value);
   return (
-    <div data-testid="mobile-likert" style={{ display: "grid", gap: 10 }}>
+    <div
+      data-testid="mobile-likert"
+      role="group"
+      aria-label={field.label}
+      style={{ display: "grid", gap: 10 }}
+    >
       {labels.map((lbl, i) => {
         const n = i + 1;
         const selected = current === n;
@@ -384,6 +400,8 @@ function BigLikert({
             key={n}
             type="button"
             onClick={() => onChange(n)}
+            // Selection announced, not only inverted (same as FormRenderer).
+            aria-pressed={selected}
             data-testid={`mobile-likert-${field.name}-${n}`}
             style={{
               display: "flex",
@@ -445,6 +463,8 @@ function BigRating({
   return (
     <div
       data-testid="mobile-rating"
+      role="group"
+      aria-label={field.label}
       style={{ display: "flex", gap: 8, justifyContent: "flex-start" }}
     >
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
@@ -454,7 +474,9 @@ function BigRating({
             key={n}
             type="button"
             onClick={() => onChange(n)}
-            aria-label={`Rate ${n} of ${max}`}
+            // State in the name, once: `on` is cumulative, so aria-pressed
+            // would announce every filled star as a separate answer.
+            aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
             data-testid={`mobile-star-${field.name}-${n}`}
             style={{
               width: 56,
@@ -822,6 +844,21 @@ export function MobileFormRunner({
     const value = values[field.name];
     const err = errors[field.name];
     const autoFocus = field.kind === "textarea" || field.kind === "text";
+    const heading = (
+      <>
+        {field.label ?? field.name}
+        {field.required ? (
+          <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
+            *
+          </span>
+        ) : null}
+        {/* lang="hi" so it is voiced as Hindi; same component as desktop. */}
+        <HindiText
+          text={field.hindiLabel}
+          style={{ display: "block", color: "var(--ink-3)", fontSize: 14, marginTop: 2 }}
+        />
+      </>
+    );
     return (
       <div
         data-testid={`mobile-field-screen-${field.name}`}
@@ -838,27 +875,16 @@ export function MobileFormRunner({
         >
           Question {step + 1} of {fields.length}
         </div>
-        <label htmlFor={field.name} style={bigLabelStyle}>
-          {field.label ?? field.name}
-          {field.required ? (
-            <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
-              *
-            </span>
-          ) : null}
-          {field.hindiLabel ? (
-            <span
-              style={{
-                display: "block",
-                fontFamily: "var(--deva)",
-                color: "var(--ink-3)",
-                fontSize: 14,
-                marginTop: 2,
-              }}
-            >
-              {field.hindiLabel}
-            </span>
-          ) : null}
-        </label>
+        {/* Group kinds (radio / checkbox / likert / rating) have no element
+            with id={field.name}, so a <label for> over them named nothing;
+            they name themselves with role + aria-label instead. */}
+        {isGroupKind(field.kind) ? (
+          <div style={bigLabelStyle}>{heading}</div>
+        ) : (
+          <label htmlFor={field.name} style={bigLabelStyle}>
+            {heading}
+          </label>
+        )}
         <div style={{ marginTop: 8 }}>
           {field.kind === "textarea" ? (
             <BigTextArea
@@ -898,6 +924,7 @@ export function MobileFormRunner({
           )}
         </div>
         {field.helpText ? <div style={helpStyle}>{field.helpText}</div> : null}
+        <HindiText text={field.helpHindi} style={{ ...helpStyle, display: "block" }} />
         {err ? (
           <div role="alert" style={errorStyle}>
             {err}
