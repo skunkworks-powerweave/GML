@@ -147,7 +147,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
           >
             {sectionLabel}
           </div>
-          <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          {/* Named by its (translated) section heading. Unnamed, a
+              super_admin heard four identical "navigation" landmarks. */}
+          <nav aria-label={sectionLabel} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
             {section.items.map((item) => {
               const isActive = activeId === item.id;
               const itemKey = ITEM_KEY[item.id];
@@ -157,6 +159,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                   key={item.id}
                   href={item.href}
                   data-help-anchor={`nav-${item.id}`}
+                  // The current page, stated -- not only drawn with a
+                  // background and a border.
+                  aria-current={isActive ? "page" : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -224,6 +229,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
         labelOnline={tStatus("online")}
         labelOffline={tStatus("offline")}
         labelChecking={tStatus("checking")}
+        hintOnline={tStatus("onlineHint")}
+        hintOffline={tStatus("offlineHint")}
+        hintChecking={tStatus("checkingHint")}
       />
     </aside>
   );

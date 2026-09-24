@@ -14,6 +14,7 @@ import { Topbar } from "@/components/nav/Topbar";
 import { ConfidentialityFooter } from "@/components/ConfidentialityFooter";
 import type { NavCounts, QueueDepth } from "@/lib/chrome-counts";
 import type { Locale } from "@/i18n/config";
+import { MAIN_CONTENT_ID, SkipLink } from "./SkipLink";
 
 type DesktopShellProps = {
   user: { id: string; name?: string | null; email?: string | null; role: RoleName; image?: string | null };
@@ -43,6 +44,9 @@ export function DesktopShell({
   // Suspense fallback is needed because the JSON bundles are bundled in.
   return (
     <div style={{ display: "grid", gridTemplateColumns: "248px 1fr", minHeight: "100dvh", background: "var(--paper)" }}>
+      {/* First in tab order, ahead of the sidebar. position:fixed (globals.css)
+          keeps it out of the grid's column placement. */}
+      <SkipLink />
       <Sidebar role={user.role} activeId={activeNavId} counts={navCounts} />
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar
@@ -52,7 +56,11 @@ export function DesktopShell({
           queueDepth={queueDepth}
           locale={locale}
         />
-        <main style={{ flex: 1, padding: "20px 28px 80px" }}>{children}</main>
+        {/* tabIndex -1: the skip link's target must take focus, so the next
+            Tab starts inside the page rather than back at the sidebar. */}
+        <main id={MAIN_CONTENT_ID} tabIndex={-1} style={{ flex: 1, padding: "20px 28px 80px" }}>
+          {children}
+        </main>
         <ConfidentialityFooter user={{ name: user.name, email: user.email }} />
       </div>
     </div>

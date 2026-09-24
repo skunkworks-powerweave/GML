@@ -12,5 +12,5 @@ Per spec 026's research note D-001, the Topbar was built alongside DesktopShell 
 
 - **FR-001**: Topbar renders breadcrumbs from props
 - **FR-002**: Bell icon present (badge count comes from /api/notifications/poll in spec 070)
-- **FR-003**: Language picker shows EN / हिन्दी / Ladakhi (لد) — Devanagari + Arabic-script labels
+- **FR-003**: Language picker shows EN / हिन्दी / Bhoti / Ladakhi (བོད་) — Devanagari + Tibetan-script labels
 - **FR-004**: User pill shows initials + name + role label; clicking signs out via Auth.js server action

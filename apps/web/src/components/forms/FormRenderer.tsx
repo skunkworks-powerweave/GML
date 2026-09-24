@@ -46,7 +46,9 @@ export type FieldKind =
   | "likert"
   | "rating";
 
-export type FieldOption = { value: string; label: string };
+// hindiLabel on an option is seeded (seed_forms_mentee.ts: "हाँ" / "नहीं") and
+// was rendered by neither runner until the 2026-09 freeze.
+export type FieldOption = { value: string; label: string; hindiLabel?: string };
 
 export type FormField = {
   name: string;
@@ -57,6 +59,8 @@ export type FormField = {
   // Renderer canonical: {value,label}[]. Seeds also write string[].
   options?: FieldOption[] | string[];
   helpText?: string;
+  /** Hindi companion to helpText. Seeded, and referenced nowhere until 2026-09. */
+  helpHindi?: string;
   placeholder?: string;
   min?: number;
   max?: number;
@@ -141,6 +145,50 @@ export function validateField(field: FormField, raw: unknown): string | null {
     if (typeof field.max === "number" && n > field.max) return `Must be ≤ ${field.max}.`;
   }
   return null;
+}
+
+/**
+ * Field kinds whose control is a GROUP (several buttons / inputs), not one
+ * element with id={field.name}. A `<label htmlFor={field.name}>` over one of
+ * these points at nothing, so the wrapper renders as a plain block instead and
+ * the group names itself with role + aria-label. Shared with MobileFormRunner.
+ */
+export function isGroupKind(kind: FormField["kind"]): boolean {
+  return kind === "radio" || kind === "checkbox" || kind === "likert" || kind === "rating";
+}
+
+/**
+ * Style reset for Hindi text that sits inside a Latin-styled container.
+ *
+ * The desktop label style is 11px uppercase JetBrains Mono with 0.06em
+ * letter-spacing, and a child span inherits all of it: letter-spacing pulls
+ * Devanagari matras and conjuncts apart from their base glyphs, and 11px
+ * mono-metric Devanagari is unreadable. So every Hindi run resets them.
+ */
+const HINDI_RESET: React.CSSProperties = {
+  fontFamily: "var(--deva)",
+  letterSpacing: "normal",
+  textTransform: "none",
+  fontWeight: 400,
+};
+
+/**
+ * One run of Hindi text, declared lang="hi" so assistive tech voices it with
+ * a Hindi engine even when the page is English. Renders nothing when absent.
+ * Shared with MobileFormRunner so both runners show the same seeded Hindi.
+ */
+export function HindiText({ text, style }: { text?: string; style?: React.CSSProperties }) {
+  if (!text) return null;
+  return (
+    <span lang="hi" style={{ ...HINDI_RESET, ...style }}>
+      {text}
+    </span>
+  );
+}
+
+/** A <select> option cannot contain markup, so its Hindi label joins the text. */
+export function optionText(o: FieldOption): string {
+  return o.hindiLabel ? `${o.label} / ${o.hindiLabel}` : o.label;
 }
 
 export function validateAll(
@@ -271,7 +319,7 @@ function Select({
       <option value="">Choose…</option>
       {normalizeOptions(field.options).map((o) =>(
         <option key={o.value} value={o.value}>
-          {o.label}
+          {optionText(o)}
         </option>
       ))}
     </select>
@@ -322,7 +370,10 @@ function Radio({
               checked={checked}
               onChange={() => onChange(o.value)}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.8 }} />
+            </span>
           </label>
         );
       })}
@@ -358,7 +409,9 @@ function CheckboxGroup({
     onChange(next);
   };
   return (
-    <div style={{ display: "grid", gap: 6 }}>
+    // A named group, like Radio's radiogroup: the field label above it is not
+    // a <label for> (there is no single control for it to point at).
+    <div role="group" aria-label={field.label} style={{ display: "grid", gap: 6 }}>
       {normalizeOptions(field.options).map((o) =>{
         const checked = selected.includes(o.value);
         return (
@@ -383,7 +436,10 @@ function CheckboxGroup({
               checked={checked}
               onChange={() => toggle(o.value)}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.8 }} />
+            </span>
           </label>
         );
       })}
@@ -418,7 +474,11 @@ function Likert({
   // path.
   const current = coerceScaleValue(value);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+    <div
+      role="group"
+      aria-label={field.label}
+      style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}
+    >
       {/* THE VALUE HAS TO LEAVE THE PAGE.
           These controls are <button type="button"> only -- they carry no name
           and contribute nothing to FormData. This form submits natively via
@@ -436,6 +496,9 @@ function Likert({
             key={n}
             type="button"
             onClick={() => onChange(n)}
+            // Selection was colour-only; a screen-reader user filling a
+            // mentor feedback form heard every point identically.
+            aria-pressed={selected}
             style={{
               padding: "10px 8px",
               border: "1px solid " + (selected ? "var(--ink)" : "var(--line)"),
@@ -478,7 +541,7 @@ function Rating({
     "Exemplary",
   ];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+    <div role="group" aria-label={field.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
       {/* THE VALUE HAS TO LEAVE THE PAGE.
           These controls are <button type="button"> only -- they carry no name
           and contribute nothing to FormData. This form submits natively via
@@ -495,7 +558,10 @@ function Rating({
             key={n}
             type="button"
             onClick={() => onChange(n)}
-            aria-label={`Rate ${n} of ${max}`}
+            // The state lives in the NAME, once. `on` is cumulative (stars
+            // 1..current all fill), so aria-pressed={on} would announce three
+            // pressed buttons for a rating of 3.
+            aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
             style={{
               width: 38,
               height: 38,
@@ -573,6 +639,11 @@ export function FormRenderer({
   // timestamp in state fixes the label AND keeps Date.now() out of render.
   const [nowMs, setNowMs] = useState<number | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Server-action submit is two passes through onFormSubmit (see there):
+  // formRef lets the first pass re-submit the form once the final draft PUT
+  // has landed; flushedRef marks the second pass so it is let through.
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const flushedRef = useRef(false);
   const valuesRef = useRef(values);
   // Assigned in an effect, never in the render body. Writing to a ref during
   // render is a render-phase side effect (react-hooks/refs) and is unsafe
@@ -658,6 +729,14 @@ export function FormRenderer({
       // the action re-validates on the server. If client validation fails we
       // preventDefault to keep the user on the page with the error showing.
       const isServerAction = Boolean(action);
+      if (isServerAction && flushedRef.current) {
+        // SECOND PASS: the requestSubmit() below, re-entering this handler
+        // after the final draft PUT has landed. Validation already passed on
+        // the first pass and the values have not changed since. Do NOT
+        // preventDefault -- that is what lets React dispatch the action.
+        flushedRef.current = false;
+        return;
+      }
       const errs = validateAll(schema.fields ?? [], values);
       // Set state for rendering; do NOT use it for the gate below.
       setErrors(errs);
@@ -667,14 +746,32 @@ export function FormRenderer({
         return;
       }
       if (isServerAction) {
-        // Flush any pending autosave synchronously-ish so the draft on disk
-        // matches what the server is about to persist. We can't await here
-        // without preventDefault'ing, so we fire-and-forget; the browser will
-        // submit the form on the next tick. Mark submitting so the button
-        // disables and a second click does nothing.
+        // FIRST PASS: hold the submit until the last autosave has landed.
+        //
+        // This used to be `void flushSave()` and let the POST go at once --
+        // the shape MobileFormRunner's spec-149 comment describes as the bug.
+        // The submit transaction deletes the draft row; a PUT that landed
+        // after it committed re-created the row, and the next visit painted
+        // "Draft loaded" over a form that had in fact been submitted.
+        //
+        // The flush is kept, not dropped: on a server-side validation
+        // redirect the page re-renders from the draft, so the last keystrokes
+        // must be on disk. requestSubmit() re-dispatches submit through THIS
+        // handler (the form is visible and has onSubmit, unlike mobile's
+        // hidden one), so flushedRef marks the second pass or it would loop.
+        e.preventDefault();
         if (debounceRef.current) clearTimeout(debounceRef.current);
-        if (autosaveEnabled) void flushSave();
         setSubmitting(true);
+        // flushSave never rejects: it records a failure in saveState, and the
+        // answers travel in the POST either way.
+        if (autosaveEnabled) await flushSave();
+        const form = formRef.current;
+        if (!form) {
+          setSubmitting(false);
+          return;
+        }
+        flushedRef.current = true;
+        form.requestSubmit();
         return;
       }
       // Client-callback mode (preview surfaces). preventDefault, then run
@@ -727,6 +824,7 @@ export function FormRenderer({
       // callback. The dev-mode assertion above catches the both-set mistake.
       action={action}
       onSubmit={onFormSubmit}
+      ref={formRef}
       style={{
         background: "var(--card)",
         border: "1px solid var(--line)",
@@ -801,16 +899,36 @@ export function FormRenderer({
       {(schema.fields ?? []).map((field) => {
         const value = values[field.name];
         const error = errors[field.name];
+        const heading = (
+          <>
+            <span>{field.label}</span>
+            {field.required ? (
+              <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
+                *
+              </span>
+            ) : null}
+            {/* The seeded Hindi prompt. It rendered on the phone runner only,
+                so the same form was Hindi on a phone and English-only on a
+                classroom laptop. Resets the label's mono/uppercase/tracking
+                (see HINDI_RESET). */}
+            <HindiText
+              text={field.hindiLabel}
+              style={{ display: "block", fontSize: 14, color: "var(--ink-3)", marginTop: 2 }}
+            />
+          </>
+        );
         return (
           <div key={field.name} style={{ display: "block" }}>
-            <label htmlFor={field.name} style={labelStyle}>
-              <span>{field.label}</span>
-              {field.required ? (
-                <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
-                  *
-                </span>
-              ) : null}
-            </label>
+            {/* Group kinds have no element with id={field.name}, so a <label
+                for> over them named nothing. They name themselves (role +
+                aria-label) and the heading is a plain block. */}
+            {isGroupKind(field.kind) ? (
+              <div style={labelStyle}>{heading}</div>
+            ) : (
+              <label htmlFor={field.name} style={labelStyle}>
+                {heading}
+              </label>
+            )}
             {field.kind === "textarea" ? (
               <TextArea field={field} value={value} onChange={(v) => setField(field.name, v)} />
             ) : field.kind === "select" ? (
@@ -837,6 +955,7 @@ export function FormRenderer({
               <TextLike field={field} value={value} onChange={(v) => setField(field.name, v)} />
             )}
             {field.helpText ? <div style={helpStyle}>{field.helpText}</div> : null}
+            <HindiText text={field.helpHindi} style={{ ...helpStyle, display: "block" }} />
             {error ? (
               <div role="alert" style={errorStyle}>
                 {error}

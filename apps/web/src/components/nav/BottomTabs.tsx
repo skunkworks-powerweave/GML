@@ -34,6 +34,9 @@ const TAB_KEY: Record<string, string> = {
   "inbox": "inbox",
   "data": "data",
   "audit": "audit",
+  // Without this entry the teacher's uploads tab fell through to its English
+  // literal while the rest of the bar rendered in hi / bo.
+  "uploads": "uploads",
 };
 
 // id → resolver matching the same convention as the sidebar (chrome-counts.ts).
@@ -51,6 +54,9 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
   return (
     <nav
       className="m-bottomnav"
+      // Named, in the user's language: on a phone this bar is the ONLY
+      // navigation, so it is the landmark a screen-reader user jumps to.
+      aria-label={tNav("primary")}
       style={{
         position: "fixed",
         left: 0,
@@ -79,6 +85,8 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
           <Link
             key={tab.id}
             href={tab.href}
+            // The 3px bar and the weight change are visual only.
+            aria-current={isActive ? "page" : undefined}
             style={{
               display: "flex",
               flexDirection: "column",

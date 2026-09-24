@@ -111,6 +111,27 @@ test("spec 149 — MobileFormRunner no longer fire-and-forgets flushSave with vo
   );
 });
 
+// Widened in the 2026-09 freeze (fix brief D_ui #10). Only the mobile file was
+// pinned, so the DESKTOP FormRenderer kept the exact `void flushSave()` shape
+// that MobileFormRunner's spec-149 comment calls the bug -- while that comment
+// claimed the two runners mirrored each other. This is a source-text pin only;
+// the race itself is executed in tests/behaviour/ui-forms.test.ts (D10).
+test("spec 149 — the desktop FormRenderer does not fire-and-forget flushSave either", () => {
+  const src = read("apps/web/src/components/forms/FormRenderer.tsx");
+  const offendingLine = src.split(/\r?\n/).find((line) => {
+    const stripped = line.trim();
+    if (stripped.startsWith("//") || stripped.startsWith("*")) return false;
+    return /void\s+flushSave\s*\(\s*\)/.test(line);
+  });
+  assert.equal(offendingLine, undefined, `FormRenderer must not contain \`void flushSave()\` as live code (offending line: ${offendingLine ?? "<none>"})`);
+  assert.match(
+    src,
+    /await\s+flushSave\(\)[\s\S]{0,400}form\.requestSubmit\(\)/,
+    "FormRenderer's server-action path must await the final flushSave before re-submitting the form",
+  );
+  assert.match(src, /flushedRef/, "the re-submit must be guarded (requestSubmit re-enters the same onSubmit handler)");
+});
+
 // ---------- MobileUploadRunner — mountedRef + redirect timer refs ----------
 
 test("spec 149 — MobileUploadRunner declares mountedRef and redirectTimerRef", () => {

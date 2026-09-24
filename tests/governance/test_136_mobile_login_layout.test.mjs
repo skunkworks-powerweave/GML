@@ -214,11 +214,27 @@ test("spec 136 — MobileLogin renders the language picker pill row", () => {
     /हिं|हिन्दी/,
     "MobileLogin language row must include the Hindi locale label (Devanagari)",
   );
-  // Ladakhi label (Perso-Arabic ل character).
+  // Bhoti/Ladakhi label — TIBETAN script. This assertion used to require an
+  // ARABIC letter here (it matched U+0644), which is how the pill shipped two
+  // Arabic letters for months: the test enforced the defect, and after the
+  // button was fixed it still passed on a stale source comment. The pill now
+  // renders the shared constant, so assert that, assert the constant is
+  // Tibetan, and assert no Arabic-script character survives anywhere in the
+  // file. The rendered output is checked in tests/behaviour/ui-i18n.test.ts.
   assert.match(
     src,
-    /لد|ل/,
-    "MobileLogin language row must include the Ladakhi locale label",
+    /\{LOCALE_LABELS\.bo\.script\}/,
+    "MobileLogin's Bhoti pill must render LOCALE_LABELS.bo.script, not a hand-copied glyph",
+  );
+  assert.match(
+    read("apps/web/src/i18n/config.ts"),
+    /bo:\s*\{[^}]*script:\s*"བོད/,
+    "LOCALE_LABELS.bo.script must be the Tibetan-script abbreviation for Bhoti",
+  );
+  assert.doesNotMatch(
+    src,
+    /[؀-ۿ]/,
+    "MobileLogin must not contain Arabic-script characters (U+0600-U+06FF): Bhoti is written in Tibetan",
   );
 });
 

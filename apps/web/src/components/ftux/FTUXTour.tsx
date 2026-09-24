@@ -21,9 +21,10 @@
 // Selectors used by each step's `target` field come from the prototype's
 // FTUX_TOURS map verbatim (e.g. `[data-help-anchor='nav-mentorship']`).
 // Sidebar.tsx emits `data-help-anchor={`nav-${item.id}`}` for every nav row,
-// and Topbar.tsx tags its bell button with `data-help-anchor='topbar-help'`,
-// so every selector in this file is guaranteed to resolve on the desktop
-// shell. On mobile, the BottomTabs use a different id space — those selectors
+// and Topbar.tsx tags its help button with `data-help-anchor='topbar-help'`
+// (the mobile ? FAB carries the same anchor), so every selector in this file
+// resolves on the desktop shell. The anchor used to sit on the notifications
+// bell, so "Help is always here" spotlit the inbox link. On mobile, the BottomTabs use a different id space — those selectors
 // will simply not match, the ring will not paint, and the caption sticks to
 // its default {top:100,left:100} position (matching the prototype's fallback
 // at help.jsx line 524). We accept this on mobile — the FTUX is a desktop
@@ -43,7 +44,9 @@ type Step = {
 // (selecting the *right* persona is more important than padding to six — the
 // prototype settled on a 4–5 length to keep the overlay finishable in under
 // 90 seconds). super_admin maps onto programme_admin, observer onto mentor.
-const FTUX_TOURS: Record<Role, Step[]> = {
+// Exported for tests/behaviour/ui-navigation.test.ts, which checks that the
+// copy promises only help affordances that exist.
+export const FTUX_TOURS: Record<Role, Step[]> = {
   mentor: [
     {
       target: "[data-help-anchor='nav-mentorship']",
@@ -73,7 +76,9 @@ const FTUX_TOURS: Record<Role, Step[]> = {
       target: "[data-help-anchor='topbar-help']",
       title: "Help is always here",
       body:
-        "Hover the dotted-underline words anywhere. Tap the ⓘ icons. Or press ? on your keyboard to open this panel.",
+        // Rewritten: it promised dotted-underline words and ⓘ icons, and no
+        // page renders either. The ? button is what ships.
+        "Tap the ? button to look up any term or message the programme team. It sits here on a computer and at the bottom right on a phone. On a keyboard, ? opens it too.",
     },
   ],
   teacher: [
@@ -99,7 +104,7 @@ const FTUX_TOURS: Record<Role, Step[]> = {
       target: "[data-help-anchor='topbar-help']",
       title: "Help is always here",
       body:
-        "Hover any underlined word for a short explanation. Tap ⓘ icons for more. Press ? on your keyboard any time.",
+        "Stuck on a word or a step? Tap the ? button — here on a computer, bottom right on your phone — to look it up or to message the programme team.",
     },
   ],
   programme_admin: [
@@ -125,7 +130,7 @@ const FTUX_TOURS: Record<Role, Step[]> = {
       target: "[data-help-anchor='topbar-help']",
       title: "Help is always here",
       body:
-        "Press ? any time to open the help panel. Or hover any dotted-underline word for a quick explanation.",
+        "Press ? any time, or use this ? button, to open the help panel: every term explained, plus the helpdesk contacts.",
     },
   ],
   // help.jsx::FTUX_TOURS.super_admin = FTUX_TOURS.programme_admin

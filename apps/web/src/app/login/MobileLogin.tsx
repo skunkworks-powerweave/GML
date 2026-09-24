@@ -15,10 +15,15 @@
 // Spec 125 — labels still translate via next-intl. The route-segment layout
 // supplies the provider; we read action + language bundles client-side.
 //
-// Spec 034 governance contract — the literal mentions of Hindi (हिं) and the
-// Ladakhi script glyph (لد) remain inside the language pill row so the
-// static script-test that reads the source sees them. The visible labels
-// match the LoginLanguagePicker's contract so a future swap is one import.
+// Spec 034 governance contract — the Hindi literal (हिं) remains inside the
+// language pill row so the static script-test that reads the source sees it.
+// The Bhoti/Ladakhi pill is NOT a literal: it renders LOCALE_LABELS.bo.script,
+// the Tibetan abbreviation for Bhoti. It shipped as two ARABIC letters
+// (U+0644 U+062F) because the glyph was hand-copied into four files and
+// diverged; an earlier version of THIS comment carried the same wrong glyph
+// and kept the source-regex test green on its own after the button was fixed.
+// The wrong codepoints are named, never written, for that reason. The visible
+// labels match LoginLanguagePicker's contract so a future swap is one import.
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
@@ -27,6 +32,7 @@ import { useTranslations } from "next-intl";
 import { loginAction, type LoginState } from "./actions";
 import type { LoginShellProps } from "./shell-props";
 import { EmailLinkForm } from "./email-link-form";
+import { LOCALE_LABELS } from "@/i18n/config";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
@@ -353,6 +359,7 @@ export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
           type="button"
           onClick={() => pickLocale("hi")}
           className="btn btn-sm btn-ghost deva"
+          lang="hi"
           aria-label={tLanguage("hindi")}
           style={{
             minHeight: TOUCH_TARGET,
@@ -366,7 +373,8 @@ export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
         <button
           type="button"
           onClick={() => pickLocale("bo")}
-          className="btn btn-sm btn-ghost"
+          className="btn btn-sm btn-ghost tib"
+          lang="bo"
           aria-label={tLanguage("bhoti")}
           style={{
             minHeight: TOUCH_TARGET,
@@ -375,7 +383,7 @@ export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
             padding: "0 14px",
           }}
         >
-          لد
+          {LOCALE_LABELS.bo.script}
         </button>
       </div>
     </div>

@@ -178,12 +178,26 @@ test("spec 123 — Sidebar emits data-help-anchor with the nav- prefix", () => {
   );
 });
 
-test("spec 123 — Topbar tags the bell with data-help-anchor='topbar-help'", () => {
+// This test was titled "Topbar tags the BELL with data-help-anchor='topbar-help'"
+// and the bell -- a link to /inbox -- is where the anchor sat: the tour's
+// "Help is always here" step spotlit the notifications. Corrected in the
+// 2026-09 freeze (fix brief D_ui #5): the anchor belongs on the help control.
+// The rendered markup (exactly one anchor, not on the bell) is checked in
+// tests/behaviour/ui-navigation.test.ts.
+test("spec 123 — Topbar tags its HELP control, not the bell, with data-help-anchor='topbar-help'", () => {
   const src = read(TOPBAR);
   assert.match(
     src,
+    /data-help-anchor=["']topbar-help["'][^>]*>\s*<HelpButton\b/,
+    "Topbar must put data-help-anchor='topbar-help' on the element wrapping <HelpButton> so the FTUX 'Help is always here' step resolves to help",
+  );
+  const bell = src.match(/<Link\b[^>]*data-testid="topbar-bell"[^>]*>/);
+  assert.ok(bell, "the bell link must still render");
+  assert.doesNotMatch(bell[0], /data-help-anchor/, "the notifications bell must not carry the help anchor");
+  assert.doesNotMatch(
+    read("apps/web/src/components/help/HelpHeadbtn.tsx"),
     /data-help-anchor=["']topbar-help["']/,
-    "Topbar must tag a control with data-help-anchor='topbar-help' so the FTUX 'Help is always here' step resolves",
+    "HelpHeadbtn is a per-page-header button; hardcoding the anchor there would add a second match for every page that mounts one",
   );
 });
 

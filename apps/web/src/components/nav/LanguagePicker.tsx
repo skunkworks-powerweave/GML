@@ -123,6 +123,7 @@ export default function LanguagePicker({ current, ariaLabel = "Language" }: Prop
           fontSize: 12,
           color: "var(--ink-2)",
           background: "var(--card-hi)",
+          fontFamily: current === "hi" ? "var(--deva)" : current === "bo" ? "var(--tib)" : undefined,
         }}
       >
         {pending ? "…" : summaryChip}
@@ -165,13 +166,16 @@ export default function LanguagePicker({ current, ariaLabel = "Language" }: Prop
                   background: isCurrent ? "var(--paper-2)" : "transparent",
                   color: "var(--ink)",
                   fontSize: 12,
-                  fontFamily: code === "hi" ? "var(--deva)" : undefined,
+                  // Each option in its own script's face; --tib is the bundled
+                  // Tibetan webfont (globals.css), so བོད་ཡིག does not depend on
+                  // the client machine having a Tibetan font installed.
+                  fontFamily: code === "hi" ? "var(--deva)" : code === "bo" ? "var(--tib)" : undefined,
                   textAlign: "left",
                   cursor: pending !== null ? "progress" : "pointer",
                   borderRadius: "var(--r-1)",
                 }}
               >
-                <span>{label}</span>
+                <span lang={code}>{label}</span>
                 {isCurrent ? (
                   <span aria-hidden style={{ color: "var(--ink-3)", fontSize: 10 }}>•</span>
                 ) : null}

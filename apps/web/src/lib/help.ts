@@ -301,6 +301,29 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
     related: ["upload", "video", "cycle"],
     seeAlso: ["/uploads"],
   },
+  // The next three entries (and the "start" group below) carry what the mobile
+  // help sheet used to say in five hardcoded bullets, before its ? button was
+  // pointed at this panel. "password" in particular was the only in-app
+  // instruction a locked-out teacher had, and existed nowhere else.
+  upload: {
+    title: "Uploading from the browser",
+    short: "You can also upload a lesson video straight from this app — best on stable wifi.",
+    long: "Direct browser upload works on a phone or a computer. It resumes if your connection drops, but a large video needs a steady link, so use stable wifi where you can. On a slow or patchy network, sending the video by WhatsApp is easier. Either way, your videos appear on your Uploads page within a few minutes.",
+    related: ["whatsapp_ingest", "transcoding", "video"],
+    seeAlso: ["/uploads"],
+  },
+  navigation: {
+    title: "Finding your way around",
+    short: "On a phone, use the bottom tabs to switch between sections. On a computer, use the sidebar.",
+    long: "Every section you can use is one tap away: the bottom tabs on a phone, the sidebar on the left on a computer. Your settings, including the interface language, are under Settings in the sidebar on a computer, and behind your initial at the top of the screen on a phone. The ? button opens this help from anywhere.",
+    related: ["password", "confidentiality"],
+  },
+  password: {
+    title: "Forgot your password?",
+    short: "Ask your programme admin to send you a sign-in link — it lets you in without the password.",
+    long: "If you cannot sign in, ask your programme admin to send a sign-in link to your email address. Open the link on the device you want to use, then set a new password from Settings. The section gate password (for Observation, Mentorship and Admin) is different: your programme admin shares that one separately.",
+    related: ["section_gate", "navigation"],
+  },
 
   // ── Auth / security ────────────────────────────────────────────────────────
   section_gate: {
@@ -362,6 +385,14 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
 
 /** Topic groups used in HelpPanel's "Browse all" view. */
 export const HELP_GROUPS: ReadonlyArray<{ id: string; title: string; keys: readonly string[] }> = Object.freeze([
+  // First, because it is what a new or stuck user needs; it is also where the
+  // mobile help sheet's bullets went (see the upload / navigation / password
+  // entries above).
+  {
+    id: "start",
+    title: "Getting started",
+    keys: ["navigation", "whatsapp_ingest", "upload", "confidentiality", "password"],
+  },
   { id: "core", title: "Core ideas", keys: ["rtt", "phase", "observation", "cycle", "pairing", "quarter"] },
   {
     id: "people",

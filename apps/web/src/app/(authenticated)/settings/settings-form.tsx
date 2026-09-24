@@ -203,10 +203,10 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
             English
           </LangPill>
           <LangPill active={values.uiLanguage === "hi"} onClick={() => set("uiLanguage", "hi")}>
-            <span style={{ fontFamily: "var(--deva)" }}>हिन्दी</span>
+            <span style={{ fontFamily: "var(--deva)" }} lang="hi">हिन्दी</span>
           </LangPill>
           <LangPill active={values.uiLanguage === "bo"} onClick={() => set("uiLanguage", "bo")}>
-            བོད་ཡིག
+            <span className="tib" lang="bo">བོད་ཡིག</span>
           </LangPill>
         </div>
       </SectionCard>

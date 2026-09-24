@@ -393,6 +393,10 @@ export function MobileQuizRunner({
                 type="button"
                 data-testid={`mobile-quiz-option-${i}`}
                 onClick={() => onPick(i)}
+                // Same contract as the desktop QuizRunner: selection is
+                // announced, not only painted saffron. Not role="radio" (see
+                // QuizRunner for why).
+                aria-pressed={isSel}
                 style={{
                   textAlign: "left",
                   padding: "14px 14px",

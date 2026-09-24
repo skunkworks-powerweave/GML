@@ -170,9 +170,16 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       <AntiDownloadGuard />
       <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />
       <QuickFind userId={user.id} />
+      {/* THE LANGUAGE IS DECLARED, NOT JUST RECORDED. This was
+          data-html-lang={htmlLang}: a data attribute, invisible to the browser
+          and to assistive technology, so every Hindi and Bhoti page was read
+          out as English. The root layout sets <html lang> from the gml-locale
+          cookie; this subtree override uses the DATABASE preference, which is
+          authoritative post-auth and wins on a fresh device where the cookie
+          has not been written yet. */}
       <div
         data-locale={locale}
-        data-html-lang={htmlLang}
+        lang={htmlLang}
         style={fontFamily ? { fontFamily } : undefined}
       >
         {content}
