@@ -259,11 +259,11 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
     await audited();
   } catch (err) {
     console.error("[admin.row.delete] failed", err);
-    deleteError = describeDbError(err);
+    deleteError = gridErrorQuery(err);
   }
   revalidatePath(`/admin/data/${slug}`);
   if (deleteError) {
-    redirect(`/admin/data/${slug}?error=${encodeURIComponent(deleteError)}`);
+    redirect(`/admin/data/${slug}?${deleteError}`);
   }
 }
 
@@ -284,6 +284,23 @@ function describeDbError(err: unknown): string {
     return "duplicate";
   }
   return "delete_failed";
+}
+
+/**
+ * The grid's `?error=` query for a failed delete, plus `&ref=<table>` naming
+ * WHAT still references the row when the database says so.
+ *
+ * Since migration 0029 a delete that used to cascade into learners, attendance,
+ * meetings or submitted forms is refused instead, so "still referenced" is now
+ * a common answer -- and "other records" gives the operator nothing to go and
+ * look for. Postgres reports the referencing table on a 23503; only a bare
+ * identifier is passed on, and the page shows the matching entity's label.
+ */
+function gridErrorQuery(err: unknown): string {
+  const params = new URLSearchParams({ error: describeDbError(err) });
+  const { code, table } = (err ?? {}) as { code?: string; table?: string };
+  if (code === "23503" && table && /^[a-z_]+$/.test(table)) params.set("ref", table);
+  return params.toString();
 }
 
 /**
@@ -332,7 +349,7 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
     // successful one, except that all N rows were still on screen afterwards.
     console.error("[admin.row.bulk_delete] transaction failed", err);
     revalidatePath(`/admin/data/${slug}`);
-    redirect(`/admin/data/${slug}?error=${encodeURIComponent(describeDbError(err))}`);
+    redirect(`/admin/data/${slug}?${gridErrorQuery(err)}`);
   }
 
   // Commit-then-audit. The audit row lands only on a successful commit —

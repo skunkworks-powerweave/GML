@@ -45,7 +45,7 @@
 
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { and, asc, desc, eq, ilike, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableName, ilike, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
@@ -398,8 +398,17 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     duplicate: "That change conflicts with an existing row.",
     delete_failed: "That delete could not be completed. Nothing was changed.",
   };
+  // `ref` is the table that still references the row (actions.ts
+  // gridErrorQuery). Named by its entity label, so the operator knows where to
+  // go; an unregistered table falls back to the generic sentence.
+  const rawRef = typeof sp.ref === "string" ? sp.ref : undefined;
+  const refEntity = rawRef
+    ? Object.values(ADMIN_ENTITIES).find((e) => getTableName(e.table) === rawRef)
+    : undefined;
   const gridError = rawError
-    ? (GRID_ERRORS[rawError] ?? "That action could not be completed.")
+    ? rawError === "still_referenced" && refEntity
+      ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
+      : (GRID_ERRORS[rawError] ?? "That action could not be completed.")
     : null;
 
   return (

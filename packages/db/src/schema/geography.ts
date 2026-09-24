@@ -16,7 +16,7 @@ export const zones = pgTable(
   "zones",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    districtId: uuid("district_id").notNull().references(() => districts.id, { onDelete: "cascade" }),
+    districtId: uuid("district_id").notNull().references(() => districts.id, { onDelete: "restrict" }), // 0029: was cascade
     name: varchar("name", { length: 80 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -27,7 +27,7 @@ export const schools = pgTable(
   "schools",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    zoneId: uuid("zone_id").notNull().references(() => zones.id, { onDelete: "cascade" }),
+    zoneId: uuid("zone_id").notNull().references(() => zones.id, { onDelete: "restrict" }), // 0029: was cascade
     code: varchar("code", { length: 16 }).notNull().unique(), // v2 (spec 020): e.g. "GPS-CHU", "GMS-KHA"
     name: varchar("name", { length: 160 }).notNull(),
     address: text("address"),

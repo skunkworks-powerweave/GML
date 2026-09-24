@@ -11,8 +11,8 @@ export const learners = pgTable(
   "learners",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "cascade" }),
+    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "restrict" }), // 0029: was cascade
+    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }), // 0029: was cascade
     grade: smallint("grade").notNull(),
     name: varchar("name", { length: 160 }).notNull(),
     age: smallint("age"),

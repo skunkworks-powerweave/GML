@@ -203,14 +203,31 @@ async function main(): Promise<void> {
     const keptCycles = keepCycleIds.length ? keepCycleIds : ["00000000-0000-0000-0000-000000000000"];
     const keptTeachers = keepTeacherIds.length ? keepTeacherIds : ["00000000-0000-0000-0000-000000000000"];
 
-    // Cycles first: they RESTRICT teacher deletion, and their forms, evidence
-    // and drafts cascade away with them.
+    // Cycles first: they RESTRICT teacher deletion. Their drafts cascade; their
+    // forms and evidence are RESTRICT since migration 0029 (so a grid delete
+    // cannot erase submitted work) and are removed explicitly here. A cycle
+    // being deleted has no submitted form and no evidence -- those are what
+    // put it in keepCycleIds -- so this only takes the seed's unsubmitted
+    // templates, exactly what the cascade used to take.
+    const doomedCycles = sql`
+      SELECT id FROM observation_cycles
+      WHERE code LIKE ${DEMO_CYCLE_CODE_PREFIX + "%"} AND id NOT IN (${valueList(keptCycles)})`;
+    await tx.execute(sql`DELETE FROM observation_forms WHERE cycle_id IN (${doomedCycles})`);
+    await tx.execute(sql`DELETE FROM observation_evidence WHERE cycle_id IN (${doomedCycles})`);
     await tx.execute(sql`
       DELETE FROM observation_cycles
       WHERE code LIKE ${DEMO_CYCLE_CODE_PREFIX + "%"} AND id NOT IN (${valueList(keptCycles)})`);
 
-    // Pairings RESTRICT both mentors and teachers; meetings and feedback
-    // responses cascade with them.
+    // Pairings RESTRICT both mentors and teachers. Their meetings and feedback
+    // responses used to cascade with them and are RESTRICT since 0029, so they
+    // go first, explicitly -- the same rows the cascade removed.
+    const doomedPairings = sql`
+      SELECT id FROM mentor_pairings
+      WHERE teacher_id IN (
+        SELECT id FROM teachers
+        WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"} AND id NOT IN (${valueList(keptTeachers)}))`;
+    await tx.execute(sql`DELETE FROM mentor_meetings WHERE pairing_id IN (${doomedPairings})`);
+    await tx.execute(sql`DELETE FROM feedback_responses WHERE pairing_id IN (${doomedPairings})`);
     await tx.execute(sql`
       DELETE FROM mentor_pairings
       WHERE teacher_id IN (
@@ -230,6 +247,13 @@ async function main(): Promise<void> {
     // cycle for its real work still deleted that cycle's demo teacher, which
     // observation_cycles.teacher_id (ON DELETE RESTRICT) refuses with 23503 --
     // rolling the entire purge back. Same shape as the schools guard below.
+    // Their RTT attendance marks cascaded before 0029 and are removed first.
+    await tx.execute(sql`
+      DELETE FROM rtt_attendance
+      WHERE teacher_id IN (
+        SELECT id FROM teachers
+        WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"} AND id NOT IN (${valueList(keptTeachers)})
+          AND id NOT IN (SELECT teacher_id FROM observation_cycles))`);
     await tx.execute(sql`
       DELETE FROM teachers
       WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"} AND id NOT IN (${valueList(keptTeachers)})
@@ -241,8 +265,16 @@ async function main(): Promise<void> {
       WHERE id NOT IN (SELECT mentor_id FROM mentor_pairings)
         AND name IN (${valueList(DEMO_MENTOR_NAMES)})`);
 
-    // Schools last: teachers RESTRICT them. classes, learners and remaining
-    // sessions cascade.
+    // Schools last: teachers RESTRICT them. Their learners, remaining sessions
+    // and classes used to cascade and are RESTRICT since 0029, so they are
+    // removed first, children before classes.
+    const doomedSchools = sql`
+      SELECT id FROM schools
+      WHERE code IN (${valueList(DEMO_SCHOOL_CODES)})
+        AND id NOT IN (SELECT school_id FROM teachers)`;
+    await tx.execute(sql`DELETE FROM learners WHERE school_id IN (${doomedSchools})`);
+    await tx.execute(sql`DELETE FROM sessions WHERE school_id IN (${doomedSchools})`);
+    await tx.execute(sql`DELETE FROM classes WHERE school_id IN (${doomedSchools})`);
     await tx.execute(sql`
       DELETE FROM schools
       WHERE code IN (${valueList(DEMO_SCHOOL_CODES)})

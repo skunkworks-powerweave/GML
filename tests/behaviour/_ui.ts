@@ -23,13 +23,17 @@
 //   - next/headers       cookies() / headers() need a request. The stub serves
 //                        whatever the test put in `request`.
 //   - next/font/google   a build-time transform; outside `next build` it throws.
+//   - next/cache         revalidatePath() throws outside a Next request; the
+//                        stub records the call instead.
 //   - *.css              Node cannot import a stylesheet.
 //   - server-only        Next aliases this internally; it is not installable.
 //   - @/auth, the login server actions, @/lib/chrome-counts
 //                        these open Supabase / Postgres connections at import
 //                        time. The components only pass them through (a form
 //                        action, a badge formatter), so a stub changes nothing
-//                        the assertions look at.
+//                        the assertions look at. auth() returns
+//                        `request.session`, so a test can drive a real route
+//                        handler or server action as a chosen role.
 //   - @/lib/supabase/browser
 //                        reads the session from document.cookie; the upload
 //                        module only takes a bearer token from it.
@@ -72,6 +76,7 @@ const STUB_BY_SPECIFIER: Record<string, string> = {
   "next-intl/server": "next-intl-server.ts",
   "next/headers": "next-headers.ts",
   "next/font/google": "next-font-google.ts",
+  "next/cache": "next-cache.ts",
 };
 
 /** App modules replaced by path (after @/ and relative resolution). */
@@ -105,6 +110,10 @@ type RequestState = {
   locale: "en" | "hi" | "bo";
   cookies: Record<string, string>;
   headers: Record<string, string>;
+  /** What the @/auth stub's auth() returns; null means signed out. */
+  session?: { user: { id: string; email: string | null; name: string | null; image: string | null; role: string } } | null;
+  /** Paths passed to the next/cache stub's revalidatePath(). */
+  revalidated?: string[];
 };
 
 /**
@@ -121,6 +130,13 @@ export function resetRequest(): void {
   request.locale = "en";
   request.cookies = {};
   request.headers = {};
+  request.session = null;
+  request.revalidated = [];
+}
+
+/** Sign the fake request in as `role` (the id should be a real users.id). */
+export function signIn(id: string, role: string, email: string | null = null): void {
+  request.session = { user: { id, email, name: null, image: null, role } };
 }
 
 /** Synchronous render for client components and plain trees. */

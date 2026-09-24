@@ -25,7 +25,7 @@ export const terms = pgTable(
   "terms",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    phaseId: uuid("phase_id").notNull().references(() => phases.id, { onDelete: "cascade" }),
+    phaseId: uuid("phase_id").notNull().references(() => phases.id, { onDelete: "restrict" }), // 0029: was cascade
     name: varchar("name", { length: 80 }).notNull(),
     sequence: integer("sequence").notNull(),
   },
@@ -36,7 +36,7 @@ export const rttSubjects = pgTable(
   "rtt_subjects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    termId: uuid("term_id").notNull().references(() => terms.id, { onDelete: "cascade" }),
+    termId: uuid("term_id").notNull().references(() => terms.id, { onDelete: "restrict" }), // 0029: was cascade
     name: varchar("name", { length: 160 }).notNull(),
     code: varchar("code", { length: 32 }),
     active: boolean("active").notNull().default(true),
@@ -48,7 +48,7 @@ export const rttModules = pgTable(
   "rtt_modules",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "restrict" }), // 0029: was cascade
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     description: text("description"),
@@ -65,7 +65,7 @@ export const rttSessions = pgTable(
   "rtt_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "restrict" }), // 0029: was cascade
     rttModuleId: uuid("rtt_module_id").references(() => rttModules.id, { onDelete: "set null" }),
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
@@ -83,7 +83,7 @@ export const rttLessons = pgTable(
   "rtt_lessons",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttModuleId: uuid("rtt_module_id").notNull().references(() => rttModules.id, { onDelete: "cascade" }),
+    rttModuleId: uuid("rtt_module_id").notNull().references(() => rttModules.id, { onDelete: "restrict" }), // 0029: was cascade
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     bodyMd: text("body_md"),
@@ -96,7 +96,7 @@ export const rttReadings = pgTable(
   "rtt_readings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "restrict" }), // 0029: was cascade
     title: varchar("title", { length: 240 }).notNull(),
     fileKey: text("file_key"), // MinIO object key (lands with spec 037)
     externalUrl: text("external_url"),
@@ -109,8 +109,8 @@ export const rttAttendance = pgTable(
   "rtt_attendance",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSessionId: uuid("rtt_session_id").notNull().references(() => rttSessions.id, { onDelete: "cascade" }),
-    teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "cascade" }),
+    rttSessionId: uuid("rtt_session_id").notNull().references(() => rttSessions.id, { onDelete: "restrict" }), // 0029: was cascade
+    teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "restrict" }), // 0029: was cascade
     status: attendanceStatusEnum("status").notNull().default("absent"),
     markedByUserId: uuid("marked_by_user_id").references(() => users.id, { onDelete: "set null" }),
     markedAt: timestamp("marked_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

@@ -10,7 +10,7 @@ export const classes = pgTable(
   "classes",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "cascade" }),
+    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }), // 0029: was cascade
     grade: smallint("grade").notNull(),
     stage: varchar("stage", { length: 16 }).notNull(), // Primary | Middle | High (or future Pre-Primary)
     studentsCount: integer("students_count").notNull().default(0),

@@ -44,7 +44,7 @@ export const observationForms = pgTable(
   "observation_forms",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    cycleId: uuid("cycle_id").notNull().references(() => observationCycles.id, { onDelete: "cascade" }),
+    cycleId: uuid("cycle_id").notNull().references(() => observationCycles.id, { onDelete: "restrict" }), // 0029: was cascade
     kind: varchar("kind", { length: 16 }).notNull(), // pre|post|observer|summary
     schemaVersion: text("schema_version").notNull().default("1"),
     responses: jsonb("responses").$type<Record<string, unknown>>().notNull(),
@@ -58,7 +58,7 @@ export const observationEvidence = pgTable(
   "observation_evidence",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    cycleId: uuid("cycle_id").notNull().references(() => observationCycles.id, { onDelete: "cascade" }),
+    cycleId: uuid("cycle_id").notNull().references(() => observationCycles.id, { onDelete: "restrict" }), // 0029: was cascade
     // Spec 143 — FK to video_submissions hardened at the TS + SQL layers. ON DELETE SET NULL
     // mirrors the existing app-level contract: deleting a video_submission must not cascade
     // and wipe the observation evidence row (the row still carries the caption + cycle link
