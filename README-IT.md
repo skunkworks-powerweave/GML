@@ -137,6 +137,17 @@ typing the URL.
   video quality, and which inbox notification types are on globally.
 - **`/admin/whatsapp-log`** — recent WhatsApp ingest events: signature failures,
   replay-ignores, media fetch results, unmatched context.
+- **`/admin`** and **`/admin/data/<table>`** — the no-code tables: schools,
+  teachers, mentors, pairings, classes, learners, sessions, course outlines,
+  resources, RTT modules / lessons / readings / sessions, observation cycles and
+  the rest, each with add, edit, delete, **Import CSV** and **Export CSV**. This
+  is how a programme's data gets in: a fresh deployment's Repository reads zero
+  until it is loaded. CSVs reference parent rows by UUID, which you get from the
+  parent's Export CSV (first column `id`); the procedure and a load order are in
+  `README-deploy.md` section 3.2.
+- **`/observation/new`** — nominate an observation cycle (teacher and observer
+  pickers; the code is assigned). The only other way to create one is the
+  `observation-cycles` table above, for bulk loads.
 
 ### Accounts and passwords
 
