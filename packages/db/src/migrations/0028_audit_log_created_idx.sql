@@ -1,0 +1,49 @@
+-- Index audit_log on created_at alone.
+--
+-- ── WHY ──────────────────────────────────────────────────────────────────────
+--
+-- audit_log carried three indexes and none led with created_at:
+--   audit_log_user_created_idx    (user_id, created_at)
+--   audit_log_entity_idx          (entity_type, entity_id)
+--   audit_log_action_created_idx  (action, created_at)
+--
+-- The DEFAULT /admin/audit view applies no filter and runs
+-- `ORDER BY created_at DESC LIMIT 50 OFFSET ...`; the CSV export runs the same
+-- shape with a far larger limit. A btree orders by its leading column, so
+-- neither compound index puts created_at in order across the table, and the
+-- planner seq-scans audit_log and sorts all of it -- on every page load.
+--
+-- That cost grows without bound, because this table only grows: a row per
+-- render of the learner grids, a client beacon accepting 30 rows a minute per
+-- user, 150-odd recordAudit() call sites -- and no delete path at all.
+-- _post/001 revokes DELETE/TRUNCATE and installs a BEFORE DELETE trigger that
+-- raises per row. The page an administrator opens when something has gone
+-- wrong was the page that got slower every day nothing did.
+--
+-- Declared in packages/db/src/schema/audit.ts as
+-- index("audit_log_created_idx").on(t.createdAt), so drizzle-kit sees it as
+-- existing rather than generating it again.
+--
+-- ── NOT CONCURRENTLY, DELIBERATELY ───────────────────────────────────────────
+--
+-- The drizzle migrator runs this inside a transaction, and CREATE INDEX
+-- CONCURRENTLY cannot run inside one (SQLSTATE 25001). It would throw, and
+-- scripts/migrate.ts would exit non-zero -- taking the one-shot `migrate`
+-- container, and with it the whole `docker compose up`, down. 0018 made the
+-- same call for the same reason.
+--
+-- The cost is a SHARE lock that blocks audit INSERTs while the index builds.
+-- At today's row count that is milliseconds, which is why this ships now
+-- rather than once the table is large.
+--
+-- IF THIS IS EVER APPLIED TO AN ALREADY-LARGE audit_log (a restore of an old
+-- database, or an upgrade that skipped many versions), build the index by hand
+-- FIRST, outside the migrate runner, so that this file finds it present and
+-- does nothing:
+--
+--   psql "$DATABASE_URL" -c 'CREATE INDEX CONCURRENTLY IF NOT EXISTS
+--     "audit_log_created_idx" ON "audit_log" USING btree ("created_at");'
+--
+-- IF NOT EXISTS below is what makes that escape hatch safe.
+
+CREATE INDEX IF NOT EXISTS "audit_log_created_idx" ON "audit_log" USING btree ("created_at");

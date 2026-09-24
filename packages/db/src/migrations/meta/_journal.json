@@ -197,6 +197,13 @@
       "when": 1780729000000,
       "tag": "0027_pairing_commitments",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780730000000,
+      "tag": "0028_audit_log_created_idx",
+      "breakpoints": true
     }
   ]
 }
