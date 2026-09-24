@@ -28,6 +28,7 @@ import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { storage, BUCKETS } from "@/lib/video/storage";
 import { recordAudit } from "@/lib/audit";
 import { enqueueTranscode } from "@/lib/queue";
+import { mediaMetadataUrl } from "@gml/shared/whatsapp/graph";
 
 // Caption-format UUID validator. TB-<uuid> and MM-<uuid> branches require a
 // canonical lowercase-or-uppercase 8-4-4-4-12 hex group; anything else falls
@@ -387,7 +388,7 @@ async function fetchMediaUrl(mediaId: string): Promise<string | null> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   if (!token) return null;
   try {
-    const r = await fetch(`https://graph.facebook.com/v19.0/${encodeURIComponent(mediaId)}`, {
+    const r = await fetch(mediaMetadataUrl(mediaId), {
       headers: { authorization: `Bearer ${token}` },
     });
     if (!r.ok) return null;
