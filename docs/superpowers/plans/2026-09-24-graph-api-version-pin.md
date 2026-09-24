@@ -13,23 +13,37 @@ const r = await fetch(`https://graph.facebook.com/v19.0/${encodeURIComponent(med
 ```
 
 Meta's published table gives v19.0 an expiration of **2026-05-21** — four months
-before today. The deployment has been calling an expired version.
+before today. That is the code the webhook would run. Whether any deployment has
+actually made the call is **not established**: `docs/verification.md` records
+that the ingest path has never been exercised with a real Meta delivery.
 
 Make the version a single named constant, overridable by environment, and make
 the next expiry impossible to miss.
 
 ## Why it was invisible
 
-Three silences compose:
+It never failed, so nothing recorded it. Meta's versioning guide, read at the
+source (https://developers.facebook.com/docs/graph-api/guides/versioning):
 
-1. Meta does not reject a call to an expired version. Its versioning guide says
-   the request is served by the **next-oldest usable version** instead.
-2. `fetchMediaUrl` returns `null` on any non-OK response (`route.ts:393`).
-3. The caller drops the media and the webhook still answers Meta **HTTP 200**.
+> "once a version is no longer usable, any calls made to it will be defaulted to
+> the next oldest, usable version."
 
-So an expired version, a blank `WHATSAPP_ACCESS_TOKEN` and a revoked token are
-all externally indistinguishable from "the teacher never sent a video". This is
-why the fix is a *test that fails on a date*, not just a bumped string.
+So a call to v19.0 is served by v20.0 until that expires today (2026-09-24), then
+by v21.0 — the API underneath the code changes at each expiry, silently. **No
+media is lost to this.** The risk is semantic drift that nobody scheduled and
+nobody would see.
+
+That is why the fix is a *test that fails on a date* rather than a bumped string:
+a defect that never produces an error can only be caught by a clock.
+
+**Correction.** The first version of this section said "three silences compose"
+and that an expired version, a blank token and a revoked token were "all
+externally indistinguishable from the teacher never sent a video". The first half
+of that was right and the rest was not: `route.ts` records
+`whatsapp.media.url_failed` when `fetchMediaUrl` returns null (line 159) and
+`whatsapp.media.fetch_failed` when `downloadMediaBytes` does (line 166). A blank
+or revoked token leaves an audit row. The expired version was the only case that
+left none — because it was the only one that did not fail.
 
 ## Architecture
 
@@ -38,7 +52,7 @@ why the fix is a *test that fails on a date*, not just a bumped string.
 | Constant lives in `packages/shared/src/whatsapp/graph.ts` | `route.ts` imports `@gml/db`, `next/server` and `@/lib/*`, so it cannot be imported by a test. A pure module in `shared` can be, which is what makes the URL testable at all. |
 | Pin the newest version with a **published** expiry (`v25.0`, expires 2028-07-29) | Not the newest outright. `v26.0` has expiry "TBD", and pinning it would silently disarm the expiry canary — the one check that exists to stop this recurring. v25.0 still leaves 22 months. |
 | `WHATSAPP_GRAPH_API_VERSION` overrides it | An expiry should be survivable by setting a variable and restarting, not by shipping code. That is exactly the situation this defect created. |
-| A malformed override is **refused**, not passed through | `v25` or a trailing newline would go straight into the URL path; Meta answers 400; `!r.ok` swallows it. The mechanism meant to prevent a silent loss would cause one. |
+| A malformed override is **refused**, not passed through | `v25` would go straight into the URL path, Meta would reject it, and `!r.ok` would drop the video. The audit log records it as `whatsapp.media.url_failed` — but nothing in that row names the variable that caused it, so it reads as a Meta outage. (A trailing newline is trimmed first.) The check is of *shape* not *membership*: `v19.0` passes it, so an operator can recreate the original defect through the override, and the canary will not see it because it reads the pin from source. |
 | `phone_number_id` scoping **not** wired up | Meta accepts it as an optional scoping parameter on this endpoint, which would give `WHATSAPP_PHONE_NUMBER_ID` (read by nothing today) a real use. It is a behaviour change to the fetch and belongs in its own commit with its own test. Recorded below. |
 
 ## Steps
@@ -81,9 +95,12 @@ onto `main` cleanly if PR #2 is abandoned.
 - **`phone_number_id` scoping** on the media fetch (above). Meta: "the request
   will only be processed if the business phone number ID included in the query
   matches the ID of the business phone number that the media was uploaded on."
-- **The silent-loss path itself.** Every failure in `fetchMediaUrl` /
-  `downloadMediaBytes` returns `null` and the webhook answers 200. Nothing is
-  logged and nothing is audited on a failed fetch. The version pin removes one
-  cause; the class remains.
+- **Fetch failures are audited but not diagnosable.** Every failure in
+  `fetchMediaUrl` / `downloadMediaBytes` returns `null` and the webhook still
+  answers 200 — but the fetch failures ARE audited, as `whatsapp.media.url_failed`
+  (`route.ts:159`) and `whatsapp.media.fetch_failed` (`route.ts:166`). What those
+  rows lack is the cause: an HTTP status, a Graph error code, whether the token
+  was blank. An earlier version of this bullet said "nothing is logged and
+  nothing is audited on a failed fetch", which was false.
 - **`WHATSAPP_ACCESS_TOKEN` is soft-defaulted** in `docker-compose.yml`, so a
   deployment with it blank boots clean and drops every video.

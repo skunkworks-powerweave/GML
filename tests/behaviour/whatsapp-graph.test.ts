@@ -66,8 +66,10 @@ test("an unset or blank override falls back to the pin", () => {
 });
 
 test("a malformed override is refused, not pasted into the URL", () => {
-  // Without this, `v25` or `25.0` goes straight into the path, Meta answers 400,
-  // and `!r.ok` swallows it — the same silent loss the override exists to avoid.
+  // Without this, `v25` or `25.0` goes straight into the path, Meta rejects it,
+  // and `!r.ok` turns that into a dropped video. It is not SILENT — route.ts
+  // audits it as `whatsapp.media.url_failed` — but nothing in that row points at
+  // the variable that caused it, so it reads as a Meta outage.
   const errors: string[] = [];
   const realError = console.error;
   console.error = (...a: unknown[]) => void errors.push(a.join(" "));
