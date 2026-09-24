@@ -1,6 +1,4 @@
 // Sub-system health pings used by /api/health.
-// Dynamic imports so this module doesn't crash if @gml/db / the queue client / etc. aren't
-// installed yet (specs 004+ land them).
 
 export type PingResult = {
   ok: boolean;
@@ -15,8 +13,18 @@ export type MigrationsResult = {
 };
 
 /**
- * Both database probes below connect with DATABASE_URL — the SAME string the
- * application itself uses.
+ * Both database probes below go through the APPLICATION'S OWN POOL
+ * (packages/db/src/client.ts), so they fail exactly when the app's queries do.
+ *
+ * They used to build a private pg.Pool from DATABASE_URL. The app's pool does
+ * not use the URL alone: with no `sslmode` in it, it forces TLS for the
+ * Supabase pooler. The probes' pools did not, so against a Postgres without TLS
+ * every page returned 500 ("The server does not support SSL connections")
+ * while /api/health reported `db: true`. A new pool per probe also opened and
+ * tore down a connection every 30 seconds for nothing.
+ *
+ * Earlier still, they connected with POSTGRES_* variables rather than
+ * DATABASE_URL:
  *
  * They used to assemble a connection from POSTGRES_HOST / POSTGRES_PORT /
  * POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD, which is a different
@@ -34,29 +42,14 @@ export type MigrationsResult = {
  * real dependency is down, and red when it is fine.
  */
 export async function pingDb(): Promise<PingResult> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) return { ok: false, detail: "DATABASE_URL not set" };
-  const { Pool } = await import("pg");
-  const pool = new Pool({
-    connectionString,
-    // 5s, not 2s. The database is in another region now; a 2-second budget
-    // turns ordinary latency into a reported outage.
-    connectionTimeoutMillis: 5000,
-    max: 1,
-  });
+  if (!process.env.DATABASE_URL) return { ok: false, detail: "DATABASE_URL not set" };
   try {
-    await pool.query("SELECT 1");
+    // The pool's own connectionTimeoutMillis (5s) bounds a hung connect.
+    const { getPool } = await import("@gml/db");
+    await getPool().query("SELECT 1");
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
-  } finally {
-    // `finally`, not the happy path only. Previously pool.end() ran solely after
-    // a successful query, so every FAILED probe leaked a pg.Pool and its
-    // reconnect timers. With a 30s healthcheck interval against a flapping
-    // database that accumulates sockets until the process dies -- i.e. the
-    // health check itself became the outage. pingMigrations() already had this
-    // right; pingDb did not.
-    await pool.end().catch(() => undefined);
   }
 }
 
@@ -152,22 +145,14 @@ export async function pingMigrations(): Promise<MigrationsResult> {
     };
   }
 
-  // Applied: query the drizzle.__drizzle_migrations table.
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
+  // Applied: query the drizzle.__drizzle_migrations table, through the app's pool.
+  if (!process.env.DATABASE_URL) {
     return { ok: false, applied: 0, expected, error: "DATABASE_URL not set" };
   }
-  let pool: import("pg").Pool | null = null;
   try {
-    const { Pool } = await import("pg");
-    pool = new Pool({
-      connectionString,
-      // 5s, matching pingDb: the database is in another region.
-      connectionTimeoutMillis: 5000,
-      max: 1,
-    });
+    const { getPool } = await import("@gml/db");
     try {
-      const res = await pool.query<{ count: string }>(
+      const res = await getPool().query<{ count: string }>(
         "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations",
       );
       const applied = Number(res.rows[0]?.count ?? 0);
@@ -186,8 +171,6 @@ export async function pingMigrations(): Promise<MigrationsResult> {
         };
       }
       return { ok: false, applied: 0, expected, error: msg };
-    } finally {
-      await pool.end();
     }
   } catch (err) {
     return {

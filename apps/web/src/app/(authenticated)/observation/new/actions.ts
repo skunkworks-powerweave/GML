@@ -108,6 +108,7 @@ export async function nominateCycleAction(formData: FormData): Promise<void> {
       {
         action: "admin.row.create",
         entityType: observationCyclesEntity.slug,
+        entityIdFrom: (id) => id,
         metadata: {
           op: "create",
           via: "observation/new",

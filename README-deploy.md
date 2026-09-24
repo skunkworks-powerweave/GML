@@ -589,7 +589,7 @@ instance to carry the traffic.
 | Caddy will not get a certificate | DNS not pointing here yet, or 80 blocked | Check the A record and the security group. |
 | Videos upload but never play | Worker not running, or ffmpeg missing | `docker compose ps worker`; `/admin/transcode-jobs` |
 | WhatsApp videos not arriving | `WHATSAPP_APP_SECRET` wrong | The webhook **refuses all traffic** without a correct secret — by design. Check `docker compose logs app` for the refusal line. |
-| A page is blank with a console CSP error | CSP too strict after a Next upgrade | `buildCsp` in `apps/web/src/proxy.ts`. Not the Caddyfile — it deliberately sets no CSP. A violation is silent server-side. |
+| A page is blank with a console CSP error | CSP too strict after a Next upgrade | `buildCsp` in `apps/web/src/lib/csp.ts` (called per request by `apps/web/src/proxy.ts`). Not the Caddyfile — it deliberately sets no CSP. A violation is silent server-side. |
 | `deploy.sh` stops at "not healthy after 180s" with no body at all | Caddy has no certificate for `DOMAIN` yet | The A record must point here and port 80 must be open; `docker compose logs caddy` |
 | Worker container unhealthy | Cannot reach the database | Check `DATABASE_URL` uses the **session** pooler (port 5432), not transaction (6543) |
 

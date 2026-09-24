@@ -135,11 +135,17 @@ export async function createRowAction(
 
   const audited = withAudit(
     async () => {
-      await db.insert(entity.table as never).values(parse.data as never);
+      // RETURNING the row so the audit entry carries its id (see withAudit).
+      const inserted = db.insert(entity.table as never).values(parse.data as never) as unknown as {
+        returning: () => Promise<Array<Record<string, unknown>>>;
+      };
+      const [created] = await inserted.returning();
+      return created?.id != null ? String(created.id) : null;
     },
     {
       action: "admin.row.create",
       entityType: entity.slug,
+      entityIdFrom: (id) => id,
       metadata: { op: "create", row: entity.describeRow?.(parse.data as Record<string, unknown>) },
     },
   );

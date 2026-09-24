@@ -290,12 +290,21 @@ export async function recordAuditDedup(input: AuditDedupInput): Promise<boolean>
  */
 export function withAudit<TArgs extends unknown[], TResult>(
   fn: (...args: TArgs) => Promise<TResult>,
-  meta: AuditInput,
+  meta: AuditInput & {
+    /**
+     * The audited row's id, read from the action's result. A create cannot
+     * know its id until the INSERT returns, so without this every
+     * `admin.row.create` landed with entity_id NULL and could not be joined to
+     * the row it created. An explicit `entityId` wins.
+     */
+    entityIdFrom?: (result: TResult) => string | null | undefined;
+  },
 ): (...args: TArgs) => Promise<TResult> {
+  const { entityIdFrom, ...input } = meta;
   return async (...args: TArgs): Promise<TResult> => {
     try {
       const result = await fn(...args);
-      void recordAudit(meta);
+      void recordAudit({ ...input, entityId: input.entityId ?? entityIdFrom?.(result) ?? undefined });
       return result;
     } catch (err) {
       // A DISTINCT ACTION NAME, not the success one with an `error` key bolted
@@ -305,9 +314,9 @@ export function withAudit<TArgs extends unknown[], TResult>(
       // recorded deletions that never happened, and an operator scanning the
       // action column could not tell them apart.
       void recordAudit({
-        ...meta,
-        action: `${meta.action}.failed`,
-        metadata: { ...(meta.metadata ?? {}), error: String(err).slice(0, 500) },
+        ...input,
+        action: `${input.action}.failed`,
+        metadata: { ...(input.metadata ?? {}), error: String(err).slice(0, 500) },
       });
       throw err;
     }

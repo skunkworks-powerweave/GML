@@ -200,9 +200,10 @@ test("every directory a runbook cd's into exists in the clone", () => {
 test("the CSP troubleshooting row points at the code that sets the CSP", () => {
   const row = DEPLOY.split(/\r?\n/).find((l) => /CSP error/.test(l));
   assert.ok(row, "the CSP troubleshooting row is missing");
-  assert.match(row, /apps\/web\/src\/proxy\.ts/);
+  assert.match(row, /apps\/web\/src\/lib\/csp\.ts/);
   assert.match(row, /buildCsp/);
-  assert.match(read("apps/web/src/proxy.ts"), /function buildCsp\(/, "the named function must exist");
+  assert.match(read("apps/web/src/lib/csp.ts"), /export function buildCsp\(/, "the named function must exist");
+  assert.match(read("apps/web/src/proxy.ts"), /buildCsp\(nonce\)/, "and the proxy must be what sends it");
   assert.match(read("docker/Caddyfile"), /DO NOT reintroduce a CSP here/, "and the Caddyfile must still refuse one");
 });
 

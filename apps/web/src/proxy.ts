@@ -56,6 +56,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { hasAnyRole, isRoleName, type RoleName } from "@gml/shared/auth/roles";
+import { buildCsp } from "@/lib/csp";
 
 type PolicyRule = {
   prefix: string;
@@ -130,23 +131,7 @@ function matchPolicy(pathname: string): PolicyRule | undefined {
  *   connect-src  Supabase over both https and wss: the browser client talks to
  *                Storage directly for resumable uploads.
  */
-function buildCsp(nonce: string): string {
-  const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://*.supabase.co";
-  return [
-    "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data: blob: ${supabase}`,
-    `media-src 'self' blob: ${supabase}`,
-    `connect-src 'self' ${supabase} wss://*.supabase.co`,
-    "font-src 'self' data:",
-    "frame-ancestors 'self'",
-    "base-uri 'self'",
-    "form-action 'self'",
-    "object-src 'none'",
-    "upgrade-insecure-requests",
-  ].join("; ");
-}
+// Built in lib/csp.ts (unit-tested there, per environment).
 
 /**
  * The baseline security headers, set by the APPLICATION.
