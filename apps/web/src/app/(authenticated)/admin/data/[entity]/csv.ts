@@ -9,7 +9,9 @@ import { ADMIN_ENTITIES } from "@/admin/registry";
 import { exportColumnKeys } from "@/admin/export-columns";
 import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
+import { eq, getTableColumns } from "drizzle-orm";
 import { describeWriteError } from "@/admin/db-errors";
+import { MutationRefused, updateAudit } from "@/admin/audit-image";
 import { coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
@@ -19,6 +21,11 @@ import { withAudit } from "@/lib/audit";
  * 65,535; staying well under leaves room for the columns Drizzle adds.
  */
 const IMPORT_PARAMETER_BUDGET = 60_000;
+
+/** How many imported updates' from/to diffs the bulk_import audit row keeps. */
+const IMPORT_AUDITED_UPDATES = 200;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function getEntityOrThrow(slug: string) {
   const e = ADMIN_ENTITIES[slug];
@@ -130,6 +137,8 @@ export async function exportCsv(slug: string): Promise<Response> {
 export async function importCsv(slug: string, csv: string): Promise<{
   ok: boolean;
   inserted: number;
+  /** Rows whose `id` named an existing row, which were updated in place. */
+  updated: number;
   skipped: number;
   errors: { row: number; message: string }[];
 }> {
@@ -144,6 +153,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
     return {
       ok: false,
       inserted: 0,
+      updated: 0,
       skipped: parsed.data.length,
       // Papa's `row` is the 0-based data row; the operator's spreadsheet line
       // is that + 2 (the header is line 1), the same numbering as below.
@@ -154,8 +164,9 @@ export async function importCsv(slug: string, csv: string): Promise<{
   const errors: { row: number; message: string }[] = [];
   // Each valid row keeps its spreadsheet line, so a refusal from the database
   // can be reported against it.
-  const validRows: Array<{ line: number; data: Record<string, unknown> }> = [];
+  const validRows: Array<{ line: number; data: Record<string, unknown>; id?: string }> = [];
   const shape = unwrapShape(entity.formSchema);
+  const hasIdColumn = "id" in (getTableColumns(entity.table) as Record<string, unknown>);
 
   for (const [i, raw] of parsed.data.entries()) {
     const line = i + 2; // header is line 1
@@ -184,11 +195,23 @@ export async function importCsv(slug: string, csv: string): Promise<{
       errors.push({ row: line, message: `${field}: ${message}` });
       continue;
     }
-    validRows.push({ line, data: parse.data as Record<string, unknown> });
+    // AN `id` MEANS "THIS ROW". The export writes every row's id first
+    // (admin/export-columns.ts), and the import used to ignore it and only
+    // ever INSERT -- so the ordinary spreadsheet round trip (export the roster,
+    // fix phone numbers in Excel, import it back) made a second copy of every
+    // row, updated nothing and reported ok:true. A row whose id exists is now
+    // updated in place; a row with an unknown id is inserted under that id, so
+    // importing the same file twice does not duplicate it either.
+    const id = hasIdColumn ? raw.id?.trim() : undefined;
+    if (id && !UUID_RE.test(id)) {
+      errors.push({ row: line, message: "id: not a row id (leave it empty to add a new row)" });
+      continue;
+    }
+    validRows.push({ line, data: parse.data as Record<string, unknown>, ...(id ? { id } : {}) });
   }
 
   if (validRows.length === 0) {
-    return { ok: errors.length === 0, inserted: 0, skipped: parsed.data.length, errors };
+    return { ok: errors.length === 0, inserted: 0, updated: 0, skipped: parsed.data.length, errors };
   }
 
   // ROW BY ROW, IN CHUNKS, IN ONE TRANSACTION.
@@ -209,13 +232,57 @@ export async function importCsv(slug: string, csv: string): Promise<{
   const perRow = entity.formFields.length + 1;
   const chunkSize = Math.max(1, Math.floor(IMPORT_PARAMETER_BUDGET / perRow));
   const errorsBefore = errors.length;
+  const newRows = validRows.filter((r) => !r.id);
+  const idRows = validRows.filter((r) => r.id);
+  const idCol = (entity.table as unknown as { id: unknown }).id;
 
   const audited = withAudit(
     async () =>
       db.transaction(async (tx) => {
         let inserted = 0;
-        for (let start = 0; start < validRows.length; start += chunkSize) {
-          const chunk = validRows.slice(start, start + chunkSize);
+        let updated = 0;
+        // What each update changed, for the audit row, as the grid's own
+        // update records it (admin/audit-image.ts). Capped: a file can
+        // carry thousands of rows.
+        const updates: Array<Record<string, unknown>> = [];
+
+        // Rows naming an id: that row, updated through the same read-lock-
+        // guard-write as the grid's edit (a signed-off observation cycle
+        // keeps its teacher here too), or inserted under that id.
+        for (const row of idRows) {
+          try {
+            await tx.transaction(async (sp) => {
+              const [before] = (await sp
+                .select()
+                .from(entity.table as never)
+                .where(eq(idCol as never, row.id!))
+                .for("update")) as Record<string, unknown>[];
+              if (!before) {
+                await sp.insert(entity.table as never).values({ ...row.data, id: row.id } as never);
+                inserted += 1;
+                return;
+              }
+              const reason = entity.guardMutation?.("update", before, { ...before, ...row.data });
+              if (reason) throw new MutationRefused(reason);
+              await sp
+                .update(entity.table as never)
+                .set(row.data as never)
+                .where(eq(idCol as never, row.id!));
+              updated += 1;
+              if (updates.length < IMPORT_AUDITED_UPDATES) {
+                updates.push({ id: row.id, ...updateAudit(entity, before, row.data) });
+              }
+            });
+          } catch (err) {
+            errors.push({
+              row: row.line,
+              message: err instanceof MutationRefused ? err.message : describeWriteError(entity, err),
+            });
+          }
+        }
+
+        for (let start = 0; start < newRows.length; start += chunkSize) {
+          const chunk = newRows.slice(start, start + chunkSize);
           try {
             await tx.transaction(async (sp) => {
               await sp.insert(entity.table as never).values(chunk.map((r) => r.data) as never);
@@ -236,19 +303,25 @@ export async function importCsv(slug: string, csv: string): Promise<{
             }
           }
         }
-        return inserted;
+        return { inserted, updated, updates };
       }),
     {
       action: `${entity.slug}.bulk_import`,
       entityType: entity.slug,
       metadata: {},
-      metadataFrom: (inserted) => ({ inserted, skipped: parsed.data.length - inserted }),
+      metadataFrom: ({ inserted, updated, updates }) => ({
+        inserted,
+        updated,
+        skipped: parsed.data.length - inserted - updated,
+        updates,
+        ...(updated > updates.length ? { updatesTruncated: true } : {}),
+      }),
     },
   );
 
-  let inserted: number;
+  let result: { inserted: number; updated: number };
   try {
-    inserted = await audited();
+    result = await audited();
   } catch (err) {
     // Not a row's fault (the connection, the transaction itself): nothing
     // was committed. The driver text goes to the log, not the operator.
@@ -256,11 +329,13 @@ export async function importCsv(slug: string, csv: string): Promise<{
     return {
       ok: false,
       inserted: 0,
+      updated: 0,
       skipped: parsed.data.length,
       errors: [...errors.slice(0, errorsBefore), { row: -1, message: "The import could not be completed. Nothing was saved." }],
     };
   }
 
   errors.sort((a, b) => a.row - b.row);
-  return { ok: errors.length === 0, inserted, skipped: parsed.data.length - inserted, errors };
+  const { inserted, updated } = result;
+  return { ok: errors.length === 0, inserted, updated, skipped: parsed.data.length - inserted - updated, errors };
 }

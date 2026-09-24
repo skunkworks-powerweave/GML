@@ -534,7 +534,8 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             <ImportCsv
               entitySlug={slug}
               entityLabel={entity.label}
-              acceptedColumns={[...entity.formFields]}
+              // `id` too: a row carrying one updates that row (csv.ts importCsv).
+              acceptedColumns={["id", ...entity.formFields]}
             />
           ) : null}
           {canExport ? (
