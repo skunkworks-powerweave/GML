@@ -409,7 +409,9 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     },
   });
 
-  redirect(`/forms/${slug}/thanks`);
+  // With the pairing, so the thank-you card can link back to it and to its
+  // read-only record of submitted feedback.
+  redirect(`/forms/${slug}/thanks?pairingId=${encodeURIComponent(pairingId)}`);
 }
 
 // ---------------------------------------------------------------------------

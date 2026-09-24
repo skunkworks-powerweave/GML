@@ -1,8 +1,13 @@
 // /forms/[slug]/thanks — post-submit confirmation. Spec 074 (Phase 8).
 //
 // Tiny server-rendered card that re-resolves the form by slug so we can echo
-// the title back at the respondent. No state of its own; both CTAs route back
-// to the inbox.
+// the title back at the respondent. No state of its own. The submit action
+// passes ?pairingId= so the card can link back to the pairing and to its
+// read-only record of submitted feedback.
+//
+// Both buttons used to go to /inbox -- which has no forms on it -- and the
+// text promised "The mentor/mentee on the other side of this pairing will see
+// a summary in their inbox". Nothing ever wrote that notification.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -11,6 +16,8 @@ import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { decodeFormSlug } from "@/lib/forms/catalogue-links";
+import { formTitle } from "@/lib/forms/quarterly";
+import { isUuid } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
 
@@ -43,16 +50,23 @@ function parseSlug(
 
 export default async function FormThanksPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<{ pairingId?: string | string[] }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
   const slug = decodeFormSlug((await params).slug);
   const parsed = parseSlug(slug);
+  // Only ever used to build links; the pairing page checks access itself.
+  const rawPairing = ((await searchParams) ?? {}).pairingId;
+  const pairingId = typeof rawPairing === "string" && isUuid(rawPairing) ? rawPairing : null;
 
-  let title = "Submitted";
+  // "Your response to Submitted has been recorded" was what a form with no
+  // schema title (all four mentor forms) produced.
+  let title = "this form";
   let hindiTitle: string | undefined;
   if (parsed) {
     const [form] = await db
@@ -68,10 +82,8 @@ export default async function FormThanksPage({
       .limit(1);
     if (form) {
       const raw = form.schema as { title?: string; hindiTitle?: string } | null;
-      if (raw && typeof raw === "object") {
-        title = raw.title ?? title;
-        hindiTitle = raw.hindiTitle;
-      }
+      title = formTitle(raw, form.kind, form.audience);
+      if (raw && typeof raw === "object") hindiTitle = raw.hindiTitle;
     }
   }
 
@@ -122,9 +134,16 @@ export default async function FormThanksPage({
         ) : null}
       </h1>
       <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-        Your response to <strong>{title}</strong> has been recorded. The
-        mentor/mentee on the other side of this pairing will see a summary in
-        their inbox.
+        Your response to <strong>{title}</strong> has been recorded.
+        {pairingId ? (
+          <>
+            {" "}You can read it again on the pairing&apos;s{" "}
+            <Link href={`/mentorship/${pairingId}/responses`} style={{ color: "var(--indigo)" }}>
+              submitted feedback
+            </Link>{" "}
+            page.
+          </>
+        ) : null}
       </p>
 
       <div
@@ -136,7 +155,7 @@ export default async function FormThanksPage({
         }}
       >
         <Link
-          href="/inbox"
+          href={pairingId ? `/mentorship/${pairingId}` : "/mentorship"}
           style={{
             background: "var(--ink)",
             color: "var(--paper)",
@@ -147,12 +166,12 @@ export default async function FormThanksPage({
             textDecoration: "none",
           }}
         >
-          Back to inbox
+          {pairingId ? "Back to pairing" : "Back to mentorship"}
         </Link>
         <Link
-          // /inbox implements filter=unread and nothing else; `forms` fell
-          // through to the "all" branch, so the parameter was decoration.
-          href="/inbox"
+          // /inbox has no forms on it; a mentor working through five mentees
+          // was left to find /forms on their own.
+          href="/forms"
           style={{
             background: "transparent",
             color: "var(--ink-2)",

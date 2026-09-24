@@ -398,7 +398,19 @@ export default async function PairingDetailPage({
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
-                {!formHref ? (
+                {state === "done" ? (
+                  // The READ-ONLY record. This opened the live form, where
+                  // each visit could file another copy and nobody but the
+                  // respondent could see the answers at all.
+                  <Link
+                    href={`/mentorship/${pairingId}/responses`}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`View Q${qNum} responses`}
+                  >
+                    View responses →
+                  </Link>
+                ) : !formHref ? (
                   // No active form published for this quarter and audience.
                   // Saying so beats a link into a "Form not found" shell.
                   state === "future" ? null : (
@@ -415,16 +427,7 @@ export default async function PairingDetailPage({
                   >
                     Fill progress form →
                   </Link>
-                ) : state === "future" ? null : (
-                  <Link
-                    href={formHref}
-                    className="btn btn-sm btn-ghost"
-                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`View Q${qNum} responses`}
-                  >
-                    View responses →
-                  </Link>
-                )}
+                ) : null}
               </div>
             );
           })}
@@ -549,6 +552,14 @@ export default async function PairingDetailPage({
               <div className="bar" style={{ marginTop: 6 }}>
                 <div style={{ width: `${feedbackPct}%` }} />
               </div>
+              {feedbackByKind.size > 0 ? (
+                <Link
+                  href={`/mentorship/${pairingId}/responses`}
+                  style={{ display: "inline-block", marginTop: 10, fontSize: 12, color: "var(--indigo)" }}
+                >
+                  Read the submitted feedback →
+                </Link>
+              ) : null}
             </div>
           </div>
 
