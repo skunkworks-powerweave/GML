@@ -794,3 +794,41 @@ test("F40: the mobile Next/Submit bar sits clear of the fixed tab bar and the he
     `the bar's buttons run under the help button (padding-right ${bar["padding-right"] ?? "none"}, button reaches ${fabReach}px)`,
   );
 });
+
+// ── F46: what is stored is what was graded ───────────────────────────────────
+
+test("F46: a submission stores one answer per quiz question, whatever the client sent", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const [q1, q2, q3] = w.questionIds as [string, string, string];
+    const junk = [
+      { questionId: q1, selectedIndex: 0, score: 100, passed: true }, // extra keys
+      { questionId: q2, selectedIndex: "x".repeat(200_000) }, // not a number
+      { questionId: q3, selectedIndex: 7 }, // out of range (3 options)
+      ...Array.from({ length: 2000 }, (_, i) => ({ questionId: `junk-${i}`, selectedIndex: 1 })),
+    ];
+    const submissionId = await takeQuiz(w, junk as never);
+    const [row] = await w.q<{ answers: unknown; score: number; bytes: number }>(
+      `SELECT answers, score, pg_column_size(answers) AS bytes FROM quiz_submissions WHERE id = $1`,
+      [submissionId],
+    );
+    assert.deepEqual(row!.answers, [
+      { questionId: q1, selectedIndex: 0 },
+      { questionId: q2, selectedIndex: null },
+      { questionId: q3, selectedIndex: null },
+    ]);
+    assert.equal(row!.score, 33, "grading is unchanged: one of three correct");
+    const html = await resultHtml(w, submissionId);
+    assert.doesNotMatch(html, /\(option /, "the result page printed whatever index the client sent");
+  });
+});
+
+test("F46: an answers value that is not an array is graded as no answers, not a server error", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const submissionId = await takeQuiz(w, "not an array" as never);
+    const [row] = await w.q<{ answers: unknown; score: number }>(`SELECT answers, score FROM quiz_submissions WHERE id = $1`, [submissionId]);
+    assert.equal(row!.score, 0);
+    assert.equal((row!.answers as unknown[]).length, 3);
+  });
+});

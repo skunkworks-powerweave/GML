@@ -73,8 +73,32 @@ export async function submitQuizAttempt(
   // absent from the map for defensive back-compat), and BOTH cases
   // count as wrong (0 points). The learner had the chance to answer
   // and chose not to — same outcome as picking the wrong option.
+  //
+  // WHAT IS STORED IS WHAT WAS GRADED. `answers` is whatever the client
+  // POSTed, and it used to be inserted verbatim: extra keys, ids of questions
+  // not in this quiz, a 200 kB string as a selectedIndex, thousands of junk
+  // entries -- none of it changed the score, all of it became the permanent
+  // record of what the learner answered, and the result page printed it back
+  // ("(option <whatever was sent>)"). So it is rebuilt from this quiz's own
+  // questions: one entry each, in order, the pick kept only if it is a whole
+  // number naming one of that question's options, and null (skipped)
+  // otherwise. A non-array is no answers, not a TypeError.
+  const posted = new Map<string, unknown>();
+  for (const a of Array.isArray(answers) ? (answers as unknown[]) : []) {
+    if (a && typeof a === "object" && typeof (a as { questionId?: unknown }).questionId === "string") {
+      const entry = a as { questionId: string; selectedIndex?: unknown };
+      posted.set(entry.questionId, entry.selectedIndex);
+    }
+  }
+  const recorded = qs.map((q) => {
+    const raw = posted.get(q.id);
+    const optionCount = Array.isArray(q.options) ? q.options.length : 0;
+    const selectedIndex =
+      typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw < optionCount ? raw : null;
+    return { questionId: q.id, selectedIndex };
+  });
   const answerMap = new Map(
-    answers.map((a) => [a.questionId, a.selectedIndex] as const),
+    recorded.map((a) => [a.questionId, a.selectedIndex] as const),
   );
   let correct = 0;
   let answeredCount = 0;
@@ -156,7 +180,7 @@ export async function submitQuizAttempt(
       .values({
         quizId: quiz.id,
         userId,
-        answers,
+        answers: recorded,
         // The questions this was graded against, so the result keeps meaning
         // the same thing after the quiz is edited (migration 0030).
         questionSnapshot: qs.map((q) => ({
