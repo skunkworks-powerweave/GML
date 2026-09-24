@@ -104,7 +104,21 @@ function readCaCert(): string | undefined {
 }
 
 export function getPool(): Pool {
-  if (!_pool) _pool = new Pool(poolConfig());
+  if (!_pool) {
+    _pool = new Pool(poolConfig());
+    // pg-pool re-emits an IDLE client's error -- the server ending the
+    // connection in a pooler restart, a failover, a TCP reset -- as an 'error'
+    // event on the Pool, and an EventEmitter with no listener throws it. That
+    // was an uncaught exception in whatever process held the pool: the worker
+    // (whose polling loops always have idle clients) exited mid-transcode on
+    // every such blip. The pool has already discarded the broken client and
+    // dials a fresh one on next use, so there is nothing to do but say so.
+    // (The Next.js server survived only because Next installs its own
+    // uncaughtException handler.)
+    _pool.on("error", (err) => {
+      console.warn(`[db] an idle pooled connection failed and was discarded: ${err.message}`);
+    });
+  }
   return _pool;
 }
 

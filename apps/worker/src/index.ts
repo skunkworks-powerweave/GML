@@ -88,7 +88,52 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Run one claimed job, holding its lease open for as long as it takes. */
+/** Dispatch a claimed job to its handler. Throws whatever the handler throws. */
+async function handle(job: ClaimedJob): Promise<void> {
+  switch (job.name) {
+    case "transcode":
+      await transcode480p(job.payload as unknown as TranscodeJobInput);
+      break;
+    // The nightly retention sweep. The name predates the second table; it is
+    // kept because scheduleDailyWork() enqueues it and its dedupe key is what
+    // makes the sweep once-per-day.
+    case "deleteOldNotifications": {
+      const n = await deleteOldNotifications();
+      log.info("retention: notifications purged", { count: n });
+      // rate_limits keys carry client IPs. Nothing pruned them before this
+      // line: the old reaper lived in apps/web behind `server-only`, where
+      // this process cannot reach it. Both deletes are idempotent, so a retry
+      // after a failure here re-running the first is harmless.
+      const r = await pruneRateLimits(undefined, db);
+      log.info("retention: expired rate-limit counters purged", { count: r });
+      break;
+    }
+    default:
+      throw new Error(`unknown job name: ${job.name}`);
+  }
+}
+
+/** Tries at writing a job's outcome before leaving the job to the lease reaper. */
+const OUTCOME_WRITE_ATTEMPTS = 3;
+
+/**
+ * Run one claimed job, holding its lease open for as long as it takes.
+ *
+ * NEVER REJECTS, and the consumer loop depends on that. It used to await the
+ * outcome writes -- succeed(), and fail() inside the catch -- unguarded, so
+ * when Postgres refused that one write (read-only mode under disk pressure, a
+ * statement error on a live connection, a pooler reset) the rejection escaped
+ * the consumer's `while` and ended it. With WORKER_CONCURRENCY=1 that was the
+ * only transcode consumer. The retention loop kept the process alive and the
+ * healthcheck green, so restart policy never fired and no video was transcoded
+ * again until someone restarted the container by hand.
+ *
+ * The handler's outcome is decided first and recorded second, so a transcode
+ * that worked is never recorded as failed because only succeed() hit the blip.
+ * If the write still fails after a few tries the job is left 'running' with
+ * its heartbeat stopped: its lease lapses and reapExpiredLeases() requeues or
+ * dead-letters it, the recovery path a hard-killed worker already takes.
+ */
 async function runJob(job: ClaimedJob): Promise<void> {
   const hb = setInterval(() => {
     void heartbeat(db, job.id, LEASE_SECONDS).catch((err) =>
@@ -98,41 +143,44 @@ async function runJob(job: ClaimedJob): Promise<void> {
   // Do not hold the event loop open just for the heartbeat.
   hb.unref?.();
 
+  let failure: { err: unknown } | null = null;
   try {
-    switch (job.name) {
-      case "transcode":
-        await transcode480p(job.payload as unknown as TranscodeJobInput);
-        break;
-      // The nightly retention sweep. The name predates the second table; it is
-      // kept because scheduleDailyWork() enqueues it and its dedupe key is what
-      // makes the sweep once-per-day.
-      case "deleteOldNotifications": {
-        const n = await deleteOldNotifications();
-        log.info("retention: notifications purged", { count: n });
-        // rate_limits keys carry client IPs. Nothing pruned them before this
-        // line: the old reaper lived in apps/web behind `server-only`, where
-        // this process cannot reach it. Both deletes are idempotent, so a retry
-        // after a failure here re-running the first is harmless.
-        const r = await pruneRateLimits(undefined, db);
-        log.info("retention: expired rate-limit counters purged", { count: r });
-        break;
-      }
-      default:
-        throw new Error(`unknown job name: ${job.name}`);
-    }
-    await succeed(db, job.id);
-    log.info("job succeeded", { id: job.id, name: job.name, attempt: job.attempts });
+    await handle(job);
   } catch (err) {
-    const { willRetry } = await fail(db, job.id, String(err), job.attempts, job.maxAttempts);
-    log.error("job failed", {
-      id: job.id,
-      name: job.name,
-      attempt: job.attempts,
-      willRetry,
-      err: String(err).slice(0, 500),
-    });
+    failure = { err };
   } finally {
     clearInterval(hb);
+  }
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      if (failure === null) {
+        await succeed(db, job.id);
+        log.info("job succeeded", { id: job.id, name: job.name, attempt: job.attempts });
+      } else {
+        const { willRetry } = await fail(db, job.id, String(failure.err), job.attempts, job.maxAttempts);
+        log.error("job failed", {
+          id: job.id,
+          name: job.name,
+          attempt: job.attempts,
+          willRetry,
+          err: String(failure.err).slice(0, 500),
+        });
+      }
+      return;
+    } catch (err) {
+      if (attempt >= OUTCOME_WRITE_ATTEMPTS) {
+        log.error("could not record job outcome; the lease reaper will requeue it", {
+          id: job.id,
+          name: job.name,
+          outcome: failure === null ? "succeeded" : "failed",
+          handlerErr: failure === null ? undefined : String(failure.err).slice(0, 500),
+          err: String(err).slice(0, 500),
+        });
+        return;
+      }
+      await sleep(POLL_IDLE_MS * attempt);
+    }
   }
 }
 
@@ -162,6 +210,12 @@ async function consumer(queue: "transcode" | "retention", slot: number): Promise
     inFlight.add(p);
     try {
       await p;
+    } catch (err) {
+      // runJob does not reject by construction. Should that ever stop being
+      // true, this loop must still outlive the job: a consumer that ends
+      // quietly is the one failure nothing else here can see.
+      log.error("job runner threw; consumer continuing", { job: job.id, err: String(err).slice(0, 500) });
+      await sleep(POLL_IDLE_MS * 5);
     } finally {
       inFlight.delete(p);
     }
@@ -264,9 +318,14 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   // An unhandled rejection used to take the process down with no log line, so a
-  // crash-looping worker looked identical to one that had never started.
+  // crash-looping worker looked identical to one that had never started. It is
+  // logged -- and then it is still fatal. Logging it and carrying on is what
+  // turned a dead consumer loop into a process that stayed up, passed its
+  // healthcheck and never claimed again: `restart: unless-stopped` is the only
+  // supervisor this worker has, and it acts on an exit, nothing else.
   process.on("unhandledRejection", (reason) => {
     log.error("unhandled rejection", { reason: String(reason).slice(0, 500) });
+    process.exit(1);
   });
 
   await Promise.all([
@@ -275,6 +334,12 @@ async function main(): Promise<void> {
     ...Array.from({ length: CONCURRENCY }, (_, i) => consumer("transcode", i)),
     consumer("retention", 0),
   ]);
+  // A consumer only returns once shutdown has begun; shutdown() owns the exit
+  // then. Anything else is a loop that ended, and must end the process too.
+  if (!shuttingDown) {
+    log.error("a consumer loop exited without a shutdown; exiting so the container restarts");
+    process.exit(1);
+  }
 }
 
 // Only start when this file IS the process entrypoint. apps/web no longer
@@ -286,5 +351,11 @@ const invokedDirectly =
   import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-  void main();
+  // A rejected main() is a consumer that died; see the end of main().
+  main().catch((err) => {
+    log.error("worker main loop failed; exiting so the container restarts", {
+      err: String(err).slice(0, 500),
+    });
+    process.exit(1);
+  });
 }
