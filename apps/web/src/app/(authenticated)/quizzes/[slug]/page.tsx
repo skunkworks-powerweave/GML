@@ -157,6 +157,15 @@ export async function submitQuizAttempt(
         quizId: quiz.id,
         userId,
         answers,
+        // The questions this was graded against, so the result keeps meaning
+        // the same thing after the quiz is edited (migration 0030).
+        questionSnapshot: qs.map((q) => ({
+          id: q.id,
+          prompt: q.prompt,
+          options: Array.isArray(q.options) ? q.options : [],
+          correctIndex: q.correctIndex,
+          explanation: q.explanation ?? null,
+        })),
         score,
         passed,
       })

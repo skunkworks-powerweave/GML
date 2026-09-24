@@ -227,11 +227,10 @@ export async function saveQuizSchema(
     // positions are inserted and only genuinely removed tail positions are
     // deleted.
     //
-    // HONEST LIMIT: reordering questions still repoints history, because
-    // sequence is then the wrong identity. Fixing that properly means
-    // versioning a quiz so past attempts keep the questions they were actually
-    // asked, which is a schema change and a larger piece of work than this.
-    // What this removes is the case where an unrelated edit destroys history.
+    // Reordering, inserting or rewording still rewrites these rows by
+    // position, so they are not history. History is the question snapshot
+    // each submission now carries (migration 0030): the result page reads
+    // what the learner was asked from there, not from these rows.
     const existing = await tx
       .select({ id: quizQuestions.id, sequence: quizQuestions.sequence })
       .from(quizQuestions)

@@ -211,6 +211,13 @@
       "when": 1780731000000,
       "tag": "0029_quizzes_scope_fk_restrict",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780732000000,
+      "tag": "0030_quiz_submission_question_snapshot",
+      "breakpoints": true
     }
   ]
 }

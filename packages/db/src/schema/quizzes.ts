@@ -108,6 +108,15 @@ export const quizQuestions = pgTable(
   ],
 );
 
+/** One question as it stood when a submission was made. */
+export type QuizQuestionSnapshot = {
+  id: string;
+  prompt: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string | null;
+};
+
 export const quizSubmissions = pgTable(
   "quiz_submissions",
   {
@@ -121,6 +130,14 @@ export const quizSubmissions = pgTable(
       .$type<Array<{ questionId: string; selectedIndex: number | null }>>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    // The questions exactly as this learner was asked them, frozen at submit
+    // time (migration 0030). The quiz editor rewrites quiz_questions rows in
+    // place by position, so a result read against the LIVE rows re-attached
+    // every past answer to whatever question now sits at that position, and
+    // re-graded it against the current correctIndex while the stored score
+    // stayed as it was. The result page reads this; NULL only on a row written
+    // before the column existed and not backfilled.
+    questionSnapshot: jsonb("question_snapshot").$type<QuizQuestionSnapshot[]>(),
     // Percentage correct (0-100).
     score: smallint("score").notNull(),
     passed: boolean("passed").notNull(),

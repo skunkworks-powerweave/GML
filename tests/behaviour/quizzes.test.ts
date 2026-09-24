@@ -648,3 +648,96 @@ test("F38: an explicit empty questions array is refused once learners have submi
     assert.equal(await questionCount(w), 3);
   });
 });
+
+// ── F72: a result keeps the questions the learner was asked ──────────────────
+
+test("F72: inserting a question on a live quiz does not rewrite a past result", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const submissionId = await takeQuiz(w, answerAll(w, 0));
+    const before = await resultHtml(w, submissionId);
+    assert.match(before, /3 correct/);
+
+    // The editor keys rows by position, so a warm-up inserted first rewrites
+    // question 1's row as the warm-up, 2 as the old 1, and so on.
+    signIn(randomUUID(), "programme_admin");
+    const { saveQuizSchema } = await editorActions();
+    const saved = await saveQuizSchema(
+      w.quizId,
+      JSON.stringify({
+        questions: [
+          { prompt: `Warm-up ${w.t}`, options: ["x", "y"], correctIndex: 1 },
+          ...[1, 2, 3].map((n) => ({
+            prompt: `Question ${n} ${w.t}`,
+            options: [`KEY-${n}-${w.t}`, `wrong-${n}-a`, `wrong-${n}-b`],
+            correctIndex: 0,
+            explanation: `EXPLAIN-${n}-${w.t}`,
+          })),
+        ],
+      }),
+    );
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+
+    signIn(w.userId);
+    const after = await resultHtml(w, submissionId);
+    assert.doesNotMatch(after, /Warm-up/, "the result shows a question the learner was never asked");
+    assert.match(after, /3 of 3 answered/);
+    assert.match(after, /3 correct/, "a 100% result now contradicts its own breakdown");
+    for (const n of [1, 2, 3]) assert.match(after, new RegExp(`Question ${n} ${w.t}`));
+  });
+});
+
+test("F72: rewording a question does not change what a past result says was asked", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const submissionId = await takeQuiz(w, answerAll(w, 0));
+    signIn(randomUUID(), "programme_admin");
+    const { saveQuizSchema } = await editorActions();
+    await saveQuizSchema(
+      w.quizId,
+      JSON.stringify({
+        questions: [1, 2, 3].map((n) => ({
+          prompt: `Reworded ${n}`,
+          options: ["p", "q", `KEY-${n}-${w.t}`],
+          correctIndex: 2,
+        })),
+      }),
+    );
+    signIn(w.userId);
+    const after = await resultHtml(w, submissionId);
+    assert.doesNotMatch(after, /Reworded/);
+    assert.match(after, /3 correct/, "moving correctIndex re-graded history while the stored score stayed 100");
+  });
+});
+
+test("F72: the editor says learners have sat the quiz before anyone edits it", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    await takeQuiz(w, answerAll(w, 0));
+    signIn(randomUUID(), "programme_admin");
+    const { default: Editor } = await editorPage();
+    const html = renderSync(withAppRouter(await Editor({ params: Promise.resolve({ id: w.quizId }) })));
+    assert.match(html, /data-testid="quiz-editor-submissions"[^>]*>1 submitted attempt\./);
+  });
+});
+
+test("F72: migration 0030 gives an existing submission the questions its quiz has now", { skip }, async () => {
+  const { readFileSync } = await import("node:fs");
+  const sqlText = readFileSync(
+    new URL("../../packages/db/src/migrations/0030_quiz_submission_question_snapshot.sql", import.meta.url),
+    "utf8",
+  );
+  const backfill = sqlText.split("--> statement-breakpoint").find((s) => /UPDATE "quiz_submissions"/.test(s))!;
+  await rolledBack(async (c) => {
+    const t = tag("qsnap");
+    const subjectId = await rttSubject(c, t);
+    const user = (await c.query(`INSERT INTO users (id, email, role) VALUES (gen_random_uuid(), $1, 'teacher') RETURNING id`, [`${t}@example.test`])).rows[0].id;
+    const quiz = (await c.query(`INSERT INTO quizzes (slug, title, rtt_subject_id) VALUES ($1, 'Q', $2) RETURNING id`, [t, subjectId])).rows[0].id;
+    const q1 = (await c.query(`INSERT INTO quiz_questions (quiz_id, sequence, prompt, options, correct_index) VALUES ($1, 1, 'P1', '["a","b"]', 1) RETURNING id`, [quiz])).rows[0].id;
+    // A submission written before the column existed.
+    const sub = (await c.query(`INSERT INTO quiz_submissions (quiz_id, user_id, answers, score, passed) VALUES ($1, $2, '[]', 0, false) RETURNING id`, [quiz, user])).rows[0].id;
+    await c.query(backfill);
+    const snap = (await c.query(`SELECT question_snapshot FROM quiz_submissions WHERE id = $1`, [sub])).rows[0].question_snapshot;
+    assert.deepEqual(snap, [{ id: q1, prompt: "P1", options: ["a", "b"], correctIndex: 1, explanation: null }]);
+  });
+});

@@ -5,9 +5,9 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { quizzes, quizQuestions } from "@gml/db/schema";
+import { quizzes, quizQuestions, quizSubmissions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { QuizSchemaEditor } from "./parts";
 
@@ -33,6 +33,14 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     .from(quizQuestions)
     .where(eq(quizQuestions.quizId, row.id))
     .orderBy(asc(quizQuestions.sequence));
+
+  // Said before anyone edits a quiz learners have sat: what happens to their
+  // results. The editor used to give no sign that submissions existed.
+  const [sat] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(quizSubmissions)
+    .where(eq(quizSubmissions.quizId, row.id));
+  const submittedCount = sat?.n ?? 0;
 
   // Spec 159 — Workflow Run 15 audit-closure MISS: time_limit_seconds is
   // now part of the editable JSON. The export shape carries it (NULL =
@@ -161,6 +169,25 @@ export default async function AdminQuizDetailPage({ params }: Props) {
       </header>
 
       <section style={{ display: "grid", gap: 18 }}>
+        {submittedCount > 0 ? (
+          <p
+            data-testid="quiz-editor-submissions"
+            style={{
+              margin: 0,
+              padding: "8px 12px",
+              border: "1px solid var(--saffron)",
+              background: "var(--saffron-soft)",
+              borderRadius: "var(--r-2)",
+              fontSize: 12,
+              color: "var(--ink-2)",
+            }}
+          >
+            {submittedCount} submitted attempt{submittedCount === 1 ? "" : "s"}. Each result keeps
+            the questions exactly as that learner was asked them, so changes here apply to new
+            attempts only. The questions cannot all be removed; set <code>active</code> to{" "}
+            <code>false</code> to take the quiz offline.
+          </p>
+        ) : null}
         <QuizSchemaEditor quizId={row.id} initialJson={pretty} />
         <aside
           style={{

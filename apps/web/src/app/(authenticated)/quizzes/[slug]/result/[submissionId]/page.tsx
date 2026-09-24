@@ -52,11 +52,29 @@ export default async function QuizResultPage({
     redirect("/forbidden");
   }
 
-  const questions = await db
-    .select()
-    .from(quizQuestions)
-    .where(eq(quizQuestions.quizId, quiz.id))
-    .orderBy(asc(quizQuestions.sequence));
+  // WHAT THE LEARNER WAS ASKED, NOT WHAT THE QUIZ SAYS NOW.
+  //
+  // This page read the live quiz_questions rows, which the editor rewrites in
+  // place by position -- so inserting, reordering or rewording a question on a
+  // live quiz re-attached every past answer to a different question and
+  // re-graded it against the current key, beside a stored score that did not
+  // move. The submission carries the questions it was graded against
+  // (migration 0030); the live rows are the fallback for a row without them.
+  const questions =
+    submission.questionSnapshot ??
+    (
+      await db
+        .select()
+        .from(quizQuestions)
+        .where(eq(quizQuestions.quizId, quiz.id))
+        .orderBy(asc(quizQuestions.sequence))
+    ).map((q) => ({
+      id: q.id,
+      prompt: q.prompt,
+      options: Array.isArray(q.options) ? q.options : [],
+      correctIndex: q.correctIndex,
+      explanation: q.explanation,
+    }));
 
   const answerMap = new Map(
     (submission.answers ?? []).map((a) => [a.questionId, a.selectedIndex] as const),
