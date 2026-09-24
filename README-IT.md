@@ -1,9 +1,9 @@
 # GML LMS — IT quick reference
 
 **The authoritative deployment document is [`README-deploy.md`](README-deploy.md).**
-It carries the Supabase prerequisites, the two manual dashboard steps the
-application does not work without, sizing, cost, backup and restore, and the
-full troubleshooting table. Read it before a first deploy.
+It carries the Supabase prerequisites, the manual dashboard steps the
+application does not work without, the host preparation, sizing, cost, backup
+and restore, and the full troubleshooting table. Read it before a first deploy.
 
 This file is the short version: what runs, how to deploy it, and the four or
 five things an IT person actually does after go-live. Anything that would be a
@@ -37,15 +37,24 @@ container went, that is the answer, at the source.
 ## 5-step deploy
 
 ```bash
-# 1. Supabase: create the Pro project, then do the two dashboard steps in
-#    README-deploy.md 2.2. Nobody can sign in until the first one is done.
+# 0. Prepare the instance: Docker Engine + the Compose plugin, Node 22, pnpm
+#    and jq. Copy-paste commands in README-deploy.md 2.5; log out and back in
+#    afterwards so the docker group takes effect.
+
+# 1. Supabase: create the Pro project, then do the three dashboard steps in
+#    README-deploy.md 2.2. Nobody can sign in until the first one is done, and
+#    no real lesson video uploads until the third.
 
 # 2. Pull the release onto the instance
 git clone <repo> gml-lms && cd gml-lms   # the repo root IS the app root
+chmod +x scripts/*.sh                    # a zip or scp copy can drop the exec bit
 
 # 3. Configure
 cp .env.example .env && chmod 600 .env
 nano .env        # every REQUIRED key is marked in the file
+
+# 3.5 Check the host and the configuration (read-only)
+bash scripts/preflight.sh    # fix every FAIL before step 4
 
 # 4. Deploy
 ./scripts/deploy.sh          # or: make deploy
@@ -54,9 +63,12 @@ nano .env        # every REQUIRED key is marked in the file
 curl -s https://$DOMAIN/api/health | jq
 ```
 
-Step 4 runs: preflight (including the SM-5 restore-drill gate), tag the running
+Step 4 runs: the host-toolchain and `.env` checks, the SM-5 restore-drill gate
+(skipped, loudly, on a host's first deploy; see Backups below), tag the running
 images `:previous`, build, `docker compose up -d`, wait for health through
-Caddy, seed, verify auth, post-deploy smoke.
+Caddy, seed, verify auth, post-deploy smoke. It does **not** run
+`preflight.sh`; that is step 3.5, by hand. Preflight fails when ports 80 and 443
+are in use, which is true of every later deploy.
 
 **Migrations are not a separate step.** The `migrate` service runs them and
 gates `app` and `worker` through `depends_on: service_completed_successfully`.
@@ -177,8 +189,8 @@ is false. It used to return 200 with `ok:false`, which meant the container
 healthcheck and the deploy script — both of which read only the status code —
 called a stack with no schema healthy.
 
-Set up Docker log rotation once (`README-deploy.md` section 6); the default
-`json-file` driver grows without bound.
+Log rotation is already configured in `docker-compose.yml`: 10 MB × 3 files per
+service, about 120 MB across the stack. There is nothing to set up.
 
 ## Backups (SM-5)
 
@@ -187,17 +199,31 @@ product for Storage at all** — the videos are a year of classroom recordings
 that cannot be re-made, and if we do not mirror them, nobody does. That is what
 `scripts/backup.sh` is for.
 
+Install the backup tools first (`README-deploy.md` section 7: the PostgreSQL
+client from PGDG, rclone, the AWS CLI), then:
+
 ```cron
-0 2 * * *  cd /home/ubuntu/gml-lms && ./scripts/backup.sh  >> /var/lib/gml/backup.log 2>&1
-0 4 * * 0  cd /home/ubuntu/gml-lms && ./scripts/restore.sh >> /var/lib/gml/drill.log  2>&1
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+0 2 * * *  cd /home/ubuntu/gml-lms && bash scripts/backup.sh  >> /var/lib/gml/backup.log 2>&1
+0 4 * * 0  cd /home/ubuntu/gml-lms && bash scripts/restore.sh >> /var/lib/gml/drill.log  2>&1
 ```
 
 `scripts/restore.sh` is the drill: it restores the newest dump into a throwaway
 database, asserts the schema and row counts look sane, drops it, and stamps
-`workspace/last_restore_drill.json`. `deploy.sh` refuses to deploy in production
-if that stamp is missing or older than 30 days. Restoring for real is
-`README-deploy.md` section 7 — and step 4 there, re-doing the dashboard steps,
-is the one people miss.
+`workspace/last_restore_drill.json`. The throwaway database is a Postgres
+container the drill starts and removes itself; the box has no Postgres server of
+its own. A failed drill stamps `"result": "failed"` with the reason.
+
+**When the gate arms.** `deploy.sh` refuses to deploy when that stamp is
+missing, older than 30 days, or records a failure, on every deploy **except a
+host's first deploy**, when nothing can have been backed up yet. So right after
+the first deploy, run `bash scripts/backup.sh && bash scripts/restore.sh` once
+by hand, or the second deploy will be refused. The gate is also skipped if
+`NODE_ENV` is exported as anything other than `production`; do not do that on
+the production box.
+
+Restoring for real is `README-deploy.md` section 7 — and step 4 there, re-doing
+the dashboard steps, is the one people miss.
 
 ## Security notes (substrate moats)
 

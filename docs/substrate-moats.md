@@ -118,9 +118,14 @@ Save As — does not produce an unwatermarked file.
 production deploy is refused.
 
 **Enforcement.** `scripts/restore.sh` restores the newest dump into a throwaway
-database, asserts ≥40 tables and ≥1 user actually landed, and stamps
-`workspace/last_restore_drill.json`. `scripts/check-restore-drill.mjs` reads the
-stamp and `scripts/deploy.sh` runs it first.
+database (a Postgres container of the dump's own major, started and removed by
+the drill), asserts ≥40 tables and ≥1 user actually landed, and stamps
+`workspace/last_restore_drill.json`, as `"result": "failed"` with the reason
+when it does not pass. `scripts/check-restore-drill.mjs` reads the stamp and
+`scripts/deploy.sh` runs it before building, with `NODE_ENV` defaulting to
+`production`, on every deploy **except a host's first**, when no backup can
+exist yet. (Until this was fixed the gate self-skipped on every deploy, because
+deploy.sh never set `NODE_ENV`.)
 
 **Scope, stated honestly.** The drill covers the **database only**. The stamp
 reports `"storage_verified": false`, because the object mirror is not exercised

@@ -17,9 +17,11 @@ Check that the restore drill passed:
 cat workspace/last_restore_drill.json
 ```
 
-`"result": "ok"` and an `at` within the last seven days. If it is stale,
-`scripts/deploy.sh` will refuse to deploy once it passes 30 days — that refusal
-is the point, not an obstacle to work around.
+`"result": "ok"` and a `ranAt` within the last seven days. A drill that failed
+says so, `"result": "failed"` with an `error`, instead of leaving no file. If it
+is failed, or stale past 30 days, `scripts/deploy.sh` will refuse to deploy —
+that refusal is the point, not an obstacle to work around. Fix the cause and
+re-run `bash scripts/restore.sh`; `/var/lib/gml/drill.log` has the detail.
 
 Note `"storage_verified": false` is expected and correct: the drill exercises
 the database only. See [SM-5](substrate-moats.md#sm-5--backups-are-proven-restorable).
@@ -123,8 +125,12 @@ Stated so nobody assumes otherwise:
   has not been done.
 - There are no application metrics — no request rates, no latency histograms, no
   queue-depth time series. `/admin/transcode-jobs` shows an instantaneous depth.
-- Log aggregation is `docker compose logs`. Logs are rotated at 50 MB × 5 files
-  if you followed README-deploy.md §6; otherwise they grow without bound.
+- Log aggregation is `docker compose logs`. Rotation is configured in
+  `docker-compose.yml` (its `x-logging` anchor) at 10 MB × 3 files per service,
+  about 120 MB across the stack, and needs no operator action. With no alerting
+  and no metrics these logs are the only forensic record, and 30 MB of Caddy
+  access lines is a few days on a busy week; raise `max-size` / `max-file` in
+  that anchor if more history is wanted.
 
 For a single-instance internal tool with fifty users this is a defensible
 position. It is a position, not an oversight, and it should be revisited if the
