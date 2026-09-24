@@ -67,4 +67,15 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
    * Run by the create and update actions and by CSV import, after zod.
    */
   validate?: (db: AdminDb, row: Record<string, unknown>) => Promise<Record<string, string> | null>;
+  /**
+   * State-dependent write rules. Called by the grid's update (with the row as
+   * it is and as it would become) and delete (with the row as it is), inside
+   * the write's transaction and after the row is locked. Returns the reason
+   * shown to the operator to refuse the write, or null to allow it.
+   */
+  guardMutation?: (
+    op: "update" | "delete",
+    before: Record<string, unknown>,
+    next?: Record<string, unknown>,
+  ) => string | null;
 };

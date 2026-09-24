@@ -432,8 +432,13 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const refEntity = rawRef
     ? Object.values(ADMIN_ENTITIES).find((e) => getTableName(e.table) === rawRef)
     : undefined;
+  // `locked` carries the entity guard's own sentence (actions.ts,
+  // entity.guardMutation), e.g. why a signed-off cycle cannot be deleted.
+  const rawDetail = typeof sp.detail === "string" ? sp.detail.slice(0, 300) : undefined;
   const gridError = rawError
-    ? rawError === "still_referenced" && refEntity
+    ? rawError === "locked"
+      ? (rawDetail ?? "That row is locked in its current state.")
+      : rawError === "still_referenced" && refEntity
       ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
       : (GRID_ERRORS[rawError] ?? "That action could not be completed.")
     : null;

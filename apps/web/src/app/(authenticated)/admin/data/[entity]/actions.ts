@@ -19,6 +19,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { entityRowProblems } from "@/admin/access";
+import { deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
@@ -36,6 +37,8 @@ function getEntityOrThrow(slug: string) {
   if (!entity) throw new Error(`Unknown admin entity: ${slug}`);
   return entity;
 }
+
+const BULK_BEFORE_IMAGE_CAP = 200;
 
 function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
   return entity.mutateRoles ?? entity.readRoles;
@@ -225,28 +228,48 @@ export async function updateRowAction(
   const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
   if (refused) return refused;
 
+  // READ, GUARD, WRITE, in one transaction. This used to be a blind UPDATE by
+  // id: it could not enforce a rule that depends on the row's current state
+  // (a signed-off observation cycle keeping its teacher -- see the entity's
+  // guardMutation) and had no previous value to audit, so after an edit the
+  // append-only log could not say what the record had been. The row is locked
+  // FOR UPDATE so the guard judges the state the write actually replaces.
+  const next = parse.data as Record<string, unknown>;
   const audited = withAudit(
-    async () => {
-      const idCol = (entity.table as unknown as { id: unknown }).id;
-      await db
-        .update(entity.table as never)
-        .set(parse.data as never)
-        .where(eq(idCol as never, rowId));
-    },
+    async () =>
+      db.transaction(async (tx) => {
+        const idCol = (entity.table as unknown as { id: unknown }).id;
+        const [before] = (await tx
+          .select()
+          .from(entity.table as never)
+          .where(eq(idCol as never, rowId))
+          .for("update")) as Record<string, unknown>[];
+        if (!before) throw new MutationRefused("That row no longer exists.");
+        const reason = entity.guardMutation?.("update", before, { ...before, ...next });
+        if (reason) throw new MutationRefused(reason);
+        await tx
+          .update(entity.table as never)
+          .set(next as never)
+          .where(eq(idCol as never, rowId));
+        return updateAudit(entity, before, next);
+      }),
     {
       action: "admin.row.update",
       entityType: entity.slug,
       entityId: rowId,
       metadata: {
         op: "update",
-        row: entity.describeRow?.(parse.data as Record<string, unknown>),
+        row: entity.describeRow?.(next),
       },
+      // `changes: { field: { from, to } }` -- field names only for PII.
+      metadataFrom: (diff) => diff,
     },
   );
 
   try {
     await audited();
   } catch (err) {
+    if (err instanceof MutationRefused) return { ok: false, error: err.message };
     return { ok: false, error: `Update failed: ${String(err)}` };
   }
 
@@ -270,18 +293,34 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
   const session = await requireRole(mutateRolesFor(entity));
   await requireEntityGate(entity, session.user.id);
 
+  // Read, guard, delete -- the same shape as updateRowAction, and for the same
+  // two reasons: a state-dependent rule (a signed-off cycle is not deletable)
+  // and a before-image, since the audit row used to be literally
+  // {"op":"delete"} and could not say what was removed or whom it was about.
   const audited = withAudit(
-    async () => {
-      // Drizzle's loose `eq(table.id, value)` needs the `id` column to exist.
-      // All admin-editable tables in v2 do (uuid pk).
-      const idCol = (entity.table as unknown as { id: unknown }).id;
-      await db.delete(entity.table as never).where(eq(idCol as never, rowId));
-    },
+    async () =>
+      db.transaction(async (tx) => {
+        // Drizzle's loose `eq(table.id, value)` needs the `id` column to exist.
+        // All admin-editable tables in v2 do (uuid pk).
+        const idCol = (entity.table as unknown as { id: unknown }).id;
+        const [before] = (await tx
+          .select()
+          .from(entity.table as never)
+          .where(eq(idCol as never, rowId))
+          .for("update")) as Record<string, unknown>[];
+        if (!before) return null;
+        const reason = entity.guardMutation?.("delete", before);
+        if (reason) throw new MutationRefused(reason);
+        await tx.delete(entity.table as never).where(eq(idCol as never, rowId));
+        return before;
+      }),
     {
       action: "admin.row.delete",
       entityType: entity.slug,
       entityId: rowId,
       metadata: { op: "delete" },
+      metadataFrom: (before) =>
+        before ? { row: entity.describeRow?.(before), before: deleteImage(entity, before) } : { missing: true },
     },
   );
 
@@ -335,6 +374,10 @@ function describeDbError(err: unknown): string {
  * identifier is passed on, and the page shows the matching entity's label.
  */
 function gridErrorQuery(err: unknown): string {
+  // A guard's refusal carries its own sentence (entity.guardMutation).
+  if (err instanceof MutationRefused) {
+    return new URLSearchParams({ error: "locked", detail: err.message.slice(0, 300) }).toString();
+  }
   const params = new URLSearchParams({ error: describeDbError(err) });
   const { code, table } = (err ?? {}) as { code?: string; table?: string };
   if (code === "23503" && table && /^[a-z_]+$/.test(table)) params.set("ref", table);
@@ -372,15 +415,28 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
 
   const idCol = (entity.table as unknown as { id: unknown }).id;
   let deletedCount = 0;
+  let befores: Record<string, unknown>[] = [];
 
   try {
     await db.transaction(async (tx) => {
+      // The same guard as the single-row delete, for EVERY selected row, and
+      // the whole batch is refused if any one is refused -- otherwise the bulk
+      // toolbar would be the way round it.
+      befores = (await tx
+        .select()
+        .from(entity.table as never)
+        .where(inArray(idCol as never, rowIds as never[]))
+        .for("update")) as Record<string, unknown>[];
+      for (const before of befores) {
+        const reason = entity.guardMutation?.("delete", before);
+        if (reason) throw new MutationRefused(reason);
+      }
       // Single DELETE ... WHERE id IN (...) — atomic, one round-trip.
       // Drizzle's `inArray` builds the correct parameterised SQL list.
       await tx
         .delete(entity.table as never)
         .where(inArray(idCol as never, rowIds as never[]));
-      deletedCount = rowIds.length;
+      deletedCount = befores.length;
     });
   } catch (err) {
     // Same reasoning as deleteRowAction: an atomic bulk delete that rolls back
@@ -402,6 +458,10 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
       // First 5 ids for traceability. A full N-id dump can blow the metadata
       // JSON column on big selections; 5 is enough to spot-check.
       ids: rowIds.slice(0, 5),
+      // What was removed, as for a single delete. A grid page selects at most
+      // 50 rows; the cap only guards a hand-built request.
+      before: befores.slice(0, BULK_BEFORE_IMAGE_CAP).map((b) => deleteImage(entity, b)),
+      ...(befores.length > BULK_BEFORE_IMAGE_CAP ? { beforeTruncated: true } : {}),
     },
   });
 

@@ -1,5 +1,7 @@
 // Audit-log helpers. Use recordAudit() for ad-hoc events; wrap server actions
-// with withAudit() to get automatic before/after logging.
+// with withAudit() to log their success or failure. withAudit records only the
+// metadata it is given (or derives from the result via metadataFrom) -- it
+// does NOT capture a before-image by itself; the caller must read the row.
 
 import "server-only";
 import { headers } from "next/headers";
@@ -305,13 +307,23 @@ export function withAudit<TArgs extends unknown[], TResult>(
      * the row it created. An explicit `entityId` wins.
      */
     entityIdFrom?: (result: TResult) => string | null | undefined;
+    /**
+     * Metadata only the action's result can supply -- a before-image or a
+     * from/to diff, which exist only once the row has been read inside the
+     * write's transaction. Merged over `metadata`.
+     */
+    metadataFrom?: (result: TResult) => Record<string, unknown>;
   },
 ): (...args: TArgs) => Promise<TResult> {
-  const { entityIdFrom, ...input } = meta;
+  const { entityIdFrom, metadataFrom, ...input } = meta;
   return async (...args: TArgs): Promise<TResult> => {
     try {
       const result = await fn(...args);
-      void recordAudit({ ...input, entityId: input.entityId ?? entityIdFrom?.(result) ?? undefined });
+      void recordAudit({
+        ...input,
+        entityId: input.entityId ?? entityIdFrom?.(result) ?? undefined,
+        metadata: metadataFrom ? { ...(input.metadata ?? {}), ...metadataFrom(result) } : input.metadata,
+      });
       return result;
     } catch (err) {
       // A DISTINCT ACTION NAME, not the success one with an `error` key bolted

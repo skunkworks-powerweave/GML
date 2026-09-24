@@ -21,6 +21,33 @@ async function liveObserver(db: AdminDb, row: Record<string, unknown>): Promise<
   return found ? null : { observerId: "must be an active observer account" };
 }
 
+/**
+ * Once a cycle is past "nominated", forms have been written ABOUT a teacher
+ * under a kind: the lesson plan, the observer's rubric, the summary. Changing
+ * teacherId then moves that record onto someone else -- and read access with
+ * it, since lib/authz.ts follows cycle.teacher_id -- and changing kind turns
+ * an evaluative record into a baseline one. Deleting it would erase the forms'
+ * parent (their FKs refuse that since 0029, but the refusal should say why).
+ * Code, observer, schedule, subject and topic stay editable, and every change
+ * is audited with its previous value.
+ */
+function lockAfterNomination(
+  op: "update" | "delete",
+  before: Record<string, unknown>,
+  next?: Record<string, unknown>,
+): string | null {
+  if (before.status === "nominated") return null;
+  if (op === "delete") {
+    return `This cycle is at stage "${String(before.status)}" and has work recorded under it; it cannot be deleted from the grid.`;
+  }
+  for (const field of ["teacherId", "kind"] as const) {
+    if (next && field in next && next[field] !== before[field]) {
+      return `This cycle is at stage "${String(before.status)}": its ${field === "kind" ? "kind" : "teacher"} can no longer be changed.`;
+    }
+  }
+  return null;
+}
+
 // Observation cycles — the nomination record every classroom observation hangs off.
 //
 // WHY THIS ENTITY EXISTS. The Observation module was inert on any real
@@ -43,6 +70,8 @@ export const observationCyclesEntity: AdminEntity = {
   // not be the way round it. Test: tests/behaviour/admin-section-gate.test.ts.
   gate: "observation",
   validate: liveObserver,
+  // Test: tests/behaviour/admin-cycle-lock.test.ts.
+  guardMutation: lockAfterNomination,
   displayColumns: [
     { key: "code", label: "Code" },
     { key: "teacherId", label: "Teacher" },
