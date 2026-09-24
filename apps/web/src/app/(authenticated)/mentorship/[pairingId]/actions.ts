@@ -31,6 +31,7 @@ import { db } from "@gml/db";
 import { mentorPairings, mentorMeetings } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit } from "@/lib/audit";
@@ -66,6 +67,15 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
     redirect(`/mentorship/${pairingId}?error=invalid_meeting_time`);
   }
 
+  // A WHOLE NUMBER OF MINUTES. The field was free text, so "forty" was stored
+  // and rendered as "fortym". Optional; when given, 1..600.
+  if (durationMinRaw.length > 0) {
+    const minutes = Number(durationMinRaw);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 600) {
+      redirect(`/mentorship/${pairingId}?logMeeting=1&error=invalid_duration`);
+    }
+  }
+
   // OWNERSHIP GATE. What stood here was described as a "cheap guard against URL
   // tampering", but it only confirmed the pairing EXISTED -- not that the caller
   // had anything to do with it. With no role check either, any authenticated
@@ -73,6 +83,13 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // meetings_count / last_meeting_at counters.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // THE MENTOR LOGS MEETINGS (or an administrator). The page says "Mentor logs
+  // every contact", yet the mentee was offered the button and her posts were
+  // accepted -- and nothing can remove a meeting row, so a mistaken entry
+  // inflated meetings_count on the list and the dashboard for good.
+  if (!hasAnyRole(actor.role, ["mentor", "programme_admin", "super_admin"])) {
+    redirect(`/mentorship/${pairingId}?error=meetings_mentor_only`);
+  }
   // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
   // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
   // assertSectionGate never executes on a mutation. Every action in this file

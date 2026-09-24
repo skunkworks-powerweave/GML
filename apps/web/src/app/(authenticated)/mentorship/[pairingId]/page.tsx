@@ -23,6 +23,7 @@ import {
   mentorMeetings,
   feedbackForms,
   feedbackResponses,
+  users,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
@@ -95,6 +96,8 @@ export default async function PairingDetailPage({
     empty_commitment: "A commitment needs some text before it can be added.",
     commitments_full:
       "This pairing already has the maximum of 50 commitments. Mark some done before adding more.",
+    meetings_mentor_only: "Meetings are logged by the mentor. Nothing was saved.",
+    invalid_duration: "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
   };
   const pairingError = sp.error
     ? (PAIRING_ERRORS[sp.error] ?? "That action could not be completed. Please try again.")
@@ -141,16 +144,26 @@ export default async function PairingDetailPage({
   // along with the ownership check rather than costing a second query.
   const commitments = Array.isArray(pairing.commitments) ? pairing.commitments : [];
 
-  // Pick a WhatsApp/Message target — the mentee (teacher) is the primary
-  // contact for a mentor-led pairing. Phone may be NULL.
-  const contactPhone = teacher?.phone ?? null;
-  const contactName = teacher?.fullName ?? "Mentee";
+  // THE OTHER PERSON ON THE PAIRING, from where the viewer stands. This was
+  // always the mentee, so a teacher opening her own pairing got a WhatsApp
+  // chat with her own number greeting herself, and no way to reach her
+  // mentor. The mentor's number is her user profile's (mentors has none).
+  // Phone may be NULL.
+  const viewerIsMentee = session.user.role === "teacher";
+  const [mentorUser] =
+    viewerIsMentee && mentor?.userId
+      ? await db.select({ phone: users.phone }).from(users).where(eq(users.id, mentor.userId)).limit(1)
+      : [];
+  const contactPhone = viewerIsMentee ? (mentorUser?.phone ?? null) : (teacher?.phone ?? null);
+  const contactName = viewerIsMentee ? (mentor?.name ?? "Mentor") : (teacher?.fullName ?? "Mentee");
   const waText = `Hi ${contactName}, checking in on our mentorship pairing.`;
   const waHref =
     contactPhone && contactPhone.replace(/[^0-9]/g, "").length >= 10
       ? `https://wa.me/${contactPhone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(waText)}`
       : null;
-  const messageHref = teacher?.userId ? `/inbox?to=${teacher.userId}` : `/inbox`;
+  // The mentee does not log meetings: "Mentor logs every contact", and a
+  // mistaken entry by her could not be removed by anyone.
+  const canLogMeeting = !viewerIsMentee;
 
   const meetings = await db
     .select()
@@ -247,9 +260,9 @@ export default async function PairingDetailPage({
 
           {/* Action buttons (spec 118) — Message / WhatsApp / Log meeting / Complete */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Link href={messageHref} className="btn btn-sm" aria-label="Open message thread">
-              Message
-            </Link>
+            {/* No "Message" button: it linked /inbox?to=<id>, and the inbox is a
+                notification feed that reads no `to` and has no messaging. It
+                landed everyone on an empty feed. WhatsApp is the channel. */}
             {waHref ? (
               <a
                 href={waHref}
@@ -264,19 +277,21 @@ export default async function PairingDetailPage({
               <span
                 className="btn btn-sm"
                 style={{ opacity: 0.45, cursor: "not-allowed" }}
-                title="No phone on file for mentee"
+                title={`No phone on file for ${viewerIsMentee ? "your mentor" : "the mentee"}`}
                 aria-disabled="true"
               >
                 WhatsApp
               </span>
             )}
-            <Link
-              href={`/mentorship/${pairingId}?logMeeting=1`}
-              className="btn btn-sm btn-primary"
-              aria-label="Log a new meeting"
-            >
-              + Log meeting
-            </Link>
+            {canLogMeeting ? (
+              <Link
+                href={`/mentorship/${pairingId}?logMeeting=1`}
+                className="btn btn-sm btn-primary"
+                aria-label="Log a new meeting"
+              >
+                + Log meeting
+              </Link>
+            ) : null}
             {canComplete && pairing.status !== "complete" ? (
               <form action={completePairingAction}>
                 <input type="hidden" name="pairingId" value={pairingId} />
@@ -294,7 +309,7 @@ export default async function PairingDetailPage({
         </div>
 
         {/* Inline "Log meeting" form — shown when ?logMeeting=1 */}
-        {showLogMeetingForm ? (
+        {showLogMeetingForm && canLogMeeting ? (
           <form
             action={logMeetingAction}
             className="card"
@@ -319,8 +334,12 @@ export default async function PairingDetailPage({
               <label style={{ fontSize: 12 }}>
                 <div className="label" style={{ marginBottom: 4 }}>Duration (min)</div>
                 <input
-                  type="text"
+                  type="number"
                   name="durationMin"
+                  min={1}
+                  max={600}
+                  step={1}
+                  inputMode="numeric"
                   placeholder="42"
                   style={{
                     width: "100%",

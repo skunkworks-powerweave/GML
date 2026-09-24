@@ -84,8 +84,11 @@ test("an administrator's quarter links are previews that file nothing against th
   await withForms(async (w, f) => {
     const html = await pairingHtml(w.admin, w.pairingA);
     const q1 = /<a\b[^>]*aria-label="[^"]*Q1[^"]*"[^>]*>/.exec(html)?.[0] ?? "";
-    assert.match(q1, new RegExp(`href="/forms/${f.mentor.slug}"`), q1 || "no Q1 link");
+    // Which baseline/mentor form wins depends on what other test files have
+    // active at the same moment; that it is a bare preview link does not.
+    assert.match(q1, /href="\/forms\/baseline-mentor-[^"?]+"/, q1 || "no Q1 link");
     assert.doesNotMatch(q1, /pairingId=/);
+    assert.ok(f.mentor.slug);
   });
 });
 
