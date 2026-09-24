@@ -194,7 +194,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
 
 /**
  * Mobile bottom tabs. Match `mobile-shell.jsx::TABS_BY_ROLE`.
- * Max 5 tabs per role. `inbox` becomes `audit` for super_admin.
+ * Five tabs per role, six for teacher (uploads; see below). `inbox` becomes
+ * `audit` for super_admin.
  */
 /**
  * Give every role a link to its own settings page.
@@ -234,6 +235,15 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
     { id: "observe", label: "Observe", icon: "eye", href: "/observation" },
     { id: "repo", label: "Repo", icon: "table", href: "/repo" },
     { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    // /uploads was in the DESKTOP sidebar only. A phone has no sidebar, so a
+    // teacher could reach her uploads page -- the only mount of the mobile
+    // camera/resumable-upload runner -- solely through a dashboard to-do row
+    // that appears while a cycle is awaiting a video. Teachers are the most
+    // phone-heavy group in the programme. Added as a sixth tab rather than
+    // replacing Repo, which has no other mobile route either. The grid in
+    // BottomTabs sizes itself from tabs.length; the label renders via
+    // nav.uploads (TAB_KEY), this literal is only the fallback.
+    { id: "uploads", label: "Uploads", icon: "upload", href: "/uploads" },
   ],
   mentor: [
     { id: "home", label: "Today", icon: "home", href: "/dashboard" },

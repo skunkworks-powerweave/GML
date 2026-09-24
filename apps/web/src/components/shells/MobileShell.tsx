@@ -15,6 +15,7 @@ import { BottomTabs } from "@/components/nav/BottomTabs";
 import { ConfidentialityFooter } from "@/components/ConfidentialityFooter";
 import { MobileHelpFAB } from "@/components/MobileHelpFAB";
 import type { NavCounts } from "@/lib/chrome-counts";
+import { MAIN_CONTENT_ID, SkipLink } from "./SkipLink";
 
 type MobileShellProps = {
   user: { id: string; name?: string | null; email?: string | null; role: RoleName; image?: string | null };
@@ -37,6 +38,9 @@ export function MobileShell({
 }: MobileShellProps) {
   return (
     <div style={{ minHeight: "100dvh", background: "var(--paper)", paddingBottom: 80 }}>
+      {/* Skips the header's account controls. A phone with a keyboard or a
+          switch device tabs through them otherwise. */}
+      <SkipLink />
       <header
         style={{
           padding: "14px 16px 10px",
@@ -111,7 +115,9 @@ export function MobileShell({
           </form>
         </div>
       </header>
-      <main style={{ padding: "16px" }}>{children}</main>
+      <main id={MAIN_CONTENT_ID} tabIndex={-1} style={{ padding: "16px" }}>
+        {children}
+      </main>
       <ConfidentialityFooter user={{ name: user.name, email: user.email }} compact />
       <MobileHelpFAB />
       <BottomTabs

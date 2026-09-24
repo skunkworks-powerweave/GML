@@ -184,6 +184,32 @@ body.a11y-reduced-motion *, body.a11y-reduced-motion ::before, body.a11y-reduced
 .deva { font-family: var(--deva); }
 .tib { font-family: var(--tib); }
 
+/* Skip link. Visually hidden until it receives keyboard focus, then shown
+   with its OWN focus ring: this stylesheet has almost no focus styling, so a
+   UA outline cannot be assumed to survive. It is the first focusable element
+   in both shells and jumps past the sidebar (up to ~21 links) to <main>. */
+.skip-link {
+  position: fixed;
+  left: 8px;
+  top: -200px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: 8px;
+  outline: 3px solid var(--saffron);
+  outline-offset: 2px;
+}
+/* The skip target takes focus programmatically (tabindex=-1); no ring on it. */
+#main-content:focus { outline: none; }
+
 /* Eyebrow label */
 .label {
   font-size: 11px;
