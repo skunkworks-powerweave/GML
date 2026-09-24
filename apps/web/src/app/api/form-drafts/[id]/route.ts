@@ -23,6 +23,7 @@ import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { actorFrom, type Actor } from "@/lib/visibility";
 import { pairingDraftAccess, templateDraftWhere } from "@/lib/forms/drafts";
+import { isUuid } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,8 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const scope = parseScope(req);
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
   const { id } = await ctx.params;
+  // A uuid, or the next query raises 22P02 and this answers 500.
+  if (!isUuid(id)) return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   const pairingId = scope === "template" ? await draftPairing(req, actor) : null;
   if (pairingId instanceof NextResponse) return pairingId;
 
@@ -93,6 +96,8 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   const scope = parseScope(req);
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
   const { id } = await ctx.params;
+  // A uuid, or the next query raises 22P02 and this answers 500.
+  if (!isUuid(id)) return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   const pairingId = scope === "template" ? await draftPairing(req, actor) : null;
   if (pairingId instanceof NextResponse) return pairingId;
 
@@ -125,28 +130,37 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   const responses = parsed.data.responses;
   const now = new Date();
 
-  if (scope === "template") {
-    await db
-      .insert(formDrafts)
-      .values({ userId, templateId: id, pairingId, responses, updatedAt: now })
-      .onConflictDoUpdate({
-        // Partial-unique index `form_drafts_user_template_pairing_uq` covers
-        // (user_id, template_id, pairing_id) NULLS NOT DISTINCT WHERE
-        // template_id IS NOT NULL, so a draft with no pairing is found too.
-        // Drizzle accepts the column list + a `targetWhere` predicate.
-        target: [formDrafts.userId, formDrafts.templateId, formDrafts.pairingId],
-        targetWhere: sql`${formDrafts.templateId} IS NOT NULL`,
-        set: { responses, updatedAt: now },
-      });
-  } else {
-    await db
-      .insert(formDrafts)
-      .values({ userId, observationCycleId: id, responses, updatedAt: now })
-      .onConflictDoUpdate({
-        target: [formDrafts.userId, formDrafts.observationCycleId],
-        targetWhere: sql`${formDrafts.observationCycleId} IS NOT NULL`,
-        set: { responses, updatedAt: now },
-      });
+  try {
+    if (scope === "template") {
+      await db
+        .insert(formDrafts)
+        .values({ userId, templateId: id, pairingId, responses, updatedAt: now })
+        .onConflictDoUpdate({
+          // Partial-unique index `form_drafts_user_template_pairing_uq` covers
+          // (user_id, template_id, pairing_id) NULLS NOT DISTINCT WHERE
+          // template_id IS NOT NULL, so a draft with no pairing is found too.
+          // Drizzle accepts the column list + a `targetWhere` predicate.
+          target: [formDrafts.userId, formDrafts.templateId, formDrafts.pairingId],
+          targetWhere: sql`${formDrafts.templateId} IS NOT NULL`,
+          set: { responses, updatedAt: now },
+        });
+    } else {
+      await db
+        .insert(formDrafts)
+        .values({ userId, observationCycleId: id, responses, updatedAt: now })
+        .onConflictDoUpdate({
+          target: [formDrafts.userId, formDrafts.observationCycleId],
+          targetWhere: sql`${formDrafts.observationCycleId} IS NOT NULL`,
+          set: { responses, updatedAt: now },
+        });
+    }
+  } catch (err) {
+    // A well-formed id naming no form or cycle is a foreign-key violation
+    // (23503): that is "not found", not a server error.
+    const e = err as { code?: string; cause?: { code?: string } };
+    const code = e.code ?? e.cause?.code;
+    if (code === "23503") return NextResponse.json({ error: "not_found" }, { status: 404 });
+    throw err;
   }
 
   void recordAudit({
@@ -166,6 +180,8 @@ export async function DELETE(req: Request, ctx: RouteCtx) {
   const scope = parseScope(req);
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
   const { id } = await ctx.params;
+  // A uuid, or the next query raises 22P02 and this answers 500.
+  if (!isUuid(id)) return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   const pairingId = scope === "template" ? await draftPairing(req, actor) : null;
   if (pairingId instanceof NextResponse) return pairingId;
 
