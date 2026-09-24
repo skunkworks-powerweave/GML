@@ -25,7 +25,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, outcome, form, closeAppDb, type TestUser } from "./_server-actions.js";
-import { render, withAppRouter } from "./_ui.js";
+import { render, withAppRouter, openingTags, attr } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { observationWorld, type ObservationWorld } from "./_observation-world.js";
 
@@ -138,6 +138,43 @@ test("the refusal is explained on the page, naming the question", { skip }, asyn
     const out = await renderCycle(w.teacher, cyc.id, { error: "invalid_form", field: "lessonPlanSummary" });
     assert.match(out, /Lesson plan summary/);
     assert.match(out, /nothing was recorded/i);
+  } finally {
+    await w.cleanup();
+  }
+});
+
+// The server refuses an answer over MAX_TEXT_LENGTH, and the refusal is a
+// redirect. The inputs had no maxLength, so an observer who wrote a long
+// rubric on a phone found out only after submitting, from a message that said
+// "blank or too long" without saying how long is too long.
+
+test("every stage input carries the server's length cap, and the refusal states it", { skip }, async () => {
+  const w = await observationWorld("obscap");
+  try {
+    const { MAX_TEXT_LENGTH } = await import("../../apps/web/src/lib/forms/validate.ts");
+    const html = async (user: TestUser, cycleId: string) => {
+      signIn(user);
+      const { default: CycleDetailPage } = await import("../../apps/web/src/app/(authenticated)/observation/[cycleId]/page.tsx");
+      return render(
+        withAppRouter(await CycleDetailPage({ params: Promise.resolve({ cycleId }), searchParams: Promise.resolve({}) })),
+      );
+    };
+    const stages: Array<[TestUser, string, string]> = [
+      [w.teacher, "nominated", "lessonPlanSummary"],
+      [w.observer, "pre_submitted", "narrativeComments"],
+      [w.teacher, "observed", "whatWorked"],
+    ];
+    for (const [user, status, field] of stages) {
+      const cyc = await w.cycle({ status });
+      const tag = openingTags(await html(user, cyc.id), "textarea").find((t) => attr(t, "name") === field);
+      assert.ok(tag, `the ${status} stage renders its ${field} input`);
+      // React writes the attribute as maxLength; HTML attribute names are case-insensitive.
+      assert.equal(attr(tag!, "maxLength") ?? attr(tag!, "maxlength"), String(MAX_TEXT_LENGTH), `${field} is capped where the server caps it`);
+    }
+
+    const cyc = await w.cycle({ status: "nominated" });
+    const out = await renderCycle(w.teacher, cyc.id, { error: "invalid_form", field: "lessonPlanSummary" });
+    assert.ok(out.includes(`${MAX_TEXT_LENGTH.toLocaleString("en-IN")} characters`), `the message states the limit: ${out}`);
   } finally {
     await w.cleanup();
   }

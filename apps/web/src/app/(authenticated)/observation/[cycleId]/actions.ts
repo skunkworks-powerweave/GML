@@ -61,6 +61,7 @@ import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
+import { formatNoteEntry } from "@/lib/observation/notes";
 import { isUuid } from "@/lib/ids";
 import { notifyCycleParties } from "@/lib/observation/notify";
 
@@ -525,10 +526,12 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   // read "Mentor notes" although observers and administrators write here too,
   // so a teacher reading two entries from the same minute could not tell who
   // judged what; the audit row names the actor but not the text. The author
-  // and their role are now part of the entry itself.
-  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  // and their role are now part of the entry itself. formatNoteEntry drops
+  // blank lines from the note, since a blank line is what separates entries:
+  // otherwise a note could carry a line shaped like another author's header
+  // and read as their entry (lib/observation/notes.ts).
   const author = session.user.name?.trim() || session.user.email || "Unknown user";
-  const entry = `[${stamp} UTC] ${author} (${actor.role}): ${note}`;
+  const entry = formatNoteEntry(new Date(), author, actor.role, note);
 
   const updated = await db
     .update(observationCycles)
