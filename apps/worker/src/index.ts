@@ -48,7 +48,7 @@ import {
   LEASE_SECONDS,
   type ClaimedJob,
 } from "@gml/db/queue";
-import { deleteOldNotifications } from "@gml/db/scripts/retention";
+import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
 import { transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
 import { log } from "./log.js";
@@ -103,9 +103,18 @@ async function runJob(job: ClaimedJob): Promise<void> {
       case "transcode":
         await transcode480p(job.payload as unknown as TranscodeJobInput);
         break;
+      // The nightly retention sweep. The name predates the second table; it is
+      // kept because scheduleDailyWork() enqueues it and its dedupe key is what
+      // makes the sweep once-per-day.
       case "deleteOldNotifications": {
         const n = await deleteOldNotifications();
         log.info("retention: notifications purged", { count: n });
+        // rate_limits keys carry client IPs. Nothing pruned them before this
+        // line: the old reaper lived in apps/web behind `server-only`, where
+        // this process cannot reach it. Both deletes are idempotent, so a retry
+        // after a failure here re-running the first is harmless.
+        const r = await pruneRateLimits(undefined, db);
+        log.info("retention: expired rate-limit counters purged", { count: r });
         break;
       }
       default:
