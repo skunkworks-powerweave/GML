@@ -60,6 +60,16 @@ import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
+import { isUuid } from "@/lib/ids";
+
+// Where the gate sends the user after they unlock: back to THIS cycle. Every
+// action here passed "/observation", so a grant lapsing (8 h, or a password
+// rotation) while someone wrote a rubric or a reflection returned them to the
+// list after unlocking, with no way back to what they were doing but to find
+// the cycle again. Only a well-formed id is echoed into the path.
+function cyclePath(cycleId: string): string {
+  return isUuid(cycleId) ? `/observation/${cycleId}` : "/observation";
+}
 
 type CycleStatus =
   | "nominated"
@@ -249,7 +259,7 @@ export async function submitPreFormAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = stageResponses("pre", cycleId, formData);
@@ -305,7 +315,7 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = stageResponses("observer", cycleId, formData);
@@ -362,7 +372,7 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
   const responses = stageResponses("post", cycleId, formData);
@@ -423,7 +433,7 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
   const code = await transitionCycleStatus(cycleId, "post_submitted", "complete");
@@ -480,7 +490,7 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   // unasserted action is also an unrevoked one. The section-level rotatable
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
-  await assertSectionGate(actor.id, "observation", "/observation");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   const cycle = await assertCanAccessCycle(actor, cycleId);
   // A SIGNED-OFF RECORD IS CLOSED. Sign-off is "final ... locks the cycle"
   // (above, and spec 117), but nothing enforced it: notes kept being appended
