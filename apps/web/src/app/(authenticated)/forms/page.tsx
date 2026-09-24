@@ -49,7 +49,19 @@ function audiencesFor(role: RoleName): ("mentor" | "mentee")[] {
   }
 }
 
-export default async function FormsIndexPage() {
+/** The submit action's own errors, which it used to send to /inbox (which ignored them). */
+const SUBMIT_ERRORS: Record<string, string> = {
+  form_not_found: "That form is no longer available, so your answers were not saved. Choose a current form below.",
+  invalid_form_submit: "That submission was incomplete and could not be saved. Please open the form again.",
+};
+
+export default async function FormsIndexPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ error?: string }>;
+} = {}) {
+  const sp = (await searchParams) ?? {};
+  const submitError = sp.error ? (SUBMIT_ERRORS[sp.error] ?? null) : null;
   const session = await auth();
   if (!session) redirect("/login?next=%2Fforms");
 
@@ -135,6 +147,24 @@ export default async function FormsIndexPage() {
         </p>
       </header>
 
+      {submitError ? (
+        <p
+          role="alert"
+          data-testid="forms-error"
+          style={{
+            background: "var(--rust-soft)",
+            color: "var(--rust)",
+            border: "1px solid var(--rust)",
+            borderRadius: "var(--r-2, 8px)",
+            padding: "12px 14px",
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          {submitError}
+        </p>
+      ) : null}
+
       {locked ? (
         <p
           role="status"
@@ -198,6 +228,10 @@ export default async function FormsIndexPage() {
             // dead end. Now a row with several pairings lists one link per
             // pairing, named, and nobody is sent to /inbox.
             const links = formCatalogueLinks(slug, { isAdmin, pairings, lookupFailed, locked });
+            // Per pairing when there are several: "Answered" as soon as ONE of
+            // a mentor's five mentees was answered hid the other four.
+            const perPairing = links.filter((l) => l.pairingId);
+            const answeredHere = perPairing.filter((l) => answeredFor.has(`${f.id}:${l.pairingId}`)).length;
             // BY THE FORM'S OWN TITLE. Labelled by kind alone, the School visit
             // checklist (stored as kind 'baseline') and the mentor baseline were
             // two rows both called "Baseline for mentors".
@@ -222,7 +256,13 @@ export default async function FormsIndexPage() {
                   whiteSpace: "nowrap",
                 }}
               >
-                {done ? "Answered" : links.length === 0 ? "Needs a pairing" : "Not started"}
+                {perPairing.length > 1
+                  ? `${answeredHere} of ${perPairing.length} answered`
+                  : done
+                    ? "Answered"
+                    : links.length === 0
+                      ? "Needs a pairing"
+                      : "Not started"}
               </span>
             );
             const card: React.CSSProperties = {

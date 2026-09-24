@@ -29,6 +29,8 @@ import {
   feedbackResponses,
   formDrafts,
   mentorPairings,
+  mentors,
+  teachers,
   type FeedbackForm,
 } from "@gml/db/schema";
 
@@ -44,7 +46,7 @@ import {
 } from "@/lib/forms/validate";
 import { decodeFormSlug, formRunnerHref } from "@/lib/forms/catalogue-links";
 import { templateDraftWhere } from "@/lib/forms/drafts";
-import { isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
+import { formTitle, isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
 import { parseFormSchema } from "@/lib/forms/schema";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
@@ -240,7 +242,8 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   const pairingId = String(formData.get("__pairingId") ?? "").trim();
 
   if (!formId || !slug) {
-    redirect(`/inbox?error=invalid_form_submit`);
+    // To /forms, which shows these errors; /inbox ignored them.
+    redirect(`/forms?error=invalid_form_submit`);
   }
   if (!pairingId) {
     redirect(`/forms/${slug}?error=missing_pairing`);
@@ -267,7 +270,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     .where(eq(feedbackForms.id, formId))
     .limit(1);
   if (!form || !form.active) {
-    redirect(`/inbox?error=form_not_found`);
+    redirect(`/forms?error=form_not_found`);
   }
 
   const schema = readSchema(form);
@@ -515,11 +518,23 @@ export default async function FormRunnerPage({
   // unlocked. assertCanAccessPairing then 404s a pairing that is malformed,
   // absent or someone else's, which used to render the whole fillable form
   // (and, for a truncated id, a Postgres 22P02 as HTTP 500).
+  let aboutLine: string | null = null;
   if (pairingId) {
     const actor = actorFrom(session);
     if (!actor) redirect("/login");
     await assertSectionGate(userId, "mentorship", formRunnerHref(slug, pairingId));
-    await assertCanAccessPairing(actor, pairingId);
+    const pairing = await assertCanAccessPairing(actor, pairingId);
+
+    // WHOSE FORM THIS IS. A mentor fills the same form for four or five
+    // mentees, and the runner never named the one it was about, so nothing
+    // stopped her rating the wrong teacher before sealing the record.
+    const [mentee] = await db.select({ name: teachers.fullName }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+    const [mentor] = await db.select({ name: mentors.name }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+    const quarter = readParam(sp.quarter) || String(pairing.currentQuarter ?? 1);
+    aboutLine =
+      sessionRole === "teacher"
+        ? `With your mentor ${mentor?.name ?? "—"} · Q${quarter}`
+        : `About ${mentee?.name ?? "—"} · Q${quarter}`;
   }
 
   // THE DRAFT FOR THIS PAIRING. Selected by user+template alone, a mentor's
@@ -605,19 +620,23 @@ export default async function FormRunnerPage({
     }
   }
 
-  const title = schema.title ?? `${parsed.kind.replace("_", " ")} · ${parsed.audience}`;
+  // The four seeded mentor forms carry no title; the fallback used to be
+  // "baseline · mentor". lib/forms/quarterly.ts formTitle.
+  const title = formTitle(schema, parsed.kind, parsed.audience);
   const hindiTitle = schema.hindiTitle;
   const description = schema.description;
 
   return (
     <div>
       <div className="page-header">
+        {/* Back to where the form was opened from: the pairing, or the
+            catalogue. It was "← Inbox", and the inbox has no forms. */}
         <Link
-          href="/inbox"
+          href={pairingId ? `/mentorship/${pairingId}` : "/forms"}
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 6, textDecoration: "none" }}
         >
-          ← Inbox
+          {pairingId ? "← Pairing" : "← Forms"}
         </Link>
         <div className="label">
           Form · {parsed.kind.replace("_", " ")} · {parsed.audience}
@@ -637,6 +656,11 @@ export default async function FormRunnerPage({
             </span>
           ) : null}
         </h1>
+        {aboutLine ? (
+          <p data-testid="form-about" style={{ marginTop: 4, fontSize: 14, fontWeight: 500, color: "var(--ink-2)" }}>
+            {aboutLine}
+          </p>
+        ) : null}
         {description ? (
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>{description}</p>
         ) : null}
@@ -832,8 +856,8 @@ function NotFoundShell({ slug }: { slug: string }) {
         Slug <code className="mono">{slug}</code> doesn&apos;t resolve to any
         active <code className="mono">feedback_forms</code> row. Head back to
         your{" "}
-        <Link href="/inbox" style={{ color: "var(--indigo)" }}>
-          inbox
+        <Link href="/forms" style={{ color: "var(--indigo)" }}>
+          forms
         </Link>{" "}
         and open the form from there.
       </p>
