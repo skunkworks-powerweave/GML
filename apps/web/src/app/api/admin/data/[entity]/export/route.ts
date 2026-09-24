@@ -2,7 +2,7 @@
 
 import { NextResponse } from "next/server";
 import { ADMIN_ENTITIES } from "@/admin/registry";
-import { entityGateOpen } from "@/admin/access";
+import { entityGateOpen, exportRolesFor } from "@/admin/access";
 import { exportCsv } from "@/app/(authenticated)/admin/data/[entity]/csv";
 import { requireApiRole } from "@/lib/api-guards";
 
@@ -22,7 +22,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ entity: string
   // This route previously contained no auth code whatsoever: the only check was
   // csv.ts's requireRole(), which calls redirect() and so answered an API
   // client with a 307 to /forbidden rather than a 403.
-  const gate = await requireApiRole(registered?.readRoles ?? []);
+  //
+  // Administrators among the readers only (admin/access.ts exportRolesFor):
+  // readRoles alone let mentors, observers and teachers download whole tables
+  // the grid never shows them.
+  const gate = await requireApiRole(registered ? exportRolesFor(registered) : []);
   if (gate.response) return gate.response;
 
   if (!registered) {

@@ -7,7 +7,7 @@ import Papa from "papaparse";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { exportColumnKeys } from "@/admin/export-columns";
-import { entityRowProblems } from "@/admin/access";
+import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 
@@ -36,7 +36,8 @@ export const EXPORT_ROW_LIMIT = 50_000;
 
 export async function exportCsv(slug: string): Promise<Response> {
   const entity = getEntityOrThrow(slug);
-  await requireRole(entity.readRoles);
+  // Administrators among the readers only; see admin/access.ts exportRolesFor.
+  await requireRole(exportRolesFor(entity));
 
   // Audit bulk export — special action for SM-9 PII-bearing entities.
   // For non-PII entities, the action is `<slug>.bulk_export`.

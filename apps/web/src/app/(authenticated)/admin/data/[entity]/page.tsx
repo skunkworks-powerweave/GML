@@ -56,6 +56,7 @@ import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { referenceLabels, referenceOptions } from "@/admin/references";
+import { exportRolesFor } from "@/admin/access";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
 import { ImportCsv } from "./import-csv";
@@ -202,8 +203,8 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // and was navigated away to /forbidden. Offering an action and then refusing
   // it reads as a broken permission rather than a deliberate one.
   const canExport =
-    !(entity.piiAudited && entity.slug === "learners") ||
-    session.user.role === "super_admin";
+    hasAnyRole(session.user.role, exportRolesFor(entity)) &&
+    (!(entity.piiAudited && entity.slug === "learners") || session.user.role === "super_admin");
 
   // Same reasoning as canExport, in the other direction: readRoles gets you
   // onto this page, mutateRoles is what the import endpoint enforces. Rendering

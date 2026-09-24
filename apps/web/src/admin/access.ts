@@ -17,8 +17,26 @@
 
 import "server-only";
 import { db } from "@gml/db";
+import { ADMIN_ROLES, type RoleName } from "@gml/shared/auth/roles";
 import { getActiveGrant } from "@/lib/gates";
 import type { AdminDb, AdminEntity } from "./types";
+
+/**
+ * Who may BULK-EXPORT an entity: its readers, but administrators only.
+ *
+ * The export authorised on readRoles, which says who may see the grid, and
+ * several entities list non-admins there (mentor-pairings and rtt-attendance
+ * list mentors; teachers lists mentors and observers; classes, subjects,
+ * resources and sessions list teachers). The /admin pages were closed to them
+ * by the proxy, but /api/* is not covered by it, so a mentor could download
+ * every mentor's pairing roster -- which /mentorship scopes to the mentor's
+ * own mentees -- and an observer every teacher's phone number. A whole-table
+ * download is an administrative act; non-admin reads go through the scoped,
+ * gated surfaces built for them (lib/gated-reads.ts).
+ */
+export function exportRolesFor(entity: AdminEntity): RoleName[] {
+  return entity.readRoles.filter((r) => (ADMIN_ROLES as readonly string[]).includes(r));
+}
 
 /** True when `entity` has no gate, or `userId` holds an active grant for it. */
 export async function entityGateOpen(entity: AdminEntity, userId: string): Promise<boolean> {
