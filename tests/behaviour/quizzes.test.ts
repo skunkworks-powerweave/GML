@@ -83,6 +83,7 @@ type QuizWorld = {
   slug: string;
   quizId: string;
   userId: string;
+  subjectId: string;
   /** Question ids in sequence order; the correct option of each is `KEY-<n>-<tag>`. */
   questionIds: string[];
   q: <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<R[]>;
@@ -123,9 +124,10 @@ async function withQuiz(
     );
   }
   try {
-    await body({ c, t, slug: t, quizId, userId, questionIds, q });
+    await body({ c, t, slug: t, quizId, userId, subjectId, questionIds, q });
   } finally {
-    await c.query(`DELETE FROM quizzes WHERE id = $1`, [quizId]);
+    // Any other quiz a test created on this subject (the F48 create) goes too.
+    await c.query(`DELETE FROM quizzes WHERE id = $1 OR rtt_subject_id = $2`, [quizId, subjectId]);
     await c.query(`DELETE FROM users WHERE id = $1`, [userId]);
     await c.query(
       `DELETE FROM phases WHERE id = (SELECT t.phase_id FROM rtt_subjects s JOIN terms t ON t.id = s.term_id WHERE s.id = $1)`,
@@ -846,5 +848,65 @@ test("F46: an answers value that is not an array is graded as no answers, not a 
     const [row] = await w.q<{ answers: unknown; score: number }>(`SELECT answers, score FROM quiz_submissions WHERE id = $1`, [submissionId]);
     assert.equal(row!.score, 0);
     assert.equal((row!.answers as unknown[]).length, 3);
+  });
+});
+
+// ── F48: docs/audit-actions.md against the rows the quiz code writes ─────────
+
+test("F48: every quiz audit row the code writes is documented with its real metadata keys", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    // quiz.created -- the real create action, as a programme_admin.
+    signIn(randomUUID(), "programme_admin");
+    const { createQuizAction } = await import("../../apps/web/src/app/(authenticated)/admin/quizzes/actions.ts");
+    const fd = new FormData();
+    fd.set("title", `Created ${w.t}`);
+    fd.set("slug", `${w.t}-c`);
+    fd.set("rttSubjectId", w.subjectId);
+    // The audit row is written before revalidatePath(), which needs Next's
+    // request store and throws outside it; the redirect after it never runs.
+    await outcome(() => createQuizAction(undefined, fd)).catch((e: Error) => {
+      if (!/static generation store missing/.test(e.message)) throw e;
+    });
+    const [created] = await w.q<{ id: string }>(`SELECT id FROM quizzes WHERE slug = $1`, [`${w.t}-c`]);
+    assert.ok(created, "createQuizAction created nothing");
+
+    // quiz.schema.update -- every setting changed, so every optional key is written.
+    const { saveQuizSchema } = await editorActions();
+    await saveQuizSchema(
+      w.quizId,
+      JSON.stringify({ title: `T ${w.t}`, passThreshold: 50, timeLimitSeconds: 60, maxAttempts: 5, active: true }),
+    );
+
+    // quiz.submit, then quiz.attempt.expired, as the learner.
+    signIn(w.userId);
+    const submissionId = await takeQuiz(w, answerAll(w, 0));
+    const { runner } = await openRunner(w);
+    await backdateOpenAttempt(w, 600);
+    await submit(runner, answerAll(w, 0));
+
+    // recordAudit is fire-and-forget; give the four inserts a moment.
+    const ids = [created!.id, w.quizId, submissionId];
+    type Row = { action: string; entity_type: string; metadata: Record<string, unknown> };
+    let rows: Row[] = [];
+    for (let i = 0; i < 40 && rows.length < 4; i++) {
+      rows = await w.q<Row>(`SELECT action, entity_type, metadata FROM audit_log WHERE entity_id = ANY($1) AND action LIKE 'quiz.%'`, [ids]);
+      if (rows.length < 4) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.deepEqual(rows.map((r) => r.action).sort(), ["quiz.attempt.expired", "quiz.created", "quiz.schema.update", "quiz.submit"]);
+
+    const { readFileSync } = await import("node:fs");
+    const doc = readFileSync(new URL("../../docs/audit-actions.md", import.meta.url), "utf8");
+    const section = doc.slice(doc.indexOf("## quiz.*"), doc.indexOf("\n## ", doc.indexOf("## quiz.*") + 1));
+    for (const r of rows) {
+      const line = section.split("\n").find((l) => l.startsWith(`| \`${r.action}\` |`));
+      assert.ok(line, `${r.action} is written by the code and missing from docs/audit-actions.md`);
+      for (const key of Object.keys(r.metadata)) {
+        assert.ok(line!.includes(`\`${key}\``), `${r.action}: metadata key ${key} is not documented`);
+      }
+      assert.ok(line!.includes(`\`${r.entity_type}\``), `${r.action}: entity_type ${r.entity_type} is not documented`);
+    }
+    // Both admin roles can edit a quiz; the doc said only a super_admin.
+    const schemaLine = section.split("\n").find((l) => l.startsWith("| `quiz.schema.update` |"))!;
+    assert.match(schemaLine, /programme_admin/);
   });
 });
