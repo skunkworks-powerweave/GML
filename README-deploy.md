@@ -167,6 +167,56 @@ Two things it does deliberately:
 
 Safe to run twice; the second run finds nothing.
 
+### 3.2 Loading your programme's data (the Repository reads zero until you do)
+
+**Empty screens after a first deploy are expected, not a fault.** The seed
+never writes `classes`, `course_outlines`, `outline_lessons`, `sessions`,
+`learners`, `resources`, `resource_subjects`, `rtt_modules`, `rtt_lessons`,
+`rtt_readings` or `rtt_sessions`, and the purge in 3.1 additionally empties
+`schools`, `teachers`,
+`mentors`, `mentor_pairings` and `observation_cycles`. So the Repository home
+shows Classes 0, Course outlines 0, Sessions 0, Learners 0 and Reading material
+0 with an empty week table, every RTT subject page says "No modules yet", and
+`/observation` lists nothing, until you load your own rows.
+
+**Where.** Sign in as an administrator and open **`/admin`** ("All tables" under
+Data in the sidebar; the Data tab on a phone). It lists every editable table;
+each opens a grid at
+`/admin/data/<table>` with **Add row**, per-row edit and delete, **Import CSV**
+and **Export CSV**. Every change is written to the audit log.
+
+**CSV import.** The first line is a header of field names, exactly as the
+grid's add-row form labels them (`name`, `code`, `zoneId`, ...). Each row is
+checked with the same rules as the form; rows that fail are reported by line
+number with the reason, and the valid rows are inserted together. Leave a cell
+empty for "not set". `true`/`false` are booleans.
+
+**Parents are referenced by id, not by name or code.** `classes.csv` needs a
+`schoolId`, `learners.csv` a `classId`, and so on, and those are UUIDs — the
+import does not look a school up by its code. So load in order, and for each
+parent:
+
+1. import (or add) the parent rows;
+2. press **Export CSV** on the parent's grid — the first column is `id`;
+3. paste those ids into the child sheet's `schoolId` / `classId` / ... column;
+4. import the child.
+
+A workable order: **schools** (`zoneId` from the zones export; the seed's zones
+are real) → **teachers** (`schoolId`) and **mentors** → **mentor-pairings**
+(`mentorId`, `teacherId`) → **classes** (`schoolId`) → **learners** and
+**sessions** (`classId`, `schoolId`; sessions also `subjectId`, `teacherId`) →
+**course-outlines** (`subjectId`) → **outline-lessons** (`outlineId`) →
+**resources** → **resource-subjects**. For training content: **rtt-modules**
+(`rttSubjectId`, from the seeded rtt-subjects) → **rtt-lessons**
+(`rttModuleId`), and **rtt-readings** (`rttSubjectId`, plus an `http(s)://`
+`externalUrl`).
+
+**Observation cycles** are easiest from **`/observation/new`**, which offers
+teacher and observer pickers and assigns the `OBS-<year>-<NNN>` code. The grid
+at `/admin/data/observation-cycles` takes CSV too, but its `observerId` is the
+observer's login (user) id, which no screen shows; use the form unless you are
+loading many at once.
+
 ## 4. Upgrading
 
 ```bash

@@ -10,8 +10,11 @@
 //   4. /rtt/subject/[id]: session rows use rtt_sessions.link_or_recording
 //      (NOT /repo/session/<id>, which reads a different table -- see below).
 //   5. /rtt/subject/[id]: each session row has a Join/Watch action button.
-//   6. /rtt/subject/[id]: readings with fileKey link to /repo/resource/<reading.id>/view.
-//   7. /rtt/subject/[id]: Assessment card emits /quizzes/mid-unit and /quizzes/endline links.
+//   6. /rtt/subject/[id]: readings NEVER link to /repo/resource/<reading.id>/view
+//      (INVERTED -- that href 404'd by construction; see the test).
+//   7. /rtt/subject/[id]: Assessment card links /quizzes/mid-unit; the endline
+//      "Locked" chip is inert (INVERTED -- it used to be a live link to a 404).
+//   8. /rtt/subject/[id]: "expand its lessons" is only promised over real lessons.
 //
 // All five spec-kit files exist and the plan follows the CREATED/EDITED/MIGRATED contract.
 
@@ -164,22 +167,27 @@ test("spec 119 — /rtt/subject/[id] session rows render a Join/Watch action but
   );
 });
 
-test("spec 119 — /rtt/subject/[id] file-key readings link to /repo/resource/<id>/view", () => {
+// INVERTED. This test used to REQUIRE the link below -- it pinned the defect.
+// An rtt_readings id sent to /repo/resource/[id]/view is looked up in the
+// `resources` table, a different id space, so the button 404'd by
+// construction; and file_key is a MinIO object key nothing can set or serve.
+// The runtime proof that readings now work is
+// tests/behaviour/admin-write-paths.test.ts (readings are external links).
+test("spec 119 — /rtt/subject/[id] never sends a reading id to the resources viewer", () => {
   const src = read(RTT_SUBJECT);
-  assert.match(
+  assert.doesNotMatch(
     src,
     /\/repo\/resource\/\$\{r\.id\}\/view/,
-    "fileKey-only readings must link to /repo/resource/${r.id}/view (spec 087 viewer)",
+    "an rtt_readings id is not a resources id -- /repo/resource/${r.id}/view is a guaranteed 404",
   );
-  // The View label must be the visible CTA on that branch.
-  assert.match(
+  assert.doesNotMatch(
     src,
-    />\s*View\s*</,
-    "fileKey-only readings must render a visible 'View' label so the user knows what the click does",
+    /r\.fileKey\s*\?/,
+    "no branch may render an action for fileKey: nothing in the stack can serve a MinIO key",
   );
 });
 
-test("spec 119 — /rtt/subject/[id] Assessment card emits quiz hrefs with subjectId", () => {
+test("spec 119 — /rtt/subject/[id] Assessment card: mid-unit links, endline is inert", () => {
   const src = read(RTT_SUBJECT);
   // Mid-unit Start link…
   assert.match(
@@ -187,11 +195,20 @@ test("spec 119 — /rtt/subject/[id] Assessment card emits quiz hrefs with subje
     /\/quizzes\/mid-unit\?subjectId=\$\{id\}/,
     "Mid-unit Start CTA must link to /quizzes/mid-unit?subjectId=${id}",
   );
-  // …and Endline Locked link.
+  // INVERTED. This used to require the endline "Locked" chip to be a link to
+  // /quizzes/endline. It carried only aria-disabled, which does not stop
+  // navigation, so a chip that looked inert dropped the teacher on a 404.
+  // Opening endline is a programme decision nothing implements; until then the
+  // chip must not navigate anywhere.
+  assert.doesNotMatch(
+    src,
+    /href=\{?\s*[`"']\/quizzes\/endline/,
+    "the Locked endline chip must not link to the quiz runner, which 404s an unpublished slug",
+  );
   assert.match(
     src,
-    /\/quizzes\/endline\?subjectId=\$\{id\}/,
-    "Endline Locked CTA must link to /quizzes/endline?subjectId=${id}",
+    /<span className="chip"[^>]*>\s*Locked\s*<\/span>/,
+    "the endline state must render as an inert 'Locked' chip",
   );
   // The card must render the literal section title.
   assert.match(
@@ -199,6 +216,21 @@ test("spec 119 — /rtt/subject/[id] Assessment card emits quiz hrefs with subje
     />\s*Assessment\s*</,
     "right column must include the 'Assessment' card heading",
   );
+});
+
+test("spec 119 — /rtt/subject/[id] only promises lesson expansion when it renders lessons", () => {
+  const src = read(RTT_SUBJECT);
+  // The subtitle said "Click a module to expand its lessons." over static
+  // server-rendered divs, and the page never queried rtt_lessons at all.
+  if (/expand its lessons/.test(src)) {
+    assert.match(src, /\.from\(rttLessons\)/, "the page promises lessons, so it must read rtt_lessons");
+    assert.match(src, /<details\b/, "the promised expansion must be a real disclosure element");
+    assert.match(
+      src,
+      /lessons\.length\s*>\s*0\s*\?\s*"Click a module to expand its lessons\."/,
+      "the expansion copy must be conditional on there being lessons to expand",
+    );
+  }
 });
 
 test("spec 119 — /rtt/subject/[id] preserves the modules anchor fallback", () => {

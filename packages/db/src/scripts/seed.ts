@@ -257,6 +257,13 @@ export async function main() {
   await db.insert(schema.observationCycles).values(cyclesValues);
 
   console.log("[seed] DONE: 2 districts, 11 zones, 10 schools, 10 teachers, 2 mentors, 10 pairings, 8 cycles, 9 curriculum subjects, 3 phases, 5 terms, 3 RTT subjects.");
+  // Said at the moment the operator is watching deploy.sh, which is when "why
+  // does the Repository read zero?" gets asked. README-deploy.md section 3.2.
+  console.log(
+    "[seed] NOT SEEDED, by design: classes, course_outlines, outline_lessons, sessions, learners, " +
+      "resources, resource_subjects, rtt_modules, rtt_lessons, rtt_readings, rtt_sessions. The Repository and RTT " +
+      "subject pages stay empty until you load them at /admin (Import CSV per table; see README-deploy.md 3.2).",
+  );
   await pool.end();
 }
 

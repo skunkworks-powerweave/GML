@@ -98,6 +98,14 @@ export default async function ObservationListPage({
   if (!actor) redirect("/login");
   const visibility = await cycleVisibilityFilter(actor);
 
+  // WHERE A CYCLE COMES FROM. Nothing in this module creates one -- the four
+  // stages only ever UPDATE a cycle. The only INSERT in the repository was the
+  // demo seed, and purge_demo_data.ts removes those rows at hand-over, so on a
+  // real deployment this list starts empty. Cycles are nominated at
+  // /observation/new (pickers, code minted for you) or bulk-loaded through the
+  // admin grid (admin/entities/observation-cycles.ts).
+  const canNominate = actor.role === "programme_admin" || actor.role === "super_admin";
+
   // Build the WHERE clause server-side — only emit predicates for filters
   // the user actively chose. The visibility predicate is NOT one of them: it
   // is unconditional and cannot be cleared by removing a chip.
@@ -175,6 +183,15 @@ export default async function ObservationListPage({
               Every step is time-stamped and signed.
             </p>
           </div>
+          {canNominate ? (
+            <Link
+              href="/observation/new"
+              className="btn btn-primary"
+              style={{ textDecoration: "none", whiteSpace: "nowrap" }}
+            >
+              Nominate cycle
+            </Link>
+          ) : null}
         </div>
       </div>
 
@@ -234,6 +251,11 @@ export default async function ObservationListPage({
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
               No observation cycles match this filter.
+              {canNominate ? (
+                <div style={{ fontSize: 12, marginTop: 8 }}>
+                  <Link href="/observation/new">Nominate a cycle</Link> to start one.
+                </div>
+              ) : null}
             </div>
           ) : (
             <table className="t">

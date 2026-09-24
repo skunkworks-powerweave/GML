@@ -19,15 +19,46 @@
 // keystrokes in devtools and absent entirely from a direct POST to the server
 // action — which is a URL, not a private channel.
 
+/**
+ * An option as stored in feedback_forms.schema. Most seeds write plain strings;
+ * seed_forms_mentee.ts writes `{ value, label, hindiLabel }` objects. Both
+ * renderers normalise the two (FormRenderer.tsx::normalizeOptions) and SUBMIT
+ * THE VALUE, so the validator has to compare against values too.
+ */
+export type FormFieldOption = string | { value: string; label?: string; hindiLabel?: string };
+
 export type FormField = {
   name: string;
   kind: string;
   label?: string;
   required?: boolean;
-  options?: string[];
+  options?: FormFieldOption[];
   min?: number;
   max?: number;
 };
+
+/**
+ * The submit-able values of a field's options.
+ *
+ * `new Set(field.options)` over object options was a Set of object references,
+ * which never contains the string a renderer submits -- so the mentee final
+ * form's required `would_recommend` radio rejected both "yes" and "no" and the
+ * form could not be submitted by anyone. A malformed entry (null, or an object
+ * with no string value) contributes nothing rather than throwing inside a
+ * server action or becoming the literal string "undefined".
+ *
+ * Deliberately NOT imported from FormRenderer: that module is "use client".
+ */
+export function optionValues(options: readonly unknown[]): Set<string> {
+  const out = new Set<string>();
+  for (const o of options) {
+    if (typeof o === "string") out.add(o);
+    else if (o && typeof o === "object" && typeof (o as { value?: unknown }).value === "string") {
+      out.add((o as { value: string }).value);
+    }
+  }
+  return out;
+}
 
 export type ValidationError = { field: string; message: string };
 
@@ -110,7 +141,8 @@ export function validateResponses(
     // constraint for these kinds, and it is stricter: it enforces min/max
     // rather than mere membership.
     if (field.options && field.options.length > 0 && !NUMERIC_KINDS.has(field.kind)) {
-      const allowed = new Set(field.options);
+      // Values, not the raw entries: see optionValues().
+      const allowed = optionValues(field.options);
       for (const v of values) {
         if (!allowed.has(v)) {
           errors.push({

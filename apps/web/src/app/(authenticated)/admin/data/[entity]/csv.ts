@@ -6,6 +6,7 @@ import "server-only";
 import Papa from "papaparse";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import { exportColumnKeys } from "@/admin/export-columns";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 
@@ -62,8 +63,10 @@ export async function exportCsv(slug: string): Promise<Response> {
   const truncated = rows.length > EXPORT_ROW_LIMIT;
   if (truncated) rows.length = EXPORT_ROW_LIMIT;
 
-  // Use the entity's displayColumns ordering for headers.
-  const headers = entity.displayColumns.map((c) => c.key);
+  // `id` first, then the entity's displayColumns. Without the id a parent's
+  // export gave the operator nothing to paste into a child CSV's schoolId /
+  // classId column -- see admin/export-columns.ts.
+  const headers = exportColumnKeys(entity);
   const data = rows.map((r) => {
     const out: Record<string, string> = {};
     for (const k of headers) {

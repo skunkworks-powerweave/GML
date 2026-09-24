@@ -56,6 +56,11 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "tbl-mentors", label: "Mentors", icon: "users", href: "/admin/data/mentors" },
         { id: "tbl-pairings", label: "Pairings", icon: "users", href: "/admin/data/mentor-pairings" },
         { id: "tbl-attendance", label: "Attendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        // The index of ALL 20 tables. Without it the desktop sidebar reached 5
+        // of them, and classes, learners, sessions, resources, RTT content and
+        // observation cycles -- the tables a fresh deployment is empty in --
+        // could only be found by typing /admin. README-deploy.md section 3.2.
+        { id: "tbl-all", label: "All tables", icon: "table", href: "/admin" },
       ],
     },
     {
@@ -98,6 +103,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "tbl-teachers", label: "Teachers", icon: "users", href: "/admin/data/teachers" },
         { id: "tbl-schools", label: "Schools", icon: "school", href: "/admin/data/schools" },
         { id: "tbl-pairings", label: "Pairings", icon: "users", href: "/admin/data/mentor-pairings" },
+        // See the super_admin Data section: the index of every table.
+        { id: "tbl-all", label: "All tables", icon: "table", href: "/admin" },
       ],
     },
     {
