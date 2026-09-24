@@ -8,18 +8,31 @@
 // Existing FK references within this file are internal — all use the same module's
 // renamed exports.
 
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, check, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { attendanceStatusEnum } from "./enums";
 import { teachers } from "./geography";
 import { users } from "./identity";
 
-export const phases = pgTable("phases", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  label: varchar("label", { length: 24 }).notNull().unique(), // "Phase 1" / "Phase 2" / "Phase 3"
-  sequence: integer("sequence").notNull(),
-  startDate: timestamp("start_date", { withTimezone: true, mode: "date" }),
-  endDate: timestamp("end_date", { withTimezone: true, mode: "date" }),
-});
+// Admin-editable since the grid registered phases and terms; migration 0030
+// adds the date check and the sequence uniques that a write path needs.
+export const phases = pgTable(
+  "phases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    label: varchar("label", { length: 24 }).notNull().unique(), // "Phase 1" / "Phase 2" / "Phase 3"
+    sequence: integer("sequence").notNull(),
+    startDate: timestamp("start_date", { withTimezone: true, mode: "date" }),
+    endDate: timestamp("end_date", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    uniqueIndex("phases_sequence_uq").on(t.sequence),
+    check(
+      "phases_dates_check",
+      sql`${t.startDate} IS NULL OR ${t.endDate} IS NULL OR ${t.endDate} >= ${t.startDate}`,
+    ),
+  ],
+);
 
 export const terms = pgTable(
   "terms",
@@ -29,7 +42,10 @@ export const terms = pgTable(
     name: varchar("name", { length: 80 }).notNull(),
     sequence: integer("sequence").notNull(),
   },
-  (t) => [uniqueIndex("terms_phase_name_uq").on(t.phaseId, t.name)],
+  (t) => [
+    uniqueIndex("terms_phase_name_uq").on(t.phaseId, t.name),
+    uniqueIndex("terms_phase_sequence_uq").on(t.phaseId, t.sequence),
+  ],
 );
 
 export const rttSubjects = pgTable(
