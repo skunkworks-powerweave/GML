@@ -34,6 +34,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The hook's own constant, imported rather than copied — see the note above
+// SURFACES. Importing it is only possible because pre-edit.mjs runs its main()
+// behind an "was I invoked as the hook, or imported?" check; that check is
+// biased towards running, so if it is ever wrong the 50-odd spawn tests below
+// fail loudly rather than the gate going quiet.
+import { GATE_SETTINGS, SECURITY_SURFACES } from "../../.claude/hooks/pre-edit.mjs";
+
 const ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const HOOK_SRC = resolve(ROOT, ".claude", "hooks", "pre-edit.mjs");
 const LIB_SRC = resolve(ROOT, ".claude", "hooks", "_lib.mjs");
@@ -135,6 +142,69 @@ test("protected: the override cannot unlock a protected file", (t) => {
   const dir = fixture(t);
   const r = runHook(dir, editOf(dir, ".env", "Write"), { GML_GATE_SKIP: "I know what I am doing" });
   assert.equal(r.status, 2, "protected files are not overridable");
+});
+
+// ── C6: PROTECTED ON THE PLATFORM THIS PROJECT ACTUALLY RUNS ON ──────────────
+//
+// isEnvFile matched the literal basename with a case-SENSITIVE regex. On
+// Windows — this project's only platform — that is not a filter, it is a
+// spelling suggestion. Reproduced before the fix, in a sandbox holding a real
+// `.env`: a Write to `.ENV` and to `.env::$DATA` was ALLOWED by the hook, and
+// writing through either name replaced the contents of `.env` itself. The
+// filesystem was asked directly — both names read the secret back out.
+
+test("protected: .env is protected case-insensitively — Windows filesystems are", (t) => {
+  const dir = fixture(t);
+  for (const name of [".ENV", ".Env", ".eNv", ".ENV.LOCAL", ".Env.Production"]) {
+    const r = runHook(dir, editOf(dir, name, "Write"));
+    assert.equal(r.status, 2, `${name} names the same file as .env here; stderr=${r.stderr}`);
+  }
+});
+
+test("protected: an NTFS alternate data stream is not a way round", (t) => {
+  const dir = fixture(t);
+  // `.env::$DATA` is NTFS syntax for the DEFAULT data stream of `.env` — the
+  // same bytes, under a name the regex did not recognise. `.env:hidden` is a
+  // named stream: different bytes, but still a write into the `.env` file
+  // object, and still a place to park a secret. Both are writes to a protected
+  // file, so both are refused.
+  for (const name of [".env::$DATA", ".ENV::$DATA", ".env:hidden", ".env.local::$DATA"]) {
+    const r = runHook(dir, editOf(dir, name, "Write"));
+    assert.equal(r.status, 2, `${name} reaches .env; stderr=${r.stderr}`);
+  }
+});
+
+test("protected: .env.EXAMPLE is the committed example and stays editable", (t) => {
+  const dir = fixture(t);
+  // The other direction of the same bug, and the more corrosive one: the
+  // refusal above tells you to go and edit `.env.example`, while the
+  // case-sensitive `name !== ".env.example"` turned that very file — spelled
+  // the way Windows will happily open it — into a second refusal.
+  for (const name of [".env.example", ".env.EXAMPLE", ".ENV.EXAMPLE", ".Env.Example"]) {
+    const r = runHook(dir, editOf(dir, name, "Write"));
+    assert.equal(r.status, 0, `${name} IS .env.example here; stderr=${r.stderr}`);
+  }
+});
+
+test("protected: `.env.` and `.env ` are different files, so they are not bypasses", (t) => {
+  // CHARACTERISATION, not a regression test — this was already correct and was
+  // green before the C6 fix and after it. It is here to pin the BOUNDARY of
+  // that fix. "Win32 strips a trailing dot or space" is true of the Win32 API
+  // and NOT true of Node, which prefixes `\\?\` and gets a literal, distinct
+  // name. The assertion below asks the filesystem rather than believing either
+  // story: these names do not resolve to `.env`, so refusing them would be
+  // theatre — a rule that looks like protection and defends nothing.
+  const dir = fixture(t);
+  writeFileSync(join(dir, ".env"), "SUPABASE_SERVICE_ROLE_KEY=real\n");
+  for (const name of [".env.", ".env "]) {
+    assert.throws(
+      () => readFileSync(join(dir, name), "utf8"),
+      /ENOENT/,
+      `${name} must not resolve to .env, or this test is asserting the wrong thing`,
+    );
+    const r = runHook(dir, editOf(dir, name, "Write"));
+    assert.equal(r.status, 0, `${name} is a different file; stderr=${r.stderr}`);
+  }
 });
 
 // ── 2. NO EDITS ON main / master ─────────────────────────────────────────────
@@ -283,14 +353,78 @@ test("tdd: an exemption longer than the 60-minute cap is ignored", (t) => {
 
 test("tdd: the gate does not stand between you and writing the test", (t) => {
   const dir = fixture(t);
+  // `apps/web/src/lib/wiki.spec.ts` was on this list and has been removed.
+  // It was asserting the defect below: `.spec.` is not a test convention in
+  // this repository (144 files match `.test.`, ZERO match `.spec.`, and no
+  // script in package.json globs for it), so accepting it only widened the way
+  // past the nudge. The shapes below are the ones that actually exist.
   for (const rel of [
     "apps/web/src/lib/wiki.test.ts",
-    "apps/web/src/lib/wiki.spec.ts",
+    "apps/web/src/lib/wiki.test.tsx",
     "apps/web/src/lib/wiki.d.ts",
     "tests/behaviour/wiki.test.ts",
+    "tests/governance/test_200_wiki.test.mjs",
+    "apps/web/tests/behaviour/proxy.test.ts",
+    "packages/db/tests/queue.test.ts",
   ]) {
     const r = runHook(dir, editOf(dir, rel, "Write"));
     assert.equal(r.status, 0, `${rel} must be writable with no evidence; stderr=${r.stderr}`);
+  }
+});
+
+// ── WHAT COUNTS AS "THIS FILE IS A TEST" ─────────────────────────────────────
+//
+// isTestish was `/(^|\/)tests\//` on the path OR `/\.(test|spec)\./` on the
+// name, and both are wider than they read. Measured against this tree: 144
+// files match `.test.`, ZERO match `.spec.`, and the ONLY directory named
+// `tests/` anywhere in the repository is the top-level one. So the extra width
+// buys nothing that exists and sells the rule — reproduced before the fix, all
+// three of these were ALLOWED with no test evidence whatsoever.
+
+test("tdd: `.spec.` is not a test convention in this repository", (t) => {
+  const dir = fixture(t);
+  const r = runHook(dir, editOf(dir, "apps/web/src/lib/x.spec.ts", "Write"));
+  assert.equal(r.status, 2, `no .spec. file exists here and no runner globs for one; stderr=${r.stderr}`);
+});
+
+test("tdd: `.test.` in the middle of a name does not make a test", (t) => {
+  const dir = fixture(t);
+  for (const rel of ["apps/web/src/lib/thing.test.helper.ts", "apps/web/src/lib/x.test.data.json"]) {
+    const r = runHook(dir, editOf(dir, rel, "Write"));
+    assert.equal(r.status, 2, `${rel} is a helper beside a test, not a test; stderr=${r.stderr}`);
+  }
+});
+
+test("tdd: a tests/ directory inside src/ is not a test tier", (t) => {
+  const dir = fixture(t);
+  for (const rel of ["apps/web/src/tests/helpers.ts", "packages/db/src/tests/seed.ts"]) {
+    const r = runHook(dir, editOf(dir, rel, "Write"));
+    assert.equal(r.status, 2, `${rel} is source; `+`stderr=${r.stderr}`);
+  }
+});
+
+test("tdd: a file under src/tests/ is not evidence that a test was touched", (t) => {
+  const dir = fixture(t);
+  put(dir, SOURCE);
+  // The same looseness read from the other side: isTestPath shares the regex,
+  // so `mkdir apps/web/src/tests && touch anything` unlocked the nudge for the
+  // whole tree. Both predicates now go through one tier-root rule so they
+  // cannot drift apart — this codebase's recurring failure.
+  put(dir, "apps/web/src/tests/helpers.ts");
+  const r = runHook(dir, editOf(dir, SOURCE));
+  assert.equal(r.status, 2, `expected a block; stderr=${r.stderr}`);
+});
+
+test("tdd: a shouted source path does not walk past the nudge", (t) => {
+  const dir = fixture(t);
+  put(dir, SOURCE);
+  // Found while fixing C6 and the same defect: isSourcePath is case-sensitive,
+  // so on this project's platform `APPS/WEB/SRC/LIB/WIKI.TS` was ALLOWED while
+  // naming the very file that had just been refused. Verified by reading the
+  // file back through the shouted name — same bytes.
+  for (const rel of ["APPS/WEB/SRC/LIB/WIKI.TS", "Apps/Web/Src/Lib/wiki.ts", "apps/web/SRC/lib/wiki.ts"]) {
+    const r = runHook(dir, editOf(dir, rel));
+    assert.equal(r.status, 2, `${rel} IS ${SOURCE} on this filesystem; stderr=${r.stderr}`);
   }
 });
 
@@ -324,14 +458,24 @@ test("tdd: an explicit override is honoured and recorded", (t) => {
 // ever enforced. On the files where being wrong means an unauthorised read,
 // only tests/behaviour/ — real code, real Postgres — counts as touching a test.
 
-const SECURITY_SURFACES = [
-  "apps/web/src/proxy.ts",
-  "apps/web/src/lib/authz.ts",
-  "apps/web/src/lib/gates.ts",
-  "apps/web/src/lib/rate-limit.ts",
-  "apps/web/src/lib/request-ip.ts",
+// IMPORTED from the hook, not restated here. This was a second copy of the
+// hook's own list — the drift class this codebase keeps paying for: two lists
+// that agree until someone adds a surface to one of them, after which the suite
+// goes on certifying a rule that is no longer the rule, in green. A copy also
+// cannot notice the hook's list SHRINKING, which is the direction that matters.
+const SURFACES = [
+  ...SECURITY_SURFACES,
+  // Deliberately not in the exported set: everything under
+  // packages/db/src/schema/ is a surface by PATTERN rather than by name, and
+  // this entry is what holds that half of the rule to account.
   "packages/db/src/schema/gates.ts",
 ];
+
+test("security: the surface list under test is the hook's own", () => {
+  assert.ok(SECURITY_SURFACES instanceof Set, "the hook must export the list it actually uses");
+  assert.ok(SECURITY_SURFACES.size >= 5, `only ${SECURITY_SURFACES.size} named surfaces — did the list shrink?`);
+  assert.ok(SECURITY_SURFACES.has("apps/web/src/proxy.ts"), "proxy.ts is the request gate; it cannot quietly leave");
+});
 
 test("security: a governance test does not license an authz change", (t) => {
   const dir = fixture(t);
@@ -349,7 +493,7 @@ test("security: a governance test does not license an authz change", (t) => {
 });
 
 test("security: every listed surface rejects a governance-only test", (t) => {
-  for (const rel of SECURITY_SURFACES) {
+  for (const rel of SURFACES) {
     const dir = fixture(t);
     put(dir, rel);
     put(dir, "tests/governance/test_042_thing.test.mjs");
@@ -409,6 +553,109 @@ test("security: a neighbouring lib file is NOT a surface", (t) => {
   put(dir, "tests/governance/test_042_wiki.test.mjs");
   const r = runHook(dir, editOf(dir, "apps/web/src/lib/wiki.ts"));
   assert.equal(r.status, 0, "the narrowed rule applies to the listed surfaces only");
+});
+
+test("security: a shouted security surface is still a security surface", (t) => {
+  const dir = fixture(t);
+  put(dir, "apps/web/src/lib/authz.ts");
+  put(dir, "tests/governance/test_042_authz.test.mjs");
+  // Before the fix this was ALLOWED: the surface list is compared exactly, and
+  // on a case-insensitive filesystem the shift key was enough to drop out of
+  // the narrowed rule AND out of isSourcePath, clearing the nudge entirely.
+  const r = runHook(dir, editOf(dir, "APPS/WEB/SRC/LIB/AUTHZ.TS"));
+  assert.equal(r.status, 2, `expected a block; stderr=${r.stderr}`);
+  assert.match(r.stderr, /tests\/behaviour\//, "and for the right reason");
+});
+
+// ── I9. THE GATE FILES THEMSELVES ────────────────────────────────────────────
+//
+// Reproduced before the fix: a Write to `.claude/hooks/pre-bash.mjs`, to
+// `.claude/hooks/_lib.mjs` and to `.claude/settings.json` was ALLOWED. One edit
+// turns the whole layer off, and nothing anywhere says a word — which is
+// precisely how the six hooks this replaces stayed dead for the life of the
+// project.
+//
+// ── WHY THE REFUSAL IS OVERRIDABLE AND NOT ABSOLUTE ──────────────────────────
+//
+// A hard refusal cannot be right here, and the proof is this branch: the layer
+// has to stay deliberately editable or it cannot be maintained, reviewed or
+// switched off when it is wrong — and a gate that cannot be maintained is a
+// gate that gets deleted wholesale, taking everything it defended with it. So
+// the rule is not "you may not"; it is "you may not do this silently". The
+// hatch is honoured and LOGGED, and the log line is what a reviewer looks for.
+
+// The settings half comes from the hook; the hooks half is a list of INSTANCES
+// the hook matches by pattern, which is a different thing from a copied literal
+// — it is the pattern being held to account on named files.
+const GATE_FILES = [
+  ...GATE_SETTINGS,
+  ".claude/hooks/pre-edit.mjs",
+  ".claude/hooks/pre-bash.mjs",
+  ".claude/hooks/post-edit.mjs",
+  ".claude/hooks/post-bash.mjs",
+  ".claude/hooks/session-start.mjs",
+  ".claude/hooks/stop.mjs",
+  ".claude/hooks/_lib.mjs",
+];
+
+test("gate: the protected settings list is the hook's own, and has not shrunk", () => {
+  // Importing a list closes the drift where a COPY goes stale, and opens a
+  // different one: a test that iterates the imported list cannot notice the
+  // list getting SHORTER, because its own loop gets shorter with it. Verified
+  // by mutation — deleting settings.local.json from the hook left all 57 tests
+  // green until these two assertions existed. So the membership that matters is
+  // named here explicitly, which is the only form that can fail on a removal.
+  assert.ok(GATE_SETTINGS.has(".claude/settings.json"), "the file that wires every hook");
+  assert.ok(
+    GATE_SETTINGS.has(".claude/settings.local.json"),
+    "local settings wire hooks too, and are the quietest place to switch them off",
+  );
+});
+
+test("gate: editing a hook, or the settings that wire them, is refused", (t) => {
+  for (const rel of GATE_FILES) {
+    const dir = fixture(t);
+    const r = runHook(dir, editOf(dir, rel, "Write"));
+    assert.equal(r.status, 2, `${rel} switches enforcement off; stderr=${r.stderr}`);
+    assert.match(r.stderr, /GML_GATE_SKIP/, "must hand over the deliberate way through");
+  }
+});
+
+test("gate: the bootstrap hatch is honoured and LOGGED", (t) => {
+  const dir = fixture(t);
+  const r = runHook(dir, editOf(dir, ".claude/settings.json", "Write"), {
+    GML_GATE_SKIP: "chore/enforcement: this branch rewrites the gate layer",
+  });
+  assert.equal(r.status, 0, `the layer must stay maintainable; stderr=${r.stderr}`);
+  const log = readFileSync(join(dir, "workspace", "gate-overrides.log"), "utf8");
+  assert.match(log, /gate-file/, "the rule overridden is named, so the log can be grepped");
+  assert.match(log, /rewrites the gate layer/, "and the reason, for the PR to quote");
+});
+
+test("gate: a touched test does not license switching the gate off", (t) => {
+  const dir = fixture(t);
+  put(dir, "tests/behaviour/gate.test.ts");
+  const r = runHook(dir, editOf(dir, ".claude/hooks/pre-bash.mjs", "Write"));
+  assert.equal(r.status, 2, "test evidence answers the test-first rule, not this one");
+});
+
+test("gate: a shouted or stream-suffixed .claude path is the same file", (t) => {
+  const dir = fixture(t);
+  for (const rel of [".CLAUDE/HOOKS/PRE-BASH.MJS", ".claude/Hooks/Pre-Edit.mjs", ".claude/hooks/_lib.mjs::$DATA"]) {
+    const r = runHook(dir, editOf(dir, rel, "Write"));
+    assert.equal(r.status, 2, `${rel} reaches the gate; stderr=${r.stderr}`);
+  }
+});
+
+test("gate: documentation ABOUT the gates is not itself a gate", (t) => {
+  const dir = fixture(t);
+  // These enforce nothing, so gating them would only teach people that the
+  // rule is noise. The protected set is the executable surface: the hooks and
+  // the settings that wire them.
+  for (const rel of [".claude/hooks/README.md", ".claude/agents/reviewer.md", "docs/superpowers/README.md"]) {
+    const r = runHook(dir, editOf(dir, rel, "Write"));
+    assert.equal(r.status, 0, `${rel} enforces nothing; stderr=${r.stderr}`);
+  }
 });
 
 // ── FAILING OPEN ─────────────────────────────────────────────────────────────
@@ -492,13 +739,121 @@ test("robust: a corrupt receipts file neither crashes nor counts as red", (t) =>
   assert.doesNotMatch(r.stderr, /internal error/i);
 });
 
-test("robust: the gate is fast enough to sit on every edit", (t) => {
+// ── FAST ENOUGH TO SIT ON EVERY EDIT ─────────────────────────────────────────
+//
+// The assertion that stood here was `elapsed < 3000` on a single run. It passed
+// at 908ms and would have passed at 2.9s, so it could not fail and therefore
+// meant nothing — the same shape as the 28 assertions this project wrote to
+// match what the code already did.
+//
+// What the profile actually found, measured on a source path in the real
+// worktree: 707ms median, of which ~466ms was hasRedReceipt() spending THREE
+// git processes (merge-base, then rev-list at 239ms, then rev-parse) building a
+// set of commit SHAs it used to filter a receipts list that was EMPTY. Five git
+// processes on every Edit; the answer needed two.
+
+/**
+ * Give the fixture a real commit and a real `main`, without running `git commit`.
+ *
+ * Every other test here runs on an unborn branch, and that HIDES the cost this
+ * section is about: hasRedReceipt() only reaches its three scoping git calls
+ * once `git merge-base main HEAD` can answer, which needs both refs to exist.
+ * On an unborn branch that call fails, the scoping is skipped, and the hook
+ * looks 480ms cheaper than it is in the repository it actually runs in. Built
+ * with plumbing — write-tree, commit-tree, update-ref — so this suite still
+ * never commits.
+ */
+function withHistory(dir, branch = "chore/thing") {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@example.invalid",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@example.invalid",
+  };
+  const run = (args) => execFileSync("git", args, { cwd: dir, encoding: "utf8", env }).trim();
+  const commit = run(["commit-tree", run(["write-tree"]), "-m", "base"]);
+  for (const ref of ["refs/heads/main", `refs/heads/${branch}`]) run(["update-ref", ref, commit]);
+  return commit;
+}
+
+test("fast: an edit costs at most two git processes", (t) => {
+  // A wall-clock budget cannot say WHICH work went away, and it drifts with
+  // whatever else the machine is doing. GIT_TRACE names every git process the
+  // hook starts, so this counts the actual work and reads the same on a loaded
+  // CI box as on an idle laptop.
   const dir = fixture(t);
+  withHistory(dir);
   put(dir, SOURCE);
-  const started = Date.now();
-  runHook(dir, editOf(dir, SOURCE));
-  const elapsed = Date.now() - started;
-  // Generous because node's own start-up dominates: the budget exists to catch
-  // a hook that grows a `pnpm test` or a network call, not to measure ms.
-  assert.ok(elapsed < 3000, `hook took ${elapsed}ms — it runs on EVERY edit`);
+  const trace = join(dir, "git-trace.log");
+  const r = runHook(dir, editOf(dir, SOURCE), { GIT_TRACE: trace });
+  assert.equal(r.status, 2, `expected the ordinary refusal; stderr=${r.stderr}`);
+  const calls = readFileSync(trace, "utf8")
+    .split(/\r?\n/)
+    .map((l) => /built-in: git (.*)$/.exec(l)?.[1])
+    .filter(Boolean);
+  assert.ok(
+    calls.length <= 2,
+    `${calls.length} git processes on ONE edit: ${calls.join(" | ")}\n` +
+      "The budget is the branch and one status. A third means a rule started " +
+      "asking git a question it could have answered from a file it already read.",
+  );
+});
+
+test("fast: a gated edit costs little more than an ungated one", (t) => {
+  // Modelled on tests/hooks/pre-bash.test.mjs "10. the common case costs
+  // nothing worth noticing" — the budget covers the WHOLE spawn, node's own
+  // start-up included, because that is what the developer waits for — but it is
+  // stated as a RATIO against this same hook on a cheaper path, measured on this
+  // machine seconds earlier, rather than as a number of milliseconds.
+  //
+  // WHY NOT A MILLISECOND CONSTANT. Measured in this fixture: 706-885ms per
+  // gated edit with the defect, 347-407ms once fixed — and 609ms once fixed
+  // while other suites were running on the same laptop. A constant that
+  // separates those is one busy CI box away from failing on correct code, and a
+  // constant safe from that is too loose to fail on the defect at all. The
+  // latter is an assertion that cannot fail, which is the shape this project
+  // already has 28 of.
+  //
+  // WHY THIS RATIO AND NOT A SUBTRACTION. The first version of this test priced
+  // one git call as (docs - .env) and budgeted three of them. Measured over five
+  // repetitions that statistic ran 1.71-3.15 on FIXED code against 4.78-6.76 on
+  // the defect: the difference of two small, noisy numbers ends up in the
+  // denominator, and a budget of 3 failed on correct code once in five runs. The
+  // plain ratio below measured 1.32-1.84 fixed against 2.65-3.44 defective —
+  // both terms are large, both move together when the machine is busy, so 2.25
+  // sits between the two distributions with room on each side.
+  //
+  // What the ratio means: `docs/*` makes one git call (the branch), a gated
+  // `src/*` path makes two (the branch, plus one `git status`) and used to make
+  // five. Counts verified with GIT_TRACE in the test above, which is the
+  // instrument that actually pins the fix; this one is the wall-clock backstop.
+  const dir = fixture(t);
+  withHistory(dir);
+  put(dir, SOURCE);
+  put(dir, "docs/architecture.md");
+
+  const price = (payload) => {
+    const runs = [];
+    for (let i = 0; i < 4; i++) {
+      const started = Date.now();
+      runHook(dir, payload);
+      runs.push(Date.now() - started);
+    }
+    // Second-cheapest rather than the mean: one scheduler stall must not be able
+    // to decide the verdict in either direction.
+    return runs.sort((a, b) => a - b)[1];
+  };
+
+  runHook(dir, editOf(dir, SOURCE)); // warm; git's first run in a tree is not the steady state
+  const ungated = price(editOf(dir, "docs/architecture.md", "Write"));
+  const gated = price(editOf(dir, SOURCE));
+
+  assert.ok(
+    gated <= 2.25 * ungated,
+    `a gated edit costs ${gated}ms against ${ungated}ms for an ungated one — ` +
+      `${(gated / ungated).toFixed(2)}x, budget 2.25x. This runs on EVERY Edit and Write.`,
+  );
+  // The one thing a ratio cannot catch: work that is slow without being git.
+  assert.ok(gated < 2500, `${gated}ms per gated edit — a rule in here is doing real work`);
 });

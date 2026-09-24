@@ -24,9 +24,9 @@ against the repository, step by step. It was false for all six:
 | brainstorming | per spec | No design document exists. `docs/` holds `architecture.md`, `audit-actions.md`, `operations.md`, `substrate-moats.md`, `verification.md` — five cross-cutting documents, none of them a design for a feature. |
 | writing-plans | per spec | 132 `plan.md` files exist and **none** carries the writing-plans header (Goal / Architecture / Tech Stack, bite-sized checkbox steps, exact paths, a commit step per task). |
 | test-driven-development | per spec | 37 commits add a `tests/governance/*.test.mjs` file. All 37 also add or change code under `apps/` or `packages/` **in the same commit**. Zero test-only commits: no test in this project's history has ever existed before the code it tests. |
-| verification-before-completion | per spec | 264 task checkboxes are still unchecked across specs, 26 of which sit in a `spec.md` whose own header says `Status: complete`. |
+| verification-before-completion | per spec | 264 task checkboxes are still unticked across the 132 `tasks.md` files (443 are ticked). No `spec.md` in the corpus contains a checkbox at all: the **26** is a count of `spec.md` headers declaring `Status: complete`, and one of those 26 folders (`specs/150-middleware-401-vs-403/`) still carries **3** unticked boxes in its `tasks.md`. |
 | requesting-code-review | per spec | No review is recorded anywhere in the repository. |
-| finishing-a-development-branch | per spec | Of 90 commits exactly one has two parents, and that merge is dated 2026-09-24. The history is otherwise a straight line onto the integration branch, and `.worktrees/` did not exist before that date. |
+| finishing-a-development-branch | per spec | Of **91** commits (`git rev-list --count HEAD`) exactly **one** has two parents (`git rev-list --count --merges HEAD`), and that merge is dated 2026-09-24. The history is otherwise a straight line onto the integration branch, and `.worktrees/` did not exist before that date. |
 
 A discipline that is written down and enforced by nothing is not a discipline,
 it is a wish. The gates in `.claude/hooks/` exist so that the table above cannot
@@ -151,8 +151,18 @@ sections are the sections below: plan link, RED evidence, GREEN evidence,
 mutation check, review, verification output, overrides used. Delete nothing; a
 section that does not apply gets `n/a` and one line saying why.
 
-The verdict line `Review-Verdict: approved` must appear at the start of a line
-in the PR body. Anything else — including `approved-with-nits` — blocks.
+The PR body must carry a `Review-Verdict:` line whose value is the single word
+`approved`. The template ships that field reading `pending`; the reviewer is
+what changes it, and nothing else in the body should mention it.
+
+The hook is weaker than that sentence, and this file used to claim otherwise.
+`.claude/hooks/pre-bash.mjs` matches `/Review-Verdict:\s*approved/i` —
+**unanchored**, so a qualified verdict and even prose merely discussing the
+field satisfy it (finding I6, being anchored to
+`/^[ \t]*Review-Verdict:[ \t]*approved[ \t]*$/im`). Until that lands, the field
+is kept honest by the person filling it in rather than by the gate. The one
+thing now pinned is that the default template no longer approves itself:
+`tests/hooks/template-not-self-approving.test.mjs`.
 
 ### 8. Merge
 
@@ -168,9 +178,15 @@ git branch -d <type>/<slug>
 
 ## Evidence per artefact
 
-This is the table the commit gate enforces. What you changed determines what
-you must be able to show; there is no artefact class whose evidence is "I read
-it carefully".
+This table is the **convention a reviewer checks**. What you changed determines
+what you must be able to show; there is no artefact class whose evidence is "I
+read it carefully".
+
+It is not what the commit gate enforces. This paragraph used to say it was, and
+that was the same defect as everything else on this page: a control described as
+installed, enforcing something narrower than its description. The gate's actual
+rules are listed under the table — read both, because the gap between them is
+the part only a human closes.
 
 | Artefact changed | Evidence required |
 | --- | --- |
@@ -180,7 +196,52 @@ it carefully".
 | Docs, comments (`docs/**`, `*.md`, comment-only diffs) | Reviewer, plus any doc-sync test that covers the claim. A doc that states a number or a path the tree can be asked about should be asked. |
 
 The phrase "fails first" in the first two rows means the literal failing output
-in the PR, not a statement that it failed.
+in the PR, not a statement that it failed. Nothing in the tree can check that,
+which is why it is in this table and not in the list below.
+
+### What the gates actually check
+
+Measured by spawning the hooks against sandbox repositories, not by reading
+them. All of it is narrower than the table above:
+
+- **`pre-bash.mjs`, on `git commit` — "test with code".** If anything under
+  `apps/**`, `packages/**`, `scripts/*.sh` or `docker/**` is staged, then at
+  least one staged path must begin with `tests/`. That is the entire rule. It
+  does not look at the tier, at the file's contents, or at whether the file is a
+  test: staging an **empty `tests/anything.txt`** beside
+  `apps/web/src/lib/authz.ts` clears it (measured — the hook exits 0), and so
+  does a `tests/governance/` file beside runtime code.
+- **`pre-bash.mjs`, on `git commit` — receipt.** A receipt must exist, have
+  exited 0, recorded at least one suite that actually RAN, and carry a tree
+  fingerprint equal to the tree being committed. The fingerprint covers HEAD,
+  the worktree diff, the INDEX and untracked files — the index because
+  `git commit` writes it, and HEAD because without it every clean tree
+  fingerprinted to `sha256("")` and one green receipt satisfied them all.
+- **`pre-bash.mjs`, on `git commit` — no-database runs.** If the staged set
+  touches `apps/**` or `packages/**` and the receipt is marked `noDb`, the
+  commit is refused, because a run without `DATABASE_URL` never executed
+  `tests/behaviour/`. This is the only point at which the tier distinction
+  reaches a commit, and it is a statement about the RUN, not about which file
+  you staged.
+- **`pre-edit.mjs`, on an Edit/Write — the behaviour tier.** Required, but only
+  on five named files — `apps/web/src/proxy.ts`, `apps/web/src/lib/authz.ts`,
+  `apps/web/src/lib/gates.ts`, `apps/web/src/lib/rate-limit.ts`,
+  `apps/web/src/lib/request-ip.ts` — plus anything under
+  `packages/db/src/schema/`. There the touched test must live in
+  `tests/behaviour/` or `apps/web/tests/behaviour/`. Every **other** source file
+  is cleared by a touched test at any tier (measured: editing
+  `apps/web/src/lib/report.ts` with only `tests/governance/` touched exits 0).
+- **Every rule above is overridable** with `GML_GATE_SKIP` — measured one by
+  one, each logging its own rule name: `commit-receipt` (for the missing, stale
+  and `noDb` cases alike), `test-with-code`, `security-surface-behaviour-test`
+  and `test-first`. The `pre-edit.mjs` rules are additionally cleared by a RED
+  receipt on the branch or a live `workspace/tdd-exempt.json` exemption. The
+  destructive-command scan and the merge verdict rule are the two with no hatch.
+
+So: which tier the test belongs to, that it failed before the code, and that the
+mutation check was really performed are reviewer obligations, not gate
+obligations. The gate makes their absence visible at commit time; it cannot make
+their presence true.
 
 ---
 
@@ -243,8 +304,9 @@ nothing, for two reasons and one proof:
 - The proof they never fired at all: the old `Stop` hook script appended a line
   to `workspace/session_log.md` **unconditionally**, with no branch that could
   skip it. That file is 112 bytes — its header and nothing else — and its last
-  modification time is the moment it was created, 2026-09-18 12:57. Fifty-two
-  commits have landed since. A hook that ran even once would have left a line.
+  modification time is the moment it was created, 2026-09-18 12:57. **53**
+  commits have landed since — `git rev-list --count --since='2026-09-18 12:57'
+  HEAD`. A hook that ran even once would have left a line.
   (The six old scripts were deleted on this branch; they are in git history.)
 
 The current hooks defend against this directly: `_lib.mjs` derives the project

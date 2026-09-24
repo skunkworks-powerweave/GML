@@ -20,23 +20,77 @@
 // by searching the raw string: `git   commit` and `git -C . commit` are the same
 // commit, and a substring match for "git commit" sees neither.
 //
-// This is deliberately a denylist, and a denylist is bounded: `$(echo rm) -rf`,
-// an aliased binary, or a script that wraps the command all evade it. It is
-// worth having anyway because it catches the shapes that actually occur, and it
-// is honest about the rest rather than claiming to be a sandbox.
+// This is deliberately a denylist, and a denylist is bounded. It is worth having
+// anyway because it catches the shapes that actually occur, and it is honest
+// about the rest rather than claiming to be a sandbox — which is what the two
+// lists below are for, and they are meant to be kept current. The review that
+// produced the C4/C5 fixes said it plainly: a docblock naming what a gate does
+// NOT catch is worth more than any claim that it catches everything. The first
+// version of this file made the claim while a one-token prefix — `env rm -rf x` —
+// walked past every rule in it.
 //
-// ── THE TWO PLACES THIS KNOWINGLY OVER-MATCHES ───────────────────────────────
+// ── THE THREE PLACES THIS KNOWINGLY OVER-MATCHES ─────────────────────────────
 //
 // 1. Segments are split without tracking quotes, so `echo "a && rm -rf x"` reads
 //    as two segments and is refused. Tracking quotes would make `bash -c "rm -rf
 //    x"` invisible, which is the worse failure, so the over-match is kept.
 // 2. Destructive SQL is matched over the WHOLE command text including heredoc
 //    bodies, because `psql <<'SQL' … DROP TABLE …` is the only shape a DROP
-//    actually arrives in here. Prose that contains the phrase is refused too.
+//    actually arrives in here. Prose that contains the phrase is refused too —
+//    now including `DELETE FROM <word>`, which turns up in prose far more
+//    readily than `DROP TABLE` does. There is a test pinning that on purpose.
+// 3. An UNTERMINATED heredoc has its remainder read as COMMANDS. Real bash
+//    treats those lines as data, so this is wrong about bash on purpose:
+//    deciding it the other way is what made C5 a universal bypass, because
+//    omitting the delimiter hid every line after it.
 //
-// Both refusals name the way out (write the text with the Write tool instead of
-// through a shell), because a gate that is wrong and offers nothing gets
-// disabled wholesale rather than satisfied.
+// Each of those refusals names the way out (write the text with the Write tool
+// instead of through a shell), because a gate that is wrong and offers nothing
+// gets disabled wholesale rather than satisfied.
+//
+// ── WHAT THIS STILL DOES NOT CATCH, AFTER C4/C5 ──────────────────────────────
+//
+// Checked by running them, not by reasoning about them. All still ALLOWED, and
+// written down so the next reader does not have to rediscover them:
+//
+//   • Indirection through the shell's own evaluators, where the program name is
+//     not a token of the command at all: `eval "rm -rf x"`, `bash -c 'rm -rf x'`,
+//     `sh -lc …`, `$(echo rm) -rf x`, `echo x | xargs -I{} sh -c 'rm -rf {}'`.
+//     No token match can reach inside a string. (`env -S 'rm -rf x'` IS caught,
+//     but only incidentally: `-S` is consumed as one of env's flags and the
+//     quoted string's first word then lands in argv[0], where unquoting finds
+//     it. Do not read that as the class being handled.)
+//   • Aliases, shell functions, and any wrapper script: `alias rm='rm -rf'`, or
+//     `./scripts/clean.sh`, whose contents this gate never reads.
+//   • A different tool for the same effect: `find -delete`, `find -exec rm`,
+//     `shred`, `truncate`, `git rm -r`, `rsync --delete`, `robocopy /MIR`,
+//     `python -c "shutil.rmtree(…)"`.
+//   • Any wrapper program not in WRAPPERS: `chronic`, `script`, `unbuffer`,
+//     `flock`, `runuser`, `su -c`.
+//   • `docker container|image|network|builder prune`, `docker rm -f`,
+//     `docker compose rm -v`, `kubectl delete`.
+//   • SQL these patterns do not spell: `DROP INDEX`, `DROP VIEW`,
+//     `DROP MATERIALIZED VIEW`, `UPDATE … SET` with no WHERE, `dropdb`,
+//     `pg_restore --clean`, and any statement assembled at runtime.
+//   • `gh api graphql` with a `mergePullRequest` mutation, and the GitHub REST
+//     API reached with plain `curl`.
+//   • A commit made by anything other than `git commit`: `git merge`,
+//     `git cherry-pick`, `git revert`, `git rebase --continue`, `git am`. None of
+//     them passes through the commit gate's evidence checks.
+//   • I3's problem, still open in the PUSH rule. checkCommit() refuses a commit
+//     redirected out of this tree; checkPush() does not, and a SYMBOLIC refspec
+//     is then resolved against the wrong repository: measured,
+//     `git -C ../elsewhere push origin HEAD` is ALLOWED from a feature branch
+//     here even when ../elsewhere is on main, as are the `--work-tree` spelling
+//     and a bare `git -C ../elsewhere push`. Named refspecs are unaffected —
+//     `git -C ../elsewhere push origin main` and `--all` are both still refused —
+//     so the hole is only the symbolic and bare forms. Closing it means giving
+//     checkPush the same scope check checkCommit has; it is called out here
+//     rather than fixed quietly because it was found outside the findings this
+//     pass was scoped to.
+//
+// And the receipt the commit gate reads is a file anyone can write; see
+// checkReceipt() for exactly what the hardening there buys and what it does not.
 
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
@@ -56,26 +110,139 @@ import {
 
 // ─── command parsing ─────────────────────────────────────────────────────────
 
+/** Strip the shell quoting that survives a whitespace split. */
+function unquote(token = "") {
+  return token.replace(/^["']|["']$/g, "");
+}
+
+/**
+ * Arithmetic: `$(( … ))` and `(( … ))`, where `<<` means SHIFT and not a
+ * redirection. The inner alternation is the unrolled-loop form, so it handles
+ * one level of nested parentheses and cannot backtrack catastrophically — this
+ * runs before every Bash call, on command strings of any length.
+ */
+const ARITHMETIC = /\$?\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)/g;
+
+/**
+ * Blank the spans a heredoc opener cannot legally live in, leaving every other
+ * column where it was so the delimiter can still be read off the result.
+ *
+ * Quoting is not tracked, so a `#` inside a string blanks the rest of that line
+ * too. That can only cause an opener to be MISSED, which means its body gets
+ * SCANNED AS COMMANDS — for a gate, the direction to be wrong in.
+ */
+function maskNonRedirection(line) {
+  let masked = line.replace(ARITHMETIC, (m) => " ".repeat(m.length));
+  const comment = masked.search(/(?:^|\s)#/);
+  if (comment !== -1) masked = masked.slice(0, comment) + " ".repeat(masked.length - comment);
+  return masked;
+}
+
+/**
+ * A heredoc opener, in REDIRECTION POSITION ONLY.
+ *
+ * `(?<![\d<])` keeps an arithmetic shift written outside `$(( ))` out (`1<<N`),
+ * and `(?!<)` keeps `<<<` out — a here-STRING carries its data inline and opens
+ * no body, so there is no delimiter line to go looking for.
+ */
+const HEREDOC_OPENER = /(?<![\d<])<<(?!<)-?\s*(?:(["'])([^"'\s]+)\1|\\?([A-Za-z_][A-Za-z0-9_]*))/g;
+
+/** Every heredoc delimiter opened on one line, in the order they were opened. */
+function heredocDelimiters(line) {
+  const out = [];
+  for (const m of maskNonRedirection(line).matchAll(HEREDOC_OPENER)) out.push(m[2] ?? m[3]);
+  return out;
+}
+
+/**
+ * Trimmed line text -> the ascending line numbers where it occurs.
+ *
+ * Built once so that finding a delimiter is a lookup rather than a forward scan.
+ * The scan version was quadratic in the number of openers, and the C5 fix made
+ * that reachable: an UNTERMINATED opener now searches the whole remainder
+ * instead of giving up, so N of them cost N²/2 line comparisons. Measured on
+ * `"cat <<EOF\n".repeat(N)`: 0.6s at 5,000, 1.5s at 10,000, 4.1s at 20,000 — on
+ * a hook that runs before every Bash call and is registered with a timeout it
+ * must never approach. Closing one hole is not licence to open another.
+ */
+function lineIndex(lines) {
+  const index = new Map();
+  for (let i = 0; i < lines.length; i += 1) {
+    const key = lines[i].trim();
+    const at = index.get(key);
+    if (at) at.push(i);
+    else index.set(key, [i]);
+  }
+  return index;
+}
+
+/** The first line at or after `from` whose trimmed text is `text`, or -1. */
+function firstLineAtOrAfter(index, text, from) {
+  const at = index.get(text);
+  if (!at) return -1;
+  let lo = 0;
+  let hi = at.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (at[mid] < from) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < at.length ? at[lo] : -1;
+}
+
 /**
  * Remove heredoc BODIES, keeping the line that introduces them.
  *
  * A heredoc body is an argument, not a command: `cat <<'EOF' > notes.md` with
  * "rm -rf" in the body runs nothing. Scanning it as a command would refuse a
  * file write, which is the kind of wrongness that gets a gate turned off.
+ *
+ * ── C5: TWO CHARACTERS USED TO HIDE ANYTHING AFTER THEM ─────────────────────
+ *
+ * The first version matched `<<WORD` ANYWHERE on a line and, when the delimiter
+ * never appeared, discarded everything to the END OF INPUT. Either half alone
+ * was exploitable; together they were a universal bypass:
+ *
+ *     echo $((1<<N))
+ *     rm -rf node_modules
+ *
+ * `1<<N` is an arithmetic left shift — verified in real bash, which prints 8 and
+ * then RUNS the rm — but it read as an opener for a delimiter named `N`, no line
+ * equalled `N`, and the rm was dropped with the rest of the input. The gate
+ * returned 0 and said nothing. `# cat <<EOF` in a comment did the same.
+ *
+ * So: the opener has to be in redirection position (see HEREDOC_OPENER), and
+ * when its delimiter never arrives the remainder is SCANNED rather than dropped.
+ * Scanning over-matches a genuinely unterminated heredoc — bash would treat
+ * those lines as data — and that is deliberate: deciding the other way makes
+ * "leave the delimiter off" a one-token bypass for every rule in this file.
  */
 function stripHeredocs(text) {
   const lines = text.split(/\r?\n/);
+  const index = lineIndex(lines);
   const kept = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
     kept.push(line);
     i += 1;
-    const opener = line.match(/<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/);
-    if (!opener) continue;
-    const delimiter = opener[2];
-    while (i < lines.length && lines[i].trim() !== delimiter) i += 1;
-    if (i < lines.length) i += 1; // drop the closing delimiter line too
+
+    const delimiters = heredocDelimiters(line);
+    if (!delimiters.length) continue;
+
+    // Several bodies can be opened on one line (`cat <<A <<B`); they close in
+    // the order they were opened.
+    let j = i;
+    let closed = 0;
+    for (const delimiter of delimiters) {
+      const at = firstLineAtOrAfter(index, delimiter, j);
+      if (at === -1) break;
+      closed += 1;
+      j = at + 1;
+    }
+    // Only skip the body when EVERY delimiter was found. Otherwise leave `i`
+    // where it is, so the remainder is read as commands (C5).
+    if (closed === delimiters.length) i = j;
   }
   return kept.join("\n");
 }
@@ -89,6 +256,83 @@ function segments(text) {
 }
 
 /**
+ * Shell keywords that can stand where a program name is expected.
+ *
+ * segments() splits on `;`, so `if true; then rm -rf x; fi` arrives as the
+ * segment "then rm -rf x" — a keyword sitting exactly where argv[0] is read.
+ */
+const SHELL_KEYWORDS = new Set([
+  "if", "then", "elif", "else", "fi",
+  "while", "until", "do", "done",
+  "for", "select", "case", "esac", "in",
+  "function", "coproc",
+]);
+
+/**
+ * Programs whose job is to RUN ANOTHER PROGRAM, with the options of their own
+ * that consume a separate value. `env rm -rf build` is `rm -rf build`.
+ *
+ * `duration` marks the ones that take a bare number before the program
+ * (`timeout 5 rm -rf build`).
+ */
+const WRAPPERS = new Map([
+  ["sudo", { valued: new Set(["-u", "-g", "-p", "-C", "-h", "-r", "-t", "--user", "--group", "--prompt", "--close-from", "--host", "--role", "--type"]) }],
+  ["doas", { valued: new Set(["-u", "-C", "-a"]) }],
+  ["env", { valued: new Set(["-u", "-C", "--unset", "--chdir"]) }],
+  ["command", { valued: new Set() }],
+  ["builtin", { valued: new Set() }],
+  ["exec", { valued: new Set(["-a"]) }],
+  ["nohup", { valued: new Set() }],
+  ["setsid", { valued: new Set() }],
+  ["nice", { valued: new Set(["-n", "--adjustment"]) }],
+  ["ionice", { valued: new Set(["-c", "-n", "-p", "--class", "--classdata", "--pid"]) }],
+  ["time", { valued: new Set(["-f", "-o", "--format", "--output"]) }],
+  ["stdbuf", { valued: new Set(["-i", "-o", "-e", "--input", "--output", "--error"]) }],
+  ["timeout", { valued: new Set(["-s", "-k", "--signal", "--kill-after"]), duration: true }],
+  ["xargs", { valued: new Set(["-n", "-P", "-I", "-d", "-s", "-E", "-a", "--max-args", "--max-procs", "--replace", "--delimiter", "--arg-file"]) }],
+]);
+
+/**
+ * Consume a wrapper's OWN options, leaving the program it runs at the front.
+ *
+ * The loop is bounded rather than `for(;;)` only as belt-and-braces: every
+ * branch already slices at least one character off, so it cannot spin.
+ */
+function consumeWrapperArgs(text, wrapper) {
+  let rest = text;
+  for (let guard = 0; guard < 64; guard += 1) {
+    const word = rest.match(/^(\S+)(?:\s+|$)/);
+    if (!word) break;
+    const arg = word[1];
+
+    if (arg === "--") return rest.slice(word[0].length);
+
+    if (arg.length > 1 && arg.startsWith("-")) {
+      rest = rest.slice(word[0].length);
+      if (!arg.includes("=") && wrapper.valued.has(arg)) {
+        const value = rest.match(/^(\S+)(?:\s+|$)/);
+        if (value) rest = rest.slice(value[0].length);
+      }
+      continue;
+    }
+
+    const assignment = rest.match(/^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$)/);
+    if (assignment) {
+      rest = rest.slice(assignment[0].length);
+      continue;
+    }
+
+    if (wrapper.duration && /^\d+(?:\.\d+)?[smhd]?$/.test(arg)) {
+      rest = rest.slice(word[0].length);
+      continue;
+    }
+
+    break;
+  }
+  return rest;
+}
+
+/**
  * A segment's argv, with the noise that hides a command stripped from the
  * front: `FOO=bar sudo git commit` is a commit.
  *
@@ -97,20 +341,73 @@ function segments(text) {
  * with is used exactly that way (`GML_GATE_SKIP='CI is down' git commit`). A
  * token-wise version of this read `CI` as the program name and let the commit
  * through unexamined, which is worse than not having the override at all.
+ *
+ * ── C4: A ONE-TOKEN PREFIX DEFEATED EVERY RULE IN THIS FILE ─────────────────
+ *
+ * This used to strip `VAR=value` and `sudo`, and nothing else. So the program
+ * name of `env rm -rf build` was `env`, of `nice rm -rf build` was `nice`, and
+ * of the segment `then rm -rf x` was `then`. All of them ran. The fix is not a
+ * longer list of spellings for `rm` — it is reading past the words that are, by
+ * definition, not the command: environment assignments, shell keywords, group
+ * openers, case labels, and the handful of programs whose entire purpose is to
+ * exec another one.
  */
 function argvOf(segment) {
   let rest = segment.trim();
-  for (;;) {
-    const prefix = rest.match(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+|sudo\s+)/);
-    if (!prefix) break;
-    rest = rest.slice(prefix[0].length);
+  for (let guard = 0; guard < 64; guard += 1) {
+    // `(` and `{` open a group, `!` negates one; any of them can be glued to
+    // the word that follows, as in `(rm -rf x)`.
+    const group = rest.match(/^(?:[!({]\s*)+/);
+    if (group) {
+      rest = rest.slice(group[0].length);
+      continue;
+    }
+
+    // `a)` / `*)` — a case label, which is where a program name goes but is not
+    // one. Anchored to exclude anything containing a parenthesis, so `$(…)` and
+    // a trailing `)` on a real command are left alone.
+    const label = rest.match(/^[^\s()]*\)\s*/);
+    if (label) {
+      rest = rest.slice(label[0].length);
+      continue;
+    }
+
+    const assignment = rest.match(/^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+/);
+    if (assignment) {
+      rest = rest.slice(assignment[0].length);
+      continue;
+    }
+
+    const word = rest.match(/^(\S+)(?:\s+|$)/);
+    if (!word) break;
+    const head = program([word[1]]);
+
+    if (SHELL_KEYWORDS.has(head)) {
+      rest = rest.slice(word[0].length);
+      // `case $x in a) …` — everything up to and including `in` is the subject
+      // being matched, not a command.
+      if (head === "case") rest = rest.replace(/^[\s\S]*?\bin\s+/, "");
+      continue;
+    }
+
+    const wrapper = WRAPPERS.get(head);
+    if (!wrapper) break;
+    rest = consumeWrapperArgs(rest.slice(word[0].length), wrapper);
   }
   return rest.split(/\s+/).filter(Boolean);
 }
 
-/** The bare program name, so `/usr/bin/rm` and `rm` are the same program. */
+/**
+ * The bare program name, so `/usr/bin/rm`, `rm.exe`, `\rm` and `"rm"` are all
+ * the same program.
+ *
+ * C4: the quotes used to survive, so `"rm" -rf x` was the program `"rm"`, which
+ * matched no rule and ran.
+ */
 function program(argv) {
-  return (argv[0] ?? "").replace(/^.*[\\/]/, "").replace(/\.exe$/i, "");
+  return unquote((argv[0] ?? "").trim())
+    .replace(/^.*[\\/]/, "")
+    .replace(/\.exe$/i, "");
 }
 
 /**
@@ -133,28 +430,41 @@ function flagsOf(args, longNames = {}) {
   return letters;
 }
 
+/** git GLOBAL options that consume a value, in either `--opt=v` or `--opt v`. */
+const GIT_OPTS_WITH_VALUE = new Set([
+  "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix", "--config-env",
+]);
+
 /**
  * Recognise a git invocation and return its subcommand, seeing past the global
  * options that sit between `git` and the verb. `git -C . commit` is a commit;
  * the brief calls this out because it is the obvious way past a naive match.
+ *
+ * ── I3: THE OPTIONS THAT REDIRECT A COMMIT WERE THROWN AWAY ────────────────
+ *
+ * This captured `-C` and treated `--git-dir=X` / `--work-tree=Y` as noise, so
+ * `git --git-dir=X --work-tree=Y commit` passed the scope check and committed
+ * into a tree whose branch, staged paths and receipt the gate had never read.
+ * The SPACE-separated spelling was worse: the value was not consumed at all, so
+ * `git --git-dir X commit` parsed its subcommand as "X" and the commit gate did
+ * not run — no scope check, no branch check, no receipt check, nothing.
  */
 function gitInvocation(argv) {
   if (program(argv) !== "git") return null;
   let i = 1;
-  let cDir = null;
+  const seen = { cDir: null, gitDir: null, workTree: null };
   while (i < argv.length) {
     const arg = argv[i];
-    if (arg === "-C" || arg === "-c") {
-      if (arg === "-C") cDir = argv[i + 1] ?? null;
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("--git-dir=") || arg.startsWith("--work-tree=") || arg.startsWith("--namespace=")) {
-      i += 1;
-      continue;
-    }
-    if (arg === "--no-pager" || arg === "-P" || arg === "--paginate" || arg === "--no-replace-objects") {
-      i += 1;
+    const eq = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+
+    if (GIT_OPTS_WITH_VALUE.has(name)) {
+      const glued = eq === -1 ? null : arg.slice(eq + 1);
+      const value = glued ?? argv[i + 1] ?? null;
+      if (name === "-C") seen.cDir = value;
+      if (name === "--git-dir") seen.gitDir = value;
+      if (name === "--work-tree") seen.workTree = value;
+      i += glued === null ? 2 : 1;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -164,7 +474,7 @@ function gitInvocation(argv) {
     break;
   }
   if (i >= argv.length) return null;
-  return { sub: argv[i], args: argv.slice(i + 1), cDir };
+  return { sub: argv[i], args: argv.slice(i + 1), ...seen };
 }
 
 /** Run git for its EXIT STATUS. git() in _lib returns "" for both outcomes. */
@@ -203,7 +513,16 @@ const WAY_OUT_TEXT =
 const SQL_PATTERNS = [
   [/\bDROP\s+TABLE\b/i, "DROP TABLE"],
   [/\bDROP\s+DATABASE\b/i, "DROP DATABASE"],
+  [/\bDROP\s+SCHEMA\b/i, "DROP SCHEMA"],
   [/\bTRUNCATE\s+(TABLE\s+)?["'`\w]/i, "TRUNCATE"],
+  // I8. The shape, not the WHERE: a DELETE FROM with no WHERE empties a table,
+  // but one with a WHERE nobody checked is the same loss at a smaller scale, and
+  // this gate cannot tell a good predicate from a bad one. Both are refused and
+  // routed to a migration, where the statement is reviewable and replayable.
+  [/\bDELETE\s+FROM\s+["'`\w]/i, "DELETE FROM"],
+  // I8. The PAIR, so that an additive `ALTER TABLE … ADD COLUMN` is untouched.
+  // A dropped column takes its data with it and no later commit brings it back.
+  [/\bALTER\s+TABLE\b(?=[\s\S]*?\bDROP\s+COLUMN\b)/i, "ALTER TABLE … DROP COLUMN"],
 ];
 
 /** Destructive shell commands, matched on a segment's tokens. */
@@ -211,18 +530,28 @@ function destructiveSegment(argv) {
   const prog = program(argv);
 
   if (prog === "rm") {
+    // C4: -R is a documented synonym for -r in both GNU and BSD rm, so `rm -Rf`,
+    // `rm -R -f` and `rm -fR` are all `rm -rf`. Only lowercase r was looked for,
+    // and one capital letter walked past the rule.
     const flags = flagsOf(argv.slice(1), { "--recursive": "r", "--force": "f" });
-    if (flags.has("r") && flags.has("f")) return "rm -rf";
+    if ((flags.has("r") || flags.has("R")) && flags.has("f")) return "rm -rf";
   }
 
   if (prog === "docker" || prog === "docker-compose") {
     const args = prog === "docker-compose" ? argv.slice(1) : argv.slice(2);
-    const group = prog === "docker-compose" ? "compose" : argv[1];
+    const group = prog === "docker-compose" ? "compose" : unquote(argv[1] ?? "");
     if (group === "compose" && args.includes("down")) {
       const flags = flagsOf(args, { "--volumes": "v" });
       if (flags.has("v")) return "docker compose down -v";
     }
-    if (group === "volume" && args[0] === "rm") return "docker volume rm";
+    const verb = unquote(args[0] ?? "");
+    if (group === "volume" && verb === "rm") return "docker volume rm";
+    // I8. `prune` deletes by absence rather than by name: every volume nothing
+    // currently references, which includes the database volume of any stack that
+    // happens to be down. `system prune` adds images, networks and build cache,
+    // and with -a --volumes it is the whole machine.
+    if (group === "volume" && verb === "prune") return "docker volume prune";
+    if (group === "system" && verb === "prune") return "docker system prune";
   }
 
   const g = gitInvocation(argv);
@@ -275,6 +604,35 @@ function checkDestructive(command) {
 
 /** `git push` options that consume the NEXT argument, so it is not a refspec. */
 const PUSH_OPTS_WITH_VALUE = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
+
+/**
+ * `git push` flags that push refs the command never names — main included, from
+ * whatever branch you happen to be standing on.
+ *
+ * I8/I1: these carry no refspec, so the old code asked what a BARE push would
+ * target, got the current branch, and allowed it from anywhere that was not
+ * main. `--mirror` is worse than `--all`: it also DELETES remote refs that no
+ * longer exist locally, which is a force push and a branch deletion at once.
+ */
+const PUSH_EVERYTHING = new Set(["--all", "--branches", "--mirror"]);
+
+/**
+ * The branch a refspec actually lands on.
+ *
+ * ── I1: `git push origin HEAD` PUSHED main AND WAS ALLOWED ──────────────────
+ *
+ * The target used to be the last `:`-separated field with `refs/heads/` removed.
+ * That leaves `HEAD` as "HEAD", `@` as "@" and `heads/main` as "heads/main",
+ * none of which is in PROTECTED_BRANCHES — so all three went through, and the
+ * first two pushed main whenever main was checked out. A symbolic name has to be
+ * RESOLVED before it is compared, and `heads/` is as much a prefix as
+ * `refs/heads/`.
+ */
+function pushTarget(refspec) {
+  const dst = refspec.replace(/^\+/, "").split(":").pop();
+  const name = dst.replace(/^refs\/heads\//, "").replace(/^heads\//, "");
+  return name === "HEAD" || name === "@" || name === "" ? currentBranch() : name;
+}
 
 /** The branch a push with no refspec would land on. */
 function impliedPushBranch() {
@@ -332,9 +690,21 @@ function checkPush(command) {
       );
     }
 
-    const targets = refspecs.length
-      ? refspecs.map((r) => r.replace(/^\+/, "").split(":").pop().replace(/^refs\/heads\//, ""))
-      : [impliedPushBranch()];
+    const everything = g.args.find((a) => PUSH_EVERYTHING.has(unquote(a).split("=")[0]));
+    if (everything) {
+      deny(
+        `[gate: push] Refused — \`git push ${everything}\` pushes every branch ` +
+          `there is, main included, from whatever branch you are standing on.\n` +
+          `It names no refspec, so nothing about your current branch makes it safe. ` +
+          `${everything === "--mirror" ? "--mirror also DELETES remote refs that no longer exist locally, " +
+            "which is a force push and a branch deletion in one flag. " : ""}` +
+          `This rule has no override.\n` +
+          `Way forward: push the one branch you mean —\n` +
+          `  git push -u origin <your-branch>`,
+      );
+    }
+
+    const targets = refspecs.length ? refspecs.map(pushTarget) : [impliedPushBranch()];
 
     const protectedTarget = targets.find((t) => PROTECTED_BRANCHES.has(t));
     if (protectedTarget) {
@@ -413,7 +783,24 @@ function checkWorktree(command) {
 
 // ─── rule 7: merge only with a recorded review ───────────────────────────────
 
-const VERDICT = /Review-Verdict:\s*approved/i;
+// ── ANCHORED, BECAUSE THE UNANCHORED FORM ACCEPTED ITS OWN DOCUMENTATION ─────
+//
+// This was `/Review-Verdict:\s*approved/i`, matching anywhere in the body. Three
+// consequences, all verified:
+//
+//   the PR template     shipped in this same commit, explained the rule using
+//                       the literal words `Review-Verdict: approved` in its
+//                       prose — so every PR opened from the default template
+//                       satisfied the merge gate with no review at all
+//   approved-with-nits  matched, though the template said it blocks
+//   prose                `do not write Review-Verdict: approved yet` matched
+//
+// The verdict must therefore be a LINE, not a substring: optional indentation,
+// the field, the single word, optional trailing space, end of line. `m` so it
+// can sit anywhere in the body; `i` because the word's case is not the point.
+// tests/hooks/template-not-self-approving.test.mjs asserts the unedited
+// template does not satisfy this.
+const VERDICT = /^[ \t]*Review-Verdict:[ \t]*approved[ \t]*\r?$/im;
 
 /**
  * The PR body, straight from gh.
@@ -456,11 +843,65 @@ function ghPrBody(prNumber) {
  * verdict down, which is the difference between a claim nobody made and a claim
  * someone is on the record for.
  */
+/** gh's GLOBAL options that consume the next argument. */
+const GH_OPTS_WITH_VALUE = new Set(["-R", "--repo", "--hostname"]);
+
+/**
+ * gh's positional words, with flags and their values skipped.
+ *
+ * ── I2: THE RULE ASKED FOR A POSITION, NOT A SUBCOMMAND ────────────────────
+ *
+ * The check was `argv[1] === "pr" && argv[2] === "merge"`, so a single global
+ * flag in front — `gh --repo o/r pr merge 1` — shifted the words along by two
+ * and the entire merge gate stopped applying. Reading POSITIONS out of a
+ * flag-bearing command line is the same mistake as substring-matching
+ * "git commit", which the top of this file already knows not to make.
+ */
+function ghWords(argv) {
+  if (program(argv) !== "gh") return null;
+  const words = [];
+  for (let i = 1; i < argv.length; i += 1) {
+    const arg = unquote(argv[i]);
+    if (GH_OPTS_WITH_VALUE.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    words.push(arg);
+  }
+  return words;
+}
+
+/** The REST route that merges a pull request, in any of gh api's spellings. */
+const API_MERGE_ROUTE = /\/pulls\/\d+\/merge\/?$/;
+
 function checkMerge(command) {
   for (const segment of segments(command)) {
     const argv = argvOf(segment);
-    if (program(argv) !== "gh" || argv[1] !== "pr" || argv[2] !== "merge") continue;
-    const args = argv.slice(3);
+    const words = ghWords(argv);
+    if (!words) continue;
+
+    // I2. `gh api … /pulls/<n>/merge` is the same merge with the porcelain
+    // taken off, and it never touches `gh pr merge`. Refused on the ROUTE
+    // rather than on the method: a GET of that path only reports whether the PR
+    // is merged, and losing that to a clear refusal costs nothing next to
+    // leaving the one-line bypass open.
+    if (words[0] === "api") {
+      if (argv.some((a) => API_MERGE_ROUTE.test(unquote(a)))) {
+        deny(
+          `[gate: merge] Refused — \`gh api\` against a pull request's merge route.\n` +
+            `This merges the PR exactly as \`gh pr merge\` does, without passing the ` +
+            `review check, which is the only reason to reach for it. This rule has ` +
+            `no override.\n` +
+            `Way forward: \`gh pr merge <n> --squash\` once the PR body carries ` +
+            `Review-Verdict: approved.`,
+        );
+      }
+      continue;
+    }
+
+    if (words[0] !== "pr" || words[1] !== "merge") continue;
+    const args = argv.slice(1);
 
     if (args.includes("--admin")) {
       deny(
@@ -473,7 +914,9 @@ function checkMerge(command) {
       );
     }
 
-    const prNumber = args.find((a) => /^\d+$/.test(a));
+    // The PR number is the first positional AFTER `pr merge`, so a digit that is
+    // really some flag's value cannot be mistaken for one.
+    const prNumber = words.slice(2).find((a) => /^\d+$/.test(a));
     const result = ghPrBody(prNumber);
 
     if (!result.ok) {
@@ -507,9 +950,48 @@ function checkMerge(command) {
 
 const PROTECTED_BRANCHES = new Set(["main", "master"]);
 
-/** Strip the shell quoting that survives a whitespace split. */
-function unquote(token = "") {
-  return token.replace(/^["']|["']$/g, "");
+/** Compare two filesystem paths: case-insensitively, and either separator. */
+function samePath(a, b) {
+  const norm = (p) => p.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/**
+ * A commit that would land somewhere this gate holds no evidence about.
+ *
+ * Every piece of evidence the rules below read — branch, staged paths, receipt,
+ * tree fingerprint — comes from PROJECT_DIR. A commit aimed anywhere else would
+ * be judged against the WRONG tree and pass on evidence that describes something
+ * entirely different, which is the same category of mistake as the ledger that
+ * reported "1549/1549 passing" for an app that could not serve its own login
+ * page.
+ *
+ * I3: `-C` was checked here and `--git-dir` / `--work-tree` were not. A git
+ * directory is accepted when it is <repo>/.git or the directory git itself
+ * reports for this checkout — in a worktree those differ, and the real one lives
+ * outside the checkout, so comparing against `.git` alone would refuse a commit
+ * from every worktree this project's own workflow tells you to make.
+ */
+function commitScopeEscape(commit) {
+  const checks = [
+    ["-C", commit.cDir, (t) => samePath(t, PROJECT_DIR)],
+    ["--work-tree", commit.workTree, (t) => samePath(t, PROJECT_DIR)],
+    [
+      "--git-dir",
+      commit.gitDir,
+      (t) => {
+        if (samePath(t, resolve(PROJECT_DIR, ".git"))) return true;
+        const own = git(["rev-parse", "--absolute-git-dir"]);
+        return Boolean(own) && samePath(t, own);
+      },
+    ],
+  ];
+  for (const [flag, value, isOurs] of checks) {
+    if (!value) continue;
+    const target = resolve(PROJECT_DIR, unquote(value));
+    if (!isOurs(target)) return { flag, value, target };
+  }
+  return null;
 }
 
 /** The first `git commit` in the command, or null. */
@@ -526,23 +1008,18 @@ function checkCommit(command) {
   if (!commit) return;
 
   // ── rule 2a: the gate can only vouch for the tree it lives in ──────────────
-  // Every piece of evidence below — branch, staged paths, receipt — is read
-  // from PROJECT_DIR. `git -C <elsewhere> commit` would be checked against the
-  // WRONG tree and pass on evidence that describes something else entirely,
-  // which is the same category of mistake as the ledger that reported
-  // "1549/1549 passing" for an app that could not serve its own login page.
-  if (commit.cDir) {
-    const target = resolve(PROJECT_DIR, unquote(commit.cDir));
-    if (target.toLowerCase() !== PROJECT_DIR.toLowerCase()) {
-      deny(
-        `[gate: commit scope] Refused — \`git -C ${commit.cDir}\` commits into ` +
-          `another repository (${target}).\n` +
-          `This gate reads the branch, the staged paths and the test receipt from ` +
-          `${PROJECT_DIR}, so it cannot vouch for a commit made anywhere else.\n` +
-          `Way forward: run the commit from a session whose project directory IS ` +
-          `that repository, so its own gate can check it.`,
-      );
-    }
+  const elsewhere = commitScopeEscape(commit);
+  if (elsewhere) {
+    deny(
+      `[gate: commit scope] Refused — \`git ${elsewhere.flag} ${elsewhere.value}\` ` +
+        `commits into another repository (${elsewhere.target}).\n` +
+        `This gate reads the branch, the staged paths and the test receipt from ` +
+        `${PROJECT_DIR}, so it cannot vouch for a commit made anywhere else — and ` +
+        `a receipt that describes the wrong tree is worse than no receipt, because ` +
+        `it reads as evidence.\n` +
+        `Way forward: run the commit from a session whose project directory IS ` +
+        `that repository, so its own gate can check it.`,
+    );
   }
 
   // ── rule 2b: no commit on a protected branch ──────────────────────────────
@@ -586,6 +1063,21 @@ function touchesRuntimeCode(staged) {
  * something checkable: edit a file after the run and the receipt stops
  * matching, which is exactly the case the claim was wrong in.
  */
+/**
+ * True unless the receipt says, unambiguously, that a database WAS there.
+ *
+ * C3(c): this was `receipt.noDb === true`, a strict compare against a field read
+ * out of a JSON file, so the string "true" sailed past it and a database-free
+ * run covered a change to runtime code. Anything that is not plainly false now
+ * counts as "no database", because that is the direction a missing-evidence
+ * question has to be answered in.
+ */
+function ranWithoutDatabase(value) {
+  if (value === undefined || value === null || value === false) return false;
+  const s = String(value).trim().toLowerCase();
+  return !(s === "false" || s === "" || s === "0");
+}
+
 function checkReceipt(command, staged) {
   const rule = "commit-receipt";
   const receipt = latestReceipt();
@@ -615,6 +1107,68 @@ function checkReceipt(command, staged) {
     );
   }
 
+  // ── C3(c): make a forged receipt a bigger and more specific lie ────────────
+  //
+  // The receipt is a plain file under workspace/, which pre-edit.mjs exempts, so
+  // anything able to write a file can write one. That cannot be closed from
+  // inside this hook, and pretending otherwise would be the same kind of claim
+  // this layer exists to stop. RESIDUAL RISK, stated plainly: a process that can
+  // write workspace/ can also read HEAD and call treeHash(), so a deliberate
+  // forgery still succeeds. What the checks below buy is that an ACCIDENTAL pass
+  // is no longer possible — a run where no suite executed, a receipt that
+  // disagrees with itself, one carried over from another commit — and that a
+  // deliberate one has to state several specific untrue things rather than one
+  // vague one.
+  const suites = Array.isArray(receipt.suites) ? receipt.suites : [];
+  const executed = suites.filter((s) => s && s.ran === true);
+  if (!executed.length) {
+    denyOverridable(
+      command,
+      rule,
+      `[gate: commit evidence] Refused — the receipt records no suite that ran ` +
+        `(exit ${receipt.exitCode}, ${suites.length} suite(s) listed).\n` +
+        `An exit code of 0 from a run that executed nothing is not a green run, it ` +
+        `is an empty one. scripts/test-gate.mjs writes \`ran: false\` for a suite it ` +
+        `skipped, and at least one suite has to say otherwise.\n${RUN_TESTS}`,
+    );
+  }
+
+  // Note what is NOT required: that EVERY suite ran. test-gate.mjs legitimately
+  // records `ran: false, reason: "no DATABASE_URL"`, and refusing that outright
+  // would refuse every commit made without a database. The noDb rule below is
+  // what handles it, and it handles it per staged path instead of wholesale.
+  const contradictory = executed.filter((s) => s.status !== 0 || (s.failed ?? 0) > 0);
+  if (contradictory.length) {
+    denyOverridable(
+      command,
+      rule,
+      `[gate: commit evidence] Refused — the receipt contradicts itself: exit ` +
+        `${receipt.exitCode}, but a suite that ran reports otherwise.\n` +
+        `  ${contradictory.map((s) => `${s.suite}: status ${s.status}, ${s.failed ?? 0} failed`).join("\n  ")}\n` +
+        `test-gate.mjs takes exitCode from the WORST suite status, so this is a ` +
+        `shape it cannot produce.\n${RUN_TESTS}`,
+    );
+  }
+
+  // The commit the tests ran on top of. treeHash() has covered HEAD since C3(a),
+  // so this is a second reading of the same fact rather than the only one — kept
+  // because it turns an opaque hash mismatch into a refusal that names the two
+  // commits, and because it is one more field a forgery has to get right.
+  // A repository with an unborn HEAD reports "", and a receipt from one has to
+  // claim "" as well; there is no history there to protect.
+  const head = git(["rev-parse", "HEAD"]);
+  if (String(receipt.head ?? "") !== head) {
+    denyOverridable(
+      command,
+      rule,
+      `[gate: commit evidence] Refused — the receipt was produced at a different HEAD.\n` +
+        `  receipt HEAD: ${String(receipt.head ?? "(none)").slice(0, 12)} (run at ${receipt.ts})\n` +
+        `  current HEAD: ${(head || "(unborn)").slice(0, 12)}\n` +
+        `The tests ran against a different commit, so what they demonstrated is not ` +
+        `what this commit would add to.\n${RUN_TESTS}`,
+    );
+  }
+
   const now = treeHash();
   if (receipt.treeHash !== now) {
     denyOverridable(
@@ -633,7 +1187,7 @@ function checkReceipt(command, staged) {
   // text and was green for months while the app could not boot, so it is not
   // cover for a change to the code that boots.
   const runtime = touchesRuntimeCode(staged);
-  if (receipt.noDb === true && runtime.length) {
+  if (ranWithoutDatabase(receipt.noDb) && runtime.length) {
     denyOverridable(
       command,
       rule,
@@ -771,12 +1325,27 @@ function checkMigration(command, staged) {
 
 // ─── entry point ─────────────────────────────────────────────────────────────
 
+/**
+ * The command this run was asked about, kept where the error path can reach it.
+ *
+ * The override has to work even when a rule threw, so the reason has to be
+ * readable off the command string at that point.
+ */
+let observedCommand = "";
+
 function main() {
   const input = readInput();
-  if (input.tool_name && input.tool_name !== "Bash") allow();
+
+  // I4: this line was `input.tool_name`, and readInput() returns whatever
+  // JSON.parse gives back — `null` is valid JSON, so a literal `null` payload
+  // threw "Cannot read properties of null (reading 'tool_name')". The line below
+  // it already used `?.`; this one did not, and the difference cost the gate 12
+  // recorded crashes in one 33-minute session.
+  if (input?.tool_name && input.tool_name !== "Bash") allow();
 
   const command = input?.tool_input?.command;
   if (typeof command !== "string" || !command.trim()) allow();
+  observedCommand = command;
 
   checkDestructive(command);
   checkPush(command);
@@ -788,13 +1357,44 @@ function main() {
 try {
   main();
 } catch (err) {
-  // A gate that crashes blocks ALL work, which is how an enforcement layer gets
-  // ripped out. Failing open is the right direction for a bug in the gate — but
-  // silently failing open is how the previous hooks stayed invisible across 27
-  // commits, so the failure is recorded where it can be found.
+  // ── I4: THE GATE WAS SILENTLY OPEN, AND A TEST HELD IT THAT WAY ───────────
+  //
+  // This used to log and fall through to allow(). workspace/gate-errors.log in
+  // this worktree holds 12 TypeErrors from 2026-09-23 between 22:50 and 23:23,
+  // and three more arrived while this was being fixed: fifteen Bash calls that
+  // went through unexamined, with nothing on stderr and nothing in the
+  // transcript. Worse, tests/hooks/pre-bash.test.mjs asserted exit 0 for the
+  // payload that caused them, so the suite was GREEN BECAUSE OF the crash.
+  //
+  // THE DECISION: an internal error now REFUSES. A gate that fails open on its
+  // own bug is off exactly when something is wrong and quiet about being off,
+  // which is the defect this whole layer was built to remove — the previous six
+  // hooks enforced nothing for the life of the project and nobody noticed,
+  // because nothing ever said so. The cost is real and is paid deliberately: a
+  // bug here stops Bash work. That is the point. A stopped session gets fixed in
+  // minutes; a silently open gate lasted 33 of them and would have lasted longer
+  // if the log had not been read.
+  //
+  // Two things keep the cost bounded. The refusal names the error and where it
+  // was recorded, so the bug is diagnosable from the refusal alone. And the
+  // override still works, so a broken gate cannot brick a session outright —
+  // at the usual price, a reason written down where the PR can quote it.
   appendWorkspace(
     "gate-errors.log",
     `${new Date().toISOString()}\tpre-bash\t${err?.stack?.split("\n")[0] ?? err}`,
+  );
+  allowIfOverridden(observedCommand, "gate-internal-error");
+  deny(
+    `[gate: internal error] Refused — the gate itself failed, so it could not judge ` +
+      `this command.\n` +
+      `  ${err?.stack?.split("\n")[0] ?? err}\n` +
+      `Recorded in workspace/gate-errors.log. This refuses rather than allowing ` +
+      `because a gate that fails open on its own bug is off precisely when something ` +
+      `is wrong: 12 crashes on 2026-09-23 let 12 Bash calls through unexamined and ` +
+      `unseen, and the test that should have caught it was passing because of them.\n` +
+      `Way forward: fix the hook — or, if you need to move now, take the hatch and ` +
+      `say why:\n` +
+      `  GML_GATE_SKIP='<why>' <your command>`,
   );
 }
 allow();

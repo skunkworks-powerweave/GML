@@ -292,6 +292,25 @@ test("session-start announces an unfinished plan and ignores a finished one", ()
 // to fill it appends UNCONDITIONALLY — there is no branch in it that can skip
 // the write — so the file's emptiness is proof the hook never executed at all.
 // Hence a test that spawns the hook and then READS THE FILE BACK.
+//
+// ── STOP IS A RECORDER. IT DOES NOT BLOCK ────────────────────────────────────
+//
+// This section used to assert exit 2 from a BARE `node stop.mjs`, and passed,
+// while the registration in settings.json was `node … stop.mjs || true` —
+// which returns 0 whatever the script does. The refusal the file described at
+// length could not reach Claude Code even once, and no test noticed, because
+// this file tested the script and fail-closed.test.mjs tested the registration
+// and nothing tested the pair. The pair test now lives in fail-closed.test.mjs
+// ("the Stop hook's registration and its file agree about whether it can
+// block"); these tests pin the contract that was chosen to settle it.
+//
+// The contract: Stop writes a ledger line and exits 0, always. What the old
+// gate blocked on — source files with no green receipt for this tree — is
+// RECORDED in that line instead of refused, because the commit gate in
+// pre-bash.mjs already refuses the commit on the same invariant, at the moment
+// it matters, and Stop is the one hook whose failure mode is a session the
+// user cannot end. So these tests assert exit 0 on the payload that used to
+// block, and assert that the ledger line still names the unverified work.
 
 /** Only the entries — a heading or preamble is not a ledger row. */
 function ledgerLines(dir) {
@@ -314,43 +333,74 @@ test("stop writes a ledger line that can be checked against the session", () => 
   assert.match(line, /no receipt/i);
 });
 
-test("stop blocks once when source changes have no green receipt", () => {
+test("stop RECORDS unverified source changes instead of refusing to stop", () => {
   const dir = fixture({
     files: { "apps/web/x.ts": "export const x = 1;\n", "scripts/y.mjs": "// y\n", "docs/z.md": "z" },
   });
-  const r = runHook(dir, "stop.mjs", { hook_event_name: "Stop", session_id: "s-block" });
-  assert.equal(r.status, 2, `expected a block; stdout: ${r.stdout} stderr: ${r.stderr}`);
-  // The refusal has to name the offending paths, the rule, and the way out —
-  // a gate that only says "no" gets deleted the first time it is wrong.
-  assert.match(r.stderr, /apps\/web\/x\.ts/);
-  assert.match(r.stderr, /scripts\/y\.mjs/);
-  assert.doesNotMatch(r.stderr, /docs\/z\.md/, "docs changes are not source changes");
-  assert.match(r.stderr, /pnpm test/);
-  assert.match(r.stderr, /once/i, "the message must say the nudge will not repeat");
+  const r = runHook(dir, "stop.mjs", { hook_event_name: "Stop", session_id: "s-record" });
+
+  assert.equal(r.status, 0, `Stop must never block; stdout: ${r.stdout} stderr: ${r.stderr}`);
+  assert.equal(r.stderr.trim(), "", `a recorder says nothing on stderr; got:\n${r.stderr}`);
+
+  // Recording is the whole job, so the line has to carry what the old gate
+  // would have refused over: how much of the dirt is SOURCE, and the fact that
+  // no receipt covers it. A line that said "3 dirty" and stopped there would
+  // leave the reader no better off than the empty file this replaces.
+  //
+  // The SOURCE count is asserted exactly; the dirty total only as "at least
+  // the three files written here", because a fixture necessarily also contains
+  // the hook copies it runs — and those live under .claude/hooks/, which is
+  // why they move the total without moving the source count.
+  const line = ledgerLines(dir).at(-1);
+  const m = line.match(/(\d+) dirty \((\d+) source\)/);
+  assert.ok(m, `expected a "N dirty (M source)" count in:\n${line}`);
+  assert.ok(Number(m[1]) >= 3, `all three written files must be counted dirty; got:\n${line}`);
+  assert.equal(Number(m[2]), 2, `docs/z.md is not source, apps/** and scripts/** are; got:\n${line}`);
+  assert.match(line, /no receipt/i, `the unverified state must be on the record; got:\n${line}`);
+  assert.match(line, /s-record/, "the ledger indexes by session — an entry you cannot attribute is not evidence");
 });
 
-test("stop can never loop: stop_hook_active short-circuits everything", () => {
-  const dir = fixture({ files: { "apps/web/x.ts": "export const x = 1;\n" } });
-  const r = runHook(dir, "stop.mjs", {
-    hook_event_name: "Stop",
-    session_id: "s-loop",
-    stop_hook_active: true,
-  });
-  assert.equal(r.status, 0, `a Stop hook that blocks while stop_hook_active is set loops forever; stderr: ${r.stderr}`);
-  assert.equal(ledgerLines(dir).length, 1, "the continuation is still worth recording");
+test("stop never blocks, whatever the payload", () => {
+  // Exit 2 from a Stop hook is what makes Claude Code keep going, so a Stop
+  // that can reach exit 2 by ANY route is a session that can refuse to end.
+  // The registered command shape hides that (`|| true`), which is why this
+  // asserts on the bare process: the file itself must have no such route.
+  const payloads = [
+    ["nothing at all", {}],
+    ["source, no receipt", { hook_event_name: "Stop", session_id: "s-src" }],
+    ["a continuation", { hook_event_name: "Stop", session_id: "s-cont", stop_hook_active: true }],
+    ["no session id", { hook_event_name: "Stop" }],
+    ["a hostile session id", { hook_event_name: "Stop", session_id: "../../etc/passwd" }],
+  ];
+  for (const [what, payload] of payloads) {
+    const dir = fixture({ files: { "apps/web/x.ts": "export const x = 1;\n" } });
+    const r = runHook(dir, "stop.mjs", payload);
+    assert.equal(r.status, 0, `Stop blocked on ${what}; stderr: ${r.stderr}`);
+    assert.equal(ledgerLines(dir).length, 1, `Stop must record on ${what}`);
+  }
 });
 
-test("stop nudges once per session and leaves a marker so a resume does not nag", () => {
+test("stop records every stop and leaves no per-session marker behind", () => {
+  // The old gate wrote workspace/.stop-nudged-<session_id> so it would nudge
+  // only once. That brake was never durable: appendWorkspace() swallows write
+  // failures by design, so anything that makes workspace/ unwritable leaves
+  // the marker unarmed and turns "once per session" into every stop, forever.
+  // With no nudge there is no marker, and that state file must not come back.
   const dir = fixture({ files: { "packages/db/x.ts": "export const x = 1;\n" } });
-  const first = runHook(dir, "stop.mjs", { hook_event_name: "Stop", session_id: "s-42" });
-  assert.equal(first.status, 2, `expected a block; stderr: ${first.stderr}`);
-  assert.ok(
-    existsSync(join(dir, "workspace", ".stop-nudged-s-42")),
-    `expected a marker for this session; workspace holds: ${readdirSync(join(dir, "workspace")).join(", ")}`,
-  );
 
+  const first = runHook(dir, "stop.mjs", { hook_event_name: "Stop", session_id: "s-42" });
+  assert.equal(first.status, 0, `stderr: ${first.stderr}`);
   const second = runHook(dir, "stop.mjs", { hook_event_name: "Stop", session_id: "s-42" });
-  assert.equal(second.status, 0, `the second stop must not re-nudge; stderr: ${second.stderr}`);
+  assert.equal(second.status, 0, `stderr: ${second.stderr}`);
+
+  assert.equal(ledgerLines(dir).length, 2, "two stops are two entries — the ledger is append-only");
+
+  const left = readdirSync(join(dir, "workspace"));
+  assert.deepEqual(
+    left.filter((f) => f.startsWith(".stop-nudged")),
+    [],
+    `no nudge, so no marker; workspace holds: ${left.join(", ")}`,
+  );
 });
 
 test("stop stays out of the way when a green receipt covers this exact tree", async () => {

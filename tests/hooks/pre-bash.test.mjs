@@ -36,7 +36,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -135,10 +135,25 @@ function sandbox({ branch = "feature/x", files = {}, staged = [], receipts = [] 
  */
 function writeReceipts(dir, list) {
   mkdirSync(join(dir, "workspace"), { recursive: true });
+  const head = headOf(dir);
   writeFileSync(
     join(dir, "workspace", "test-receipts.jsonl"),
-    list.map((r) => `${JSON.stringify(r)}\n`).join(""),
+    list.map((r) => `${JSON.stringify({ head, ...r })}\n`).join(""),
   );
+}
+
+/**
+ * The sandbox's HEAD, or "" when it has no commits yet.
+ *
+ * C3(c): the gate now requires `receipt.head` to equal the current HEAD, so a
+ * receipt forged here has to name the sandbox's real HEAD — and a sandbox with an
+ * unborn HEAD has to claim "". Filling it in here rather than in receipt() means
+ * a test that wants a MISMATCH has to say so out loud, and no test gets a green
+ * receipt by accident.
+ */
+function headOf(dir) {
+  const r = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8", timeout: 20_000 });
+  return r.status === 0 ? r.stdout.trim() : "";
 }
 
 /**
@@ -153,12 +168,16 @@ async function sandboxTreeHash(dir) {
   return lib.treeHash();
 }
 
-/** A receipt shaped exactly like the one scripts/test-gate.mjs appends. */
+/**
+ * A receipt shaped exactly like the one scripts/test-gate.mjs appends.
+ *
+ * `head` is deliberately absent: writeReceipts() fills in the sandbox's real
+ * HEAD unless a test overrides it. See headOf().
+ */
 function receipt(overrides = {}) {
   return {
     ts: new Date().toISOString(),
     branch: "feature/x",
-    head: "0".repeat(40),
     treeHash: "unmatched".padEnd(64, "0"),
     suites: [{ suite: "governance", ran: true, status: 0, passed: 10, failed: 0, failing: [] }],
     exitCode: 0,
@@ -215,6 +234,170 @@ test("1. destructive commands cannot be overridden", () => {
   assertBlocked(run("rm -rf node_modules", { env: { GML_GATE_SKIP: "urgent" } }), /destructive/i);
 });
 
+// ── C4: A ONE-TOKEN PREFIX DEFEATED EVERY RULE ───────────────────────────────
+//
+// argvOf() consumed `VAR=value` and `sudo` and nothing else, so the program name
+// of `env rm -rf build` was `env` and no rule looked past it. Every command in
+// the next three tests was VERIFIED ALLOWED (exit 0) before the fix.
+
+test("1. C4: a one-token prefix does not hide a destructive command", () => {
+  for (const command of [
+    "env rm -rf build",
+    "env -i FOO=1 rm -rf build",
+    "env DATABASE_URL=x rm -rf build",
+    "command rm -rf build",
+    "command -p rm -rf build",
+    "builtin rm -rf build",
+    "nice rm -rf build",
+    "nice -n 10 rm -rf build",
+    "nice -10 rm -rf build",
+    "ionice -c 3 rm -rf build",
+    "time rm -rf build",
+    "nohup rm -rf build",
+    "setsid rm -rf build",
+    "exec rm -rf build",
+    "exec -a innocent rm -rf build",
+    "doas rm -rf build",
+    "doas -u root rm -rf build",
+    "sudo -u root rm -rf build",
+    "timeout 5 rm -rf build",
+    "timeout -k 5 10s rm -rf build",
+    "stdbuf -oL rm -rf build",
+    "env docker volume rm gml_pgdata",
+    "sudo env nice -n 5 rm -rf build",
+    "find . -name '*.log' | xargs rm -rf",
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. C4: leading shell keywords and grouping do not hide one either", () => {
+  // segments() already splits on `;`, so the rm in `if true; then rm -rf x; fi`
+  // arrives as the segment "then rm -rf x" — with a keyword where the program
+  // name should be.
+  for (const command of [
+    "if true; then rm -rf x; fi",
+    "if [ -d x ]; then rm -rf x; else echo no; fi",
+    "for f in a b; do rm -rf $f; done",
+    "while read f; do rm -rf $f; done",
+    "until false; do rm -rf x; done",
+    "{ rm -rf x; }",
+    "(rm -rf x)",
+    "( rm -rf x )",
+    "! rm -rf x",
+    "case $x in a) rm -rf x;; esac",
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. C4: a quoted program name is the same program", () => {
+  // `"rm"` is how you spell rm when you want to break a token match. program()
+  // stripped a directory prefix and a .exe suffix but never the quotes.
+  for (const command of ['"rm" -rf x', "'rm' -rf x", '"/usr/bin/rm" -rf x', "'git' reset --hard", '"docker" volume rm v']) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. C4: -R is a documented synonym for -r, so rm -Rf is rm -rf", () => {
+  for (const command of [
+    "rm -Rf build",
+    "rm -R -f build",
+    "rm -fR build",
+    "rm --recursive --force build",
+    "rm -R --force build",
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+// ── C5: TWO CHARACTERS HID ANYTHING AFTER THEM ───────────────────────────────
+
+test("1. C5: a heredoc opener only counts in redirection position", () => {
+  // VERIFIED in real bash: `N=3; echo $((1<<N))` prints 8 and the NEXT line
+  // RUNS. stripHeredocs read `<<N` as an opener, found no line equal to `N`, and
+  // discarded everything to the end of input — so the rm was never scanned and
+  // the gate returned 0.
+  assertBlocked(run("echo $((1<<N))\nrm -rf node_modules"), /destructive/i);
+  assertBlocked(run("echo $(( 1 << SHIFT ))\ngit reset --hard"), /destructive/i);
+  assertBlocked(run("echo $(( (1+2)<<3 ))\nrm -rf node_modules"), /destructive/i);
+  assertBlocked(run("(( x = 1<<2 ))\nrm -rf node_modules"), /destructive/i);
+  assertBlocked(run("# see cat <<EOF for the pattern\nrm -rf node_modules"), /destructive/i);
+  assertBlocked(run("echo hi  # <<EOF\nrm -rf node_modules"), /destructive/i);
+  // A here-STRING has no delimiter line to look for, so it opens no body.
+  assertBlocked(run("grep x <<<'a'\nrm -rf node_modules"), /destructive/i);
+
+  // ── AND THE SAME SHAPES WITH THE DELIMITER ACTUALLY PRESENT ────────────────
+  // These matter more than the ones above. When the delimiter appears further
+  // down, a loose opener FINDS it and drops only the lines in between, which is
+  // how the bypass really worked. Without these, the "scan an unterminated
+  // heredoc" half of the fix would cover for a still-loose opener and hide that
+  // it was loose — so each payload below pins one specific guard:
+  //   the arithmetic mask   →  $(( 1 << SHIFT ))
+  //   the digit lookbehind  →  1<<N with no $(( )) around it
+  //   the comment mask      →  # cat <<EOF
+  //   the <<< exclusion     →  a here-string whose text also names a line below
+  assertBlocked(run("echo $(( 1 << SHIFT ))\nrm -rf node_modules\nSHIFT"), /destructive/i);
+  assertBlocked(run('echo "shift by 1<<N"\nrm -rf node_modules\nN'), /destructive/i);
+  assertBlocked(run("# cat <<EOF\nrm -rf node_modules\nEOF"), /destructive/i);
+  assertBlocked(run("grep x <<<'a'\nrm -rf node_modules\na"), /destructive/i);
+});
+
+test("1. C5: an unterminated heredoc does not swallow the rest of the input", () => {
+  // The other half of C5: with no closing delimiter the loop ran to
+  // lines.length and dropped every remaining line, so LEAVING THE DELIMITER OFF
+  // was itself a universal bypass.
+  assertBlocked(run("cat <<'EOF'\nrm -rf node_modules"), /destructive/i);
+  assertBlocked(run("cat <<EOF > f.txt\ngit reset --hard"), /destructive/i);
+});
+
+test("1. C5: a TERMINATED heredoc body is still data, not a command", () => {
+  // The reason stripHeredocs exists at all, and the case the C5 fix must not
+  // break: writing the WORDS "rm -rf" into a file runs nothing.
+  assertAllowed(run("cat <<'EOF' > notes.md\nrm -rf node_modules\nEOF"));
+  assertAllowed(run("cat <<EOF > notes.md\ngit reset --hard\nEOF"));
+  assertAllowed(run("cat <<-EOF > notes.md\n\tdocker volume rm x\n\tEOF"));
+  // Two bodies opened on one line close in the order they were opened.
+  assertAllowed(run("cat <<A <<B > f\nrm -rf one\nA\nrm -rf two\nB"));
+});
+
+// ── I8: DENYLIST GAPS ────────────────────────────────────────────────────────
+
+test("1. I8: the named denylist gaps are closed", () => {
+  const cases = [
+    ["psql \"$DATABASE_URL\" -c 'DROP SCHEMA public CASCADE'", /DROP SCHEMA/],
+    ["psql \"$DATABASE_URL\" -c 'DELETE FROM audit_log'", /DELETE FROM/],
+    ["psql \"$DATABASE_URL\" -c 'DELETE FROM users WHERE id = 1'", /DELETE FROM/],
+    ["psql \"$DATABASE_URL\" -c 'ALTER TABLE users DROP COLUMN locale'", /DROP COLUMN/],
+    ["docker volume prune -f", /docker volume prune/],
+    ["docker system prune -a --volumes", /docker system prune/],
+  ];
+  for (const [command, mustMention] of cases) {
+    assertBlocked(run(command), /destructive/i, mustMention);
+  }
+});
+
+test("1. I8: a DELETE FROM inside a heredoc body is caught too", () => {
+  // SQL is matched over the whole command text, heredoc bodies included, because
+  // `psql <<'SQL'` is the only shape a statement actually arrives in here.
+  assertBlocked(run("psql \"$DATABASE_URL\" <<'SQL'\nDELETE FROM submissions;\nSQL"), /DELETE FROM/);
+});
+
+test("1. I8: an ALTER TABLE with no DROP COLUMN is not refused", () => {
+  // The rule is the PAIR, not the words. An additive column is not destructive
+  // and a gate that refused it would be refusing the fix as well as the damage.
+  assertAllowed(run("psql \"$DATABASE_URL\" -c 'ALTER TABLE users ADD COLUMN locale text'"));
+  assertAllowed(run("echo 'we should DROP COLUMN only via a migration'"));
+});
+
+test("1. I8: the SQL prose over-match is deliberate, and it is pinned here", () => {
+  // Written down rather than left to be discovered: DELETE FROM followed by an
+  // identifier is refused even in prose, exactly as DROP TABLE already was. The
+  // refusal has to print the way out, because that is the whole difference
+  // between an over-match you can work with and one that gets the gate deleted.
+  assertBlocked(run("echo 'never DELETE FROM a table without a WHERE'"), /DELETE FROM/, /Write tool/);
+});
+
 test("1. harmless commands are allowed", () => {
   for (const command of [
     "ls -la",
@@ -265,6 +448,57 @@ test("2. a commit aimed at another repository is out of this gate's scope", () =
   // only honest answer, and it is the obvious way past the rule above.
   const dir = sandbox({ branch: "feature/x" });
   assertBlocked(run("git -C ../elsewhere commit -m x", { cwd: dir }), /another repository/i);
+});
+
+test("2. C4: grouping and keywords do not hide a commit either", () => {
+  const dir = sandbox({ branch: "main" });
+  for (const command of [
+    "( git commit -m x )",
+    "(git commit -m x)",
+    "{ git commit -m x; }",
+    "if true; then git commit -m x; fi",
+    "'git' commit -m x",
+    '"git" commit -m x',
+    "env git commit -m x",
+    "nohup git commit -m x",
+    "time git commit -m x",
+  ]) {
+    assertBlocked(run(command, { cwd: dir }), /protected branch/i);
+  }
+});
+
+test("2. I3: a commit redirected by --git-dir/--work-tree is out of scope", () => {
+  // VERIFIED ALLOWED. gitInvocation() consumed `--git-dir=X` and `--work-tree=Y`
+  // as noise and captured only -C, so this committed into a tree whose branch,
+  // staged paths and receipt the gate had never read. The space-separated
+  // spelling was worse still: the VALUE stayed in argv as a positional, so the
+  // subcommand parsed as "/tmp/other/.git" and the commit gate did not run at
+  // all — no scope check, no branch check, no receipt check.
+  const dir = sandbox({ branch: "feature/x" });
+  for (const command of [
+    "git --git-dir=../elsewhere/.git --work-tree=../elsewhere commit -m x",
+    "git --git-dir ../elsewhere/.git --work-tree ../elsewhere commit -m x",
+    "git --work-tree=../elsewhere commit -m x",
+    "git --work-tree ../elsewhere commit -m x",
+    "git --git-dir=../elsewhere/.git commit -m x",
+    "git --git-dir /tmp/other/.git commit -m x",
+  ]) {
+    assertBlocked(run(command, { cwd: dir }), /commit scope/i);
+  }
+});
+
+test("2. I3: --git-dir/--work-tree naming THIS tree are not refused for scope", () => {
+  // The rule is "somewhere else", not "these flags exist". A worktree's real git
+  // directory lives outside its checkout, so the check has to accept the git dir
+  // git itself reports as well as <repo>/.git.
+  const dir = sandbox({ branch: "feature/x" });
+  for (const command of ["git --work-tree=. commit -m x", "git --git-dir=.git commit -m x", "git --work-tree . --git-dir .git commit -m x"]) {
+    const r = run(command, { cwd: dir });
+    assert.doesNotMatch(r.stderr, /commit scope/i, `${command} was refused for scope: ${r.stderr}`);
+    // It still has to reach the receipt rule — proof the commit was RECOGNISED
+    // rather than parsed into something the gate stopped caring about.
+    assertBlocked(r, /no test receipt/i);
+  }
 });
 
 test("2. a feature branch is not refused for being a protected branch", () => {
@@ -351,6 +585,94 @@ test("3. the receipt rule is overridable, and the override is recorded", () => {
   assertAllowed(r);
   const log = readFileSync(join(dir, "workspace", "gate-overrides.log"), "utf8");
   assert.match(log, /hotfix: CI is down/);
+});
+
+// ── C3(c): MAKING A FORGED RECEIPT A BIGGER LIE ──────────────────────────────
+//
+// The receipt is a plain file under workspace/, which pre-edit.mjs exempts, so
+// anything that can write a file can write a receipt. That cannot be closed from
+// inside this hook. What these tests pin is the next best thing: every field a
+// forgery now has to get RIGHT, including two (head, treeHash) it does not choose.
+
+test("3. C3(c): a receipt whose head is not this HEAD is not evidence", async () => {
+  const dir = sandbox({ files: { "a.txt": "a\n" }, staged: ["a.txt"] });
+  commitStagedViaPlumbing(dir);
+  writeReceipts(dir, [
+    receipt({ exitCode: 0, treeHash: await sandboxTreeHash(dir), head: "d".repeat(40) }),
+  ]);
+  const r = run("git commit -m x", { cwd: dir });
+  assertBlocked(r, /commit evidence/i, /HEAD/);
+});
+
+test("3. C3(c): a receipt for this HEAD and this tree still passes", async () => {
+  // The other side of the same check: adding a field to compare must not make
+  // every honest receipt unusable.
+  const dir = sandbox({ files: { "a.txt": "a\n" }, staged: ["a.txt"] });
+  commitStagedViaPlumbing(dir);
+  writeReceipts(dir, [receipt({ exitCode: 0, treeHash: await sandboxTreeHash(dir) })]);
+  assertAllowed(run("git commit -m x", { cwd: dir }));
+});
+
+test("3. C3(c): a receipt where nothing ran is not green", async () => {
+  for (const suites of [
+    [],
+    [{ suite: "behaviour", ran: false, reason: "no DATABASE_URL" }],
+    [{ suite: "governance", ran: "true", status: 0, passed: 1, failed: 0 }],
+  ]) {
+    const dir = sandbox();
+    writeReceipts(dir, [receipt({ exitCode: 0, suites, treeHash: await sandboxTreeHash(dir) })]);
+    const r = run("git commit -m x", { cwd: dir });
+    assertBlocked(r, /commit evidence/i, /no suite/i);
+  }
+});
+
+test("3. C3(c): a receipt that contradicts itself is not green", async () => {
+  // exitCode and the per-suite status are two separate fields in a file anyone
+  // can write. scripts/test-gate.mjs takes exitCode from the WORST suite status,
+  // so exitCode 0 beside a suite reporting status 1 is a shape it cannot produce.
+  const dir = sandbox();
+  writeReceipts(dir, [
+    receipt({
+      exitCode: 0,
+      suites: [{ suite: "governance", ran: true, status: 1, passed: 8, failed: 2, failing: ["test_011 moat"] }],
+      treeHash: await sandboxTreeHash(dir),
+    }),
+  ]);
+  assertBlocked(run("git commit -m x", { cwd: dir }), /commit evidence/i, /contradict/i);
+});
+
+test("3. C3(c): a SKIPPED database suite beside a real one is still green", async () => {
+  // The shape scripts/test-gate.mjs writes when DATABASE_URL is unset: one suite
+  // ran, one recorded as ran:false. Demanding ran:true from EVERY entry would
+  // refuse every commit made without a database — the noDb rule below is what
+  // handles that case, and it handles it per staged path instead of wholesale.
+  const dir = sandbox({ files: { "docs/x.md": "# x\n" }, staged: ["docs/x.md"] });
+  writeReceipts(dir, [
+    receipt({
+      exitCode: 0,
+      noDb: true,
+      suites: [
+        { suite: "governance", ran: true, status: 0, passed: 10, failed: 0, failing: [] },
+        { suite: "behaviour", ran: false, reason: "no DATABASE_URL" },
+      ],
+      treeHash: await sandboxTreeHash(dir),
+    }),
+  ]);
+  assertAllowed(run("git commit -m x", { cwd: dir }));
+});
+
+test('3. C3(c): noDb as the STRING "true" is still noDb', async () => {
+  // `receipt.noDb === true` is a strict compare and JSON read from a file is not
+  // typed, so "true" passed straight through and a database-free receipt covered
+  // a change to runtime code.
+  for (const noDb of ["true", "TRUE", 1]) {
+    const dir = sandbox({
+      files: { "apps/web/src/page.tsx": "export const x = 1;\n", "tests/behaviour/p.test.ts": "// t\n" },
+      staged: ["apps/web/src/page.tsx", "tests/behaviour/p.test.ts"],
+    });
+    writeReceipts(dir, [receipt({ exitCode: 0, noDb, treeHash: await sandboxTreeHash(dir) })]);
+    assertBlocked(run("git commit -m x", { cwd: dir }), /without a database/i, /apps\/web/);
+  }
 });
 
 /** A sandbox whose latest receipt is green and matches its tree, so that a test
@@ -566,6 +888,64 @@ test("6. a bare push is judged by the branch it would push", () => {
   assertAllowed(run("git push", { cwd: sandbox({ branch: "feature/x" }) }));
 });
 
+// ── I1: PUSHES THAT REACHED main WITHOUT NAMING IT ───────────────────────────
+
+test("6. I1: a refspec that RESOLVES to main is a push to main", () => {
+  // VERIFIED ALLOWED. The target was the last `:`-separated field with
+  // refs/heads/ stripped, so `HEAD`, `@` and `heads/main` came out as themselves,
+  // matched nothing in PROTECTED_BRANCHES, and pushed main while standing on it.
+  const onMain = sandbox({ branch: "main" });
+  for (const command of [
+    "git push origin HEAD",
+    "git push origin @",
+    "git push -u origin HEAD",
+    "git push origin +HEAD",
+  ]) {
+    assertBlocked(run(command, { cwd: onMain }), /\[gate: push\]/, /main|force/i);
+  }
+  // `heads/main` names main outright, so it is refused from ANY branch.
+  const onFeature = sandbox({ branch: "feature/x" });
+  for (const command of [
+    "git push origin heads/main",
+    "git push origin HEAD:heads/master",
+    "git push origin feature/x:heads/main",
+  ]) {
+    assertBlocked(run(command, { cwd: onFeature }), /\[gate: push\]/, /main|master/);
+  }
+});
+
+test("6. I1: HEAD on a feature branch is still a feature branch", () => {
+  // Resolving HEAD must resolve it, not assume the worst.
+  const dir = sandbox({ branch: "feature/x" });
+  assertAllowed(run("git push origin HEAD", { cwd: dir }));
+  assertAllowed(run("git push origin @", { cwd: dir }));
+  assertAllowed(run("git push origin HEAD:feature/x", { cwd: dir }));
+});
+
+test("6. I1: --all and --mirror push main from any branch", () => {
+  // These name no refspec at all, so the old code asked what a BARE push would
+  // target — the current branch — and allowed it from anywhere that was not main.
+  // They push every branch there is, main included, and --mirror deletes remote
+  // refs that are missing locally.
+  const dir = sandbox({ branch: "feature/x" });
+  for (const command of [
+    "git push --all origin",
+    "git push --mirror origin",
+    "git push --branches origin",
+    "git push origin --all",
+    "git push --all",
+  ]) {
+    assertBlocked(run(command, { cwd: dir }), /\[gate: push\]/, /every branch|--all|--mirror|--branches/i);
+  }
+});
+
+test("6. I1: --tags is not --all", () => {
+  // A tag does not move a branch. Sweeping it up would be the rule over-reaching,
+  // and an over-reaching rule is the one that gets switched off.
+  assertAllowed(run("git push --tags origin", { cwd: sandbox({ branch: "feature/x" }) }));
+  assertAllowed(run("git push --follow-tags origin feature/x", { cwd: sandbox({ branch: "feature/x" }) }));
+});
+
 test("6. pushing a feature branch is allowed", () => {
   for (const command of ["git push origin feature/x", "git push -u origin chore/enforcement"]) {
     assertAllowed(run(command));
@@ -629,12 +1009,48 @@ test("7. a merge is blocked when the PR body carries no approved verdict", () =>
   assertBlocked(run("gh pr merge 42 --squash", { cwd: dir, env }), /Review-Verdict: approved/);
 });
 
-test("7. a merge is allowed when the PR body carries the approved verdict", () => {
+test("7. a merge is allowed when the PR body carries the approved verdict ON ITS OWN LINE", () => {
   const dir = sandbox();
-  const env = stubGh(dir, '{"body":"## Summary ... Review-Verdict: approved"}');
+  // The verdict must be a LINE. This fixture used to read
+  // "## Summary ... Review-Verdict: approved" — the verdict inline in prose —
+  // which passed only because the gate's regex was unanchored. See the
+  // rejection cases below for what that permitted.
+  const env = stubGh(dir, '{"body":"## Summary\\nsome prose\\n\\nReview-Verdict: approved\\n"}');
   assertAllowed(run("gh pr merge 42 --squash", { cwd: dir, env }));
   // No PR number: gh resolves the PR from the current branch.
   assertAllowed(run("gh pr merge --squash", { cwd: dir, env }));
+
+  // CRLF, because GitHub bodies routinely arrive that way and a verdict that
+  // works in the browser must work here.
+  const crlf = stubGh(dir, '{"body":"## Summary\\r\\nReview-Verdict: approved\\r\\n"}');
+  assertAllowed(run("gh pr merge 42 --squash", { cwd: dir, env: crlf }));
+});
+
+test("7. a verdict buried in prose does NOT approve a merge", () => {
+  // ── WHY THE ANCHORING MATTERS ─────────────────────────────────────────────
+  //
+  // The gate's regex was `/Review-Verdict:\s*approved/i`, matching anywhere in
+  // the body. Three things satisfied it that must not:
+  //
+  //   - the PULL REQUEST TEMPLATE shipped alongside this hook, which explained
+  //     the rule using those literal words, so every PR opened from the default
+  //     template approved itself with no review at all
+  //   - `approved-with-nits`, which the template said blocks
+  //   - a sentence telling you NOT to write it yet
+  //
+  // Each is a real body a reviewer could plausibly produce.
+  const dir = sandbox();
+  for (const body of [
+    "do not write Review-Verdict: approved yet — finish the checklist first",
+    "Review-Verdict: approved-with-nits",
+    "Review-Verdict: approvedNOT",
+    "the reviewer should add a line reading Review-Verdict: approved when done",
+  ]) {
+    assertBlocked(
+      run("gh pr merge 42 --squash", { cwd: dir, env: stubGh(dir, JSON.stringify({ body })) }),
+      /Review-Verdict/,
+    );
+  }
 });
 
 test("7. an unreachable gh is a refusal, not a free pass", () => {
@@ -649,6 +1065,57 @@ test("7. the merge rule cannot be overridden", () => {
   const env = stubGh(dir, '{"body":"no verdict here"}');
   assertBlocked(run("GML_GATE_SKIP=urgent gh pr merge 42 --squash", { cwd: dir, env }), /Review-Verdict/);
   assertBlocked(run("gh pr merge 42 --admin", { cwd: dir, env: { ...env, GML_GATE_SKIP: "urgent" } }), /--admin/);
+});
+
+// ── I2: THE MERGE RULE ASKED FOR A POSITION, NOT A SUBCOMMAND ────────────────
+
+test("7. I2: a global flag in front does not lift the merge rule", () => {
+  // VERIFIED ALLOWED. The check required argv[1]==="pr" and argv[2]==="merge", so
+  // one `--repo o/r` shifted the words along by two and the rule stopped applying
+  // entirely. Reading POSITIONS out of a flag-bearing command line is the same
+  // mistake as substring-matching "git commit", which this file already knows not
+  // to do.
+  const dir = sandbox();
+  const env = stubGh(dir, '{"body":"no verdict here"}');
+  for (const command of [
+    "gh --repo o/r pr merge 1 --squash",
+    "gh -R o/r pr merge 1 --squash",
+    "gh --repo=o/r pr merge 1 --squash",
+    "gh pr --repo o/r merge 1 --squash",
+    "gh --hostname github.com pr merge 1 --squash",
+  ]) {
+    assertBlocked(run(command, { cwd: dir, env }), /Review-Verdict/);
+  }
+  assertBlocked(run("gh --repo o/r pr merge 1 --admin", { cwd: dir, env }), /--admin/);
+});
+
+test("7. I2: gh api is the same merge with the porcelain removed", () => {
+  // A verdict in the PR body is not what makes this refusable — the route is.
+  // The stub below returns an APPROVED body, so nothing here passes because the
+  // review check happened to fail.
+  const dir = sandbox();
+  const env = stubGh(dir, '{"body":"Review-Verdict: approved"}');
+  for (const command of [
+    "gh api -X PUT /repos/o/r/pulls/7/merge",
+    "gh api --method PUT repos/o/r/pulls/7/merge",
+    "gh api -X PUT '/repos/o/r/pulls/7/merge'",
+    "gh --repo o/r api -X PUT /repos/o/r/pulls/7/merge",
+  ]) {
+    assertBlocked(run(command, { cwd: dir, env }), /\[gate: merge\]/, /gh api/);
+  }
+});
+
+test("7. I2: other gh api calls are not the merge gate's business", () => {
+  const dir = sandbox();
+  const env = stubGh(dir, '{"body":"x"}');
+  for (const command of [
+    "gh api /repos/o/r/pulls/7",
+    "gh api /repos/o/r/pulls",
+    "gh api /repos/o/r/pulls/7/reviews",
+    "gh api user",
+  ]) {
+    assertAllowed(run(command, { cwd: dir, env }));
+  }
 });
 
 test("7. other gh commands are not the merge gate's business", () => {
@@ -723,14 +1190,104 @@ function runRaw(input, { cwd = ROOT, env = {} } = {}) {
   return r;
 }
 
-test("9. malformed or empty payloads are allowed, not crashed on", () => {
+test("9. malformed or empty payloads are allowed, and do not crash the gate", () => {
   // Exit 1 is a CRASH, and a crashing PreToolUse hook blocks nothing while
   // filling the transcript with stack traces. Exit 2 here would be worse: it
   // would block every Bash call in the session.
-  for (const input of ["", "   ", "not json at all", "null", "[]", "{}", '{"tool_input":null}']) {
-    const r = runRaw(input);
+  //
+  // ── I4: THIS ASSERTION USED TO PASS *BECAUSE OF* A CRASH ───────────────────
+  // `null` is valid JSON, so readInput() returned null and `input.tool_name`
+  // threw "Cannot read properties of null (reading 'tool_name')". The catch-all
+  // logged it and fell through to allow(), so exit 0 was observed and this test
+  // was green — while the gate had judged nothing at all. Twelve of those
+  // TypeErrors sit in this worktree's workspace/gate-errors.log from one
+  // 33-minute session on 2026-09-23, and three more arrived while this fix was
+  // being written. Twelve Bash calls went through unexamined, silently.
+  //
+  // The exit code alone cannot tell a clean allow from a crashed one, so the
+  // ERROR LOG is asserted too: a run that judged the payload adds no line to it.
+  // Driven in a sandbox so the log under assertion is the sandbox's own.
+  const dir = sandbox();
+  const log = join(dir, "workspace", "gate-errors.log");
+  for (const input of [
+    "",
+    "   ",
+    "not json at all",
+    "null",
+    "[]",
+    '"a string"',
+    "123",
+    "false",
+    "{}",
+    '{"tool_input":null}',
+    '{"tool_name":null,"tool_input":{"command":"ls"}}',
+    '{"tool_name":"Bash","tool_input":null}',
+  ]) {
+    const before = existsSync(log) ? readFileSync(log, "utf8") : "";
+    const r = runRaw(input, { cwd: dir });
     assert.equal(r.status, 0, `payload ${JSON.stringify(input)} → exit ${r.status}: ${r.stderr}`);
+    const after = existsSync(log) ? readFileSync(log, "utf8") : "";
+    assert.equal(
+      after,
+      before,
+      `payload ${JSON.stringify(input)} made the gate log an internal error, so it allowed ` +
+        `without judging:\n${after.slice(before.length)}`,
+    );
   }
+});
+
+/**
+ * A sandbox whose copy of _lib.mjs has a fault injected into currentBranch(), so
+ * that the hook throws from inside a rule instead of from a payload shape.
+ *
+ * The injection is textual and asserts that it MATCHED, so a refactor of _lib.mjs
+ * fails this loudly rather than turning the tests below into no-ops. Only the
+ * temp copy is written; the real _lib.mjs is never touched.
+ */
+function brokenLibSandbox() {
+  const dir = sandbox();
+  const libPath = join(dir, ".claude", "hooks", "_lib.mjs");
+  const src = readFileSync(libPath, "utf8");
+  const marker = "export function currentBranch() {";
+  assert.ok(
+    src.includes(marker),
+    "_lib.mjs no longer defines currentBranch() the way this test injects a fault into",
+  );
+  writeFileSync(libPath, src.replace(marker, `${marker}\n  throw new TypeError("injected gate fault");`));
+  return dir;
+}
+
+test("9. I4: an internal error REFUSES, it does not quietly allow", () => {
+  // The decision I4 forced, and it is written down in pre-bash.mjs too: a gate
+  // that fails open on its own bug is off exactly when something is wrong, and
+  // silent about it. That is the defect this whole layer exists to remove, so an
+  // internal error is now exit 2 — loud, and fixed in minutes rather than
+  // invisible for 33 of them.
+  const dir = brokenLibSandbox();
+  const r = run("git commit -m x", { cwd: dir });
+  assertBlocked(r, /internal error/i, /injected gate fault/, /gate-errors\.log/);
+  assert.match(readFileSync(join(dir, "workspace", "gate-errors.log"), "utf8"), /injected gate fault/);
+});
+
+test("9. I4: failing closed does not mean failing closed on everything", () => {
+  // The fault is in currentBranch(), and `ls -la` reaches no rule that calls it.
+  // A gate that refused every command because one rule is broken would be
+  // indistinguishable from a gate that is switched off.
+  const dir = brokenLibSandbox();
+  assertAllowed(run("ls -la", { cwd: dir }));
+  assertBlocked(run("rm -rf x", { cwd: dir }), /destructive/i);
+});
+
+test("9. I4: the hatch still gets past an internal error, and is recorded", () => {
+  // A bug in the gate must not be able to brick a session outright. The price of
+  // getting past it is the same as everywhere else: a reason, written down where
+  // the PR can quote it.
+  const dir = brokenLibSandbox();
+  assertAllowed(run("GML_GATE_SKIP='gate is broken, see gate-errors.log' git commit -m x", { cwd: dir }));
+  assert.match(
+    readFileSync(join(dir, "workspace", "gate-overrides.log"), "utf8"),
+    /gate-internal-error\tgate is broken/,
+  );
 });
 
 test("9. a non-Bash tool is none of this hook's business", () => {
@@ -755,10 +1312,39 @@ test("9. odd command shapes do not throw", () => {
     "rm",
     "cat <<'EOF'\nunterminated heredoc",
     "x".repeat(50_000),
+    // The shapes the C4/C5 parsing added, each one stripped down to nothing.
+    "env",
+    "sudo",
+    "nice -n",
+    "timeout",
+    "exec -a",
+    "then",
+    "done",
+    "{",
+    "(",
+    "!",
+    ")",
+    "<<",
+    "<<<",
+    "echo $((",
+    "$((1<<2))".repeat(2_000),
+    "gh",
+    "gh api",
+    "gh --repo",
+    "git --git-dir",
+    "git --work-tree",
+    "git push origin",
   ]) {
     const r = run(command);
     assert.ok(r.status === 0 || r.status === 2, `command ${JSON.stringify(command.slice(0, 20))} → exit ${r.status}: ${r.stderr}`);
     assert.doesNotMatch(r.stderr, /at Object\.|node:internal/, "a stack trace reached stderr");
+    // I4: exit 2 now covers "the gate broke" as well as "refused", so a shape
+    // that merely confuses the parser must not be able to masquerade as a rule.
+    assert.doesNotMatch(
+      r.stderr,
+      /internal error/i,
+      `command ${JSON.stringify(command.slice(0, 30))} crashed the gate: ${r.stderr}`,
+    );
   }
 });
 
@@ -784,4 +1370,26 @@ test("10. the common case costs nothing worth noticing", () => {
   for (const command of commands) assertAllowed(run(command));
   const each = (Date.now() - started) / commands.length;
   assert.ok(each < 1000, `${each.toFixed(0)}ms per allowed command — too slow for every tool call`);
+});
+
+test("10. a pathological heredoc does not turn the gate into a stall", () => {
+  // A cost the C5 fix INTRODUCED, caught before it shipped. Searching forward
+  // for each delimiter was quadratic in the number of openers, and it did not
+  // matter while an unterminated opener gave up at the first miss — the C5 fix
+  // makes it search the whole remainder instead, so N openers cost N²/2 line
+  // comparisons. Measured on `"cat <<EOF\n".repeat(N)` before the line index:
+  //
+  //     N = 5,000 → 0.6s     N = 10,000 → 1.5s     N = 20,000 → 4.1s
+  //
+  // This runs before EVERY Bash call, behind a 60s registered timeout that it
+  // must never approach — and with the gate now failing CLOSED, a timeout is a
+  // refused command rather than a slow one. Closing one hole is not a licence to
+  // open another.
+  const command = `${"cat <<EOF\n".repeat(20_000)}rm -rf node_modules`;
+  const started = Date.now();
+  // Still the right ANSWER, not just a fast one: every opener is unterminated,
+  // so the remainder is scanned and the rm is found.
+  assertBlocked(run(command), /destructive/i);
+  const ms = Date.now() - started;
+  assert.ok(ms < 1_500, `${ms}ms to judge 20,000 heredoc openers — the quadratic scan is back`);
 });

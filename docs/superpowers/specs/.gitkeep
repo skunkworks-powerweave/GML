@@ -1,7 +1,11 @@
 # Design specs live here (see ../README.md).
 #
-# This file exists because git cannot track an empty directory. Twenty-one spec
-# numbers the ledger schedules -- 036-045 (video pipeline) and 057-063 (core
-# pages) -- have no directory in this repository at all, and `git log --all
-# --diff-filter=A -- specs/036*` returns nothing: they were folders only, so
-# they never entered a commit. A .gitkeep is the whole fix.
+# This file exists because git cannot track an empty directory. Seventeen spec
+# numbers the ledger schedules -- 036-045 (video pipeline, 10 numbers) and
+# 057-063 (core pages, 7 numbers) -- have no directory in this repository at
+# all, and `git log --all --diff-filter=A -- specs/036*` returns nothing: they
+# were folders only, so they never entered a commit. A .gitkeep is the whole
+# fix.
+#
+# This said "Twenty-one" until the ranges were counted. 10 + 7 = 17; the two
+# ranges are the whole list, and every one of the 17 is absent from specs/.

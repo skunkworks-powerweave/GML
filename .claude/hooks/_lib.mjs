@@ -103,19 +103,50 @@ export function stagedPaths() {
  * A fingerprint of the working tree, used to bind a test receipt to the exact
  * state it was produced from.
  *
- * Covers tracked modifications AND untracked files, because a receipt that
- * ignored untracked files could be reused across a commit that adds one — and
- * a new source file with no test is exactly what this is meant to catch.
- * `workspace/` is excluded: it holds the receipts themselves, so including it
- * would make every receipt immediately stale.
+ * Hashed in this order, NUL-separated:
+ *
+ *   1. `git rev-parse HEAD`          the commit being built on
+ *   2. the literal "worktree"
+ *   3. `git diff HEAD --binary`      unstaged changes against HEAD
+ *   4. the literal "index"
+ *   5. `git diff --cached --binary`  STAGED changes
+ *   6. each untracked path (workspace/ excluded), sorted, then its base64 bytes
+ *
+ * ── C3(a): HEAD, because without it every clean tree shared one hash ─────────
+ *
+ * This used to hash `git diff HEAD` and untracked files and nothing else. On a
+ * clean tree with nothing untracked that is the empty string, so the fingerprint
+ * was sha256("") — e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+ * — the same value for every clean tree, on every branch, at every commit, in
+ * every repository. Verified on this worktree, which was in exactly that state.
+ * A green receipt earned anywhere satisfied the commit gate everywhere.
+ *
+ * ── C3(b): the index, because that is what `git commit` actually writes ──────
+ *
+ * `git diff HEAD` reports the WORKTREE against HEAD and says nothing about the
+ * index. Stage a payload, then put the worktree file back to HEAD's bytes — or
+ * run `git stash push --keep-index`, which reaches that state in one command —
+ * and `git diff HEAD` is empty while the index still carries the change.
+ * Verified: a tree with "MALICIOUS" staged fingerprinted to the clean-tree
+ * constant above, and the commit that would have followed writes the index.
+ *
+ * The two diffs sit under their own literal labels, so a change cannot move
+ * between the worktree and the index without the fingerprint noticing.
+ *
+ * `workspace/` stays excluded: it holds the receipts themselves, so including it
+ * would make every receipt stale the instant it was written. Untracked files are
+ * covered because a new source file with no test is untracked right up until the
+ * commit, and that is exactly what this is meant to catch.
  */
 export function treeHash() {
-  const diff = git(["diff", "HEAD", "--binary"]);
+  const head = git(["rev-parse", "HEAD"]);
+  const worktreeDiff = git(["diff", "HEAD", "--binary"]);
+  const indexDiff = git(["diff", "--cached", "--binary"]);
   const untracked = git(["ls-files", "-o", "--exclude-standard"])
     .split(/\r?\n/)
     .filter((p) => p && !p.startsWith("workspace/"))
     .sort();
-  const parts = [diff];
+  const parts = [head, "worktree", worktreeDiff, "index", indexDiff];
   for (const p of untracked) {
     parts.push(p);
     try {

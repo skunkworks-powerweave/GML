@@ -8,8 +8,12 @@
 //     GML LMS — spec 079 active · 45/79 complete
 //
 // `079` and `45` came from workspace/state.json, a file last written
-// 2026-06-01; `79` was a hardcoded fallback. On disk there are 153 spec folders
-// and the ledger claims 171 entries. So the sentence was wrong in all three
+// 2026-06-01; `79` was a hardcoded fallback. On disk there are 132 numbered
+// directories under specs/ — the highest numbered 171, with 39 of the numbers
+// between 001 and 153 having no directory at all. (This comment said "153 spec
+// folders" until the fifth review round counted them; 153 is the number the old
+// CLAUDE.md asserted, which is precisely the kind of uncounted claim this hook
+// was written to stop repeating.) So the sentence was wrong in all three
 // numbers, and because STDOUT from this hook is injected into Claude's context,
 // every session in this project began by being told something false — and then
 // planned against it.

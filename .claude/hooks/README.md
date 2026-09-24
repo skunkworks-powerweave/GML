@@ -35,8 +35,28 @@ documentation or memory — zero occurrences each:
 
 The proof that none of it ran: `scripts/stop_session.mjs` appended to
 `workspace/session_log.md` unconditionally, and that file sat at 112 bytes —
-header only — across the sessions that produced 27 commits.
+header only — across every session since its creation at 2026-09-18 12:57.
+**53** commits have landed in that window:
+
+```
+git rev-list --count --since='2026-09-18 12:57' HEAD
+```
+
+This paragraph said "27 commits" while `CLAUDE.md` and
+`docs/superpowers/README.md` said 52 about the same stretch, in the same commit.
+All three now cite the command above, so the next reader can re-run it instead of
+choosing between three numbers.
 
 `tests/hooks/settings-wiring.test.mjs` pins both absences, that each registered
-command resolves to a file that exists and parses, and that the two Bash hooks
-carry `timeout: 120` (a gate killed mid-run is a gate that fails open).
+command resolves to a file that exists and parses, and that each of the two Bash
+hooks declares an explicit `timeout` between 30 and 60 seconds. Both carry
+`timeout: 60` in `.claude/settings.json` today.
+
+The bound is two-sided on purpose. Below 30s, the merge rule's `gh pr view` can
+be killed mid-flight, and a gate killed mid-run fails **open**. Above 60s, a
+hung `gh` stalls the session long enough that the layer gets removed out of
+impatience. This paragraph claimed `timeout: 120`, which is not the number in
+`.claude/settings.json` and not what the test asserts. The test's own comment
+records that an earlier draft of it did assert exactly 120, and why that was
+replaced by a range — so the doc was quoting a version of the test that no
+longer exists.

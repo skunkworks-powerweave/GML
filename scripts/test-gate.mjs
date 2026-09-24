@@ -91,6 +91,22 @@ if (unknown.length) {
   process.exit(2);
 }
 
+// ── C3(b): the fingerprint is taken BEFORE the suites run ───────────────────
+//
+// The receipt used to be built entirely after the loop, so `treeHash()` described
+// the tree the run LEFT BEHIND rather than the tree it tested. Any suite that
+// writes a file — a snapshot, a coverage report, a generated fixture, a stray
+// temp directory — moved the tree, and the receipt then vouched for a state that
+// nothing had ever executed against. Verified in a sandbox: a suite that wrote
+// one file produced a receipt fingerprinting the post-run tree.
+//
+// `branch` and `head` are captured here too, so every field in the receipt
+// describes the same moment. A receipt whose fields disagreed with each other
+// would be worse than none, because the commit gate reads them together.
+const branchBefore = git(["branch", "--show-current"]);
+const headBefore = git(["rev-parse", "HEAD"]);
+const treeHashBefore = treeHash();
+
 const ran = [];
 let worst = 0;
 let noDb = false;
@@ -125,11 +141,19 @@ for (const name of requested) {
   ran.push({ suite: name, ran: true, status, ...tap });
 }
 
+// If the tree moved while the suites ran, record BOTH rather than quietly
+// rebinding the receipt to the new state: `treeHash` stays the tree that was
+// TESTED, and `treeHashAfter` tells a consumer the run had side effects. It is
+// omitted when nothing moved, so its presence always means something.
+const treeHashAfter = treeHash();
+const treeMoved = treeHashAfter !== treeHashBefore;
+
 const receipt = {
   ts: new Date().toISOString(),
-  branch: git(["branch", "--show-current"]),
-  head: git(["rev-parse", "HEAD"]),
-  treeHash: treeHash(),
+  branch: branchBefore,
+  head: headBefore,
+  treeHash: treeHashBefore,
+  ...(treeMoved ? { treeHashAfter } : {}),
   suites: ran,
   exitCode: worst,
   noDb,
@@ -148,5 +172,16 @@ const summary = ran
   .map((s) => (s.ran ? `${s.suite} ${s.failed ? `${s.failed} FAILED` : `${s.passed} ok`}` : `${s.suite} skipped`))
   .join(" · ");
 console.error(`[test-gate] ${summary} · exit ${worst} · tree ${receipt.treeHash.slice(0, 12)}`);
+
+if (treeMoved) {
+  // Said out loud, because the receipt no longer matches the tree on disk and
+  // the next commit will be refused. Silence here would look like a broken gate.
+  console.error(
+    `[test-gate] the working tree CHANGED while the suites ran ` +
+      `(${treeHashBefore.slice(0, 12)} -> ${treeHashAfter.slice(0, 12)}). The receipt ` +
+      `fingerprints the tree that was TESTED and records both, so a commit of the tree ` +
+      `as it stands now will be refused until the suites are re-run against it.`,
+  );
+}
 
 process.exit(worst);

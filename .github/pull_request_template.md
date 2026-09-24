@@ -62,12 +62,29 @@ Test that failed as a result:
 - Reviewer findings (one line each; `none` is a finding and needs a sentence
   saying what was examined):
 
-The merge hook greps this body for the verdict line below. It must stay at the
-start of a line and read exactly `Review-Verdict: approved` to merge; anything
-else — including `approved-with-nits` — blocks.
+<!-- The merge hook greps this body for the verdict field below. The field
+     ships UNAPPROVED and stays that way until a review has actually happened:
+     once the diff has been read, change `pending` to the single word
+     `approved`, alone on that line.
+
+     Do not write the satisfying form anywhere else in this body, and do not
+     write it here in advance. This template used to spell it out in this very
+     sentence — so every pull request opened from the default template cleared
+     the merge gate with no review at all, and the line in the PR body read as
+     though a human had put it there. A gate whose own form letter approves it
+     is the exact failure this layer exists to end.
+     `tests/hooks/template-not-self-approving.test.mjs` pins that: it extracts
+     the live pattern from `.claude/hooks/pre-bash.mjs` and asserts this file
+     does not satisfy it.
+
+     A qualified verdict is not an approval. Nits, caveats or conditions mean
+     the field stays `pending` until they are resolved. Do not lean on the hook
+     to notice: its pattern is an unanchored substring match today, so a
+     qualified verdict would slip past it (finding I6, being anchored
+     separately). The field is yours to keep honest. -->
 
 ```
-Review-Verdict:
+Review-Verdict: pending
 ```
 
 ## Verification commands with output

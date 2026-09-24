@@ -54,8 +54,17 @@ This section used to say every feature is a numbered folder with five files
   nothing in them, and git cannot track an empty directory, so they do not
   exist in a clone and never did.
 - **264** task checkboxes are still unticked across the 132 `tasks.md` files
-  (427 are ticked), while **26** `spec.md` headers declare `Status: complete`
-  and 45 declare `in_progress`.
+  and **443** are ticked, while **26** `spec.md` headers declare
+  `Status: complete` and 45 declare `in_progress`. No `spec.md` contains a
+  checkbox at all — the boxes are all in `tasks.md`. One folder whose `spec.md`
+  says `complete` (`specs/150-middleware-401-vs-403/`) still has 3 unticked
+  boxes in its `tasks.md`.
+
+  Counted with the same two patterns `.claude/hooks/session-start.mjs` uses for
+  its plan line — `/^\s*[-*] \[[xX]\]/gm` and `/^\s*[-*] \[ \]/gm` — so these
+  numbers cannot disagree with the tool that prints them. The ticked count read
+  `427` here until it was measured; 264 was right and 427 was not, which is the
+  failure mode of writing two numbers and checking one.
 
 So the corpus does not describe the code, and its own completion markers
 disagree with its own checkboxes. Treat every number in it as a claim that was
@@ -76,9 +85,10 @@ never checked — which is exactly what it is.
    exists; none of the 132 `plan.md` files carries the writing-plans header; all
    37 commits that add a governance test also change `apps/` or `packages/` in
    the same commit, so no test has ever existed before its code; no code review
-   is recorded anywhere; and of 90 commits exactly one has two parents — the
-   history is otherwise a straight line onto the integration branch, with no
-   worktree taken before 2026-09-24.
+   is recorded anywhere; and of **91** commits exactly one has two parents
+   (`git rev-list --count HEAD`, then `--merges`) — the history is otherwise a
+   straight line onto the integration branch, with no worktree taken before
+   2026-09-24.
 2. **Gates** — `.claude/settings.json` wires six hooks in `.claude/hooks/` (see
    Hooks below). They are what makes item 1 a rule rather than a wish.
 3. **Test receipts** — `scripts/test-gate.mjs` runs the suites and appends a
@@ -100,7 +110,7 @@ Configured in [`.claude/settings.json`](.claude/settings.json); wiring notes in
 | Event · matcher | Hook | What it actually enforces |
 |---|---|---|
 | SessionStart | `session-start.mjs` | Prints only facts read live at that moment — repo path and whether the session started inside it, branch, working-tree state, the newest test receipt and whether it still matches the tree, open PRs, plan in progress. No cached counts: the script it replaces read a state file last written 2026-06-01 and opened every session with three wrong numbers. |
-| PreToolUse · Bash | `pre-bash.mjs` | **Refuses, no override:** `rm -rf`, `DROP TABLE`, `DROP DATABASE`, `TRUNCATE`, `docker compose down -v`, `docker volume rm`, `git reset --hard`, `git clean -fd`, `git stash drop`/`clear`. **Refuses a `git commit`** that runs outside this tree, that targets `main`/`master`, or that has no green receipt in `workspace/test-receipts.jsonl` whose tree fingerprint equals the tree being committed (a stale or failing receipt is named as such). Parses the command into segments and matches on tokens, so `git -C . commit` and `FOO=1 sudo rm -rf` are seen. |
+| PreToolUse · Bash | `pre-bash.mjs` | **Refuses, no override:** `rm -rf` (and `-R`/`-fR` orderings), `DROP TABLE`, `DROP DATABASE`, `DROP SCHEMA`, `TRUNCATE`, `DELETE FROM`, `ALTER TABLE … DROP COLUMN`, `docker compose down -v`, `docker volume rm`, `docker volume prune`, `docker system prune`, `git reset --hard`, `git clean -fd`, `git stash drop`/`clear`. **Refuses a push** whose refspec *resolves* to `main` — `HEAD`, `@`, `heads/main` — and any `--force`, `--all`, `--mirror` or `--branches` push. **Refuses a `git commit`** that runs outside this tree (including via `--git-dir`/`--work-tree`), that targets `main`/`master`, or that has no green receipt in `workspace/test-receipts.jsonl` whose tree fingerprint equals the tree being committed. A receipt in which no suite actually ran is not green. **Refuses a merge** without a `Review-Verdict: approved` line of its own in the PR body, including via `gh api …/pulls/N/merge`. Tokenises the command, so `env rm -rf`, `'rm' -rf`, `( git commit )`, `if true; then rm -rf x; fi` and `git -C . commit` are all seen. **An internal error in the hook is now a REFUSAL**, recorded in `workspace/gate-errors.log` — it used to be a silent allow, and fifteen Bash calls went through unexamined that way. |
 | PreToolUse · Edit\|Write\|MultiEdit | `pre-edit.mjs` | **Refuses, no override:** writes to `.env` and `.env.*` (except `.env.example`) and to generated drizzle snapshots under `packages/db/src/migrations/meta/`. **Refuses, overridable:** edits on `main`/`master`, and edits to `apps/*/src/**` or `packages/*/src/**` when nothing in the working tree shows a test alongside. It matches `tool_input.file_path` itself. |
 | PostToolUse · Edit\|Write\|MultiEdit | `post-edit.mjs` | Migration hygiene, advisory (a PostToolUse cannot undo a write). Flags a `DROP TABLE`/`DROP COLUMN` with no `-- irreversible:` justification, a `CREATE INDEX CONCURRENTLY` that the transaction-wrapping runner will reject at deploy time, a migration absent from `meta/_journal.json` and therefore never run, and a `_post/` file declaring an object the drizzle schema also declares. |
 | PostToolUse · Bash | `post-bash.mjs` | Advisory. Meant to catch source files written *through a shell* — heredoc, `sed -i`, `cp`, a generator, `git checkout -- .` — which no Edit hook ever sees. It does so by diffing `git status` against `workspace/.status-snapshot`, and it stays silent whenever that file is absent. **`pre-bash.mjs` does not currently write it**, so this hook reports nothing today. |
@@ -118,8 +128,9 @@ so they fired on every single edit instead.
 **The proof they never loaded at all:** the old `Stop` script appended to
 `workspace/session_log.md` unconditionally — there was no branch through it that
 skipped the write. That file is 112 bytes, header only, with an mtime equal to
-its creation time of 2026-09-18 12:57, and 52 commits have landed since. A hook
-that ran once would have left a line.
+its creation time of 2026-09-18 12:57, and **53** commits have landed since
+(`git rev-list --count --since='2026-09-18 12:57' HEAD`). A hook that ran once
+would have left a line.
 
 Hook configuration is read from the directory the **session** started in. Start
 Claude Code in the repository root or in a worktree under it — started anywhere
@@ -163,7 +174,26 @@ deployed differs in ways worth knowing:
 - **Auth is Supabase**, not Auth.js. `auth()` keeps its old signature; the
   implementation behind it changed completely. See `docs/architecture.md`.
 - **There is no local Postgres, Redis, MinIO or tusd.** Four containers:
-  `caddy`, `app`, `worker`, `migrate`.
+  `caddy`, `app`, `worker`, `migrate`. `docker-compose.yml` declares no
+  `postgres` service at all; its own comment says why — "Supabase IS the
+  database".
+- **The production Postgres major version is not recorded anywhere in this
+  repository.** Supabase runs it, and no file in the tree names the version
+  Supabase is on. What the tree does contain, and what each thing is actually
+  evidence of:
+  - `.github/workflows/test.yml` pins the CI service to `postgres:17-alpine`.
+    That is a CI service version that was raised from `16.4`; it is a decision
+    about the test environment, **not** a reading of production.
+  - `docs/verification.md` and `docs/substrate-moats.md` still record the
+    verified migration baseline as `postgres:16.4-alpine`, so the only
+    *observed* Postgres in this repository is a 16.4 probe container.
+  - `scripts/backup.sh` and `scripts/preflight.sh` tell the operator to install
+    `postgresql-client-16`. A `pg_dump` 16 refuses a server on 17, so if
+    production really were 17 the backup script would already be broken —
+    another reason the version cannot be inferred from what is written here.
+
+  Until someone reads it off the Supabase project and records it, "to match
+  production" is not a claim this repository can back. Do not repeat it.
 - **`middleware.ts` is `proxy.ts`** (Next 16 renamed the convention; proxy runs
   on the Node runtime and that is not configurable).
 - **Tests are in three tiers and they are NOT interchangeable.**
