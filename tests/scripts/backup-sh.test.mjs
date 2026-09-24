@@ -65,11 +65,19 @@ case "$*" in
 esac
 `;
 
-/** rclone that records the endpoint it was handed and fails without a secret. */
+/**
+ * rclone that records the endpoint it was handed, fails without a source
+ * secret, and — like the real s3 backend — treats a destination with no keys
+ * and env_auth unset as ANONYMOUS, which a private DR bucket refuses.
+ */
 const RCLONE = `
 printf 'rclone-endpoint=%s\\n' "\${RCLONE_CONFIG_SUPASRC_ENDPOINT}" >> "$SANDBOX_LOG"
 if [ -z "\${RCLONE_CONFIG_SUPASRC_SECRET_ACCESS_KEY}" ]; then
   echo "rclone: SignatureDoesNotMatch" >&2
+  exit 1
+fi
+if [ -z "\${RCLONE_CONFIG_DRDEST_ACCESS_KEY_ID:-}" ] && [ "\${RCLONE_CONFIG_DRDEST_ENV_AUTH:-false}" != "true" ]; then
+  echo "rclone: AccessDenied: anonymous PUT to DR bucket" >&2
   exit 1
 fi
 `;

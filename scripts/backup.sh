@@ -170,6 +170,13 @@ if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY
   export RCLONE_CONFIG_DRDEST_TYPE=s3
   export RCLONE_CONFIG_DRDEST_PROVIDER=AWS
   export RCLONE_CONFIG_DRDEST_REGION="${AWS_REGION:-${SUPABASE_S3_REGION:-ap-south-1}}"
+  # The DESTINATION's credentials. With no keys, rclone's s3 backend is
+  # ANONYMOUS unless env_auth is on -- and this remote set neither, so every
+  # write into our private DR bucket was refused and `set -e` ended the run
+  # before the dump was shipped. env_auth takes the same chain the aws CLI in
+  # step 3 uses: AWS_* environment variables, else the EC2 instance role
+  # (README-deploy.md section 7).
+  export RCLONE_CONFIG_DRDEST_ENV_AUTH=true
 
   for bucket in videos-original videos-hls posters pdfs; do
     log "mirroring ${bucket}"
