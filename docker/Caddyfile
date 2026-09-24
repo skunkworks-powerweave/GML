@@ -43,6 +43,20 @@
 		max_size 25MB
 	}
 
+	# REFUSE ABSURD USER-AGENTS HERE, NOT IN THE APP. Next.js tests every
+	# request's User-Agent against a bot regex (HTML_LIMITED_BOT_UA_RE,
+	# next/dist/shared/lib/router/utils/html-bots.js) whose `[\w-]+-Google`
+	# branch is quadratic on a long run of word characters. A 15 KB User-Agent
+	# held the single app process for ~2 s on every route, /api/ping included,
+	# and six concurrent anonymous requests made a normal one wait 11 s. No
+	# application code runs before that check, so the edge is the only place it
+	# can be stopped; Caddy's RE2 matching is linear. Real browsers send a few
+	# hundred characters. (1000 is also RE2's largest repeat count.)
+	@oversized_ua header_regexp User-Agent "^.{1000}"
+	handle @oversized_ua {
+		respond "Request header too large" 431
+	}
+
 	# WhatsApp webhook. Meta re-delivers on timeout, and the handler does its
 	# media fetch in `after()` so the response is prompt — but Meta's own
 	# tolerance is the thing being accommodated here, not ours.

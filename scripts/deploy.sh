@@ -201,11 +201,18 @@ esac
 
 missing=""
 for var in DOMAIN ACME_EMAIL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL \
-           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY \
-           WHATSAPP_APP_SECRET; do
+           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY; do
   grep -qE "^${var}=.+" .env || missing="${missing} ${var}"
 done
 [ -z "${missing}" ] || fail "these variables are unset or empty in .env:${missing}"
+
+# WhatsApp is optional. The webhook refuses every request while
+# WHATSAPP_APP_SECRET is unset (it fails closed), so requiring it here added no
+# protection and made an integration the programme switches on later a
+# prerequisite for running the LMS at all. Say so instead of failing.
+if ! grep -qE "^WHATSAPP_APP_SECRET=.+" .env; then
+  log "WhatsApp ingest is OFF: WHATSAPP_APP_SECRET is not set, so the webhook refuses all traffic. Direct upload is unaffected. To switch it on, set the WHATSAPP_* variables in .env (see .env.example) and re-run this script."
+fi
 
 # SM-5: refuse to deploy on a stale or failed restore drill.
 #

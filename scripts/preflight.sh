@@ -94,9 +94,16 @@ req() {
   fi
 }
 for v in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY \
-         SUPABASE_SECRET_KEY DATABASE_URL DOMAIN ACME_EMAIL WHATSAPP_APP_SECRET; do
+         SUPABASE_SECRET_KEY DATABASE_URL DOMAIN ACME_EMAIL; do
   req "$v"
 done
+# Optional: WhatsApp ingest. The webhook fails closed without its secret, so
+# an unconfigured integration is reported, not blocked.
+if [ -n "${WHATSAPP_APP_SECRET:-}" ]; then
+  ok "WHATSAPP_APP_SECRET is set (${#WHATSAPP_APP_SECRET} chars) -- WhatsApp ingest can be switched on"
+else
+  nb "WHATSAPP_APP_SECRET is not set -- WhatsApp ingest is OFF (the webhook refuses all traffic); direct upload is unaffected"
+fi
 
 # ---- the pooler port --------------------------------------------------------
 sect "Database connection"

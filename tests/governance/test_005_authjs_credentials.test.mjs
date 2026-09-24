@@ -100,9 +100,12 @@ test("login page + server action exist", () => {
 
 test("loginAction validates its redirect target", () => {
   const src = read("apps/web/src/app/login/actions.ts");
+  // The guard is now the shared safeInternalPath (apps/web/src/lib/safe-redirect.ts),
+  // which tests/behaviour/redirects.test.ts executes against an attack table --
+  // including "/%09/evil.example", which the old startsWith("//") copy passed.
   assert.match(
     src,
-    /startsWith\("\/\/"\)/,
+    /redirect\(safeInternalPath\(/,
     "the post-login redirect must reject protocol-relative paths — proxy.ts puts " +
       "an attacker-suppliable value in ?from=, and //evil.example is resolved by " +
       "browsers as a foreign origin, turning a real sign-in into an open redirect",

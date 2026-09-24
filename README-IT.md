@@ -117,7 +117,7 @@ this is only the operator-facing subset.
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Project origin and the browser-safe key. |
 | `SUPABASE_SECRET_KEY` | Bypasses RLS entirely and can create, ban and delete accounts. Never let it reach a browser. |
 | `AUTH_EMAIL_ENABLED` | `false` until SMTP is attached in the Supabase dashboard. See "Accounts and passwords" below. |
-| `WHATSAPP_APP_SECRET` | Required. The webhook refuses **all** traffic without it — by design. |
+| `WHATSAPP_APP_SECRET` | Optional until WhatsApp is switched on. While empty, the webhook refuses **all** traffic (503 `whatsapp_not_configured`) and deploy/preflight report WhatsApp ingest as OFF; everything else works. |
 | `WHATSAPP_VERIFY_TOKEN` | Must match what you type into the Meta dashboard during webhook setup. |
 | `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` | From Meta Business Manager. |
 | `GML_WHATSAPP_NUMBER` | Display E.164 shown on the upload pages as the "send your clip here" hint. |
@@ -307,7 +307,7 @@ calls:
 | Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs`. |
 | `/api/health` returns 503 | Read which of `db`, `storage`, `migrations` is false | `docker compose logs migrate` first — it is usually that. |
 | Worker unhealthy, videos stuck transcoding | It cannot reach the database, or ffmpeg failed | Check `DATABASE_URL` uses the session pooler (5432); then `/admin/transcode-jobs`. |
-| WhatsApp videos not arriving | `WHATSAPP_APP_SECRET` wrong | The webhook refuses all traffic without the right secret. Look for the refusal line in `docker compose logs app`. |
+| WhatsApp videos not arriving | `WHATSAPP_APP_SECRET` unset or wrong | Unset: the webhook answers 503 `whatsapp_not_configured` and logs `WhatsApp ingest is OFF` once. Wrong: it answers 401 and audits `whatsapp.signature_failed`. Check `docker compose logs app`. |
 
 ## Support
 

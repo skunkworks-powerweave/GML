@@ -262,3 +262,17 @@ test("the marker is written after verify-auth, never before seed", () => {
   assert.ok(seed > 0 && verify > 0 && mark > 0, "seed, verify-auth and the marker write must all exist");
   assert.ok(mark > verify && verify > seed, "the marker must be written after seed AND verify-auth");
 });
+
+// ── WhatsApp is optional ─────────────────────────────────────────────────────
+
+test("a deploy without WhatsApp configured completes, and says WhatsApp ingest is off", () => {
+  const sb = deploySandbox();
+  try {
+    sb.write(".env", ENV_FILE.replace(/^WHATSAPP_APP_SECRET=.*\n/m, ""));
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, `WhatsApp is switched on later; it must not block a deploy.\nstderr:\n${r.stderr}`);
+    assert.match(`${r.stdout}${r.stderr}`, /WhatsApp ingest is OFF/i, "the operator must be told, not left to discover it");
+  } finally {
+    sb.cleanup();
+  }
+});

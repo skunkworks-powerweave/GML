@@ -10,6 +10,7 @@ import { clientIp } from "@/lib/request-ip";
 import { rateLimit } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
 import { getCurrentGate, type GateSlug } from "@/lib/gates";
+import { safeInternalPath } from "@/lib/safe-redirect";
 
 // `admin` was ABSENT here, which made it unreachable: /gate/admin answered
 // "Unknown section." for every attempt, so the gate could not be unlocked by
@@ -26,24 +27,6 @@ export type GateState = { error?: string };
 // user. Both states map to the same response.
 const SERVICE_UNAVAILABLE = "Service temporarily unavailable.";
 
-/**
- * Only same-origin, absolute-path redirects are permitted.
- *
- * `next` arrives from the query string via a hidden form field, and was passed
- * straight to redirect(). `/gate/observation?next=https://evil.example` sent the
- * user off-site immediately after they entered a correct section password --
- * a convincing place to harvest credentials, since the victim has just proven
- * they will type one.
- *
- * Rejects protocol-relative URLs ("//evil.example", which the browser treats as
- * absolute) and anything not starting with a single "/".
- */
-function safeNext(raw: string, fallback = "/dashboard"): string {
-  if (!raw.startsWith("/")) return fallback;
-  if (raw.startsWith("//")) return fallback;
-  if (raw.includes("\\")) return fallback;
-  return raw;
-}
 
 export async function verifyGate(
   _prev: GateState | undefined,
@@ -170,5 +153,5 @@ export async function verifyGate(
     path: "/",
   });
 
-  redirect(safeNext(next));
+  redirect(safeInternalPath(next));
 }

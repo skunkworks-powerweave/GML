@@ -438,8 +438,8 @@ test("spec 170 — loginAction surfaces one generic credential failure", () => {
   );
   assert.match(
     src,
-    /safeNext\(/,
-    "loginAction must validate its redirect target -- ?from= is attacker-supplied",
+    /safeInternalPath\(/,
+    "loginAction must validate its redirect target -- ?from= is attacker-supplied (lib/safe-redirect.ts)",
   );
 });
 

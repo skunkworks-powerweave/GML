@@ -39,6 +39,7 @@ import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { publicUrl } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
 
@@ -104,7 +105,8 @@ export async function POST(
   // refresh on the queue does not re-submit the review.
   if (wantsHtml(request)) {
     return NextResponse.redirect(
-      new URL(`/rtt/teach-back?reviewed=${encodeURIComponent(id)}`, request.url),
+      // The public origin: request.url is Next's bind address behind Caddy.
+      await publicUrl(`/rtt/teach-back?reviewed=${encodeURIComponent(id)}`),
       { status: 303 },
     );
   }

@@ -49,6 +49,16 @@ export async function GET(req: Request) {
 
 // POST handler: actual message ingestion
 export async function POST(req: Request) {
+  // NOT CONFIGURED is its own answer. WhatsApp is switched on after go-live, so
+  // the LMS legitimately runs without a secret; every request is refused (the
+  // route fails closed), but it is not a signature failure -- there is nothing
+  // to verify against -- so it is neither a 401 nor an audit row per stray POST
+  // into the append-only log. One log line per process says why.
+  if (!process.env.WHATSAPP_APP_SECRET) {
+    warnUnconfiguredOnce();
+    return NextResponse.json({ error: "whatsapp_not_configured" }, { status: 503 });
+  }
+
   const raw = await req.text();
   const signature = req.headers.get("x-hub-signature-256") ?? "";
   if (!verifySignature(raw, signature)) {
@@ -522,15 +532,20 @@ async function resolveSenderUserId(from: string): Promise<string | null> {
 }
 
 
+let warnedUnconfigured = false;
+function warnUnconfiguredOnce(): void {
+  if (warnedUnconfigured) return;
+  warnedUnconfigured = true;
+  console.warn(
+    "[whatsapp] WHATSAPP_APP_SECRET is not set — the webhook refuses all traffic and WhatsApp " +
+      "ingest is OFF. Set the WHATSAPP_* variables (see .env.example) to switch it on.",
+  );
+}
+
 function verifySignature(raw: string, signatureHeader: string): boolean {
   const secret = process.env.WHATSAPP_APP_SECRET;
-  if (!secret) {
-    console.error(
-      "[whatsapp] WHATSAPP_APP_SECRET is not set — REFUSING the webhook. " +
-        "Set it to the app secret from Meta's dashboard; ingest is disabled until you do.",
-    );
-    return false;
-  }
+  // Still fails closed on its own, whoever calls it.
+  if (!secret) return false;
   const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
   if (signatureHeader.length !== expected.length) return false;
   try {

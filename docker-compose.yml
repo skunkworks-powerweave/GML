@@ -150,9 +150,12 @@ services:
       # this to `true` only after an SMTP provider is attached there; until then
       # the UI says plainly that password resets go through an administrator.
       AUTH_EMAIL_ENABLED: ${AUTH_EMAIL_ENABLED:-false}
-      # Refused rather than defaulted: an unset app secret used to make the
-      # WhatsApp webhook accept unsigned POSTs from anyone on the internet.
-      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?WHATSAPP_APP_SECRET must be set — the webhook refuses all traffic without it}
+      # Optional. An unset app secret USED to make the webhook accept unsigned
+      # POSTs from anyone; the route now fails closed instead (every request is
+      # refused -- see verifySignature in app/api/webhooks/whatsapp/route.ts),
+      # so requiring it here only stopped the LMS from starting before WhatsApp
+      # was set up. deploy.sh and preflight.sh report it as OFF.
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}

@@ -41,6 +41,13 @@ export type AuditInput = {
 // even when half the cluster has lost backend connectivity.
 let auditDegradedCount = 0;
 
+/**
+ * audit_log is append-only, so it must not store whatever a client sends.
+ * Real browsers send a few hundred characters; Caddy refuses 1000+ at the edge
+ * (docker/Caddyfile), and this bounds the column even without it.
+ */
+const MAX_STORED_USER_AGENT = 512;
+
 export function noteAuditDegraded(callsite: string): void {
   auditDegradedCount += 1;
   console.error(
@@ -130,7 +137,7 @@ export async function recordAudit(input: AuditInput): Promise<boolean> {
         const resolved = clientIpFrom(hdr);
         ip = resolved === UNKNOWN_IP ? undefined : resolved;
       }
-      ua = hdr.get("user-agent") ?? undefined;
+      ua = hdr.get("user-agent")?.slice(0, MAX_STORED_USER_AGENT) ?? undefined;
     } catch {
       // No request headers (e.g. background job) — proceed without them.
     }
@@ -228,7 +235,7 @@ export async function recordAuditDedup(input: AuditDedupInput): Promise<boolean>
         const resolved = clientIpFrom(hdr);
         ip = resolved === UNKNOWN_IP ? undefined : resolved;
       }
-      ua = hdr.get("user-agent") ?? undefined;
+      ua = hdr.get("user-agent")?.slice(0, MAX_STORED_USER_AGENT) ?? undefined;
     } catch {
       // No request headers.
     }

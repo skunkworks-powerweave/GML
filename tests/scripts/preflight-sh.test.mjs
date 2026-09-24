@@ -249,3 +249,22 @@ test("Upload: the 50 MB project cap is still a FAIL", () => {
   const r = run({}, { FAKE_UPLOAD_CODE: "413" });
   assert.ok(line(r.out, "FAIL", /600 MB upload/), r.out);
 });
+
+// ── WhatsApp is optional ─────────────────────────────────────────────────────
+//
+// The webhook route refuses every request while WHATSAPP_APP_SECRET is unset
+// (it fails closed), so requiring the secret to deploy added no protection and
+// made WhatsApp -- an integration the programme switches on later -- a
+// prerequisite for running the LMS at all.
+
+test("WhatsApp: an unconfigured integration is a WARN that says ingest is off, not a blocker", () => {
+  const r = run({ envFile: { WHATSAPP_APP_SECRET: undefined } });
+  assert.ok(!line(r.out, "FAIL", /WHATSAPP/), `an optional integration must not fail preflight:\n${r.out}`);
+  assert.ok(line(r.out, "WARN", /WHATSAPP_APP_SECRET/), `the operator must be told WhatsApp ingest is off:\n${r.out}`);
+  assert.equal(r.status, 0, `a host with everything but WhatsApp is safe to deploy:\n${r.out}`);
+});
+
+test("WhatsApp: a configured integration passes", () => {
+  const r = run();
+  assert.ok(line(r.out, "PASS", /WHATSAPP_APP_SECRET/), `expected a PASS for the configured secret:\n${r.out}`);
+});

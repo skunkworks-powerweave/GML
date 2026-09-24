@@ -64,3 +64,26 @@ test("an explicit entityId still wins, and a failure is audited as .failed witho
   assert.equal(row?.action, "admin.row.create.failed");
   assert.equal(row?.entity_id, null);
 });
+
+// ── The User-Agent column is bounded ─────────────────────────────────────────
+//
+// audit_log.user_agent stored whatever the client sent, and audit_log is
+// append-only: a caller could write a 16 KB string per request into a table
+// that can never be pruned. Caddy now refuses User-Agents of 1000+ characters
+// at the edge, but the app must not rely on its proxy for what it stores.
+
+test("an oversized User-Agent is stored truncated, not verbatim", { skip }, async () => {
+  const { recordAudit } = await import("../../apps/web/src/lib/audit.ts");
+  const { request } = await import("./_ui.js");
+  const entityType = tag("audit-ua");
+  request.headers = { "user-agent": "Mozilla/5.0 " + "x".repeat(16_000) };
+  try {
+    assert.equal(await recordAudit({ action: "admin.row.update", entityType }), true);
+  } finally {
+    request.headers = {};
+  }
+  const len = await withClient(async (c) =>
+    Number((await c.query(`SELECT length(user_agent) AS n FROM audit_log WHERE entity_type = $1`, [entityType])).rows[0].n),
+  );
+  assert.ok(len > 0 && len <= 512, `stored ${len} characters of User-Agent`);
+});
