@@ -19,15 +19,9 @@ import { auth } from "@/auth";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { formCatalogueLinks, UNLOCK_FORMS_HREF, type PairingChoice } from "@/lib/forms/catalogue-links";
 import { actorFrom, mentorshipAccess } from "@/lib/visibility";
+import { formTitle } from "@/lib/forms/quarterly";
 
 export const dynamic = "force-dynamic";
-
-const KIND_LABELS: Record<string, string> = {
-  baseline: "Baseline",
-  progress_1: "Progress check 1",
-  progress_2: "Progress check 2",
-  final: "Final reflection",
-};
 
 /**
  * Which audiences may this role fill in?
@@ -81,10 +75,11 @@ export default async function FormsIndexPage() {
       kind: feedbackForms.kind,
       audience: feedbackForms.audience,
       version: feedbackForms.version,
+      schema: feedbackForms.schema,
     })
     .from(feedbackForms)
     .where(and(eq(feedbackForms.active, true), inArray(feedbackForms.audience, audiences)))
-    .orderBy(feedbackForms.audience, feedbackForms.kind);
+    .orderBy(feedbackForms.audience, feedbackForms.kind, feedbackForms.version);
 
   // Which of these has this user already submitted, and for which pairing?
   // Answered forms stay listed rather than disappearing -- a teacher asking "did
@@ -203,10 +198,13 @@ export default async function FormsIndexPage() {
             // dead end. Now a row with several pairings lists one link per
             // pairing, named, and nobody is sent to /inbox.
             const links = formCatalogueLinks(slug, { isAdmin, pairings, lookupFailed, locked });
+            // BY THE FORM'S OWN TITLE. Labelled by kind alone, the School visit
+            // checklist (stored as kind 'baseline') and the mentor baseline were
+            // two rows both called "Baseline for mentors".
             const title = (
               <span>
                 <span style={{ fontWeight: 500, fontSize: 14 }}>
-                  {KIND_LABELS[f.kind] ?? f.kind}
+                  {formTitle(f.schema, f.kind, f.audience)}
                 </span>
                 <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>
                   for {f.audience === "mentor" ? "mentors" : "mentees"}

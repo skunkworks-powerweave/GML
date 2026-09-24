@@ -44,6 +44,7 @@ import {
 } from "@/lib/forms/validate";
 import { formRunnerHref } from "@/lib/forms/catalogue-links";
 import { templateDraftWhere } from "@/lib/forms/drafts";
+import { isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -52,19 +53,6 @@ import { FormRenderer } from "@/components/forms/FormRenderer";
 // action, same autosave pipeline; only the layout changes (one field per
 // screen, big touch targets, sticky Prev/Next, review screen at the end).
 import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
-
-/**
- * The quarter a pairing moves INTO once a form of this kind is submitted.
- *
- * `final` is absent deliberately: it closes the pairing rather than opening a
- * quarter, and completePairingAction owns that transition.
- */
-const QUARTER_AFTER: Record<string, number | undefined> = {
-  baseline: 2,
-  progress_1: 3,
-  progress_2: 4,
-};
-
 
 export const dynamic = "force-dynamic";
 
@@ -387,7 +375,12 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     // because re-submitting an earlier quarter's form must never walk the
     // pairing backwards, and it makes concurrent submissions safe without a
     // read-modify-write. Capped at 4: there is no Q5.
-    if (pairingId) {
+    //
+    // ONLY A QUARTERLY FORM closes a quarter. The School visit checklist is
+    // stored as kind 'baseline' (feedback_kind has no value of its own for it)
+    // and advanced the pairing to Q2 when submitted, though it is a repeatable
+    // field-visit form; lib/forms/quarterly.ts.
+    if (pairingId && isQuarterlyForm(form.schema)) {
       const nextQuarter = QUARTER_AFTER[form.kind];
       if (nextQuarter) {
         await tx

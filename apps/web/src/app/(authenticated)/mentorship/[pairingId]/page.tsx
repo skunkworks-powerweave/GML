@@ -15,7 +15,7 @@
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   mentors,
@@ -27,6 +27,7 @@ import {
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
+import { QUARTER_TO_KIND, quarterlyVersionByKind } from "@/lib/forms/quarterly";
 import { MobileDetailFrame } from "@/components/shells";
 import {
   logMeetingAction,
@@ -43,14 +44,6 @@ const QUARTER_LABEL: Record<string, string> = {
   progress_1: "Q2 · Progress",
   progress_2: "Q3 · Progress",
   final: "Q4 · Final",
-};
-
-// Quarter index (1..4) → feedback_forms.kind value used in the /forms/ slug.
-const QUARTER_TO_KIND: Record<number, (typeof QUARTERS)[number]> = {
-  1: "baseline",
-  2: "progress_1",
-  3: "progress_2",
-  4: "final",
 };
 
 // THE FORM SLUG IS RESOLVED FROM THE DATABASE, NOT ASSEMBLED FROM CONSTANTS.
@@ -121,12 +114,23 @@ export default async function PairingDetailPage({
   // mentee-audience one. Admins preview the mentor side.
   const formAudience = session.user.role === "teacher" ? "mentee" : "mentor";
 
-  // Active form versions for that audience, keyed by kind. Resolved once.
+  // Active QUARTERLY form versions for that audience, keyed by kind.
+  //
+  // This was `new Map(activeForms.map(f => [f.kind, f.version]))` over rows
+  // with no ORDER BY, and the School visit checklist and Endline survey share
+  // a kind with a quarter's form (they differ only by schema.purpose), so the
+  // last row Postgres returned won: the mentor's Q1 opened the school-visit
+  // checklist. lib/forms/quarterly.ts skips forms with a purpose and picks the
+  // highest version, whatever the row order.
   const activeForms = await db
-    .select({ kind: feedbackForms.kind, version: feedbackForms.version })
+    .select({
+      kind: feedbackForms.kind,
+      version: feedbackForms.version,
+      purpose: sql<string | null>`${feedbackForms.schema}->>'purpose'`,
+    })
     .from(feedbackForms)
     .where(and(eq(feedbackForms.audience, formAudience), eq(feedbackForms.active, true)));
-  const versionByKind = new Map(activeForms.map((f) => [f.kind, f.version]));
+  const versionByKind = quarterlyVersionByKind(activeForms);
   const [mentor] = await db.select().from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
 
