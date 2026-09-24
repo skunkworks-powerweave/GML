@@ -68,6 +68,10 @@ export default async function CycleDetailPage({
         "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
       tone: "error",
     },
+    cycle_locked: {
+      message: "This cycle has been signed off. Its record is closed, so nothing more can be added to it.",
+      tone: "warn",
+    },
     invalid_cycle: { message: "That cycle reference was not valid.", tone: "error" },
     cycle_not_found: { message: "That cycle no longer exists.", tone: "error" },
   };
@@ -152,13 +156,13 @@ export default async function CycleDetailPage({
   const canSignOff =
     cycle.status === "post_submitted" &&
     hasAnyRole(viewerRole, ["mentor", "programme_admin", "super_admin"]);
+  // SIGNED OFF IS CLOSED. Sign-off is the locking transition, so a complete
+  // cycle offers no note form and no upload; addNoteAction and
+  // beginUploadAction refuse them on the server as well.
+  const locked = cycle.status === "complete";
   // addNoteAction: observer, mentor, programme_admin, super_admin.
-  const canAddNote = hasAnyRole(viewerRole, [
-    "observer",
-    "mentor",
-    "programme_admin",
-    "super_admin",
-  ]);
+  const canAddNote =
+    !locked && hasAnyRole(viewerRole, ["observer", "mentor", "programme_admin", "super_admin"]);
 
   // Spec 137 — device-aware adoption of MobileDetailFrame. On mobile the
   // existing single-column flow is wrapped in the thin-header + back-arrow
@@ -342,7 +346,13 @@ export default async function CycleDetailPage({
 
           {/* CTA: direct browser video upload — context wired to this cycle. */}
           <div style={{ marginTop: 12 }}>
-            <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+            {locked ? (
+              <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                Signed off — this record is closed and accepts no further evidence.
+              </p>
+            ) : (
+              <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+            )}
           </div>
         </article>
       </section>
@@ -359,7 +369,9 @@ export default async function CycleDetailPage({
           action destructive. */}
       <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
         <div className="label" style={{ marginBottom: 6 }}>Remark</div>
-        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Mentor notes</h2>
+        {/* "Notes", not "Mentor notes": observers and administrators write
+            here too, and each entry now names its author and role. */}
+        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Notes</h2>
         {cycle.remark ? (
           // whiteSpace: pre-wrap so the blank line between appended entries,
           // and the timestamp each one carries, survive rendering.
@@ -375,7 +387,7 @@ export default async function CycleDetailPage({
             {cycle.remark}
           </p>
         ) : (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No mentor note yet.</p>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No notes yet.</p>
         )}
         {canAddNote ? (
         <form action={addNoteAction} style={{ display: "grid", gap: 8 }}>

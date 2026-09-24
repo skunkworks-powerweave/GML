@@ -59,10 +59,16 @@ async function assertContextAllowed(
   if (contextType === "generic" || !contextId) return null;
 
   switch (contextType) {
-    case "observation_cycle":
+    case "observation_cycle": {
       // Throws notFound() when the actor has no business here.
-      await assertCanAccessCycle(actor, contextId);
+      const cycle = await assertCanAccessCycle(actor, contextId);
+      // Sign-off locks the record; evidence attached afterwards would change
+      // what the signer attested to.
+      if (cycle.status === "complete") {
+        return "This observation cycle has been signed off and no longer accepts evidence.";
+      }
       return null;
+    }
     case "mentor_meeting":
     case "mentee_quarterly": {
       // These carry a pairing id.
