@@ -1,7 +1,9 @@
 // Spec 077 — Observation form templates seed (pre / post / observer).
 //
 // Inserts three canonical templates onto the seed cycle `OBS-2026-001`
-// (which is created by `seed.ts` / spec 086). The schema is locked and
+// (which is created by `seed.ts` / spec 086). If that cycle is absent -- as it
+// is after purge_demo_data.ts --apply -- this warns and returns without
+// inserting anything; it never fails the deploy over it. The schema is locked and
 // has no separate `observation_form_templates` table, so the templates
 // ride on `observation_forms` rows whose `responses` jsonb carries a
 // top-level `fields` array. The form-rendering UI fetches its template
@@ -282,11 +284,33 @@ export async function main() {
 
     const canonical = cycleRows[0];
     if (!canonical) {
-      console.error(
-        `[seed:forms:obs] canonical cycle '${CANONICAL_CYCLE_CODE}' not found — run \`pnpm --filter @gml/db run seed\` first`,
+      // A WARNING AND A RETURN, NOT process.exit(1).
+      //
+      // The anchor is absent in exactly two situations, and neither is a
+      // failure of this deploy:
+      //
+      //   * purge_demo_data.ts --apply ran (README-deploy.md 3.1, the day-one
+      //     step). OBS-2026-001 is demo data, the templates on it have no
+      //     submitter so they never count as "real work", and it is removed
+      //     with the other demo cycles. seed.ts will never recreate it -- it
+      //     skips everything once any district exists, and the purge keeps the
+      //     districts on purpose.
+      //   * seed.ts has not run yet, which seed_all.ts rules out by ordering.
+      //
+      // This used to exit 1. deploy.sh runs seed_all.ts under `set -euo
+      // pipefail` on every deploy, and a process.exit() inside a phase kills
+      // the orchestrator outright, so every deploy after the documented purge
+      // stopped at the seed step -- after the containers were already up and
+      // healthy, and before verify-auth and the smoke check could run. Nothing
+      // in the application reads these three template rows, so skipping them
+      // costs nothing a user can see.
+      console.warn(
+        `[seed:forms:obs] canonical cycle '${CANONICAL_CYCLE_CODE}' not found — skipping the ${TEMPLATES.length} observation templates. ` +
+          `Expected after purge_demo_data.ts --apply, which removes the demo cycles. ` +
+          `On a fresh database, run seed first (\`pnpm --filter @gml/db run seed\`).`,
       );
       await pool.end();
-      process.exit(1);
+      return;
     }
 
     if (DRY_RUN) {

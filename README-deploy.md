@@ -135,11 +135,15 @@ only the hash is stored. You can rotate them later at `/admin/gates`.
 The seed inserts two kinds of row and does not distinguish them. The
 **districts and zones are real** Ladakh administrative divisions, and so are
 the phases, terms, subjects, form and quiz catalogues, and section gates —
-keep all of it.
+keep all of it. (One exception: the three observation-form templates are
+stored on the demo cycle `OBS-2026-001`, so they go when it goes. Nothing in
+the application reads them, and on every later deploy the seed step prints a
+warning that `OBS-2026-001` is gone and carries on — that warning is expected.)
 
 The **schools, teachers, mentors, pairings and observation cycles are
 invented**: ten schools with sequential contact numbers, ten teachers with
-sequential mobiles (`+91 9419100001..`), and eight cycles `OBS-2026-001..008`.
+sequential mobiles (`+91 9419100001..`), two mentors (Dr. Anjali Bhatt and
+Prof. Iqbal Hussain), and eight cycles `OBS-2026-001..008`.
 Left in place they appear in the roster, in QuickFind, in every admin grid and
 in the dashboard counts, indistinguishable from real staff.
 
@@ -157,7 +161,9 @@ Two things it does deliberately:
   would reinstate all of this on the next deployment.
 - **It keeps anything with real work attached.** A demo cycle that has acquired
   a genuine form, video or evidence row, or a demo teacher who has been given a
-  login, is reported and left alone rather than cascaded away.
+  login, is reported and left alone rather than cascaded away. A kept cycle's
+  teacher (and that teacher's school) is kept with it, because a cycle cannot
+  exist without its teacher.
 
 Safe to run twice; the second run finds nothing.
 
