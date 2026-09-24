@@ -1164,6 +1164,9 @@ function envWithPath(binDir) {
   return env;
 }
 
+/** One body file per stub, so an earlier stub's env keeps reading its own body. */
+let stubSeq = 0;
+
 /**
  * A stub `gh` that prints `json` for any arguments.
  *
@@ -1172,14 +1175,57 @@ function envWithPath(binDir) {
  * a shell (the 2024 argument-injection fix), and a real gh on Windows can itself
  * be a .cmd shim — which is why the hook spawns gh through a shell there, and
  * why this stub is resolvable that way.
+ *
+ * ── WHY THE JSON GOES IN A FILE, AND WHY THIS HELPER TESTS ITSELF ────────────
+ *
+ * This used to be `echo '${json}'`. On Windows that works; on Linux `/bin/sh` is
+ * dash, whose builtin echo INTERPRETS backslash escapes, so every `\n` in a
+ * multi-line body fixture became a real newline inside a JSON string literal
+ * and the hook's JSON.parse died with "Bad control character in string literal".
+ *
+ * The visible cost was one test, and the hidden cost was the whole point of
+ * having CI: `7. a merge is allowed when the PR body carries the approved
+ * verdict ON ITS OWN LINE` has never passed on Linux, the `static` job was red
+ * from the commit that introduced it, and every local run on Windows was green
+ * — so the suite reported a passing merge gate on the one platform CI does not
+ * run. A test that cannot fail on the developer's machine is the same defect
+ * class as a hook that never loads.
+ *
+ * So the body is written to a FILE that the stub prints verbatim, which has no
+ * escaping semantics on either platform, and then the stub is RUN and its output
+ * parsed. If a future change breaks the stub on one platform, it fails here, in
+ * the helper, naming the problem — instead of surfacing as a puzzling refusal
+ * from the gate under test.
  */
 function stubGh(dir, json) {
   const binDir = join(dir, "bin");
   mkdirSync(binDir, { recursive: true });
-  if (json !== null) {
-    writeFileSync(join(binDir, "gh.cmd"), `@echo off\r\necho ${json}\r\n`);
-    writeFileSync(join(binDir, "gh"), `#!/bin/sh\necho '${json}'\n`, { mode: 0o755 });
-  }
+  if (json === null) return envWithPath(binDir);
+
+  const bodyFile = join(binDir, `gh-body-${stubSeq++}.json`);
+  writeFileSync(bodyFile, json);
+  writeFileSync(join(binDir, "gh.cmd"), `@echo off\r\ntype "${bodyFile}"\r\n`);
+  writeFileSync(
+    join(binDir, "gh"),
+    `#!/bin/sh\ncat "${bodyFile.split("\\").join("/")}"\n`,
+    { mode: 0o755 },
+  );
+
+  // Self-check: run the stub the way the hook will and require the bytes back.
+  const probe = spawnSync("gh", ["pr", "view", "--json", "body"], {
+    cwd: dir,
+    encoding: "utf8",
+    timeout: 20_000,
+    shell: process.platform === "win32",
+    env: envWithPath(binDir),
+  });
+  assert.equal(probe.status, 0, `the gh stub did not run: ${probe.stderr || probe.error?.message}`);
+  assert.deepEqual(
+    JSON.parse(probe.stdout),
+    JSON.parse(json),
+    "the gh stub must reproduce its JSON byte-for-byte on this platform; if this fails, the " +
+      "shell is mangling the fixture and every merge test below is testing the mangling",
+  );
   return envWithPath(binDir);
 }
 
