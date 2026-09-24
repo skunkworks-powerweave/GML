@@ -344,6 +344,72 @@ export async function setActiveAction(
   };
 }
 
+// ── WhatsApp number ───────────────────────────────────────────────────────────
+
+/**
+ * A phone number as WhatsApp addresses it: E.164, "+" and 8-15 digits.
+ * A bare 10-digit number is an Indian mobile (the programme is in Ladakh);
+ * a leading 0 or 91 before one is the same number. null = not a number.
+ */
+function normalisePhone(raw: string): string | null {
+  const s = raw.replace(/[\s\-().]/g, "");
+  if (/^\+\d{8,15}$/.test(s)) return s;
+  if (/^\d{10}$/.test(s)) return `+91${s}`;
+  if (/^0\d{10}$/.test(s)) return `+91${s.slice(1)}`;
+  if (/^91\d{10}$/.test(s)) return `+${s}`;
+  return null;
+}
+
+/**
+ * Record (or clear) a staff member's WhatsApp number.
+ *
+ * WHY THIS EXISTS. /admin/gates offers a rotated section password to "staff
+ * with a phone number on file", and nothing in the product wrote users.phone
+ * -- no screen, action, import or entity -- so that list was always empty and
+ * "Share via WhatsApp" could never be offered. This is the write path.
+ *
+ * Unlike role and status, a number may be set on your own account: it cannot
+ * lock anyone out. programme_admin still cannot edit an administrator.
+ */
+export async function setPhoneAction(
+  _prev: UserActionState | undefined,
+  formData: FormData,
+): Promise<UserActionState> {
+  const actor = await requireAdmin();
+  if ("error" in actor) return { error: actor.error };
+
+  const targetId = String(formData.get("userId") ?? "");
+  const typed = String(formData.get("phone") ?? "").trim();
+  const phone = typed === "" ? null : normalisePhone(typed);
+  if (typed !== "" && phone === null) {
+    return { error: "Enter a mobile number, e.g. 98765 43210 or +91 98765 43210." };
+  }
+
+  if (targetId !== actor.id) {
+    const permitted = await canActOn(actor, targetId);
+    if (!permitted.ok) return { error: permitted.error };
+  }
+
+  const updated = await db
+    .update(users)
+    .set({ phone, updatedAt: new Date() })
+    .where(eq(users.id, targetId))
+    .returning({ id: users.id });
+  if (updated.length === 0) return { error: "No such user." };
+
+  // Whether a number is on file, not the number: the audit log is readable by
+  // every administrator.
+  const wrote = await recordAudit({
+    action: phone ? "admin.user.phone_set" : "admin.user.phone_cleared",
+    entityType: "user",
+    entityId: targetId,
+  });
+  if (!wrote) noteAuditDegraded("admin/users/setPhoneAction");
+
+  revalidatePath("/admin/users");
+  return { ok: phone ? `WhatsApp number saved (${phone}).` : "WhatsApp number removed." };
+}
+
 // ── password ──────────────────────────────────────────────────────────────────
 
 export async function setPasswordAction(
