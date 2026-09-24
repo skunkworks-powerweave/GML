@@ -45,6 +45,7 @@ import {
 import { decodeFormSlug, formRunnerHref } from "@/lib/forms/catalogue-links";
 import { templateDraftWhere } from "@/lib/forms/drafts";
 import { isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
+import { parseFormSchema } from "@/lib/forms/schema";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -124,10 +125,12 @@ type FormSchemaShape = {
   purpose?: string;
 };
 
-function readSchema(form: FeedbackForm): FormSchemaShape {
-  const raw = form.schema as unknown;
-  if (raw && typeof raw === "object") return raw as FormSchemaShape;
-  return {};
+// Checked, not cast: a stored `{"fields": {...}}` used to reach
+// `(schema.fields ?? []).map(...)` and 500 the runner for every user. null
+// means the stored schema is not one the renderers can draw
+// (lib/forms/schema.ts); the page shows BrokenFormShell and the action refuses.
+function readSchema(form: FeedbackForm): FormSchemaShape | null {
+  return parseFormSchema(form.schema) as FormSchemaShape | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +271,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   }
 
   const schema = readSchema(form);
+  if (!schema) redirect(`${formRunnerHref(slug, pairingId)}&error=form_broken`);
   const fieldIds = new Set((schema.fields ?? []).map((f) => f.name));
 
   // Spec 130 — pick up the context hidden inputs the renderer planted on the
@@ -554,6 +558,7 @@ export default async function FormRunnerPage({
   }
 
   const schema = readSchema(form);
+  if (!schema) return <BrokenFormShell slug={slug} />;
   const fieldNames = new Set((schema.fields ?? []).map((f) => f.name));
 
   // Spec 130 — extract the closed context set from the query string. Anything
@@ -718,6 +723,8 @@ export default async function FormRunnerPage({
                 your account. If you think that is wrong, contact your programme
                 administrator.
               </>
+            ) : error === "form_broken" ? (
+              <>This form&apos;s definition is broken, so it cannot be submitted. Please tell your programme administrator.</>
             ) : error === "invalid" ? (
               <>
                 <strong>Your answers could not be saved.</strong>
@@ -785,6 +792,27 @@ export default async function FormRunnerPage({
           away and return without losing what you typed.
         </footer>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A stored schema the renderers cannot draw. Said plainly, with nothing to
+// submit, rather than an HTTP 500 for everyone who opens the form.
+// ---------------------------------------------------------------------------
+
+function BrokenFormShell({ slug }: { slug: string }) {
+  return (
+    <div className="page-body" style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }} role="alert">
+      <div className="label">Form unavailable</div>
+      <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
+        This form cannot be shown right now.
+      </h1>
+      <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 8 }}>
+        The definition of <code className="mono">{slug}</code> is not one the form runner can draw.
+        Nothing you have already submitted is affected. Please let your programme administrator
+        know so they can correct it in Admin → Forms.
+      </p>
     </div>
   );
 }

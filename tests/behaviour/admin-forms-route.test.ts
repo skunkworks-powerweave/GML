@@ -82,6 +82,58 @@ test("F94: a form already stranded at a '+' version opens again", { skip }, asyn
   });
 });
 
+// ── F95: THE ROUTE STORED ANY JSON AS A SCHEMA ───────────────────────────────
+//
+// The only check was that the body parsed. `{"fields": {...}}` turned every
+// open of that form into an HTTP 500 for every user; `42` stored a form with
+// no questions that could still be submitted; and a malformed id answered 500
+// with the raw Postgres error in the body.
+
+test("F95: a schema the runners cannot draw is refused with 400, and nothing is stored", { skip }, async () => {
+  await withWorld(async (w) => {
+    const good = { title: `Keep ${w.T}`, fields: [{ name: "notes", kind: "textarea", label: "Notes" }] };
+    const form = await w.form("baseline", "mentor", good, { version: `${w.T}-9001` });
+    signIn(w.admin);
+    for (const bad of [
+      JSON.stringify({ title: "x", fields: { name: "a", kind: "text" } }),
+      "42",
+      "[]",
+      JSON.stringify({ title: "x", fields: [] }),
+      JSON.stringify({ fields: [{ name: "a b", kind: "text" }] }),
+      JSON.stringify({ fields: [{ name: "a", kind: "text" }, { name: "a", kind: "textarea" }] }),
+      JSON.stringify({ fields: [{ name: "a", kind: "slider" }] }),
+    ]) {
+      const res = await putSchema(form.id, bad);
+      assert.equal(res.status, 400, `${bad} -> ${await res.clone().text()}`);
+      const body = (await res.json()) as { error: string; issues?: unknown[] };
+      assert.equal(body.error, "invalid_schema");
+      assert.ok(Array.isArray(body.issues) && body.issues.length > 0, "the editor is told what is wrong");
+    }
+    const [row] = await w.q<{ version: string; title: string }>(`SELECT version, schema->>'title' AS title FROM feedback_forms WHERE id = $1`, [form.id]);
+    assert.deepEqual(row, { version: `${w.T}-9001`, title: good.title }, "nothing was stored and no version was used up");
+  });
+});
+
+test("F95: a malformed form id is a 400, never a 500 carrying the database's error", { skip }, async () => {
+  await withWorld(async (w) => {
+    signIn(w.admin);
+    const res = await putSchema("not-a-uuid", JSON.stringify({ fields: [{ name: "a", kind: "text" }] }));
+    assert.equal(res.status, 400);
+    assert.doesNotMatch(await res.text(), /invalid input syntax|uuid:/);
+  });
+});
+
+test("F95: a broken schema already stored shows an error panel instead of crashing the runner", { skip }, async () => {
+  await withWorld(async (w) => {
+    const form = await w.form("baseline", "mentor", { title: `Broken ${w.T}`, fields: { name: "a", kind: "text" } });
+    await w.grant(w.mentor.id);
+    signIn(w.mentor);
+    const html = await openRunner(form.slug, w.pairingA);
+    assert.match(html, /cannot be shown/i);
+    assert.doesNotMatch(html, /<textarea|data-testid="form-renderer-submit"/, "and offers nothing to submit");
+  });
+});
+
 test("F94: an edited endline-style form is still reachable by its new slug", { skip }, async () => {
   await withWorld(async (w) => {
     const title = `Endline probe ${w.T}`;

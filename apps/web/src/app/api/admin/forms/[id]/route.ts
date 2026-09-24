@@ -26,6 +26,8 @@ import { feedbackForms } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { isUuid } from "@/lib/ids";
+import { FormSchemaSchema } from "@/lib/forms/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +81,9 @@ export async function PUT(
   }
 
   const { id } = await ctx.params;
-  if (!id || typeof id !== "string") {
+  // A uuid, checked here: a malformed id reached the uuid column, Postgres
+  // raised 22P02, and the 500 below carried its message to the client.
+  if (!isUuid(id)) {
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 
@@ -100,6 +104,20 @@ export async function PUT(
       { status: 400 },
     );
   }
+
+  // A SCHEMA THE RUNNERS CAN DRAW. Parsing was the only check, so
+  // `{"fields": {...}}` was stored and every open of the form was a 500 for
+  // every user, and `42` stored a form with no questions that still
+  // submitted. Refused before anything is locked or a version is used up; the
+  // issues tell the editor which path is wrong. lib/forms/schema.ts.
+  const checked = FormSchemaSchema.safeParse(parsed);
+  if (!checked.success) {
+    return NextResponse.json(
+      { error: "invalid_schema", issues: checked.error.issues.slice(0, 20) },
+      { status: 400 },
+    );
+  }
+  const schema = checked.data;
 
   // Spec 152 — race-safe version bump. We wrap the SELECT + UPDATE pair in
   // `db.transaction(async (tx) => { ... })` and acquire a row-level lock on
@@ -155,15 +173,14 @@ export async function PUT(
       }
       await tx
         .update(feedbackForms)
-        .set({ schema: parsed, version: nextVersion })
+        .set({ schema, version: nextVersion })
         .where(eq(feedbackForms.id, id));
       return { prevVersion: existing.version, nextVersion };
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: "transaction_failed", message: (e as Error).message },
-      { status: 500 },
-    );
+    // Logged here, not returned: the driver's message is not for the client.
+    console.error("[admin/forms] schema update failed", { id, err: e });
+    return NextResponse.json({ error: "transaction_failed" }, { status: 500 });
   }
 
   if (notFound || !txResult) {
