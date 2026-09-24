@@ -380,7 +380,15 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     // stored as kind 'baseline' (feedback_kind has no value of its own for it)
     // and advanced the pairing to Q2 when submitted, though it is a repeatable
     // field-visit form; lib/forms/quarterly.ts.
-    if (pairingId && isQuarterlyForm(form.schema)) {
+    //
+    // AND ONLY THE MENTOR'S. The pairing page's own rule is "Mentor must
+    // complete [the] feedback form at the end of each quarter ... Closes the
+    // quarter on submit". This advanced on the first submission of the kind by
+    // ANYONE: the mentee's baseline closed Q1 before the mentor had filled
+    // hers, which then stopped being asked for, and an administrator's
+    // submission closed it too. assertCanAccessPairing above means a mentor
+    // here is this pairing's mentor.
+    if (pairingId && isQuarterlyForm(form.schema) && form.audience === "mentor" && actor.role === "mentor") {
       const nextQuarter = QUARTER_AFTER[form.kind];
       if (nextQuarter) {
         await tx

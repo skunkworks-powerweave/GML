@@ -111,8 +111,11 @@ export default async function PairingDetailPage({
 
   // Which audience's forms does THIS viewer answer? A mentor answers the
   // mentor-audience form about their mentee; the mentee answers the
-  // mentee-audience one. Admins preview the mentor side.
+  // mentee-audience one. Admins preview the mentor side -- a real preview now:
+  // their links carry no pairingId, because a submission with one was filed
+  // as this pairing's feedback.
   const formAudience = session.user.role === "teacher" ? "mentee" : "mentor";
+  const viewerIsAdmin = hasAnyRole(session.user.role, ["programme_admin", "super_admin"]);
 
   // Active QUARTERLY form versions for that audience, keyed by kind.
   //
@@ -157,6 +160,21 @@ export default async function PairingDetailPage({
     .limit(20);
 
   const feedback = await db.select().from(feedbackResponses).where(eq(feedbackResponses.pairingId, pairingId));
+
+  // The quarterly forms THIS viewer has already sent for the pairing. Only the
+  // mentor's form closes a quarter, so a mentee who has sent hers waits for
+  // the mentor -- and her card should say "submitted", not ask again.
+  const answeredByViewer = new Set(
+    (
+      await db
+        .select({ kind: feedbackForms.kind, purpose: sql<string | null>`${feedbackForms.schema}->>'purpose'` })
+        .from(feedbackResponses)
+        .innerJoin(feedbackForms, eq(feedbackForms.id, feedbackResponses.formId))
+        .where(and(eq(feedbackResponses.pairingId, pairingId), eq(feedbackResponses.respondentUserId, session.user.id)))
+    )
+      .filter((r) => !r.purpose)
+      .map((r) => r.kind as string),
+  );
   const feedbackByKind = new Set(
     feedback.map((f) => {
       // We have form_id but not kind here; query+join would be cleaner, but
@@ -356,9 +374,11 @@ export default async function PairingDetailPage({
             // No active form for this quarter yet -> no link, rather than a
             // link to a "Form not found" shell.
             const formVersion = versionByKind.get(formKind);
-            const formHref = formVersion
-              ? `/forms/${formKind}-${formAudience}-${formVersion}?pairingId=${pairingId}&quarter=${qNum}`
-              : null;
+            const formHref = !formVersion
+              ? null
+              : viewerIsAdmin
+                ? `/forms/${formKind}-${formAudience}-${formVersion}`
+                : `/forms/${formKind}-${formAudience}-${formVersion}?pairingId=${pairingId}&quarter=${qNum}`;
             return (
               <div
                 key={q}
@@ -418,7 +438,25 @@ export default async function PairingDetailPage({
                       No form published for this quarter yet.
                     </span>
                   )
-                ) : state === "current" ? (
+                ) : state !== "current" ? null : viewerIsAdmin ? (
+                  <Link
+                    href={formHref}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Preview Q${qNum} mentor form`}
+                  >
+                    Preview form →
+                  </Link>
+                ) : answeredByViewer.has(formKind) ? (
+                  <Link
+                    href={`/mentorship/${pairingId}/responses`}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Q${qNum} form submitted: view responses`}
+                  >
+                    ✓ Submitted · view →
+                  </Link>
+                ) : (
                   <Link
                     href={formHref}
                     className="btn btn-sm"
@@ -427,7 +465,7 @@ export default async function PairingDetailPage({
                   >
                     Fill progress form →
                   </Link>
-                ) : null}
+                )}
               </div>
             );
           })}
