@@ -28,7 +28,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { caddyCurl, makeSandbox } from "./_sandbox.mjs";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { caddyCurl, makeSandbox, root } from "./_sandbox.mjs";
+
+const sb_src = () => readFileSync(resolve(root, "scripts/deploy.sh"), "utf8");
 
 const DOMAIN = "lms.example.test";
 
@@ -63,9 +67,12 @@ printf 'pnpm-env SMOKE_BASE_URL=%s\\n' "\${SMOKE_BASE_URL:-}" >> "$SANDBOX_LOG"
 exit 0
 `;
 
-function deploySandbox({ healthy = true } = {}) {
+function deploySandbox({ healthy = true, deployedBefore = true } = {}) {
   const sb = makeSandbox({ files: ["scripts/deploy.sh"], prefix: "gml-deploy-" });
   sb.write(".env", ENV_FILE);
+  // A host that has completed a deploy carries the marker deploy.sh writes after
+  // seed and verify-auth. It is what arms the SM-5 gate -- not the image.
+  if (deployedBefore) sb.write("workspace/.deploy-completed", "2026-09-01T00:00:00Z");
   sb.stub("docker", DOCKER);
   sb.stub("node", NODE);
   sb.stub("pnpm", PNPM);
@@ -156,7 +163,7 @@ test("a refused restore drill stops the deploy before anything is built", () => 
 test("the first deploy on a host is not blocked by a drill that cannot exist yet", () => {
   // There is nothing to back up before the first deploy, so a gate that
   // demanded a drill here would make a fresh EC2 host undeployable.
-  const sb = deploySandbox();
+  const sb = deploySandbox({ deployedBefore: false });
   try {
     const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_FIRST_DEPLOY: "1", FAKE_DRILL_REFUSES: "1" } });
     assert.equal(r.status, 0, `the first deploy was blocked:\n${r.stderr}`);
@@ -183,4 +190,75 @@ test("DOMAIN exported in the shell wins over .env, exactly as Compose resolves i
   } finally {
     sb.cleanup();
   }
+});
+
+// ── The first-deploy deadlock (review of fix/deploy-handover) ────────────────
+//
+// The SM-5 gate used to arm whenever the image gml-lms-app:current existed.
+// `docker compose build` creates that image BEFORE migrate, health and seed,
+// so a first deploy that failed part-way -- at health, the step most likely to
+// fail on a fresh host (DNS or certificate not ready) -- left the host looking
+// as if it had deployed before. The re-run was refused for want of a restore
+// drill; the drill could not pass, because only the seed creates a user row to
+// restore; and every deploy after that was refused the same way. On main the
+// gate self-skipped, so this could not happen before the fix that armed it.
+//
+// The signal is now a marker written only after seed and verify-auth succeed:
+// the point after which a backup can contain users and a drill can pass.
+
+const MARKER = "workspace/.deploy-completed";
+
+test("a first deploy that fails at health does NOT lock the host out of re-running", () => {
+  const sb = deploySandbox({ healthy: false, deployedBefore: false });
+  try {
+    const first = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.notEqual(first.status, 0, "the unhealthy first deploy should fail at health");
+    assert.ok(!sb.exists(MARKER), "a deploy that never seeded must not mark the host as deployed");
+
+    // The operator fixes DNS and runs it again. No drill can exist yet -- the
+    // seed never ran, so there is no user to back up -- and the drill stub is
+    // set to refuse, exactly as the real one would. The gate must not be armed.
+    sb.stub("curl", caddyCurl(DOMAIN, { healthy: true }));
+    const second = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_DRILL_REFUSES: "1" } });
+    assert.equal(
+      second.status,
+      0,
+      `the re-run after a failed first deploy was refused -- the host is locked out:\n${second.stderr}`,
+    );
+    assert.ok(sb.exists(MARKER), "a deploy that seeded and verified auth must mark the host");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("once a deploy completes, the next one arms the restore-drill gate", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    const first = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(first.status, 0, first.stderr);
+    assert.ok(sb.exists(MARKER), "a completed deploy must leave the marker");
+
+    // The invocation log is cumulative across runs, so look only at what the
+    // SECOND run did -- the first one built, legitimately.
+    const before = sb.invocations().length;
+    const second = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_DRILL_REFUSES: "1" } });
+    const during = sb.invocations().slice(before);
+    assert.notEqual(second.status, 0, "a stale drill must block a deploy on a host that has deployed");
+    assert.ok(
+      !during.some((l) => /^docker (tag|compose build|compose up)/.test(l)),
+      `the gate must refuse BEFORE anything is built or tagged:\n${during.join("\n")}`,
+    );
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the marker is written after verify-auth, never before seed", () => {
+  // The order is the whole fix: write it earlier and the deadlock is back.
+  const src = sb_src();
+  const seed = src.indexOf("seed_all.ts");
+  const verify = src.indexOf("scripts/verify-auth.mjs");
+  const mark = src.indexOf('> "${DEPLOYED_MARKER}"');
+  assert.ok(seed > 0 && verify > 0 && mark > 0, "seed, verify-auth and the marker write must all exist");
+  assert.ok(mark > verify && verify > seed, "the marker must be written after seed AND verify-auth");
 });

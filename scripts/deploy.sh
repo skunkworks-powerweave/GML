@@ -219,14 +219,28 @@ done
 #
 # THE FIRST DEPLOY ON A HOST IS THE EXCEPTION. Before it there is nothing to
 # back up and no drill can have passed, so an armed gate would make a fresh
-# instance undeployable. The signal is the same one the tagging step below
-# uses: no gml-lms-app:current image means this host has never completed a
-# build. The skip is loud and says what to run before the next deploy.
-if docker image inspect gml-lms-app:current >/dev/null 2>&1; then
+# instance undeployable.
+#
+# THE SIGNAL IS A MARKER, NOT THE IMAGE. This used to test for the image
+# gml-lms-app:current, meaning "this host has completed a build". But
+# `docker compose build` below creates that image BEFORE migrate, health and
+# seed -- so a first deploy that failed part-way (at health, the step most
+# likely to fail on a fresh host, while DNS or the certificate is not ready)
+# left the host looking deployed. The re-run was refused for want of a drill;
+# the drill could not pass, because only the seed creates a user row to
+# restore; and every deploy after that was refused the same way. A deadlock
+# with no documented way out, on the step IT is most likely to hit first.
+#
+# DEPLOYED_MARKER is written only after seed AND verify-auth succeed (step 5):
+# the point after which a backup can contain users and a drill can pass.
+# workspace/ is gitignored, so `git clean -fdX` removes the marker -- the gate
+# then disarms for one deploy, which fails OPEN rather than locking the host.
+DEPLOYED_MARKER="workspace/.deploy-completed"
+if [ -f "${DEPLOYED_MARKER}" ]; then
   log "restore-drill preflight (SM-5)"
   NODE_ENV="${NODE_ENV:-production}" node scripts/check-restore-drill.mjs
 else
-  log "FIRST DEPLOY ON THIS HOST (no gml-lms-app:current image): the SM-5 restore-drill gate is not armed yet -- nothing can have been backed up."
+  log "FIRST DEPLOY ON THIS HOST (no ${DEPLOYED_MARKER}): the SM-5 restore-drill gate is not armed yet -- nothing can have been backed up."
   log "  Before the NEXT deploy run:  bash scripts/backup.sh && bash scripts/restore.sh   (README-deploy.md section 7)."
   log "  From then on a deploy is refused without a passing drill less than 30 days old."
 fi
@@ -330,6 +344,13 @@ docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
 # ── 5. Verify ────────────────────────────────────────────────────────────────
 log "verifying auth configuration"
 docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+
+# Seed and verify-auth have both succeeded: this host now holds data a backup
+# can capture and a restore drill can check, so from the next deploy on the
+# SM-5 gate is armed. Written HERE and nowhere earlier -- see the gate above.
+mkdir -p workspace
+date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOYED_MARKER}"
+log "marked this host as deployed (${DEPLOYED_MARKER}); the next deploy requires a passing restore drill"
 
 # ── 6. Smoke ─────────────────────────────────────────────────────────────────
 # Drives the deployment that was just made, over real HTTP, through Caddy. It
