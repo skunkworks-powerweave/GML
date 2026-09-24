@@ -9,7 +9,7 @@
 //   • teacher:         my uploads (7d), my cycles pending pre-form, my
 //                      cycles awaiting video, open quizzes.
 //   • observer:        cycles I am leading (active), pending observer forms
-//                      I owe, cycles awaiting my sign-off.
+//                      I owe, my cycles awaiting the mentor's sign-off.
 //   • mentor:          my active mentees, my pending video reviews (teach_back
 //                      videos that are ready and unreviewed, on my pairings --
 //                      lib/video/pending-review.ts), my scheduled meetings
@@ -244,8 +244,8 @@ const getObserverChrome = cache(async (userId: string) => {
           eq(observationCycles.status, "pre_submitted"),
         ),
       ),
-    // Cycles awaiting sign-off — post-form submitted, observer / mentor
-    // sign-off pending. Mapped to status 'post_submitted'.
+    // Cycles awaiting sign-off — post-form submitted, the MENTOR's sign-off
+    // pending (observers cannot sign off). Mapped to status 'post_submitted'.
     db
       .select({ c: count() })
       .from(observationCycles)
@@ -507,12 +507,12 @@ async function getObserverTodos(userId: string): Promise<TodoRow[]> {
       href: "/observation",
     });
   }
-  if (chrome.awaitingSignOff > 0) {
-    todos.push({
-      text: `Sign off ${chrome.awaitingSignOff} completed cycle${chrome.awaitingSignOff === 1 ? "" : "s"}`,
-      href: "/observation",
-    });
-  }
+  // NO SIGN-OFF ROW. This list used to offer "Sign off N completed cycles" for
+  // the observer's post_submitted cycles. Sign-off is mentor/admin only
+  // (signOffCycleAction's requireRole; the cycle page shows an observer no such
+  // control), and a post_submitted cycle is not complete -- so the observer
+  // followed the link to find nothing to press, on a to-do they could never
+  // clear. The count stays on the stat card, as information.
   return todos;
 }
 
@@ -572,7 +572,7 @@ export default async function DashboardPage() {
     stats = [
       { label: "Cycles I am leading (active)", value: chrome.leadingActive, hint: "assigned to me" },
       { label: "Pending observer forms", value: chrome.pendingObserverForm, hint: "I owe" },
-      { label: "Cycles awaiting sign-off", value: chrome.awaitingSignOff, hint: "post-form in" },
+      { label: "Cycles awaiting sign-off", value: chrome.awaitingSignOff, hint: "post-form in · mentor signs off" },
     ];
     todos = await getObserverTodos(session.user.id);
   } else {
