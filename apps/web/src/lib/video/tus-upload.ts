@@ -79,12 +79,14 @@ export async function startResumableUpload(
   const upload: Upload = new tus.Upload(opts.file, {
     endpoint: `${supabaseUrl}/storage/v1/upload/resumable`,
     retryDelays: [0, 3000, 5000, 10000, 20000],
-    headers: {
-      authorization: `Bearer ${token}`,
-      // Supabase requires this on the resumable endpoint even when the
-      // Authorization header is present.
-      "x-upsert": "true",
-    },
+    // No `x-upsert`. It asks Storage to overwrite an existing object, and there
+    // never is one: the key is new for every reservation. It is also refused.
+    // An upsert has to read the existing row, and _post/005 grants
+    // `authenticated` INSERT/UPDATE/DELETE under its own prefix but deliberately
+    // no SELECT. With the header, every teacher's upload came back 403 "new row
+    // violates row-level security policy"; without it, 201. Both were checked
+    // against a local Supabase stack with the same token and key.
+    headers: { authorization: `Bearer ${token}` },
     uploadDataDuringCreation: true,
     // The object key is server-issued and prefixed with the uploader's uuid.
     // Even if this were tampered with, the RLS policy on storage.objects
@@ -97,30 +99,75 @@ export async function startResumableUpload(
       cacheControl: "3600",
     },
     chunkSize: opts.chunkBytes,
-    onError: (err) => opts.onError(friendlyError(err)),
+    // A finished upload's resume entry would otherwise match the next upload
+    // of the same file (see the resume filter below).
+    removeFingerprintOnSuccess: true,
+    onError: (err) => opts.onError(uploadErrorMessage(err)),
     onProgress: (uploaded, total) => opts.onProgress(uploaded, total),
     onSuccess: () => opts.onSuccess(),
   });
 
-  // Resume a previous attempt for the same file if one is still pending. This
+  // Resume a previous attempt at THIS reservation if one is still pending. This
   // is the point of using tus on a Ladakh connection: a dropped link mid-upload
   // continues rather than restarting a 300 MB transfer.
-  const previous = await upload.findPreviousUploads();
+  //
+  // tus finds previous uploads by the file's fingerprint (name, type, size,
+  // modified time), so an upload of the same file to an EARLIER reservation
+  // matches too -- and that upload is bound to the earlier key. Resuming it
+  // sent the bytes there (or, if it had finished, "succeeded" without sending
+  // anything), and this reservation's completion check reported the file
+  // missing on every retry. beginUpload hands back the same reservation for a
+  // file picked again, so a genuine resume still matches on the key.
+  const previous = (await upload.findPreviousUploads()).filter(
+    (p) => p.metadata?.objectName === opts.objectKey,
+  );
   if (previous.length > 0) upload.resumeFromPreviousUpload(previous[0]!);
 
   upload.start();
   return { abort: () => void upload.abort(true).catch(() => undefined) };
 }
 
-function friendlyError(err: Error | unknown): string {
-  const text = String(err);
-  if (/413|too large|exceeded/i.test(text)) {
+type TusFailure = {
+  originalRequest?: unknown;
+  originalResponse?: { getStatus(): number; getBody(): string } | null;
+};
+
+/**
+ * What to tell the teacher when an upload fails.
+ *
+ * Classified from the RESPONSE tus carries, never from the error's text. The
+ * text embeds the upload URL, whose id is base64, so a regex over it could read
+ * "413" or "401" out of the id and call a dropped link "too large" or "session
+ * expired".
+ *
+ *   no response at all      the link dropped. A browser XHR that fails at the
+ *                           network level hands tus a bare ProgressEvent, so
+ *                           this used to fall through to "Upload failed" and
+ *                           the teacher was never told the upload can resume.
+ *   RLS refusal (HTTP 403)  a deployment fault, not the teacher's session.
+ *   bad/expired token       Storage answers HTTP 400 with "Unauthorized" in the
+ *                           body. The old `/401|403|jwt|token/` over the text
+ *                           matched the refusal too, and signing in again only
+ *                           produced a fresh token refused the same way.
+ */
+export function uploadErrorMessage(err: unknown): string {
+  const failure = (typeof err === "object" && err !== null ? err : {}) as TusFailure;
+  const res = failure.originalResponse ?? null;
+  if (failure.originalRequest != null && res === null) {
+    return "The connection dropped. Reconnect and choose the same file to resume.";
+  }
+  const status = res ? res.getStatus() : 0;
+  const body = res ? res.getBody() || "" : String(err);
+  if (status === 413 || /too large|exceeded/i.test(body)) {
     return "That file is too large. Send it over WhatsApp instead.";
   }
-  if (/401|403|jwt|token/i.test(text)) {
+  if (/row-level security|violates .*policy/i.test(body)) {
+    return "The server refused this upload. Send the video over WhatsApp for now, and tell your programme admin.";
+  }
+  if (status === 401 || /jwt|jws|signature verification|unauthorized/i.test(body)) {
     return "Your session expired during the upload. Sign in again and retry.";
   }
-  if (/network|failed to fetch|econn/i.test(text)) {
+  if (!res && /network|failed to fetch|econn|socket hang up/i.test(body)) {
     return "The connection dropped. Reconnect and choose the same file to resume.";
   }
   return "Upload failed. Please try again, or send the video over WhatsApp.";

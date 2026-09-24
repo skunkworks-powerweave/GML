@@ -1,0 +1,157 @@
+// Finishing a direct upload: the one place that turns "the bytes are in
+// Storage" into a queued transcode.
+//
+// Two callers reach this point. The browser's completion call
+// (apps/web/src/lib/video/upload.ts, completeUpload) is the normal path; the
+// worker's reconciler (apps/worker/src/reconcile-uploads.ts) is the backstop
+// for a completion call that never arrived -- a tab closed after the last
+// chunk, a phone that lost coverage on the way home. They used to carry
+// separate copies of this transition, and the reconciler's copy never wrote the
+// observation_evidence row. So a lesson video whose completion call was lost
+// transcoded and played, and never appeared on the cycle page -- the one place
+// the observer looks for it.
+//
+// The transition is one transaction that first CLAIMS the submission with a
+// conditional UPDATE. The browser and the reconciler can therefore race
+// without double-inserting evidence or queueing two transcodes: whichever
+// commits first moves the row on, and the other claims nothing.
+
+import { and, eq, or, sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { files, observationEvidence, videoSubmissions } from "./schema";
+import { enqueue } from "./queue";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyDb = NodePgDatabase<any>;
+
+/**
+ * How long a reservation whose bytes are complete waits for the browser's own
+ * completion call before the reconciler finishes it instead. The browser's call
+ * carries the uploader's caption, which the reconciler cannot know.
+ */
+export const UPLOAD_COMPLETE_GRACE_MINUTES = 10;
+
+/**
+ * How long a reservation stays open for its bytes.
+ *
+ * This used to be 30 minutes, after which the reconciler failed any upload
+ * whose object was not yet in Storage. A resumable object only appears when the
+ * LAST byte lands, so every upload that took longer than 30 minutes was failed
+ * while it was still transferring. The programme's default cap is 500 MB, and
+ * at the ~20 KB/s a 2G link sustains that is about seven hours. A day covers it
+ * with room for a teacher who picks the file again the next morning:
+ * beginUpload hands the same reservation back for the same file inside this
+ * window, and tus carries on from where it stopped.
+ *
+ * The cost of waiting is only that an abandoned reservation reads "uploading"
+ * for up to a day before it is marked failed.
+ */
+export const UPLOAD_ABANDON_AFTER_HOURS = 24;
+
+/** Storage reports what it holds; allow 1% below what the browser declared. */
+export function isCompleteSize(storedBytes: number, expectedBytes: number | null): boolean {
+  return expectedBytes == null || storedBytes >= Math.floor(expectedBytes * 0.99);
+}
+
+export type ReconcileDecision = "complete" | "fail" | "wait";
+
+/**
+ * What the reconciler should do with a reservation that is still waiting.
+ *
+ * `storedBytes` is null when Storage has no object at the key. An upload in
+ * flight looks exactly like an abandoned one until the abandonment window has
+ * passed, so the absence of bytes is never, on its own, a reason to fail.
+ */
+export function reconcileDecision(input: {
+  ageSeconds: number;
+  storedBytes: number | null;
+  expectedBytes: number | null;
+}): ReconcileDecision {
+  if (input.storedBytes !== null && isCompleteSize(input.storedBytes, input.expectedBytes)) {
+    return input.ageSeconds >= UPLOAD_COMPLETE_GRACE_MINUTES * 60 ? "complete" : "wait";
+  }
+  return input.ageSeconds >= UPLOAD_ABANDON_AFTER_HOURS * 3600 ? "fail" : "wait";
+}
+
+export type FinalizeUploadInput = {
+  submissionId: string;
+  fileId: string;
+  bucket: string;
+  objectKey: string;
+  /** What Storage actually holds, not what the browser claimed. */
+  storedBytes: number;
+  contextType: string;
+  contextId: string | null;
+  /** The uploader's note for the evidence row, when the browser sent one. */
+  caption?: string | null;
+};
+
+/**
+ * Move a verified upload to 'queued', link it to its observation cycle, and
+ * queue the transcode -- atomically.
+ *
+ * Claims only a submission that is still waiting for its bytes ('received'),
+ * or one the reconciler gave up on ('failed' with its FILE also 'failed', which
+ * only the reconciler writes). A submission the transcoder failed keeps its
+ * file 'stored', so it is not revived by a late completion call.
+ *
+ * Returns `finalized: false` when there was nothing to claim, i.e. another
+ * caller finished it first.
+ */
+export async function finalizeUpload(db: AnyDb, u: FinalizeUploadInput): Promise<{ finalized: boolean }> {
+  return db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(videoSubmissions)
+      .set({
+        status: "queued",
+        processingLog: sql`CASE WHEN ${videoSubmissions.status} = 'failed'
+          THEN 'upload arrived after it was reconciled as abandoned; resumed ' || now()::text
+          ELSE ${videoSubmissions.processingLog} END`,
+      })
+      .where(
+        and(
+          eq(videoSubmissions.id, u.submissionId),
+          or(
+            eq(videoSubmissions.status, "received"),
+            and(
+              eq(videoSubmissions.status, "failed"),
+              sql`EXISTS (SELECT 1 FROM ${files} WHERE ${files.id} = ${videoSubmissions.fileId} AND ${files.status} = 'failed')`,
+            ),
+          ),
+        ),
+      )
+      .returning({ id: videoSubmissions.id });
+    if (claimed.length === 0) return { finalized: false };
+
+    await tx.update(files).set({ status: "stored", sizeBytes: u.storedBytes }).where(eq(files.id, u.fileId));
+
+    // LINK THE VIDEO TO THE CYCLE'S EVIDENCE PANEL. Written here, when the
+    // bytes are known to exist, so an abandoned upload never leaves a row
+    // promising evidence that was never delivered. The claim above is what
+    // keeps this from double-inserting.
+    if (u.contextType === "observation_cycle" && u.contextId) {
+      const caption = u.caption?.trim() ? u.caption.trim().slice(0, 500) : null;
+      await tx.insert(observationEvidence).values({
+        cycleId: u.contextId,
+        videoSubmissionId: u.submissionId,
+        caption,
+      });
+    }
+
+    // Same dedupe key as every other producer (apps/web/src/lib/queue.ts), so
+    // a completion that also reaches the webhook or Retry paths cannot queue a
+    // second live job for this submission.
+    await enqueue(tx as unknown as AnyDb, {
+      queue: "transcode",
+      name: "transcode",
+      payload: {
+        videoSubmissionId: u.submissionId,
+        fileId: u.fileId,
+        bucket: u.bucket,
+        objectKey: u.objectKey,
+      },
+      dedupeKey: `submission:${u.submissionId}`,
+    });
+    return { finalized: true };
+  });
+}

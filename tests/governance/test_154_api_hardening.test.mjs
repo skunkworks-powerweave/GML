@@ -170,10 +170,19 @@ test("spec 154 — the upload entry point that replaced it authenticates AND aut
   // finished, having uploaded nothing, would otherwise push an empty object
   // into the pipeline where it fails in the worker and reads as a transcoding
   // bug rather than an upload that never happened.
+  //
+  // The comparison moved into isCompleteSize (packages/db/src/uploads.ts) when
+  // the browser's completion and the reconciler were made to share one
+  // finalizer; tests/behaviour/upload-lifecycle.test.ts executes it.
   assert.match(
     read(UPLOAD_LIB_PATH),
-    /stat\.size\s*<\s*Math\.floor\(row\.expectedBytes\s*\*\s*0\.99\)/,
-    "completeUpload must compare the stored object against the reserved size",
+    /if\s*\(!isCompleteSize\(stat\.size,\s*row\.expectedBytes\)\)\s*\{\s*return\s*\{\s*ok:\s*false/,
+    "completeUpload must refuse a stored object smaller than the reserved size",
+  );
+  assert.match(
+    read("packages/db/src/uploads.ts"),
+    /storedBytes\s*>=\s*Math\.floor\(expectedBytes\s*\*\s*0\.99\)/,
+    "the size check must compare what Storage holds against what was reserved",
   );
 });
 

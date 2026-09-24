@@ -34,9 +34,10 @@ import "server-only";
 // that claims to have finished having uploaded nothing.
 
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { files, observationEvidence, videoSubmissions } from "@gml/db/schema";
+import { files, videoSubmissions } from "@gml/db/schema";
+import { finalizeUpload, isCompleteSize, UPLOAD_ABANDON_AFTER_HOURS } from "@gml/db/uploads";
 import { BUCKETS, uploadKey } from "@gml/shared/storage/buckets";
 import { storage } from "@/lib/video/storage";
 import { getSystemSettings } from "@/lib/system-settings";
@@ -96,6 +97,8 @@ export type BeginUploadResult = {
   bucket: string;
   objectKey: string;
   chunkBytes: number;
+  /** True when this is an earlier, unfinished reservation for the same file. */
+  resumed: boolean;
 };
 
 /**
@@ -134,6 +137,51 @@ export async function beginUpload(opts: {
     };
   }
 
+  // CONTINUE AN UNFINISHED RESERVATION FOR THE SAME FILE.
+  //
+  // tus resumes a previous upload of the same file from the browser's own
+  // storage, and that upload is bound to the object key it was created for.
+  // Issuing a fresh key every time meant that picking the same file again --
+  // which is exactly what the tray tells a teacher to do after a dropped
+  // connection -- sent the bytes to the abandoned reservation's key while the
+  // new reservation waited for an object that never came. Handing back the
+  // same reservation is what lets the transfer actually resume.
+  //
+  // Matched on everything the browser knows about the file plus the context it
+  // is for, and only while the reservation is still waiting for its bytes and
+  // inside the window the reconciler leaves it open (packages/db/src/uploads.ts).
+  const filename = opts.filename.slice(0, 255);
+  const contextId = opts.contextId ?? null;
+  const [unfinished] = await db
+    .select({ submissionId: videoSubmissions.id, objectKey: files.objectKey })
+    .from(videoSubmissions)
+    .innerJoin(files, eq(files.id, videoSubmissions.fileId))
+    .where(
+      and(
+        eq(videoSubmissions.submittedByUserId, opts.userId),
+        eq(videoSubmissions.source, "direct"),
+        eq(videoSubmissions.status, "received"),
+        eq(videoSubmissions.contextType, opts.contextType),
+        contextId ? eq(videoSubmissions.contextId, contextId) : isNull(videoSubmissions.contextId),
+        eq(files.status, "uploading"),
+        eq(files.originalFilename, filename),
+        eq(files.sizeBytes, opts.sizeBytes),
+        eq(files.mimeType, contentType),
+        sql`${videoSubmissions.createdAt} > now() - make_interval(hours => ${UPLOAD_ABANDON_AFTER_HOURS})`,
+      ),
+    )
+    .orderBy(desc(videoSubmissions.createdAt))
+    .limit(1);
+  if (unfinished) {
+    return {
+      submissionId: unfinished.submissionId,
+      bucket: BUCKETS.videosOriginal,
+      objectKey: unfinished.objectKey,
+      chunkBytes: UPLOAD_CHUNK_BYTES,
+      resumed: true,
+    };
+  }
+
   const uploadId = randomUUID();
   const objectKey = uploadKey(opts.userId, uploadId, extensionFor(opts.filename, contentType));
 
@@ -150,7 +198,7 @@ export async function beginUpload(opts: {
       status: "uploading",
       sizeBytes: opts.sizeBytes,
       ownerUserId: opts.userId,
-      originalFilename: opts.filename.slice(0, 255),
+      originalFilename: filename,
     })
     .returning({ id: files.id });
 
@@ -161,7 +209,7 @@ export async function beginUpload(opts: {
       source: "direct",
       status: "received",
       contextType: opts.contextType,
-      contextId: opts.contextId ?? null,
+      contextId,
       // THE COLUMN THAT HAD NO WRITERS. `submitted_by_user_id` was declared,
       // indexed, read by lib/authz.ts, by the "My uploads" filter and by three
       // dashboard counts -- and written by nothing, anywhere. So the ownership
@@ -176,6 +224,7 @@ export async function beginUpload(opts: {
     bucket: BUCKETS.videosOriginal,
     objectKey,
     chunkBytes: UPLOAD_CHUNK_BYTES,
+    resumed: false,
   };
 }
 
@@ -195,6 +244,15 @@ export type CompleteUploadResult =
  * Idempotent: a submission already past 'received' returns ok without
  * re-enqueueing, because the browser retries this call on a flaky connection
  * and a double enqueue would transcode the same video twice.
+ *
+ * With ONE exception. A reservation the reconciler gave up on (submission and
+ * file both 'failed') used to return ok here too, so the teacher was told the
+ * upload had worked while the submission never left 'failed'. Now its bytes are
+ * checked like any other: present, and it goes on to transcode; absent, and the
+ * teacher is told it is missing.
+ *
+ * The transition itself is finalizeUpload (packages/db/src/uploads.ts), shared
+ * with the reconciler so the two cannot drift again.
  */
 export async function completeUpload(opts: {
   submissionId: string;
@@ -202,7 +260,8 @@ export async function completeUpload(opts: {
   isAdmin: boolean;
   /** Free-text note from the uploader, stored on the evidence row. */
   caption?: string | null;
-  enqueue: (input: { videoSubmissionId: string; fileId: string; bucket: string; objectKey: string }) => Promise<void>;
+  /** What Storage holds at a key. Defaults to the service-role client. */
+  stat?: (bucket: string, key: string) => Promise<{ size: number } | null>;
 }): Promise<CompleteUploadResult> {
   const [row] = await db
     .select({
@@ -230,68 +289,33 @@ export async function completeUpload(opts: {
     return { ok: false, error: "not_found", status: 404 };
   }
 
-  if (row.status !== "received") {
+  const reconciledAway = row.status === "failed" && row.fileStatus === "failed";
+  if (row.status !== "received" && !reconciledAway) {
     return { ok: true, submissionId: row.id };
   }
 
-  const stat = await storage.stat(BUCKETS.videosOriginal, row.objectKey);
+  const stat = opts.stat
+    ? await opts.stat(BUCKETS.videosOriginal, row.objectKey)
+    : await storage.stat(BUCKETS.videosOriginal, row.objectKey);
   if (!stat) {
     return { ok: false, error: "object_missing", status: 409 };
   }
   // Allow the object to be no SMALLER than declared minus a tolerance, and
   // reject a wildly different size. Storage reports the bytes it actually
   // holds, so a truncated upload is caught here rather than in ffmpeg.
-  if (row.expectedBytes != null && stat.size < Math.floor(row.expectedBytes * 0.99)) {
+  if (!isCompleteSize(stat.size, row.expectedBytes)) {
     return { ok: false, error: "object_truncated", status: 409 };
   }
 
-  await db
-    .update(files)
-    .set({ status: "stored", sizeBytes: stat.size })
-    .where(eq(files.id, row.fileId));
-
-  await db
-    .update(videoSubmissions)
-    .set({ status: "queued" })
-    .where(eq(videoSubmissions.id, row.id));
-
-  // LINK THE VIDEO TO THE CYCLE'S EVIDENCE PANEL.
-  //
-  // observation_evidence had exactly one reader -- the Evidence card on
-  // /observation/[cycleId] -- and NO WRITER anywhere in the repository. So a
-  // teacher could record her lesson, upload it against her cycle, watch it
-  // transcode and appear in the video library, and the cycle page would still
-  // say there was no evidence. The one place the observer looks for the video
-  // was the one place it never appeared.
-  //
-  // Written here rather than at reservation time because this is the point at
-  // which the bytes are known to exist: an abandoned upload must not leave a
-  // row promising evidence that was never delivered.
-  //
-  // ON CONFLICT is not available -- there is no unique constraint -- so this
-  // checks first. completeUploadAction is idempotent by the status guard above
-  // (a second call returns early on status !== "received"), which is what keeps
-  // this from double-inserting in practice.
-  if (row.contextType === "observation_cycle" && row.contextId) {
-    const [already] = await db
-      .select({ id: observationEvidence.id })
-      .from(observationEvidence)
-      .where(eq(observationEvidence.videoSubmissionId, row.id))
-      .limit(1);
-    if (!already) {
-      await db.insert(observationEvidence).values({
-        cycleId: row.contextId,
-        videoSubmissionId: row.id,
-        caption: opts.caption?.trim() ? opts.caption.trim().slice(0, 500) : null,
-      });
-    }
-  }
-
-  await opts.enqueue({
-    videoSubmissionId: row.id,
+  await finalizeUpload(db, {
+    submissionId: row.id,
     fileId: row.fileId,
     bucket: row.bucket,
     objectKey: row.objectKey,
+    storedBytes: stat.size,
+    contextType: row.contextType,
+    contextId: row.contextId,
+    caption: opts.caption,
   });
 
   return { ok: true, submissionId: row.id };

@@ -12,7 +12,6 @@ import { actorFrom, assertCanAccessCycle, assertCanAccessPairing } from "@/lib/a
 import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { beginUpload, completeUpload, type UploadContextType } from "@/lib/video/upload";
-import { enqueueTranscode } from "@/lib/queue";
 import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
 
 const CONTEXT_TYPES: ReadonlySet<string> = new Set([
@@ -130,6 +129,8 @@ export async function beginUploadAction(input: {
       contextType,
       contextId,
       sizeBytes: input.sizeBytes,
+      // A picked-again file continues its earlier reservation (beginUpload).
+      resumed: result.resumed,
       // Filename only, never the object key: the key embeds the uploader's uuid
       // and the audit log is readable by every administrator.
       filename: input.filename.slice(0, 120),
@@ -168,7 +169,6 @@ export async function completeUploadAction(
     userId: session.user.id,
     isAdmin: hasAnyRole(session.user.role, ["programme_admin", "super_admin"]),
     caption,
-    enqueue: enqueueTranscode,
   });
 
   if (!result.ok) {

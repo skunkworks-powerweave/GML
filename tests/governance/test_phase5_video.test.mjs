@@ -169,11 +169,17 @@ test("uploads go direct to Storage, with no tusd proxy in the application", () =
   const actions = read("apps/web/src/app/(authenticated)/uploads/actions.ts");
   assert.match(actions, /export async function beginUploadAction/, "reservation half of the bracket");
   assert.match(actions, /export async function completeUploadAction/, "verification half of the bracket");
-  assert.match(
-    actions,
-    /enqueueTranscode/,
+  // The completion action no longer enqueues itself: completeUpload verifies
+  // the object, then hands it to finalizeUpload (packages/db/src/uploads.ts),
+  // which the reconciler shares and which queues the transcode.
+  assert.match(actions, /await completeUpload\(/, "the completion action must go through the verifying completeUpload");
+  const lib = read("apps/web/src/lib/video/upload.ts");
+  assert.ok(
+    lib.indexOf("isCompleteSize(stat.size") > -1 &&
+      lib.indexOf("isCompleteSize(stat.size") < lib.indexOf("await finalizeUpload("),
     "the transcode must be queued from the VERIFIED completion, not from the client's claim",
   );
+  assert.match(read("packages/db/src/uploads.ts"), /await enqueue\(tx/, "the finalizer queues the transcode in the same transaction");
 });
 
 // Spec 039 — worker entry

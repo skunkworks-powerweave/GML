@@ -30,6 +30,9 @@
 //                        time. The components only pass them through (a form
 //                        action, a badge formatter), so a stub changes nothing
 //                        the assertions look at.
+//   - @/lib/supabase/browser
+//                        reads the session from document.cookie; the upload
+//                        module only takes a bearer token from it.
 //
 // ── MECHANICS ────────────────────────────────────────────────────────────────
 //
@@ -76,6 +79,7 @@ const STUB_BY_APP_PATH: Array<[RegExp, string]> = [
   [/\/apps\/web\/src\/auth\.ts$/, "auth.ts"],
   [/\/apps\/web\/src\/app\/login\/(actions|email-actions)\.ts$/, "login-actions.ts"],
   [/\/apps\/web\/src\/lib\/chrome-counts\.ts$/, "chrome-counts.ts"],
+  [/\/apps\/web\/src\/lib\/supabase\/browser\.ts$/, "supabase-browser.ts"],
 ];
 
 registerHooks({
