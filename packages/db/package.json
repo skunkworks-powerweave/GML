@@ -11,7 +11,8 @@
     "./client": "./src/client.ts",
     "./scripts/retention": "./src/scripts/retention.ts",
     "./queue": "./src/queue.ts",
-    "./uploads": "./src/uploads.ts"
+    "./uploads": "./src/uploads.ts",
+    "./notify": "./src/notify.ts"
   },
   "scripts": {
     "generate": "drizzle-kit generate",
