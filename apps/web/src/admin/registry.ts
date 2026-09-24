@@ -17,6 +17,10 @@ import { mentorPairingsEntity } from "./entities/mentor-pairings";
 import { rttAttendanceEntity } from "./entities/rtt-attendance";
 import { rttSessionsEntity } from "./entities/rtt-sessions";
 import { rttSubjectsEntity } from "./entities/rtt-subjects";
+import { rttModulesEntity } from "./entities/rtt-modules";
+import { rttLessonsEntity } from "./entities/rtt-lessons";
+import { rttReadingsEntity } from "./entities/rtt-readings";
+import { observationCyclesEntity } from "./entities/observation-cycles";
 import { subjectsEntity } from "./entities/subjects";
 import { classesEntity } from "./entities/classes";
 import { courseOutlinesEntity } from "./entities/course-outlines";
@@ -35,6 +39,15 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   "rtt-attendance": rttAttendanceEntity,
   "rtt-sessions": rttSessionsEntity,
   "rtt-subjects": rttSubjectsEntity,
+  // The four below are registered because nothing else in the product writes
+  // their tables: /rtt/subject/[id] reads modules, lessons and readings, and
+  // /observation is fed entirely by observation_cycles, which only the demo
+  // seed ever inserted. Each entity file carries the full note; the proof is
+  // tests/behaviour/admin-entities.test.ts.
+  "rtt-modules": rttModulesEntity,
+  "rtt-lessons": rttLessonsEntity,
+  "rtt-readings": rttReadingsEntity,
+  "observation-cycles": observationCyclesEntity,
   subjects: subjectsEntity,
   classes: classesEntity,
   "course-outlines": courseOutlinesEntity,
