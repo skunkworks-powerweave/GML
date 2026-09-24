@@ -37,7 +37,24 @@ const STATUS_TABS = [
 
 type PairingStatus = "active" | "review" | "paused" | "ended" | "complete";
 
-type SearchParams = Promise<{ status?: string }>;
+type SearchParams = Promise<{ status?: string; page?: string }>;
+
+/**
+ * Cards per page. The list used to be one `.limit(80)` with no way past it,
+ * while the chips counted everything: at launch scale (about 500 paired
+ * teachers) an administrator saw "All 95" over 80 cards and could not reach
+ * the rest from the module's own list.
+ */
+const PAGE_SIZE = 50;
+
+/** /mentorship with this status and page; page 1 and "all" stay out of the URL. */
+function listHref(status: string, page: number): string {
+  const q = new URLSearchParams();
+  if (status !== "all") q.set("status", status);
+  if (page > 1) q.set("page", String(page));
+  const s = q.toString();
+  return s ? `/mentorship?${s}` : "/mentorship";
+}
 
 export default async function MentorshipListPage({
   searchParams,
@@ -46,6 +63,7 @@ export default async function MentorshipListPage({
 }) {
   const sp = await searchParams;
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
+  const page = Math.min(1000, Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1));
 
   // OWNERSHIP. The detail page refuses to show a teacher anyone else's
   // pairing (assertCanAccessPairing); this list was showing her all of them --
@@ -63,7 +81,7 @@ export default async function MentorshipListPage({
     conds.push(eq(mentorPairings.status, statusFilter as PairingStatus));
   }
 
-  const rows = await db
+  const rowsPlusOne = await db
     .select({
       id: mentorPairings.id,
       status: mentorPairings.status,
@@ -80,11 +98,18 @@ export default async function MentorshipListPage({
     .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
     .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
     .where(conds.length === 0 ? undefined : and(...conds))
-    .orderBy(desc(mentorPairings.startedAt))
-    .limit(80);
+    // id breaks ties: the seed gives every pairing the same started_at, and
+    // without a unique tail the pages would not be a partition -- a pairing
+    // could appear on two of them, or on none.
+    .orderBy(desc(mentorPairings.startedAt), desc(mentorPairings.id))
+    // One extra row says whether there is a next page without a second COUNT.
+    .limit(PAGE_SIZE + 1)
+    .offset((page - 1) * PAGE_SIZE);
+  const hasNext = rowsPlusOne.length > PAGE_SIZE;
+  const rows = rowsPlusOne.slice(0, PAGE_SIZE);
 
   // Per-status counts so the filter chips remain truthful regardless of
-  // the active filter. Cheap — pairing count is ≤ a few hundred.
+  // the active filter. One GROUP BY; it also gives the pager its total.
   //
   // Scoped by the same predicate as the rows: an unscoped GROUP BY would keep
   // publishing programme-wide pairing totals even once the rows were fixed.
@@ -99,6 +124,9 @@ export default async function MentorshipListPage({
   const totalPairings = statusCountRows.reduce((acc, r) => acc + r.n, 0);
   const statusCount = (v: string) =>
     v === "all" ? totalPairings : (statusCountRows.find((r) => r.status === v)?.n ?? 0);
+  const filteredTotal = statusCount(statusFilter);
+  const firstShown = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const lastShown = (page - 1) * PAGE_SIZE + rows.length;
 
   return (
     <div>
@@ -118,7 +146,8 @@ export default async function MentorshipListPage({
           <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>Status</span>
           {STATUS_TABS.map((f) => {
             const active = statusFilter === f.v;
-            const href = f.v === "all" ? "/mentorship" : `/mentorship?status=${f.v}`;
+            // A chip starts its filter at page 1.
+            const href = listHref(f.v, 1);
             return (
               <Link
                 key={f.v}
@@ -193,6 +222,27 @@ export default async function MentorshipListPage({
             })
           )}
         </section>
+
+        {filteredTotal > 0 ? (
+          <nav
+            aria-label="Pairing pages"
+            style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "var(--ink-3)" }}
+          >
+            <span data-testid="pairings-range">
+              Showing {firstShown}–{lastShown} of {filteredTotal}
+            </span>
+            {page > 1 ? (
+              <Link href={listHref(statusFilter, page - 1)} className="btn btn-sm" style={{ textDecoration: "none" }}>
+                ← Previous
+              </Link>
+            ) : null}
+            {hasNext ? (
+              <Link href={listHref(statusFilter, page + 1)} className="btn btn-sm" style={{ textDecoration: "none" }}>
+                Next →
+              </Link>
+            ) : null}
+          </nav>
+        ) : null}
       </div>
     </div>
   );
