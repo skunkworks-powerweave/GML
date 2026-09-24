@@ -43,11 +43,12 @@
 // changes the regex in pre-bash.mjs, this test changes with it.
 //
 // The template is also checked against the ANCHORED form
-// /^[ \t]*Review-Verdict:[ \t]*approved[ \t]*$/im, which is what the unanchored
-// regex should become (finding I6: `approved-with-nits`, `approvedNOT` and the
-// prose "do not write Review-Verdict:" + " approved yet" all match today).
-// Asserting both means this test keeps its meaning after that fix lands instead
-// of quietly becoming a tautology.
+// /^[ \t]*Review-Verdict:[ \t]*approved[ \t]*$/im. That anchoring HAS landed —
+// the live regex is now the same shape with a `\r?` before the `$`, so a CRLF
+// body still matches — and asserting both forms keeps this test from quietly
+// becoming a tautology against whatever the hook happens to say. The comment
+// that stood here described the anchoring as still to come, in the commit that
+// landed it; the assertions were right and the sentence was not.
 //
 // Nothing here mutates the repository: two files are read, and that is all.
 

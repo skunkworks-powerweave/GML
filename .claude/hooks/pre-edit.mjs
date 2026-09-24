@@ -17,6 +17,7 @@ import {
   PROJECT_DIR,
   allow,
   allowIfOverridden,
+  appendWorkspace,
   currentBranch,
   deny,
   git,
@@ -527,20 +528,49 @@ function invokedAsHook() {
   }
 }
 
-// A hook must never crash.
+// ── N4: THIS GATE FAILED OPEN, AND THE CATCH IS WHAT MADE IT ────────────────
 //
-// Checked in the installed CLI rather than assumed: exit 2 is the "blocking
-// error"; any OTHER non-zero exit is dispatched as `hook_non_blocking_error`
-// ("Failed with non-blocking status code: ..."), and the tool call proceeds. So
-// an uncaught throw does not block anything — it just turns this gate off
-// silently while dumping a stack trace on every edit, which is the state the
-// previous hooks were in for the life of the project. Catching it keeps the
-// failure legible and the message one line long.
+// What stood here caught every internal error, wrote one line to stderr and
+// called allow(). The comment above it argued that an uncaught throw "does not
+// block anything", so catching it only made the failure legible.
+//
+// That premise was wrong, and it is wrong in the direction that matters. This
+// hook is registered as
+//
+//     node "$CLAUDE_PROJECT_DIR"/.claude/hooks/pre-edit.mjs || exit 2
+//
+// so the SHELL turns any non-zero exit into 2. Measured, with a fault injected
+// into currentBranch(): the registered command line exits 2 with the catch
+// removed and exits 0 with it present. The catch was not making a
+// non-blocking failure legible — it was converting a blocking failure into a
+// silent allow, which meant that on any throw the .env rule, the drizzle
+// snapshot rule, no-edits-on-main, the gate-file rule and test-first were all
+// off at once and nothing said so.
+//
+// pre-bash.mjs reached the opposite conclusion in the same round (I4) and this
+// file kept the old behaviour, so the two halves of the same layer disagreed
+// about whether a broken gate is an open one. They agree now: an internal error
+// REFUSES, is recorded in workspace/gate-errors.log with the rest, and names
+// itself in the refusal so it is diagnosable without reading the log. The
+// override still works, so a bug here cannot brick a session — at the usual
+// price of a reason written down.
 if (invokedAsHook()) {
   try {
     main();
   } catch (err) {
-    process.stderr.write(`[pre-edit] gate skipped — internal error: ${err?.message ?? err}\n`);
-    allow();
+    appendWorkspace(
+      "gate-errors.log",
+      `${new Date().toISOString()}\tpre-edit\t${err?.stack?.split("\n")[0] ?? err}`,
+    );
+    allowIfOverridden("", "gate-internal-error");
+    deny(
+      `[pre-edit] Refused — the gate itself failed, so it could not judge this edit.\n` +
+        `  ${err?.stack?.split("\n")[0] ?? err}\n` +
+        `Recorded in workspace/gate-errors.log. This refuses rather than allowing ` +
+        `because every rule in this file is off while it is broken, and a gate that ` +
+        `is off without saying so is the defect this layer exists to remove.\n` +
+        `Way forward: fix the hook — or, if you need to move now, say why:\n` +
+        `  GML_GATE_SKIP='<why>'`,
+    );
   }
 }

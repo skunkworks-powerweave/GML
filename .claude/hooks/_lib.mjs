@@ -137,6 +137,30 @@ export function stagedPaths() {
  * would make every receipt stale the instant it was written. Untracked files are
  * covered because a new source file with no test is untracked right up until the
  * commit, and that is exactly what this is meant to catch.
+ *
+ * ── WHAT THIS FINGERPRINT DOES NOT SEE ──────────────────────────────────────
+ *
+ * Measured, not reasoned about. In each case the bytes on disk change and this
+ * hash does not, so a receipt keeps matching a tree it no longer describes:
+ *
+ *   • `git update-index --assume-unchanged <path>` and `--skip-worktree`. git
+ *     is told to stop looking at the file, so `git diff` reports nothing and
+ *     `git status` is clean while the source on disk says something else. The
+ *     content cannot reach a commit that way — which is the point of those
+ *     flags — but the SUITES run against the bytes on disk, and binding a green
+ *     receipt to the tree it was produced from is the one property this exists
+ *     to provide.
+ *   • Everything `.gitignore` covers, because `ls-files -o --exclude-standard`
+ *     excludes it by definition. That includes `.env`, which sets DATABASE_URL
+ *     and therefore decides the `noDb` field the commit gate keys on.
+ *   • A file removed by a sparse-checkout pattern: physically absent, hash
+ *     unchanged. Loud rather than silent — the suites fail — but unseen here.
+ *
+ * None of the three is closed by hashing harder; each needs a different question
+ * asked (`ls-files -v` for the assume-unchanged bits, an explicit list of
+ * ignored files that matter, `sparse-checkout list`). They are written down
+ * because the previous version of this docblock described the `workspace/`
+ * exclusion and stopped, which reads as a complete account and is not one.
  */
 export function treeHash() {
   const head = git(["rev-parse", "HEAD"]);

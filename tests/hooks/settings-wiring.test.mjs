@@ -263,16 +263,23 @@ test("CI job check names are plain ASCII ids branch protection can require", () 
   }
 });
 
-test("the behaviour job's Postgres major version matches production", () => {
+test("the behaviour job pins ONE Postgres major, and it is the newer one", () => {
   const jobs = workflowJobs(read(WORKFLOW));
   const body = jobs.get("behaviour")?.body.join("\n") ?? "";
-  // Same defect class as a backup client older than its server: the gate runs
-  // against a database that is not the one being deployed to, so anything the
-  // major version changed goes unobserved until production.
+  // This test was called "matches production" and its message said "production
+  // is Postgres 17". Nothing in this repository records the version Supabase
+  // runs — the claim was withdrawn from CLAUDE.md and the CI comment in the same
+  // round, and survived here, in the assertion message, where a withdrawn claim
+  // is load-bearing for anyone who reads a failure.
+  //
+  // What is left is a real invariant with an honest reason: the job must pin an
+  // exact major (not `postgres:alpine`, which moves under the suite), and 17 is
+  // the choice on record. If the deployment's version is ever read off Supabase
+  // and it is not 17, this test is where that lands.
   assert.match(
     body,
     /image:\s*postgres:17-alpine\b/,
-    "behaviour job must run postgres:17-alpine — production is Postgres 17, and testing against 16 proves nothing about 17",
+    "behaviour job must pin postgres:17-alpine; the major has to be explicit so the suite cannot silently change databases underneath itself",
   );
   assert.ok(
     !/postgres:16/.test(body),

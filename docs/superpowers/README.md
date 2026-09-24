@@ -26,7 +26,7 @@ against the repository, step by step. It was false for all six:
 | test-driven-development | per spec | 37 commits add a `tests/governance/*.test.mjs` file. All 37 also add or change code under `apps/` or `packages/` **in the same commit**. Zero test-only commits: no test in this project's history has ever existed before the code it tests. |
 | verification-before-completion | per spec | 264 task checkboxes are still unticked across the 132 `tasks.md` files (443 are ticked). No `spec.md` in the corpus contains a checkbox at all: the **26** is a count of `spec.md` headers declaring `Status: complete`, and one of those 26 folders (`specs/150-middleware-401-vs-403/`) still carries **3** unticked boxes in its `tasks.md`. |
 | requesting-code-review | per spec | No review is recorded anywhere in the repository. |
-| finishing-a-development-branch | per spec | Of **91** commits (`git rev-list --count HEAD`) exactly **one** has two parents (`git rev-list --count --merges HEAD`), and that merge is dated 2026-09-24. The history is otherwise a straight line onto the integration branch, and `.worktrees/` did not exist before that date. |
+| finishing-a-development-branch | per spec | Of the **91** commits up to `3a1eaaf` (`git rev-list --count 3a1eaaf`) exactly **one** has two parents (`--merges`), and that merge is dated 2026-09-24. Pinned to a ref because the same sentence has now gone stale twice by counting `HEAD`. The history is otherwise a straight line onto the integration branch, and `.worktrees/` did not exist before that date. |
 
 A discipline that is written down and enforced by nothing is not a discipline,
 it is a wish. The gates in `.claude/hooks/` exist so that the table above cannot
@@ -155,14 +155,21 @@ The PR body must carry a `Review-Verdict:` line whose value is the single word
 `approved`. The template ships that field reading `pending`; the reviewer is
 what changes it, and nothing else in the body should mention it.
 
-The hook is weaker than that sentence, and this file used to claim otherwise.
-`.claude/hooks/pre-bash.mjs` matches `/Review-Verdict:\s*approved/i` —
-**unanchored**, so a qualified verdict and even prose merely discussing the
-field satisfy it (finding I6, being anchored to
-`/^[ \t]*Review-Verdict:[ \t]*approved[ \t]*$/im`). Until that lands, the field
-is kept honest by the person filling it in rather than by the gate. The one
-thing now pinned is that the default template no longer approves itself:
-`tests/hooks/template-not-self-approving.test.mjs`.
+The gate enforces exactly that, on a LINE of its own:
+`.claude/hooks/pre-bash.mjs` matches
+`/^[ \t]*Review-Verdict:[ \t]*approved[ \t]*\r?$/im`. So
+`Review-Verdict: approved-with-nits`, `approved (conditional)` and a sentence of
+prose containing the words are all refused, and the value has to be the single
+word with nothing after it.
+
+This paragraph is the second one to stand here and the first one was false in
+both directions. It said the pattern was `/Review-Verdict:\s*approved/i`,
+**unanchored**, and that anchoring it was still to come — written in the commit
+that anchored it, and deleting the correct sentence about the line being its own
+in order to say so. Two things are pinned against a repeat:
+`tests/hooks/template-not-self-approving.test.mjs` extracts the LIVE pattern
+from the hook and asserts the unedited template does not satisfy it, and
+`tests/hooks/pre-bash.test.mjs` asserts the seven spellings above one by one.
 
 ### 8. Merge
 
@@ -231,12 +238,29 @@ them. All of it is narrower than the table above:
   `tests/behaviour/` or `apps/web/tests/behaviour/`. Every **other** source file
   is cleared by a touched test at any tier (measured: editing
   `apps/web/src/lib/report.ts` with only `tests/governance/` touched exits 0).
-- **Every rule above is overridable** with `GML_GATE_SKIP` — measured one by
-  one, each logging its own rule name: `commit-receipt` (for the missing, stale
-  and `noDb` cases alike), `test-with-code`, `security-surface-behaviour-test`
-  and `test-first`. The `pre-edit.mjs` rules are additionally cleared by a RED
-  receipt on the branch or a live `workspace/tdd-exempt.json` exemption. The
-  destructive-command scan and the merge verdict rule are the two with no hatch.
+- **Some rules are overridable with `GML_GATE_SKIP` and most are not.** This
+  bullet used to end "the destructive-command scan and the merge verdict rule
+  are the two with no hatch", which was wrong by eleven rules — and contradicted
+  `CLAUDE.md`'s own "Refuses, no override: writes to `.env`" in the same commit.
+  Every rule was then driven twice, once with the hatch unset and once set:
+
+  | Refuses either way — no hatch | Cleared by the hatch |
+  | --- | --- |
+  | `rm -rf`, destructive SQL, `docker volume rm` | a commit with no matching green receipt |
+  | a push whose refspec resolves to `main`; `--force`; `--all` | an edit to one of the gate files |
+  | a commit on `main`; a commit scoped outside this tree | an edit on `main`/`master` |
+  | `git worktree add` outside `.worktrees/` | the test-first nudge |
+  | `gh pr merge` or `gh api …/pulls/N/merge` with no verdict | |
+  | a write to `.env*` or a drizzle snapshot (`pre-edit.mjs`) | |
+  | a write to `.env*` through a shell — redirection, `tee`, `sed -i`, `mv`, `cp`, `dd`, `truncate` | |
+
+  `test-with-code` and `security-surface-behaviour-test` call
+  `denyOverridable`/`allowIfOverridden` in source and so belong in the right
+  column, but the probe cleared them by other means before reaching the hatch,
+  so they are listed on the code rather than on a measurement. Every override
+  logs its own rule name to `workspace/gate-overrides.log`. The `pre-edit.mjs`
+  rules are additionally cleared by a RED receipt on the branch or a live
+  `workspace/tdd-exempt.json` exemption.
 
 So: which tier the test belongs to, that it failed before the code, and that the
 mutation check was really performed are reviewer obligations, not gate
@@ -305,8 +329,11 @@ nothing, for two reasons and one proof:
   to `workspace/session_log.md` **unconditionally**, with no branch that could
   skip it. That file is 112 bytes — its header and nothing else — and its last
   modification time is the moment it was created, 2026-09-18 12:57. **53**
-  commits have landed since — `git rev-list --count --since='2026-09-18 12:57'
-  HEAD`. A hook that ran even once would have left a line.
+  commits had landed in that window as of `3a1eaaf`, the commit that replaced
+  those hooks — `git rev-list --count --since='2026-09-18 12:57' 3a1eaaf`. The
+  ref matters: counted against `HEAD` this number goes stale on the next commit,
+  which it did, twice, inside the pull request that wrote it. A hook that ran
+  even once would have left a line.
   (The six old scripts were deleted on this branch; they are in git history.)
 
 The current hooks defend against this directly: `_lib.mjs` derives the project

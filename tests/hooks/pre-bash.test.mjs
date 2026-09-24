@@ -186,6 +186,73 @@ function receipt(overrides = {}) {
   };
 }
 
+// ─── rule 0: .env, written through a shell ───────────────────────────────────
+//
+// pre-edit.mjs has refused an Edit or Write to `.env` since it was written, and
+// its refusal has no override. The SHELL spellings of the same write were all
+// allowed — measured, eighteen of them — so the protection held for one tool and
+// not for the tool beside it. The project's standing rule is that `.env` is
+// never touched by the agent and never staged.
+
+test("0. a shell redirection into .env is refused", () => {
+  for (const command of [
+    "echo SECRET=1 > .env",
+    "echo SECRET=1 >> .env",
+    "echo x >.env",
+    'printf x > ".env"',
+    "node build.js 2> .env",
+    "pnpm build && echo x > .env",
+    "echo x > .env.production",
+    "echo x > .ENV",
+    "echo x > apps/../.env",
+  ]) {
+    assertBlocked(run(command), /protected file/i, /\.env/);
+  }
+});
+
+test("0. the NTFS spellings of .env are the same file here too", () => {
+  // `.env::$DATA` is the default data stream of `.env` — the same bytes under a
+  // different name. pre-edit.mjs normalises it; this rule has to agree, or the
+  // two halves of one protection disagree about what a file is.
+  assertBlocked(run("echo x > '.env::$DATA'"), /protected file/i);
+});
+
+test("0. the file-writing programs are refused too, in both sed spellings", () => {
+  for (const command of [
+    "echo x | tee .env",
+    "echo x | tee -a .env",
+    "sed -i s/a/b/ .env",
+    "sed --in-place s/a/b/ .env",
+    "mv tmp.txt .env",
+    "cp other.env .env",
+    "dd if=/dev/zero of=.env",
+    "truncate -s 0 .env",
+  ]) {
+    assertBlocked(run(command), /protected file/i);
+  }
+});
+
+test("0. reading .env is untouched, and .env.example stays writable", () => {
+  // A rule that blocked reads would be worked around within the hour, and
+  // .env.example is the committed, non-secret file the refusal points people at
+  // — refusing it would make the way forward contradict the rule.
+  for (const command of [
+    "cat .env",
+    "grep DATABASE_URL .env",
+    "source .env",
+    "echo X= > .env.example",
+    "echo X= > .env.EXAMPLE",
+    "cp .env.example /tmp/x",
+    "pnpm build > build.log",
+    "mv a.txt b.txt",
+    "sed -i s/a/b/ README.md",
+    "echo x | tee out.txt",
+    "echo 'see .env for details'",
+  ]) {
+    assertAllowed(run(command));
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. DESTRUCTIVE COMMANDS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,6 +375,130 @@ test("1. C4: -R is a documented synonym for -r, so rm -Rf is rm -rf", () => {
     "rm -R --force build",
   ]) {
     assertBlocked(run(command), /destructive/i);
+  }
+});
+
+// ─── N1 · N2 · N3: three more ways to spell a command the gate could not read ─
+//
+// Every one of these was ALLOWED by the commit that closed C1-C6, and every one
+// of them was verified against a real bash before being written down: the
+// continuation payloads really deleted a directory and really landed a commit on
+// main, and the `$'…'` payloads really ran rm.
+//
+// A single backslash is easy to lose — a heredoc in this session ate one level
+// of backslash four separate times — so the payloads are built from an explicit
+// BS constant rather than written as escapes inside escapes. A test whose
+// payload is not the payload it appears to be is worse than no test.
+const BS = String.fromCharCode(92);
+const NL = "\n";
+
+test("1. N1: a line continuation is not a command boundary", () => {
+  // `rm \<newline>-rf x` is ONE command in bash. segments() split on the newline
+  // and saw `rm` and `-rf x`, neither of which is a rule violation on its own.
+  for (const command of [
+    `rm ${BS}${NL}  -rf node_modules`,
+    `rm -rf ${BS}${NL} node_modules`,
+    `docker ${BS}${NL} volume prune`,
+    `docker compose ${BS}${NL} down -v`,
+    `git ${BS}${NL} reset --hard HEAD~1`,
+    // three backslashes: odd, so the last one still eats the newline
+    `rm ${BS}${BS}${BS}${NL} -rf node_modules`,
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. N1: an EVEN run of backslashes leaves the newline a boundary", () => {
+  // `echo a\\` is an escaped backslash and then the command ENDS. Joining here
+  // would pull the next command into the first one's arguments and hide it —
+  // so the following rm must still be seen as its own command.
+  assertBlocked(run(`echo a${BS}${BS}${NL}rm -rf node_modules`), /destructive/i);
+  // ...and the same shape with a harmless second command must still pass, which
+  // is what proves the line above is not passing for the wrong reason.
+  assertAllowed(run(`echo a${BS}${BS}${NL}ls -la`));
+});
+
+test("1. N1: a continuation inside SQL is joined before the pattern runs", () => {
+  // `\s` does not match a backslash, so `DROP \<newline>TABLE` matched nothing
+  // — while bash removes the backslash-newline before psql sees the string.
+  assertBlocked(run(`psql -c "DROP ${BS}${NL} TABLE users"`), /DROP TABLE/i);
+});
+
+test("1. N1: an ordinary multi-line command still passes", () => {
+  // The rule must not turn every wrapped shell line into a refusal: this is how
+  // half the commands in this project's docs are written.
+  assertAllowed(run(`pnpm ${BS}${NL}  install --frozen-lockfile`));
+  assertAllowed(run(`docker run ${BS}${NL} --rm ${BS}${NL} gml-worker:ci ffmpeg -version`));
+});
+
+test("1. N2: ANSI-C quoting is the same program", () => {
+  // `$'rm'` is `rm`. The old unquote() took one character off each end, so it
+  // produced `$'rm` — the name of nothing, matching no rule.
+  for (const command of [
+    `$'rm' -rf node_modules`,
+    `$"rm" -rf node_modules`,
+    `$'${BS}x72m' -rf node_modules`, // \x72 is 'r'
+    `$'${BS}162m' -rf node_modules`, // octal 162 is 'r'
+    `$'${BS}u0072m' -rf node_modules`,
+    `$'docker' volume prune`,
+    `$'git' reset --hard`,
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. N2: a backslash inside a word is an escape, not a character", () => {
+  // `r\m` is `rm` in bash. The old path happened to get `\rm` right — the
+  // directory-prefix strip removed it by accident — and got `r\m` wrong.
+  for (const command of [
+    `r${BS}m -rf node_modules`,
+    `${BS}rm -rf node_modules`,
+    `'r'm -rf node_modules`,
+    `r'm' -rf node_modules`,
+    `r${BS}m${BS} -rf node_modules`,
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("1. N2: a quoted Windows path still resolves to its program", () => {
+  // The other direction of the same change. Inside double quotes a backslash is
+  // literal unless it precedes $ ` " \ or newline, so the separators survive and
+  // the basename is still the program — while the UNQUOTED spelling is not this
+  // program in a real shell either, and is not claimed to be.
+  assertBlocked(run(`"C:${BS}Users${BS}bin${BS}git.exe" reset --hard`), /destructive/i);
+  assertBlocked(run(`'C:${BS}Users${BS}bin${BS}rm.exe' -rf node_modules`), /destructive/i);
+});
+
+test("3. N3: a docker global flag does not move the command group", () => {
+  // pre-bash read argv[1] as the group, which is the I2 mistake that was fixed
+  // for `gh` and left standing for docker. `-H` and `--context` are the sharp
+  // ones: they aim the command at a DIFFERENT daemon.
+  for (const command of [
+    "docker -D volume prune",
+    "docker --debug volume prune",
+    "docker --context prod volume rm pgdata",
+    "docker --context=prod volume rm pgdata",
+    "docker -H tcp://10.0.0.1:2375 volume rm pgdata",
+    "docker --tls compose down -v",
+    "docker -l debug compose down --volumes",
+    "docker -D system prune -a --volumes",
+    "docker --config /tmp/cfg volume prune",
+  ]) {
+    assertBlocked(run(command), /destructive/i);
+  }
+});
+
+test("3. N3: docker's harmless commands still pass, flags or not", () => {
+  for (const command of [
+    "docker ps",
+    "docker -D ps",
+    "docker compose up -d",
+    "docker compose down",
+    "docker --context prod compose up -d",
+    "docker compose -f docker-compose.yml up -d --build",
+  ]) {
+    assertAllowed(run(command));
   }
 });
 
@@ -1053,6 +1244,48 @@ test("7. a verdict buried in prose does NOT approve a merge", () => {
   }
 });
 
+test("7. the Markdown a reviewer actually types DOES approve a merge", () => {
+  // The other half of the anchoring, and the half the first version got wrong.
+  // The Review section of the template is a bulleted list, so `- Review-Verdict:
+  // approved` is the natural thing to write — and it was refused, along with the
+  // bold spellings and a trailing full stop. A reviewer who writes the obvious
+  // form, is refused, and cannot see the hook's message retypes the line until
+  // something works; that is how a gate teaches people to route around it.
+  const dir = sandbox();
+  for (const body of [
+    "Review-Verdict: approved",
+    "- Review-Verdict: approved",
+    "* Review-Verdict: approved",
+    "**Review-Verdict:** approved",
+    "**Review-Verdict**: approved",
+    "Review-Verdict: approved.",
+    "## Review\n\n- Review-Verdict: approved\n\nnotes below",
+    "Review-Verdict: APPROVED",
+  ]) {
+    assertAllowed(run("gh pr merge 42 --squash", { cwd: dir, env: stubGh(dir, JSON.stringify({ body })) }));
+  }
+});
+
+test("7. widening the pattern did not reopen the prose and qualified cases", () => {
+  // Pinned separately from the test above so that a future widening cannot pass
+  // by breaking this: a blockquote is how one quotes SOMEONE ELSE'S text, and a
+  // qualified verdict is not an approval however it is punctuated.
+  const dir = sandbox();
+  for (const body of [
+    "> Review-Verdict: approved",
+    "`Review-Verdict: approved`",
+    "Review-Verdict: approved with caveats",
+    "Review-Verdict: approved (conditional)",
+    "Review-Verdict: not approved",
+    "ReviewVerdict: approved",
+  ]) {
+    assertBlocked(
+      run("gh pr merge 42 --squash", { cwd: dir, env: stubGh(dir, JSON.stringify({ body })) }),
+      /Review-Verdict/,
+    );
+  }
+});
+
 test("7. an unreachable gh is a refusal, not a free pass", () => {
   // The failure mode worth naming: a gate that treats "could not check" as
   // "fine" is off precisely when the tooling is broken.
@@ -1201,8 +1434,10 @@ test("9. malformed or empty payloads are allowed, and do not crash the gate", ()
   // logged it and fell through to allow(), so exit 0 was observed and this test
   // was green — while the gate had judged nothing at all. Twelve of those
   // TypeErrors sit in this worktree's workspace/gate-errors.log from one
-  // 33-minute session on 2026-09-23, and three more arrived while this fix was
-  // being written. Twelve Bash calls went through unexamined, silently.
+  // 33-minute session on 2026-09-23, and FOUR more arrived while this fix was
+  // being written: sixteen Bash calls went through unexamined, silently. This
+  // comment previously said "three more" in one sentence and "twelve" in the
+  // next, which is two wrong numbers about a file with 16 lines in it.
   //
   // The exit code alone cannot tell a clean allow from a crashed one, so the
   // ERROR LOG is asserted too: a run that judged the payload adds no line to it.

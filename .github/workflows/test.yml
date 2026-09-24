@@ -102,15 +102,25 @@ jobs:
     # production", which an earlier version of this comment claimed: nothing in
     # this repository records the major version Supabase runs. docker-compose.yml
     # declares migrate, app, worker and caddy and no postgres at all -- its own
-    # comment says Supabase IS the database -- and a grep for a Postgres major
-    # across the tree finds only this CI service, the 16.4 probe recorded in
-    # docs/verification.md, and scripts/backup.sh installing postgresql-client-16.
+    # comment says Supabase IS the database.
     #
-    # That last one is the sharpest evidence AGAINST the claim, not for it:
-    # pg_dump 16 refuses to dump a 17 server, so a production already on 17
-    # would mean nightly backups have never produced a file. Which major
-    # Supabase actually runs is an open question, and P4-07 of the remediation
-    # plan is where it gets answered and the backup client pinned to match.
+    # `git grep -nEi "postgres(ql)?[-:]?(client-)?1[5-9]"` finds nine places and
+    # not one of them is a reading of production: this CI service; the
+    # 16.4-alpine probe in docs/verification.md and the same probe cited in
+    # docs/substrate-moats.md; postgresql-client-16 in scripts/backup.sh, in
+    # scripts/preflight.sh (twice) and in README-deploy.md; and 16.4 / 16-alpine
+    # in two specs/*/research.md files. An earlier version of this comment listed
+    # three of the nine and said "only", while the CLAUDE.md passage making the
+    # same point was complete -- so the two disagreed inside one commit.
+    #
+    # The client pin is the sharpest evidence AGAINST 17, not for it: pg_dump 16
+    # refuses to dump a 17 server, so a production already on 17 would mean the
+    # nightly backups have never produced a file. Which major Supabase actually
+    # runs is an open question. Whoever reads it off the Supabase project records
+    # it in docs/verification.md and pins the backup client to match. There is no
+    # numbered remediation item for this: an earlier version of this comment
+    # cited "P4-07 of the remediation plan", and no such item exists in any file
+    # in this repository.
     #
     # 17 is chosen here as the newer of the two and the likelier target, and
     # the honest statement is that CI now exercises 17 while the deployment's

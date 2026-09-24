@@ -78,10 +78,12 @@ Test that failed as a result:
      does not satisfy it.
 
      A qualified verdict is not an approval. Nits, caveats or conditions mean
-     the field stays `pending` until they are resolved. Do not lean on the hook
-     to notice: its pattern is an unanchored substring match today, so a
-     qualified verdict would slip past it (finding I6, being anchored
-     separately). The field is yours to keep honest. -->
+     the field stays `pending` until they are resolved, and the hook agrees:
+     `approved-with-nits` and `approved (conditional)` are both refused, because
+     the pattern requires the single word `approved` on a line of its own. This
+     paragraph used to say the opposite — "an unanchored substring match today,
+     so a qualified verdict would slip past it" — in the commit that anchored it,
+     which told every reviewer the gate was weaker than it is. -->
 
 ```
 Review-Verdict: pending

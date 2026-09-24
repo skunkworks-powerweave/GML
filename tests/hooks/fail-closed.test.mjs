@@ -301,3 +301,120 @@ test("the Bash gate's timeout is bounded to something a session can absorb", () 
     `the PreToolUse Bash hook needs a timeout of 60s or less; found ${JSON.stringify(reg.timeout)}`,
   );
 });
+
+// ── N4: THE THIRD HALF-TEST OF THE SAME SHAPE ────────────────────────────────
+//
+// C2 was a registration and a file that disagreed, and the fix added the
+// executed pair test above — for Stop, and only for Stop. pre-edit.mjs had the
+// matching defect and nothing looked: it caught every internal error, wrote one
+// line to stderr and called allow(), while its registration ends in
+// `|| exit 2` and its own comment argued that "an uncaught throw does not block
+// anything". Measured with a fault injected into the shared library:
+//
+//   node pre-bash.mjs                     -> exit 2, logged     (I4, correct)
+//   node pre-edit.mjs                     -> exit 0, nothing logged
+//   node pre-edit.mjs || exit 2           -> exit 0
+//   node pre-edit.mjs || exit 2, catch removed -> exit 2
+//
+// The last line is what settles it: the catch was not making a non-blocking
+// failure legible, it was converting a BLOCKING failure into a silent allow. So
+// on any throw, .env protection, the drizzle snapshot rule, no-edits-on-main,
+// the gate-file rule and test-first were all off at once.
+//
+// This test is deliberately generic over every PreToolUse registration rather
+// than naming pre-edit, because the defect has now appeared three times in three
+// files and the next one should fail here before it is written.
+
+/** The payload each matcher understands, chosen to reach real work. */
+function payloadFor(matcher, dir) {
+  if (matcher === "Bash") {
+    return { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git commit -m x" } };
+  }
+  return {
+    hook_event_name: "PreToolUse",
+    tool_name: "Write",
+    tool_input: { file_path: join(dir, "apps", "web", "src", "lib", "authz.ts"), content: "x" },
+  };
+}
+
+test("a blocking hook that THROWS refuses, through its registered command shape", () => {
+  const blocking = registrations().filter((r) => BLOCKING_EVENTS.has(r.event));
+  assert.ok(blocking.length >= 2, `expected PreToolUse registrations, found ${blocking.length}`);
+
+  for (const reg of blocking) {
+    const file = fileOf(reg);
+    // The fault goes into readInput(), which every hook calls before it does
+    // anything else — so this does not depend on which rule a payload reaches.
+    const lib = readFileSync(resolve(HOOK_SRC, "_lib.mjs"), "utf8");
+    const marker = "export function readInput() {";
+    assert.ok(lib.includes(marker), "readInput() must exist in _lib.mjs for this test to inject a fault");
+    const dir = hookSandbox({
+      ".claude/hooks/_lib.mjs": lib.replace(
+        marker,
+        `${marker}\n  throw new TypeError("injected fault: ${file}");`,
+      ),
+      "apps/web/src/lib/authz.ts": "export const authz = 1;\n",
+    });
+
+    const r = spawnSync("bash", ["-c", reg.command], {
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir, GML_GATE_SKIP: "" },
+      input: JSON.stringify(payloadFor(reg.matcher, dir)),
+    });
+
+    assert.equal(
+      r.status,
+      2,
+      `${file} threw internally and its registered command shape returned exit ${r.status}. ` +
+        `A PreToolUse that does not exit 2 has ALLOWED the call, so every rule in ${file} was ` +
+        `off and nothing said so. Either let the throw reach the shell's \`|| exit 2\`, or catch ` +
+        `it and deny() — not catch it and allow().\nregistration: ${reg.command}\nstderr:\n${r.stderr}`,
+    );
+
+    assert.ok(
+      (r.stderr ?? "").trim().length > 0,
+      `${file} refused silently on an internal error; the refusal has to name the error or the ` +
+        `bug is undiagnosable from the session`,
+    );
+
+    // The error must also be RECORDED, because the 12 crashes that started this
+    // were only ever found by reading that file.
+    const log = join(dir, "workspace", "gate-errors.log");
+    assert.ok(
+      readFileSync(log, "utf8").includes("injected fault"),
+      `${file} must record its internal error in workspace/gate-errors.log`,
+    );
+  }
+});
+
+test("an internal error is still overridable, and the override is recorded", () => {
+  // The cost of fail-closed is bounded by the hatch: a bug in a gate must not be
+  // able to brick a session outright. Same injected fault, GML_GATE_SKIP set.
+  const reg = registrations().find((r) => r.event === "PreToolUse" && r.matcher !== "Bash");
+  assert.ok(reg, "there must be a non-Bash PreToolUse registration");
+
+  const lib = readFileSync(resolve(HOOK_SRC, "_lib.mjs"), "utf8");
+  const dir = hookSandbox({
+    ".claude/hooks/_lib.mjs": lib.replace(
+      "export function readInput() {",
+      'export function readInput() {\n  throw new TypeError("injected fault: hatch");',
+    ),
+  });
+
+  const r = spawnSync("bash", ["-c", reg.command], {
+    cwd: dir,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: dir, GML_GATE_SKIP: "gate is broken, filed as N4" },
+    input: JSON.stringify(payloadFor(reg.matcher, dir)),
+  });
+
+  assert.equal(r.status, 0, `the hatch must clear an internal error; got exit ${r.status}\n${r.stderr}`);
+  assert.match(
+    readFileSync(join(dir, "workspace", "gate-overrides.log"), "utf8"),
+    /gate-internal-error\tgate is broken, filed as N4/,
+    "taking the hatch has to leave a line naming the rule and the reason",
+  );
+});

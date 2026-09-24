@@ -48,7 +48,7 @@
 // instead of through a shell), because a gate that is wrong and offers nothing
 // gets disabled wholesale rather than satisfied.
 //
-// ── WHAT THIS STILL DOES NOT CATCH, AFTER C4/C5 ──────────────────────────────
+// ── WHAT THIS STILL DOES NOT CATCH, AFTER C4/C5 AND N1/N2/N3 ─────────────────
 //
 // Checked by running them, not by reasoning about them. All still ALLOWED, and
 // written down so the next reader does not have to rediscover them:
@@ -88,6 +88,32 @@
 //     checkPush the same scope check checkCommit has; it is called out here
 //     rather than fixed quietly because it was found outside the findings this
 //     pass was scoped to.
+//   • A program name assembled out of an expansion — `$TOOL -rf x`, `${R}m`,
+//     `$(which rm)`. unquote() implements bash's QUOTING rules and deliberately
+//     not its EXPANSIONS: resolving them means running or reading them, which a
+//     gate must not do. Same class as the eval/`bash -c` bullet above.
+//   • A `\`-newline inside a heredoc body whose delimiter is QUOTED (`<<'EOF'`),
+//     where bash does not join lines. joinContinuations() joins them anyway.
+//     That direction over-joins rather than under-joins, so it can only merge
+//     text that was going to be scanned either way — but it is a difference from
+//     the shell and belongs in this list.
+//   • A quoted-string boundary crossing a joined line: the parser does not track
+//     quoting across segments, so a line ending inside an open quote can absorb
+//     the next line into an argument. Contrived, and it needs a trailing
+//     backslash inside an unterminated quote to reach.
+//
+// And two gaps that are about FILES rather than commands:
+//
+//   • Hard links and junctions. `cmd /c mklink /H innocent.txt .env` followed by
+//     an ordinary Write to innocent.txt replaces `.env`'s bytes, and both halves
+//     pass every gate: the link creation is not a destructive command and the
+//     write is not to a protected path. Verified. Closing it means resolving
+//     every edit target to a file identity rather than a path, which neither
+//     hook does today.
+//   • checkProtectedWrites() below covers the shell spellings of a write to
+//     `.env` that were open until N4's round — redirection, `tee`, `sed -i`,
+//     `mv`/`cp`, `dd of=`, `truncate`. It covers those spellings and no others;
+//     a script that opens the file itself is not seen.
 //
 // And the receipt the commit gate reads is a file anyone can write; see
 // checkReceipt() for exactly what the hardening there buys and what it does not.
@@ -110,9 +136,163 @@ import {
 
 // ─── command parsing ─────────────────────────────────────────────────────────
 
-/** Strip the shell quoting that survives a whitespace split. */
+/** `\` before one of these keeps its special meaning inside "…" (bash 3.1.2.3). */
+const DQ_ESCAPABLE = /[$`"\\\n]/;
+
+/** ANSI-C escapes that stand for one fixed character. */
+const ANSI_C_SIMPLE = {
+  a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f",
+  n: "\n", r: "\r", t: "\t", v: "\v",
+  "\\": "\\", "'": "'", '"': '"', "?": "?",
+};
+
+/**
+ * Decode the body of a `$'…'` word.
+ *
+ * `\x72` is `r`, which is the whole point: `$'\x72m'` is a way to write `rm`
+ * that contains neither an `r` nor an `m`. Numeric escapes are decoded because
+ * a gate that reads only the letters it can see is matching spelling rather
+ * than meaning.
+ */
+function decodeAnsiC(body) {
+  let out = "";
+  let i = 0;
+  while (i < body.length) {
+    if (body[i] !== "\\") {
+      out += body[i];
+      i += 1;
+      continue;
+    }
+    const c = body[i + 1];
+    if (c === undefined) {
+      out += "\\";
+      break;
+    }
+    if (c === "x" || c === "u" || c === "U") {
+      const width = c === "x" ? 2 : c === "u" ? 4 : 8;
+      const hex = /^[0-9a-fA-F]+/.exec(body.slice(i + 2, i + 2 + width))?.[0];
+      if (hex) {
+        const point = parseInt(hex, 16);
+        // Above the Unicode maximum String.fromCodePoint throws, and an
+        // exception here is now a REFUSAL — correct, but a refusal that reads
+        // as a hook bug. Emit nothing and keep scanning the rest of the word.
+        if (point <= 0x10ffff) out += String.fromCodePoint(point);
+        i += 2 + hex.length;
+        continue;
+      }
+      out += c;
+      i += 2;
+      continue;
+    }
+    if (c >= "0" && c <= "7") {
+      const oct = /^[0-7]{1,3}/.exec(body.slice(i + 1))[0];
+      out += String.fromCharCode(parseInt(oct, 8));
+      i += 1 + oct.length;
+      continue;
+    }
+    if (c === "c" && body[i + 2] !== undefined) {
+      out += String.fromCharCode(body[i + 2].toUpperCase().charCodeAt(0) ^ 64);
+      i += 3;
+      continue;
+    }
+    out += Object.hasOwn(ANSI_C_SIMPLE, c) ? ANSI_C_SIMPLE[c] : c;
+    i += 2;
+  }
+  return out;
+}
+
+/**
+ * A shell word with its quoting removed, by bash's rules rather than by
+ * trimming characters off the ends.
+ *
+ * ── N2: `$'rm'` WAS NOT `rm` ─────────────────────────────────────────────────
+ *
+ * This was `token.replace(/^["']|["']$/g, "")`: one quote character off each
+ * end. `$'rm'` came back as `$'rm`, which is the name of no program and matched
+ * no rule, so `$'rm' -rf node_modules`, `$'git' push origin main`,
+ * `$'gh' pr merge 1`, `$'docker' volume prune` and `$'\x72m' -rf node_modules`
+ * all ran — verified against a real shell, deleting a real directory. C4 had
+ * already established that `'rm'` and `"rm"` are `rm`; ANSI-C quoting is the
+ * third documented spelling and was left standing.
+ *
+ * What bash does, and therefore what this does:
+ *
+ *   'x'    literal; there are no escapes inside single quotes at all
+ *   "x"    `\` is special ONLY before $ ` " \ and newline — which is why
+ *          `"C:\Users\bin\git.exe"` keeps its separators and still resolves to
+ *          `git`, while the unquoted form does not (and in a real shell does
+ *          not run git either)
+ *   $'x'   ANSI-C quoting: \xHH, \uHHHH, \UHHHHHHHH, \NNN, \cX, \n, \t, …
+ *   $"x"   locale translation; the quoting rules are those of "x"
+ *   \x     outside quotes `\` escapes the next character, so `\rm` and `r\m`
+ *          are both `rm` — the second of which the old path also got wrong
+ *
+ * Concatenation falls out of walking the word instead of trimming it: `r'm'`,
+ * `'r'm` and `$'r'm` are `rm` here exactly as they are in a shell.
+ *
+ * NOT handled, deliberately: `$(…)`, `` `…` ``, `${…}` and `$VAR` are left as
+ * literal text. Expanding them means executing or resolving them, which a gate
+ * must not do, so a program name assembled out of a variable is not seen. It is
+ * in the list at the bottom of this file.
+ */
 function unquote(token = "") {
-  return token.replace(/^["']|["']$/g, "");
+  const s = String(token);
+  let out = "";
+  let i = 0;
+  // A program name is not 4KB long. The bound is here because this runs on
+  // every Bash call and the payload is attacker-shaped by definition.
+  while (i < s.length && out.length < 4096) {
+    const ch = s[i];
+
+    if (ch === "$" && s[i + 1] === '"') {
+      i += 1; // $"…" is "…" with a lookup; let the quote below do the work
+      continue;
+    }
+
+    if (ch === "$" && s[i + 1] === "'") {
+      let j = i + 2;
+      while (j < s.length && s[j] !== "'") j += s[j] === "\\" ? 2 : 1;
+      out += decodeAnsiC(s.slice(i + 2, Math.min(j, s.length)));
+      i = j + 1;
+      continue;
+    }
+
+    if (ch === "'") {
+      const end = s.indexOf("'", i + 1);
+      out += end === -1 ? s.slice(i + 1) : s.slice(i + 1, end);
+      i = end === -1 ? s.length : end + 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      i += 1;
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === "\\" && DQ_ESCAPABLE.test(s[i + 1] ?? "")) {
+          out += s[i + 1];
+          i += 2;
+          continue;
+        }
+        out += s[i];
+        i += 1;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === "\\") {
+      if (i + 1 < s.length) {
+        out += s[i + 1];
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -248,8 +428,39 @@ function stripHeredocs(text) {
 }
 
 /** The command text split into individually-executed segments. */
+/**
+ * Undo bash's line continuations, so a command written across lines is ONE
+ * command here too.
+ *
+ * ── N1: A BACKSLASH AND A NEWLINE DEFEATED EVERY RULE IN THIS FILE ──────────
+ *
+ * segments() splits on newlines. In bash a `\` at end of line does not end the
+ * command, it joins the next line onto it — so
+ *
+ *     rm \
+ *       -rf node_modules
+ *
+ * is `rm -rf node_modules`, while this gate saw the two segments `rm` and
+ * `-rf node_modules`, neither of which is anything. Verified against a real
+ * shell on `main`: the directory was really deleted, `git \`+newline+`commit`
+ * really committed (7a7d03c), and `gh \`+newline+`pr merge 1 --squash` never
+ * reached the merge rule. Exactly the shape of C4 and C5 — the parser believing
+ * a fragment was the whole command — and it survived the round that fixed both.
+ *
+ * ODD runs only. `echo a\\` + newline is an escaped backslash and then a NEW
+ * command; joining there would pull the next command into an argument position
+ * and hide it, which is the one direction a gate must never be wrong in. So the
+ * run length decides: odd, the last `\` ate the newline; even, the newline
+ * stands and the split happens.
+ */
+function joinContinuations(text) {
+  return String(text).replace(/(\\+)(\r?\n)/g, (whole, slashes) =>
+    slashes.length % 2 === 1 ? `${slashes.slice(1)} ` : whole,
+  );
+}
+
 function segments(text) {
-  return stripHeredocs(text)
+  return joinContinuations(stripHeredocs(text))
     .split(/\r?\n|&&|\|\||[;|&]/)
     .map((s) => s.trim())
     .filter(Boolean);
@@ -477,6 +688,143 @@ function gitInvocation(argv) {
   return { sub: argv[i], args: argv.slice(i + 1), ...seen };
 }
 
+/** docker's GLOBAL options that consume a value, in either spelling. */
+const DOCKER_OPTS_WITH_VALUE = new Set([
+  "-H", "--host", "-c", "--context", "-l", "--log-level",
+  "--config", "--tlscacert", "--tlscert", "--tlskey",
+]);
+
+/**
+ * A docker invocation's command GROUP and VERB, with the global options that
+ * sit in front of them skipped.
+ *
+ * ── N3: THE SAME MISTAKE I2 FIXED FOR `gh`, LEFT STANDING FOR `docker` ──────
+ *
+ * The four docker rules read `argv[1]` as the group, so ONE global flag shifted
+ * the words along and every one of them stopped applying:
+ *
+ *     docker volume prune                      refused
+ *     docker -D volume prune                   ALLOWED
+ *     docker --context prod volume rm pgdata   ALLOWED
+ *     docker -H tcp://host volume rm data      ALLOWED
+ *     docker --tls compose down -v             ALLOWED
+ *
+ * `-D`, `-H`, `-l`, `--config`, `--context`, `--tls*` are all in `docker --help`
+ * and all legal before the group word. `--context` and `-H` are worse than the
+ * rest: they aim the command at a DIFFERENT daemon, so the one spelling that
+ * reaches a machine this gate knows nothing about was the spelling it waved
+ * through.
+ *
+ * `docker-compose` (the v1 binary) has no group word — it IS the compose group.
+ */
+function dockerInvocation(argv) {
+  const prog = program(argv);
+  if (prog === "docker-compose") {
+    return { group: "compose", verb: firstWord(argv.slice(1)), args: argv.slice(1) };
+  }
+  if (prog !== "docker") return null;
+
+  let i = 1;
+  while (i < argv.length) {
+    const arg = unquote(argv[i]);
+    const eq = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    if (DOCKER_OPTS_WITH_VALUE.has(name)) {
+      i += eq === -1 ? 2 : 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  if (i >= argv.length) return null;
+  const args = argv.slice(i + 1);
+  return { group: unquote(argv[i]), verb: firstWord(args), args };
+}
+
+/** The first token that is not an option, so `compose -f x down` is `down`. */
+function firstWord(args) {
+  for (const arg of args) {
+    const word = unquote(arg);
+    if (!word.startsWith("-")) return word;
+  }
+  return "";
+}
+
+// ─── rule 0: a protected file written through a shell ────────────────────────
+//
+// pre-edit.mjs refuses an Edit or a Write to `.env` and has since it was
+// written. Nothing refused the SHELL spellings of the same thing, so
+// `echo x > .env`, `sed -i s/a/b/ .env`, `tee .env`, `mv tmp .env` and
+// `cp other .env` all clobbered the file the Edit gate exists to protect —
+// measured, all five ALLOWED. The project's standing rule is that `.env` is
+// never touched by the agent and never staged; a rule that holds for one tool
+// and not for the tool right next to it is not a rule.
+//
+// Reads are deliberately untouched: `cat .env`, `grep X .env` and `source .env`
+// are normal and are not what this defends against.
+
+/** `.env`, `.env.<anything>` — except the committed example. */
+function isProtectedEnvTarget(token) {
+  const path = unquote(token).split("\\").join("/");
+  // NTFS: `.env::$DATA` is the same bytes as `.env`, and the filesystem is
+  // case-insensitive. pre-edit.mjs normalises both; this has to agree with it.
+  const name = (path.split("/").pop() ?? "").split(":")[0].toLowerCase();
+  return /^\.env(\..+)?$/.test(name) && name !== ".env.example";
+}
+
+/** Programs whose LAST operand is a file they overwrite. */
+const LAST_ARG_WRITERS = new Set(["tee", "mv", "cp", "install", "truncate"]);
+
+function checkProtectedWrites(command) {
+  for (const segment of segments(command)) {
+    const argv = argvOf(segment);
+    const prog = program(argv);
+    let how = null;
+
+    // `> .env` and `>> .env`, glued or spaced, with an optional fd number.
+    const redirect = segment.match(/(?:^|\s)\d?>{1,2}\s*("[^"]*"|'[^']*'|\S+)/);
+    if (redirect && isProtectedEnvTarget(redirect[1])) how = "a redirection";
+
+    if (!how && LAST_ARG_WRITERS.has(prog)) {
+      const operands = argv.slice(1).filter((a) => !a.startsWith("-"));
+      const last = operands[operands.length - 1];
+      if (last && isProtectedEnvTarget(last)) how = `\`${prog}\``;
+    }
+
+    // `sed -i` edits every file it is given, not just the last. Both spellings:
+    // `--in-place` does not match a short-flag pattern, and the probe caught
+    // that before this line was written rather than after.
+    const inPlace = (a) => /^-[a-zA-Z]*i/.test(a) || a.split("=")[0] === "--in-place";
+    if (!how && prog === "sed" && argv.some((a) => inPlace(unquote(a)))) {
+      if (argv.slice(1).some((a) => !a.startsWith("-") && isProtectedEnvTarget(a))) {
+        how = "`sed -i`";
+      }
+    }
+
+    if (!how && prog === "dd") {
+      const of = argv.find((a) => unquote(a).startsWith("of="));
+      if (of && isProtectedEnvTarget(unquote(of).slice(3))) how = "`dd of=`";
+    }
+
+    if (how) {
+      deny(
+        `[gate: protected file] Refused — ${how} writing to a .env file.\n` +
+          `  in: ${segment}\n` +
+          `.env holds this deployment's real credentials and is the one file in ` +
+          `this tree that no commit can restore. The Edit/Write gate has always ` +
+          `refused it; the shell spellings were open until they were measured, ` +
+          `and this closes them. This rule has no override.\n` +
+          `Way forward: edit .env yourself, outside this session. If you are ` +
+          `adding a NEW variable, put it in .env.example — which is committed, is ` +
+          `not secret, and is what the env-completeness test reads.`,
+      );
+    }
+  }
+}
+
 /** Run git for its EXIT STATUS. git() in _lib returns "" for both outcomes. */
 function gitSucceeds(args) {
   try {
@@ -537,21 +885,19 @@ function destructiveSegment(argv) {
     if ((flags.has("r") || flags.has("R")) && flags.has("f")) return "rm -rf";
   }
 
-  if (prog === "docker" || prog === "docker-compose") {
-    const args = prog === "docker-compose" ? argv.slice(1) : argv.slice(2);
-    const group = prog === "docker-compose" ? "compose" : unquote(argv[1] ?? "");
-    if (group === "compose" && args.includes("down")) {
-      const flags = flagsOf(args, { "--volumes": "v" });
+  const d = dockerInvocation(argv);
+  if (d) {
+    if (d.group === "compose" && d.args.some((a) => unquote(a) === "down")) {
+      const flags = flagsOf(d.args, { "--volumes": "v" });
       if (flags.has("v")) return "docker compose down -v";
     }
-    const verb = unquote(args[0] ?? "");
-    if (group === "volume" && verb === "rm") return "docker volume rm";
+    if (d.group === "volume" && d.verb === "rm") return "docker volume rm";
     // I8. `prune` deletes by absence rather than by name: every volume nothing
     // currently references, which includes the database volume of any stack that
     // happens to be down. `system prune` adds images, networks and build cache,
     // and with -a --volumes it is the whole machine.
-    if (group === "volume" && verb === "prune") return "docker volume prune";
-    if (group === "system" && verb === "prune") return "docker system prune";
+    if (d.group === "volume" && d.verb === "prune") return "docker volume prune";
+    if (d.group === "system" && d.verb === "prune") return "docker system prune";
   }
 
   const g = gitInvocation(argv);
@@ -570,8 +916,12 @@ function destructiveSegment(argv) {
 }
 
 function checkDestructive(command) {
+  // N1 again, on the SQL side: `\s` does not match a backslash, so
+  // `DROP \`+newline+`TABLE x` — which bash joins into `DROP TABLE x` before psql
+  // ever sees it — matched none of these patterns.
+  const sql = joinContinuations(command);
   for (const [pattern, name] of SQL_PATTERNS) {
-    if (pattern.test(command)) {
+    if (pattern.test(sql)) {
       deny(
         `[gate: destructive] Refused — this command contains ${name}.\n` +
           `Data loss is not reversible by a revert, so this rule has no override.\n` +
@@ -796,11 +1146,25 @@ function checkWorktree(command) {
 //   prose                `do not write Review-Verdict: approved yet` matched
 //
 // The verdict must therefore be a LINE, not a substring: optional indentation,
-// the field, the single word, optional trailing space, end of line. `m` so it
-// can sit anywhere in the body; `i` because the word's case is not the point.
+// the field, the single word, nothing else, end of line. `m` so it can sit
+// anywhere in the body; `i` because the word's case is not the point.
 // tests/hooks/template-not-self-approving.test.mjs asserts the unedited
 // template does not satisfy this.
-const VERDICT = /^[ \t]*Review-Verdict:[ \t]*approved[ \t]*\r?$/im;
+//
+// The Markdown a reviewer actually types is accepted, because the first version
+// of this refused most of it: the Review section IS a bulleted list, so
+// `- Review-Verdict: approved` was the natural spelling and was rejected, as
+// were `**Review-Verdict:** approved`, `**Review-Verdict**: approved` and a
+// trailing full stop. A gate that refuses the obvious spelling of its own
+// requirement gets retyped at, not satisfied — and the person retyping cannot
+// see the refusal text that would have told them why.
+//
+// What stays refused is anything that is not the single word: the qualified
+// verdicts (`approved-with-nits`, `approved (conditional)`), the word inside a
+// sentence, and a blockquoted line — `> …` is how people quote SOMEONE ELSE'S
+// text, which is exactly the ambiguity this pattern exists to remove.
+const VERDICT =
+  /^[ \t]*(?:[-*+][ \t]+)?(?:\*\*|__)?Review-Verdict:?(?:\*\*|__)?:?[ \t]*approved[ \t]*[.,;]?[ \t]*\r?$/im;
 
 /**
  * The PR body, straight from gh.
@@ -1347,6 +1711,7 @@ function main() {
   if (typeof command !== "string" || !command.trim()) allow();
   observedCommand = command;
 
+  checkProtectedWrites(command);
   checkDestructive(command);
   checkPush(command);
   checkMerge(command);
@@ -1360,10 +1725,12 @@ try {
   // ── I4: THE GATE WAS SILENTLY OPEN, AND A TEST HELD IT THAT WAY ───────────
   //
   // This used to log and fall through to allow(). workspace/gate-errors.log in
-  // this worktree holds 12 TypeErrors from 2026-09-23 between 22:50 and 23:23,
-  // and three more arrived while this was being fixed: fifteen Bash calls that
-  // went through unexamined, with nothing on stderr and nothing in the
-  // transcript. Worse, tests/hooks/pre-bash.test.mjs asserted exit 0 for the
+  // this worktree holds 16 TypeErrors: 12 from 2026-09-23 between 22:50:06 and
+  // 23:23:05, and FOUR more at 23:57:10, 23:58:26, 23:59:00 and 23:59:47 while
+  // this was being fixed. Sixteen Bash calls went through unexamined, with
+  // nothing on stderr and nothing in the transcript. (Three places said "three
+  // more" and "fifteen" — counted once, written three times, wrong in all
+  // three; `wc -l workspace/gate-errors.log` settles it.) Worse, tests/hooks/pre-bash.test.mjs asserted exit 0 for the
   // payload that caused them, so the suite was GREEN BECAUSE OF the crash.
   //
   // THE DECISION: an internal error now REFUSES. A gate that fails open on its

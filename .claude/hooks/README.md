@@ -36,16 +36,18 @@ documentation or memory — zero occurrences each:
 The proof that none of it ran: `scripts/stop_session.mjs` appended to
 `workspace/session_log.md` unconditionally, and that file sat at 112 bytes —
 header only — across every session since its creation at 2026-09-18 12:57.
-**53** commits have landed in that window:
+**53** commits had landed in that window as of `3a1eaaf`:
 
 ```
-git rev-list --count --since='2026-09-18 12:57' HEAD
+git rev-list --count --since='2026-09-18 12:57' 3a1eaaf
 ```
 
 This paragraph said "27 commits" while `CLAUDE.md` and
 `docs/superpowers/README.md` said 52 about the same stretch, in the same commit.
-All three now cite the command above, so the next reader can re-run it instead of
-choosing between three numbers.
+Citing the command was not enough on its own: all three then said **53**, which
+was true at `3a1eaaf` and false at the very next commit, so the three of them
+were wrong together again one commit later. The command now names a REF instead
+of `HEAD`, which is the only form of this sentence that stays true.
 
 `tests/hooks/settings-wiring.test.mjs` pins both absences, that each registered
 command resolves to a file that exists and parses, and that each of the two Bash
