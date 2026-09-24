@@ -2,13 +2,16 @@
 
 // Spec 122 — page-header ⓘ button.
 //
-// Lives next to page titles in repo, observation, mentorship, rtt etc. One
-// click opens HelpPanel anchored on the current page's primary topic
+// Meant for page titles in repo, observation, mentorship, rtt etc. -- no page
+// mounts one yet; the shipped entry points are the top bar's HelpButton and
+// the mobile ? FAB. One click opens HelpPanel anchored on the page's topic
 // (e.g. /repo/schools → "school", /rtt → "rtt"). The slug is provided by the
 // page that mounts the button, so the component itself stays generic.
 //
-// Used in tandem with the `data-help-anchor="topbar-help"` discoverability
-// hook the prototype's FTUX tour highlights.
+// It does NOT carry the FTUX tour's "topbar-help" anchor. It used to, hardcoded, so
+// every page header that mounted one would have added another element matching
+// the FTUX tour's selector -- and querySelector takes the first. The anchor
+// lives on the top bar's HelpButton (and the mobile FAB) only.
 
 import { helpFor } from "@/lib/help";
 import { openHelp } from "./HelpPanel";
@@ -27,7 +30,6 @@ export function HelpHeadbtn({ k, label }: HelpHeadbtnProps) {
     <button
       type="button"
       data-help-headbtn={k}
-      data-help-anchor="topbar-help"
       aria-label={aria}
       onClick={() => openHelp(k)}
       style={{

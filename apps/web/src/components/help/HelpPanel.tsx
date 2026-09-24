@@ -4,9 +4,10 @@
 //
 // Ports the prototype's HelpPanel (LMS GML Frontend/help.jsx lines 370-458)
 // to a TypeScript client component. The panel:
-//   • opens on demand (HelpTip "Tell me more", HelpDot, HelpHeadbtn) via a
-//     custom `gml:open-help` window event so every entry point shares the
-//     same shell;
+//   • opens on demand via a custom `gml:open-help` window event so every
+//     entry point shares the same shell. The entry points that actually
+//     ship are the top bar's HelpButton and the mobile ? FAB; HelpTip,
+//     HelpDot and HelpHeadbtn dispatch it too but have no call sites yet;
 //   • renders the current topic's title + short + long + related-chips, or
 //     the full grouped browse list when no topic is set;
 //   • includes a search input that filters the dictionary live;
@@ -399,8 +400,10 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
           ) : (
             <>
               <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 4 }}>
-                Tap any topic to read its explanation. Or hover the dotted-underline words anywhere on the page. Press
-                ? on your keyboard any time.
+                {/* This promised "dotted-underline words anywhere on the page";
+                    no page renders one (HelpTip has no call sites). */}
+                Tap any topic to read its explanation, or search above. The ? button opens this panel from any
+                page; on a computer, so does the ? key.
               </p>
               <HumanHelpCard
                 waHref={waHref}

@@ -1,106 +1,57 @@
 "use client";
 
 // Floating ? help button — ports `mobile-shell.jsx`'s help FAB.
-// In v2 the help panel itself (spec 029) is dropped, so this button opens a
-// minimal contextual sheet pointing to docs/help.md content. Lightweight, no
-// dictionary dependency.
+//
+// IT OPENS THE REAL HELP PANEL. It used to open its own sheet of five
+// hardcoded English bullets, while the HelpPanel (spec 122) -- the searchable
+// dictionary, and the "Talk to a person" card with WhatsApp, email and an
+// in-app helpdesk ticket -- was mounted on every page with no way to reach it
+// on a phone: its only trigger was the `?` key, and a phone has no keyboard.
+// A locked-out or confused teacher on a handset therefore could not reach the
+// helpdesk at all.
+//
+// Nothing the sheet said was dropped. Its bullets now live in lib/help.ts, in
+// the "Getting started" group the panel's browse view lists first: moving
+// around (navigation), WhatsApp upload (whatsapp_ingest), direct browser upload
+// on stable wifi (upload), confidentiality, and what to do about a forgotten
+// password (password) -- the last of which was the only in-app instruction a
+// locked-out teacher had, and had no dictionary entry before.
+//
+// data-help-anchor="topbar-help" makes this the FTUX tour's "Help is always
+// here" target on mobile. The desktop top bar carries the same anchor on its
+// HelpButton; the two shells never render together, so exactly one element
+// matches on any page.
 
-import { useState } from "react";
+import { openHelp } from "@/components/help/HelpPanel";
 
 export function MobileHelpFAB() {
-  const [open, setOpen] = useState(false);
-
   return (
-    <>
-      <button
-        type="button"
-        aria-label="Help"
-        onClick={() => setOpen(true)}
-        style={{
-          position: "fixed",
-          right: 14,
-          bottom: 84,
-          width: 44,
-          height: 44,
-          borderRadius: "50%",
-          background: "var(--ink)",
-          color: "var(--paper)",
-          border: "none",
-          boxShadow: "var(--shadow-2)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 25,
-          fontFamily: "var(--serif)",
-          fontSize: 20,
-          fontWeight: 600,
-        }}
-      >
-        ?
-      </button>
-
-      {open ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(28, 24, 22, 0.45)",
-            zIndex: 30,
-            display: "flex",
-            alignItems: "flex-end",
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--paper)",
-              borderTopLeftRadius: 16,
-              borderTopRightRadius: 16,
-              width: "100%",
-              padding: "18px 18px calc(24px + env(safe-area-inset-bottom, 0))",
-              maxHeight: "75dvh",
-              overflowY: "auto",
-            }}
-          >
-            <div
-              style={{
-                width: 38,
-                height: 4,
-                borderRadius: 2,
-                background: "var(--line)",
-                margin: "0 auto 14px",
-              }}
-            />
-            <h2 style={{ fontFamily: "var(--serif)", fontSize: 18, marginBottom: 8 }}>How this app works</h2>
-            <ul style={{ paddingLeft: 18, fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 16 }}>
-              <li>Use the bottom tabs to switch between sections.</li>
-              <li>Upload classroom videos via WhatsApp to the programme number — they appear in your <strong>My Uploads</strong> tab within a few minutes.</li>
-              <li>Direct browser upload also works if you have stable wifi.</li>
-              <li>All content is confidential; do not share outside the programme.</li>
-              <li>Forgot your password? Ask your programme admin to send a sign-in link.</li>
-            </ul>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              style={{
-                width: "100%",
-                padding: "10px 14px",
-                border: "1px solid var(--ink)",
-                background: "var(--ink)",
-                color: "var(--paper)",
-                borderRadius: "var(--r-2)",
-                fontSize: 14,
-                fontWeight: 500,
-              }}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </>
+    <button
+      type="button"
+      aria-label="Help"
+      data-help-anchor="topbar-help"
+      onClick={() => openHelp(null)}
+      style={{
+        position: "fixed",
+        right: 14,
+        bottom: 84,
+        width: 44,
+        height: 44,
+        borderRadius: "50%",
+        background: "var(--ink)",
+        color: "var(--paper)",
+        border: "none",
+        boxShadow: "var(--shadow-2)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 25,
+        fontFamily: "var(--serif)",
+        fontSize: 20,
+        fontWeight: 600,
+      }}
+    >
+      ?
+    </button>
   );
 }

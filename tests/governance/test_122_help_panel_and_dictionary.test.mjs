@@ -190,12 +190,25 @@ test("spec 122 — HelpTip / HelpDot / HelpHeadbtn / useHelpShortcut are client 
   assert.match(read(TIP), /textDecorationStyle:\s*["']dotted["']/, "HelpTip must render a dotted underline");
   // HelpDot renders an ⓘ circle with role-correct label.
   assert.match(read(DOT), /aria-label/, "HelpDot must carry an aria-label so it's discoverable to screen readers");
-  // HelpHeadbtn carries the FTUX-tour anchor hook.
-  assert.match(
+  // INVERTED in the 2026-09 freeze (fix brief D_ui #5). This used to REQUIRE
+  // HelpHeadbtn to hardcode the tour anchor. HelpHeadbtn is a per-page-header
+  // button, so every page that mounted one would add another element matching
+  // the tour's selector, and FTUXTour's querySelector silently takes the first
+  // in DOM order. The anchor belongs to the single top-bar HelpButton (see
+  // test_123) and, on mobile, the ? FAB.
+  assert.doesNotMatch(
     read(HEAD),
     /data-help-anchor=["']topbar-help["']/,
-    "HelpHeadbtn must carry the topbar-help anchor so the FTUX tour can target it",
+    "HelpHeadbtn must NOT hardcode the topbar-help anchor; the top bar's HelpButton carries it, once",
   );
+});
+
+test("spec 122 — the help panel has visible entry points on both shells", () => {
+  // It had none: its only trigger was the `?` key, which a phone does not have.
+  // The click behaviour is executed in tests/behaviour/ui-navigation.test.ts.
+  assert.match(read("apps/web/src/components/nav/Topbar.tsx"), /<HelpButton\b/, "the desktop top bar must render the HelpButton");
+  assert.match(read("apps/web/src/components/help/HelpButton.tsx"), /openHelp\(null\)/);
+  assert.match(read("apps/web/src/components/MobileHelpFAB.tsx"), /openHelp\(null\)/, "the mobile ? FAB must open the panel");
 });
 
 test("spec 122 — /api/helpdesk/tickets validates, audits and rejects other methods", () => {

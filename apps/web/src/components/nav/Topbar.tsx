@@ -1,6 +1,6 @@
-// Topbar (desktop). Breadcrumbs + bell + queue indicator + lang picker + user pill.
-// 1:1 port from `shell.jsx::Topbar`. ⌘K Quick-Find (028), Help (029), FTUX (030)
-// are explicitly cut from v2; their slots stay empty visually.
+// Topbar (desktop). Breadcrumbs + help + bell + queue indicator + lang picker +
+// user pill. 1:1 port from `shell.jsx::Topbar`, plus the help button: the
+// HelpPanel (spec 122) was mounted everywhere with no control that opened it.
 //
 // Spec 125 — the bell aria-label, sign-out title and language picker labels
 // pull their copy from next-intl `getTranslations()` so the chrome renders in
@@ -28,6 +28,7 @@ import { formatBellBadge, formatQueueLabel, type QueueDepth } from "@/lib/chrome
 import type { RoleName } from "@gml/shared/auth/roles";
 import type { Locale } from "@/i18n/config";
 import { Breadcrumbs } from "./Breadcrumbs";
+import { HelpButton } from "@/components/help/HelpButton";
 import { Icon } from "./Icon";
 import LanguagePicker from "./LanguagePicker";
 import { SignOutButton } from "./SignOutButton";
@@ -135,13 +136,20 @@ export async function Topbar({
           </span>
         ) : null}
 
+        {/* Help. The wrapper carries data-help-anchor="topbar-help", the FTUX
+            (spec 123) "Help is always here" coach-mark target. It used to sit
+            on the bell below -- a link to /inbox -- so the tour spotlit the
+            notifications and told users that was help. Exactly one element may
+            carry it: FTUXTour uses querySelector, which takes the first. */}
+        <span data-help-anchor="topbar-help" style={{ display: "inline-flex" }}>
+          <HelpButton label={tAction("help")} />
+        </span>
+
         {/* Bell — wired to real notifications.unread (spec 128). Renders as a
-            Link to /inbox; chip shows '99+' past 99 (formatBellBadge).
-            data-help-anchor='topbar-help' is the FTUX (spec 123) coach-mark target. */}
+            Link to /inbox; chip shows '99+' past 99 (formatBellBadge). */}
         <Link
           href="/inbox"
           aria-label={tAction("notifications")}
-          data-help-anchor="topbar-help"
           data-testid="topbar-bell"
           style={{
             position: "relative",
