@@ -199,6 +199,60 @@ if that stamp is missing or older than 30 days. Restoring for real is
 `README-deploy.md` section 7 — and step 4 there, re-doing the dashboard steps,
 is the one people miss.
 
+## Data retention
+
+What the system deletes by itself, and what it never deletes. The worker runs
+one retention job a day, within the hour after 03:00 UTC (08:30 IST).
+
+| Table | Kept for | Deleted by |
+|---|---|---|
+| `notifications` | 90 days (SM-8) | the nightly retention job |
+| `rate_limits` | 24 hours after the caller's last rate-limit window started | the same nightly job |
+| `audit_log` | **forever** — nothing in the running system can delete it (SM-1) | only the manual archive below |
+
+**`rate_limits` holds client IP addresses.** Its keys are the sign-in link
+throttle (`login-link:<ip>`) and the section-gate throttle
+(`gate:<ip>:<user id>:<section>`). The longest window is 15 minutes; a counter
+is deleted once its window started more than 24 hours ago, so an address is
+not kept for more than about a day after its last attempt. To run the sweep by
+hand: `docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/retention.ts`.
+
+**`audit_log` only grows.** DELETE and TRUNCATE are revoked and a trigger
+rejects every row delete, deliberately. The default `/admin/audit` view stays
+fast as it grows (it walks `audit_log_created_idx`, migration 0028), but disk
+use does not stop. Check it monthly:
+
+```sql
+SELECT pg_size_pretty(pg_total_relation_size('audit_log')) AS size, count(*) AS rows,
+       min(created_at) AS oldest FROM audit_log;
+```
+
+If it ever has to shrink, archiving is a **deliberate, signed-off break of
+SM-1**: two people, a written reason, and the export kept with the backups. It
+needs the table owner (on Supabase, the `postgres` role); the app's own role
+cannot do it, by design. Pick a cut-off, then:
+
+```bash
+# 1. Export everything older than the cut-off, and keep this file with the backups.
+psql "$DATABASE_URL" -c "\copy (SELECT * FROM audit_log WHERE created_at < '2027-01-01') TO 'audit_log_before_2027-01-01.csv' CSV HEADER"
+# 2. Count the rows in the file (minus the header) and in the table; they must match.
+psql "$DATABASE_URL" -c "SELECT count(*) FROM audit_log WHERE created_at < '2027-01-01'"
+```
+
+```sql
+-- 3. Delete in ONE transaction, with the trigger off only inside it, and
+--    record that it happened. ALTER TABLE locks audit_log for the duration,
+--    which blocks every audited action -- do this in a quiet window.
+BEGIN;
+ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_delete;
+DELETE FROM audit_log WHERE created_at < '2027-01-01';
+ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_delete;
+INSERT INTO audit_log (action, entity_type, metadata)
+VALUES ('audit.archived', 'audit_log',
+        '{"before": "2027-01-01", "file": "audit_log_before_2027-01-01.csv"}');
+COMMIT;
+```
+
 ## Security notes (substrate moats)
 
 - **SM-1**: `audit_log` is append-only at the database layer — UPDATE and DELETE are revoked, so not even an application bug can rewrite history.

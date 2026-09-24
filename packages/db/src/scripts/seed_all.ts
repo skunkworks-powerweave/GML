@@ -10,8 +10,10 @@
 //   1. seed             — districts, zones, schools, teachers, mentors,
 //                         pairings, cycles, phases, terms, RTT subjects,
 //                         super_admin bootstrap (spec 103). The observation
-//                         seed below depends on cycle code `OBS-2026-001`
-//                         being present, so this must run first.
+//                         seed below attaches to cycle code `OBS-2026-001`,
+//                         so this must run first. (After purge_demo_data.ts
+//                         --apply that cycle is gone for good, and phase 4
+//                         warns and skips rather than failing the deploy.)
 //   2. seed_forms_mentor      — 4 mentor-audience feedback templates
 //   3. seed_forms_mentee      — 4 mentee-audience feedback templates
 //   4. seed_forms_observation — 3 observation templates onto OBS-2026-001

@@ -110,18 +110,9 @@ export async function rateLimit({
   return { ok: true, remaining: Math.max(0, limit - count), retryAfterMs: 0 };
 }
 
-/**
- * Drop counters whose window has long passed.
- *
- * Called from the nightly retention job. Without it the table grows by one row
- * per distinct caller forever, and the sweep gets slowest exactly when the
- * system is under the load that created the rows.
- */
-export async function pruneRateLimits(olderThanHours = 24): Promise<number> {
-  const res = await db.execute(sql`
-    DELETE FROM rate_limits
-     WHERE window_start < now() - make_interval(hours => ${olderThanHours})
-    RETURNING key
-  `);
-  return ((res as unknown as { rows: unknown[] }).rows ?? []).length;
-}
+// EXPIRED COUNTERS ARE DELETED BY pruneRateLimits() IN @gml/db
+// (packages/db/src/scripts/retention.ts), which the worker's nightly retention
+// job runs. A copy used to sit here, documented as nightly and called by
+// nothing -- and unreachable from the worker, because this file is
+// `server-only`. Every row it was meant to remove, each keyed by a client IP,
+// was kept forever.

@@ -36,6 +36,13 @@
 //      next deployment. Keeping the districts is what makes this permanent --
 //      and it is why this script refuses to touch them.
 //
+//      The one seeded thing that does NOT survive is the three observation
+//      templates seed_forms_observation.ts hangs on OBS-2026-001: they have no
+//      submitter, so they are not "real work", and they cascade away with that
+//      demo cycle. Nothing in the application reads them. On every later
+//      deploy that seed step warns that the cycle is gone and skips -- it must
+//      not fail, or deploy.sh stops at the seed step forever after a purge.
+//
 //   3. REAL WORK MAY ALREADY BE ATTACHED. If anyone has used a demo cycle for
 //      a genuine observation -- easily done, they look real -- deleting it
 //      cascades that work away. Every candidate is checked for attached
@@ -74,6 +81,15 @@ const DEMO_SCHOOL_CODES = [
 const DEMO_TEACHER_PHONE_PREFIX = "+91 94191000";
 /** The seed's cycles are OBS-2026-001 .. OBS-2026-008. */
 const DEMO_CYCLE_CODE_PREFIX = "OBS-2026-0";
+/**
+ * The seed's two mentors.
+ *
+ * This list read 'Dr. Anjali Bhatt', 'Rinchen Angmo' -- but Rinchen Angmo is
+ * one of the seed's TEACHERS, so the seed's second mentor, Prof. Iqbal
+ * Hussain, survived every purge and stayed in the live mentor roster.
+ * tests/governance/test_data_purge_recognises_seed pins these to seed.ts.
+ */
+const DEMO_MENTOR_NAMES = ["Dr. Anjali Bhatt", "Prof. Iqbal Hussain"];
 
 type Row = Record<string, unknown>;
 const rowsOf = async (q: ReturnType<typeof sql>): Promise<Row[]> =>
@@ -104,8 +120,12 @@ async function main(): Promise<void> {
     SELECT id, full_name FROM teachers WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"}`);
   const cycles = await rowsOf(sql`
     SELECT id, code FROM observation_cycles WHERE code LIKE ${DEMO_CYCLE_CODE_PREFIX + "%"}`);
+  // Counted so a database purged by the version with the wrong mentor list --
+  // where the only demo row left is that mentor -- is not reported as clean.
+  const mentors = await rowsOf(sql`
+    SELECT id, name FROM mentors WHERE name IN (${valueList(DEMO_MENTOR_NAMES)})`);
 
-  if (schools.length === 0 && teachers.length === 0 && cycles.length === 0) {
+  if (schools.length === 0 && teachers.length === 0 && cycles.length === 0 && mentors.length === 0) {
     console.log("  Nothing to purge — no demo rows found. (Already done, or this is real data.)\n");
     await getPool().end();
     return;
@@ -114,6 +134,7 @@ async function main(): Promise<void> {
   console.log(`  demo schools  ${schools.length}`);
   console.log(`  demo teachers ${teachers.length}`);
   console.log(`  demo cycles   ${cycles.length}`);
+  console.log(`  demo mentors  ${mentors.length}`);
 
   // ── Is there real work attached? ───────────────────────────────────────────
   //
@@ -139,6 +160,8 @@ async function main(): Promise<void> {
       if (!keepCycleIds.includes(String(r.id))) continue;
       console.log(`    ${r.code}  forms=${n(r.forms)} videos=${n(r.videos)} evidence=${n(r.evidence)}`);
     }
+    console.log("    Each one's teacher (and so that teacher's school) is kept with it --");
+    console.log("    a cycle cannot outlive its teacher.");
     console.log("    Review them by hand. Everything else below is still removed.");
   }
 
@@ -199,15 +222,22 @@ async function main(): Promise<void> {
         SELECT id FROM teachers
         WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"} AND id NOT IN (${valueList(keptTeachers)}))`);
 
+    // ...and never a teacher a SURVIVING cycle still points at. The cycles
+    // DELETE above has already run, so what is left in observation_cycles is
+    // exactly the kept set (plus any real cycle). Without this guard, keeping a
+    // cycle for its real work still deleted that cycle's demo teacher, which
+    // observation_cycles.teacher_id (ON DELETE RESTRICT) refuses with 23503 --
+    // rolling the entire purge back. Same shape as the schools guard below.
     await tx.execute(sql`
       DELETE FROM teachers
-      WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"} AND id NOT IN (${valueList(keptTeachers)})`);
+      WHERE phone LIKE ${DEMO_TEACHER_PHONE_PREFIX + "%"} AND id NOT IN (${valueList(keptTeachers)})
+        AND id NOT IN (SELECT teacher_id FROM observation_cycles)`);
 
     // Mentors, once no pairing references them. Left alone if one survives.
     await tx.execute(sql`
       DELETE FROM mentors
       WHERE id NOT IN (SELECT mentor_id FROM mentor_pairings)
-        AND name IN ('Dr. Anjali Bhatt', 'Rinchen Angmo')`);
+        AND name IN (${valueList(DEMO_MENTOR_NAMES)})`);
 
     // Schools last: teachers RESTRICT them. classes, learners and remaining
     // sessions cascade.

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { desc, sql } from "drizzle-orm";
+import { desc, gte, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog, users } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -49,14 +49,27 @@ export default async function AuditViewer({
   // administrator opens precisely when something has gone wrong.
   //
   // A DISTINCT over the column cannot drift: the options are exactly the
-  // actions that exist. Cheap -- the column is indexed and the cardinality is
-  // a few dozen.
+  // actions that exist.
+  //
+  // BOUNDED BY TIME. Unbounded, this DISTINCT read the whole of audit_log on
+  // every page load -- the one table that is append-only and never pruned --
+  // so the dropdown alone got slower every day. The last 90 days is a range
+  // scan of audit_log_created_idx and still cannot drift. The action currently
+  // being filtered on is kept as an option even if it is older than that, so
+  // re-submitting the form never silently drops the filter.
+  // The cutoff is the database's clock, as on admin/gates and
+  // admin/transcode-jobs.
   const actionOptions = (
     await db
       .selectDistinct({ action: auditLog.action })
       .from(auditLog)
+      .where(gte(auditLog.createdAt, sql`now() - interval '90 days'`))
       .orderBy(auditLog.action)
   ).map((r) => r.action);
+  if (sp.action && !actionOptions.includes(sp.action)) {
+    actionOptions.push(sp.action);
+    actionOptions.sort();
+  }
 
   const rows = await db
     .select({

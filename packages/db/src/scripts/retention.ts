@@ -1,18 +1,35 @@
-// SM-8 retention: delete notifications older than 90 days.
-// Wired to a daily BullMQ scheduled job in spec 107 (the worker registers a
-// repeat job at cron '0 3 * * *' that calls deleteOldNotifications()). The
-// script is still directly runnable for ad-hoc IT use:
+// Nightly retention sweep.
+//
+//   SM-8          notifications older than 90 days are deleted.
+//   rate_limits   counters whose window started more than 24 hours ago are
+//                 deleted (see pruneRateLimits below).
+//
+// The worker runs both, once a day, from the job scheduleDailyWork() enqueues
+// (apps/worker/src/index.ts, the `deleteOldNotifications` arm of the job
+// switch; spec 107). The script is still directly runnable for ad-hoc IT use:
 //   pnpm --filter @gml/db retention
 
 import "dotenv/config";
-import { lt } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
+import { lt, sql } from "drizzle-orm";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { getDb, getPool } from "../client.js";
 import { notifications } from "../schema/notifications";
+import { rateLimits } from "../schema/rateLimits";
 
 const RETAIN_DAYS = 90;
+
+/**
+ * How long a rate-limit counter is kept after its window started.
+ *
+ * The longest window any caller configures is 15 minutes, so 24 hours is
+ * conservative by two orders of magnitude -- and deleting a row whose window
+ * has passed is harmless in any case: the next request from that caller simply
+ * starts a fresh window, exactly as the upsert in rateLimit() would have.
+ */
+const RATE_LIMIT_RETAIN_HOURS = 24;
 
 /**
  * Delete notifications older than RETAIN_DAYS (90) days. Returns the number
@@ -37,8 +54,56 @@ export async function deleteOldNotifications(): Promise<number> {
   }
 }
 
+/**
+ * Delete rate-limit counters whose window started more than `olderThanHours`
+ * ago. Returns the number of rows deleted.
+ *
+ * ── WHY THIS IS HERE ─────────────────────────────────────────────────────────
+ *
+ * It used to live in apps/web/src/lib/rate-limit.ts under a docstring saying
+ * it was "called from the nightly retention job". It was called from nowhere,
+ * and could not have been: that file begins `import "server-only"`, and the
+ * worker that runs the nightly job has never imported from apps/web. So
+ * rate_limits kept one permanent row per distinct caller -- and the keys are
+ * IP-bearing (`login-link:<ip>`, `gate:<ip>:<userId>:<section>`), which made
+ * the table an indefinite record of which address tried to sign in, as whom,
+ * and when. It now sits on the side of the fence the worker can reach, and
+ * the worker's nightly job calls it.
+ *
+ * ── WHICH CONNECTION ─────────────────────────────────────────────────────────
+ *
+ * Unlike deleteOldNotifications() this does not open a pool of its own. By
+ * default it uses @gml/db's shared handle -- the same `db` the worker already
+ * holds -- because that is the one client.ts configures TLS for; a bare
+ * `new Pool({ connectionString })` would carry IP-bearing rows over whatever
+ * the URL alone negotiates. Whoever owns that pool owns its lifetime: the
+ * worker keeps it for the life of the process, main() below closes it.
+ * `database` exists so a caller (a test) can hand in its own connection.
+ */
+export async function pruneRateLimits(
+  olderThanHours: number = RATE_LIMIT_RETAIN_HOURS,
+  database: Pick<NodePgDatabase<Record<string, unknown>>, "delete"> = getDb(),
+): Promise<number> {
+  const seconds = Math.max(0, Math.round(olderThanHours * 3600));
+  // Compared against the DATABASE clock, like the upsert in rateLimit() that
+  // wrote window_start, so app/database clock skew cannot shorten a window.
+  const result = await database
+    .delete(rateLimits)
+    .where(sql`${rateLimits.windowStart} < now() - make_interval(secs => ${seconds})`);
+  const rowCount = result.rowCount ?? 0;
+  console.log(`[retention] deleted rate_limits counters older than ${olderThanHours}h: ${rowCount} rows`);
+  return rowCount;
+}
+
 export async function main(): Promise<void> {
-  await deleteOldNotifications();
+  try {
+    await deleteOldNotifications();
+    await pruneRateLimits();
+  } finally {
+    // pruneRateLimits() borrows the shared pool; without this the CLI lingers
+    // until the pool's idle timeout instead of exiting.
+    await getPool().end();
+  }
 }
 
 // Entry-point guard: only auto-run when invoked directly (e.g. `tsx retention.ts`),
