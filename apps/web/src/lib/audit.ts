@@ -7,6 +7,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog, type AuditAction } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { clientIpFrom, UNKNOWN_IP } from "@/lib/request-ip";
 
 export type AuditInput = {
   action: AuditAction;
@@ -120,10 +121,14 @@ export async function recordAudit(input: AuditInput): Promise<boolean> {
     try {
       const hdr = await headers();
       if (!ip) {
-        ip =
-          hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-          hdr.get("x-real-ip") ??
-          undefined;
+        // lib/request-ip, not the raw X-Forwarded-For head this used to read:
+        // Caddy APPENDS to that header, so its first element is whatever the
+        // client sent, and this column is the forensic record an administrator
+        // reads when investigating exactly that kind of caller. UNKNOWN_IP
+        // becomes undefined so a request with no proxy header still stores
+        // NULL ("not captured") rather than the literal marker.
+        const resolved = clientIpFrom(hdr);
+        ip = resolved === UNKNOWN_IP ? undefined : resolved;
       }
       ua = hdr.get("user-agent") ?? undefined;
     } catch {
@@ -219,10 +224,9 @@ export async function recordAuditDedup(input: AuditDedupInput): Promise<boolean>
     try {
       const hdr = await headers();
       if (!ip) {
-        ip =
-          hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-          hdr.get("x-real-ip") ??
-          undefined;
+        // Same source as recordAudit above -- see lib/request-ip.ts.
+        const resolved = clientIpFrom(hdr);
+        ip = resolved === UNKNOWN_IP ? undefined : resolved;
       }
       ua = hdr.get("user-agent") ?? undefined;
     } catch {

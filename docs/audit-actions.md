@@ -174,6 +174,7 @@ or `action='logout'` to find them.
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `audit.bulk_export` | A `super_admin` downloaded the audit log itself via `/api/admin/audit/export` (spec 116). Writing this row IS the audit-of-the-audit | `actorId`, `rowCount`, `dateRange` (from/to) |
+| `audit.bulk_export.gate_denied` | An admin-role session requested `/api/admin/audit/export` without an active `admin` section-gate grant; answered 403 `gate_required` and no row was read. Distinct from `audit.bulk_export` so the log never records an export that did not happen | `gateSlug` ("admin"), `reason` ("no_active_grant") |
 
 ## anti_download.* — SM-4 deterrence (spec 156)
 

@@ -15,11 +15,11 @@ import {
   sessions as classroomSessions,
   subjects,
   classes,
-  mentorPairings,
-  mentors,
-  observationCycles,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { teacherCycleHistory, teacherPairingHistory } from "@/lib/gated-reads";
+import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
@@ -68,6 +68,10 @@ export default async function RepoTeacherDetailPage({
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
+  // READ_ROLES answers "may you read /repo at all" and stays. The actor is what
+  // the section-access checks below need; actorFrom only narrows a null session.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
 
   const { id } = await params;
 
@@ -119,41 +123,31 @@ export default async function RepoTeacherDetailPage({
     .orderBy(desc(classroomSessions.scheduledDate))
     .limit(12);
 
-  const recentCycles = await db
-    .select({
-      id: observationCycles.id,
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      status: observationCycles.status,
-      scheduledAt: observationCycles.scheduledAt,
-      topic: observationCycles.topic,
-    })
-    .from(observationCycles)
-    .where(eq(observationCycles.teacherId, id))
-    .orderBy(desc(observationCycles.scheduledAt))
-    .limit(6);
-
-  const pairings = await db
-    .select({
-      id: mentorPairings.id,
-      status: mentorPairings.status,
-      startedAt: mentorPairings.startedAt,
-      currentQuarter: mentorPairings.currentQuarter,
-      meetingsCount: mentorPairings.meetingsCount,
-      lastMeetingAt: mentorPairings.lastMeetingAt,
-      mentorId: mentors.id,
-      mentorName: mentors.name,
-      mentorHindi: mentors.hindiName,
-      mentorBase: mentors.baseLocation,
-    })
-    .from(mentorPairings)
-    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
-    .where(eq(mentorPairings.teacherId, id))
-    .orderBy(desc(mentorPairings.startedAt))
-    .limit(5);
+  // The teacher's own profile -- name, subject, school, phase, sessions -- is
+  // directory data and stays visible to any signed-in user; that is what /repo
+  // is for. THE OBSERVATION HISTORY AND THE MENTOR PAIRING ARE NOT. Both were
+  // bare `teacher_id = $1` selects on a page outside the observation and
+  // mentorship section gates, so any teacher could open a colleague from
+  // /repo/teachers and read her cycle codes, topics, evaluative-vs-developmental
+  // kind and stage, plus who mentors her, where, and how often they meet -- the
+  // rows /observation and /mentorship guard with a section password AND a
+  // per-actor predicate. Both controls now apply here too: without the section
+  // grant the card is locked and no query runs (so not even the count
+  // escapes); with it, the actor's visibility predicate is in the SQL.
+  // Executed in tests/behaviour/access-control.test.ts.
+  const [observation, mentorship] = await Promise.all([
+    observationAccess(db, actor),
+    mentorshipAccess(db, actor),
+  ]);
+  const [recentCycles, pairings] = await Promise.all([
+    teacherCycleHistory(db, observation, id),
+    teacherPairingHistory(db, mentorship, id),
+  ]);
 
   const activePairing =
-    pairings.find((p) => p.status === "active") ?? pairings[0] ?? null;
+    pairings?.find((p) => p.status === "active") ?? pairings?.[0] ?? null;
+  const unlockHref = (slug: "observation" | "mentorship") =>
+    `/gate/${slug}?next=${encodeURIComponent(`/repo/teacher/${id}`)}`;
 
   const subjColor =
     (teacher.subjectSpecialism &&
@@ -398,7 +392,12 @@ export default async function RepoTeacherDetailPage({
               <div style={{ fontWeight: 600, fontSize: 13 }}>Mentor pairing</div>
             </div>
             <div style={{ padding: 14 }}>
-              {activePairing && activePairing.mentorId ? (
+              {pairings === null ? (
+                <LockedNote
+                  what="Mentorship details are"
+                  href={unlockHref("mentorship")}
+                />
+              ) : activePairing && activePairing.mentorId ? (
                 <Link
                   href={`/mentorship/${activePairing.id}`}
                   style={{
@@ -473,11 +472,17 @@ export default async function RepoTeacherDetailPage({
               }}
             >
               <div style={{ fontWeight: 600, fontSize: 13 }}>
-                Recent observation cycles ({recentCycles.length})
+                Recent observation cycles
+                {recentCycles ? ` (${recentCycles.length})` : ""}
               </div>
             </div>
             <div style={{ padding: 14 }}>
-              {recentCycles.length === 0 ? (
+              {recentCycles === null ? (
+                <LockedNote
+                  what="Observation history is"
+                  href={unlockHref("observation")}
+                />
+              ) : recentCycles.length === 0 ? (
                 <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
                   No cycles yet.
                 </p>
@@ -547,6 +552,22 @@ export default async function RepoTeacherDetailPage({
     </MobileDetailFrame>
   ) : (
     body
+  );
+}
+
+/**
+ * A gated card's content when the viewer has not unlocked that section. Says
+ * why the card is empty and offers the unlock, returning here afterwards,
+ * rather than rendering "No cycles yet." -- which would be a false statement.
+ */
+function LockedNote({ what, href }: { what: string; href: string }) {
+  return (
+    <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+      {what} behind the section password.{" "}
+      <Link href={href} style={{ color: "var(--indigo)" }}>
+        Unlock →
+      </Link>
+    </p>
   );
 }
 

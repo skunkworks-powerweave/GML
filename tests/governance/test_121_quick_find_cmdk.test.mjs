@@ -110,21 +110,27 @@ test("Spec 121: API route fans out to all 8 documented entities via ilike", () =
     /import\s*\{[^}]*\bilike\b[^}]*\}\s*from\s*"drizzle-orm"/,
     "route.ts must import `ilike` from drizzle-orm",
   );
-  // …and the schema imports must include every fanned-out table.
+  // …and the schema imports must include every DIRECTORY table it fans out to.
   for (const tbl of [
     "teachers",
     "schools",
     "classes",
     "subjects",
-    "observationCycles",
-    "mentorPairings",
-    "mentors",
     "courseOutlines",
     "sessions",
   ]) {
     const re = new RegExp(`import\\s*\\{[\\s\\S]*?\\b${tbl}\\b[\\s\\S]*?\\}\\s*from\\s*"@gml/db/schema"`);
     assert.match(src, re, `route.ts must import \`${tbl}\` from @gml/db/schema`);
   }
+  // Observation cycles and mentor pairings are the other two kinds, and they
+  // are GATED rows. This list used to require the route to import
+  // observationCycles / mentorPairings / mentors and select them itself -- with
+  // a bare ILIKE and nothing else, which returned every teacher's cycle codes
+  // and every "Mentor -> Teacher" pairing to any signed-in user. They must come
+  // through the scoped searches in lib/gated-reads under the caller's section
+  // access (executed in tests/behaviour/access-control.test.ts).
+  assert.match(src, /searchCycles\(\s*db\s*,\s*observation\s*,\s*pattern\s*,/);
+  assert.match(src, /searchPairings\(\s*db\s*,\s*mentorship\s*,\s*pattern\s*,/);
   // Schools must use both name and code (OR) — the audit-trail prose calls this out.
   assert.match(
     src,

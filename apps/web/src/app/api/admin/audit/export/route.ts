@@ -10,6 +10,7 @@
 //   GET                            → 200 text/csv   success
 //   GET (no session)               → 401 unauthenticated
 //   GET (role not in allow-list)   → 403 forbidden
+//   GET (no admin section grant)   → 403 gate_required  (and an audit row)
 //   GET (>10k rows match)          → 413 too_many_rows  (with narrowing hint)
 //   POST                           → 405 method_not_allowed
 //
@@ -29,6 +30,10 @@
 //   action="audit.bulk_export", entityType="audit_log",
 //   metadata={ rowCount, filters: { action, userId, entityType, from, to } }
 // so a downstream reviewer can see who exfiltrated which slice of the log.
+// A request refused by the admin section gate records
+// action="audit.bulk_export.gate_denied" instead -- a distinct action, never
+// the success one, so the append-only log cannot show an export that did not
+// happen.
 //
 // Hard cap: 10000 rows per request. If the selected count would exceed that,
 // we return 413 with a JSON body hinting the caller to narrow by from/to or
@@ -47,6 +52,7 @@ import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
+import { getActiveGrant } from "@/lib/gates";
 import { hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
 
 /** Same shape /admin/audit validates against, kept in step deliberately. */
@@ -68,6 +74,36 @@ export async function GET(req: Request) {
   // middleware role list. super_admin + programme_admin only.
   if (!hasAnyRole(session.user.role, ALLOWED_ROLES)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
+  // Section gate. The PAGE these rows come from is gated
+  // (admin/audit/layout.tsx, assertSectionGate) because "a role check alone is a
+  // thinner guard than the UI was claiming". This endpoint streams the SAME
+  // rows -- up to 10k, with ip, user agent and full metadata -- and checked the
+  // role only, so an admin session that had never entered the admin section
+  // password (a borrowed laptop in a shared school office is the realistic
+  // case) could pull the whole log, and rotating that password closed nothing.
+  //
+  // getActiveGrant rather than assertSectionGate: the latter redirect()s, which
+  // in a Route Handler is a 307 to an HTML unlock page where the method matrix
+  // above promises JSON status codes. The only legitimate caller is the Export
+  // CSV link on the gated page, whose user already holds a grant.
+  //
+  // BEFORE any row is read and before the audit.bulk_export row below: a denied
+  // request must not record an export that did not happen. It records its own
+  // action instead -- an ungranted admin probing this URL is exactly the signal
+  // the gate exists to surface, and it used to leave no trace at all.
+  const grant = await getActiveGrant(session.user.id, "admin");
+  if (!grant) {
+    const denialAudited = await recordAudit({
+      action: "audit.bulk_export.gate_denied",
+      entityType: "audit_log",
+      metadata: { gateSlug: "admin", reason: "no_active_grant" },
+    });
+    if (!denialAudited) {
+      noteAuditDegraded("/api/admin/audit/export (gate_denied)");
+    }
+    return NextResponse.json({ error: "gate_required" }, { status: 403 });
   }
 
   const url = new URL(req.url);

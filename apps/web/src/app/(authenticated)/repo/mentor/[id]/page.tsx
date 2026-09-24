@@ -14,11 +14,13 @@
 
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentors, mentorPairings, teachers } from "@gml/db/schema";
+import { mentors } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { actorFrom, pairingVisibilityFilter } from "@/lib/authz";
+import { actorFrom } from "@/lib/authz";
+import { mentorRoster } from "@/lib/gated-reads";
+import { mentorshipAccess } from "@/lib/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -54,8 +56,10 @@ export default async function RepoMentorDetailPage({
   // THE PAIRING ROSTER IS NOT. It names mentees and their meeting history, and
   // this page sits OUTSIDE the mentorship section gate, so it was reproducing
   // the exact roster /mentorship protects to anyone who knew a mentor id. The
-  // same predicate that scopes /mentorship scopes it here.
-  const visibility = await pairingVisibilityFilter(actor);
+  // same predicate that scopes /mentorship scopes it here -- and, as on
+  // /repo/teacher/[id], the same section password: without the mentorship
+  // grant the roster is locked and not queried at all. See lib/gated-reads.ts.
+  const mentorship = await mentorshipAccess(db, actor);
 
   // Spec 153 — only return active mentors. A soft-retired mentor (active=false)
   // must not render here; the row exists in the DB so without this guard the
@@ -68,24 +72,9 @@ export default async function RepoMentorDetailPage({
     .limit(1);
   if (!mentor) notFound();
 
-  const pairings = await db
-    .select({
-      id: mentorPairings.id,
-      status: mentorPairings.status,
-      currentQuarter: mentorPairings.currentQuarter,
-      meetingsCount: mentorPairings.meetingsCount,
-      lastMeetingAt: mentorPairings.lastMeetingAt,
-      startedAt: mentorPairings.startedAt,
-      endedAt: mentorPairings.endedAt,
-      teacherId: mentorPairings.teacherId,
-      teacherName: teachers.fullName,
-      teacherHindi: teachers.hindiName,
-    })
-    .from(mentorPairings)
-    .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
-    .where(and(eq(mentorPairings.mentorId, id), ...(visibility ? [visibility] : [])))
-    .orderBy(desc(mentorPairings.startedAt))
-    .limit(120);
+  const roster = await mentorRoster(db, mentorship, id);
+  const locked = roster === null;
+  const pairings = roster ?? [];
 
   // Group pairings by status for the cluster lists.
   const grouped = new Map<Status, typeof pairings>();
@@ -126,9 +115,11 @@ export default async function RepoMentorDetailPage({
           {mentor.baseLocation ? (
             <span className={`chip ${baseChipKind}`}>{mentor.baseLocation}</span>
           ) : null}
-          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-            {activeCount} active mentee{activeCount === 1 ? "" : "s"} · {totalMeetings} meeting{totalMeetings === 1 ? "" : "s"} lifetime
-          </span>
+          {locked ? null : (
+            <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
+              {activeCount} active mentee{activeCount === 1 ? "" : "s"} · {totalMeetings} meeting{totalMeetings === 1 ? "" : "s"} lifetime
+            </span>
+          )}
         </div>
       </div>
 
@@ -163,10 +154,23 @@ export default async function RepoMentorDetailPage({
               marginBottom: 12,
             }}
           >
-            Pairings ({pairings.length})
+            Pairings{locked ? "" : ` (${pairings.length})`}
           </h2>
 
-          {pairings.length === 0 ? (
+          {locked ? (
+            <div
+              className="card card-hi"
+              style={{ padding: 24, color: "var(--ink-3)", fontSize: 13 }}
+            >
+              Mentorship details are behind the section password.{" "}
+              <Link
+                href={`/gate/mentorship?next=${encodeURIComponent(`/repo/mentor/${id}`)}`}
+                style={{ color: "var(--indigo)" }}
+              >
+                Unlock →
+              </Link>
+            </div>
+          ) : pairings.length === 0 ? (
             <div
               className="card card-hi"
               style={{ padding: 24, color: "var(--ink-3)", fontSize: 13 }}
