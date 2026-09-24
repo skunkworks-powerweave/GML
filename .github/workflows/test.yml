@@ -27,6 +27,18 @@ jobs:
       DATABASE_URL: postgres://build:build@127.0.0.1:5432/build
     steps:
       - uses: actions/checkout@v4
+
+      # The runbook's first command is `./scripts/deploy.sh`, and the cron lines
+      # run backup.sh and restore.sh the same way. Every script was once
+      # committed 100644, so each of those was "Permission denied" on a fresh
+      # clone. A regex over file text cannot see a mode bit; this checks the
+      # checked-out files the way an operator's shell would.
+      - name: Operator shell scripts are executable
+        run: |
+          for f in scripts/*.sh; do
+            test -x "$f" || { echo "::error::$f is not executable -- git update-index --chmod=+x $f"; exit 1; }
+          done
+
       - uses: pnpm/action-setup@v4        # version comes from packageManager
       - uses: actions/setup-node@v4
         with:
