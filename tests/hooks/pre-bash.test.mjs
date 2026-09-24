@@ -1191,27 +1191,75 @@ let stubSeq = 0;
  * run. A test that cannot fail on the developer's machine is the same defect
  * class as a hook that never loads.
  *
- * So the body is written to a FILE that the stub prints verbatim, which has no
- * escaping semantics on either platform, and then the stub is RUN and its output
- * parsed. If a future change breaks the stub on one platform, it fails here, in
- * the helper, naming the problem — instead of surfacing as a puzzling refusal
- * from the gate under test.
+ * So the body is written to a FILE and both halves of the stub exec THIS node
+ * on a shim that reads it — no shell ever touches the JSON, and no path is
+ * interpolated into a shell word. The stub is then RUN and its output parsed, so
+ * a future break fails here, in the helper, naming the cause, instead of
+ * surfacing as a puzzling refusal from the gate under test. That self-check has
+ * already earned itself twice: it caught  on the Linux runner
+ * (PATH is the stub directory alone, so no external binary is reachable) in the
+ * same place it would have caught the original echo mangling.
  */
 function stubGh(dir, json) {
   const binDir = join(dir, "bin");
   mkdirSync(binDir, { recursive: true });
   if (json === null) return envWithPath(binDir);
 
-  const bodyFile = join(binDir, `gh-body-${stubSeq++}.json`);
+  const n = stubSeq++;
+  const bodyFile = join(binDir, `gh-body-${n}.json`);
+  const shim = join(binDir, `gh-shim-${n}.mjs`);
   writeFileSync(bodyFile, json);
-  writeFileSync(join(binDir, "gh.cmd"), `@echo off\r\ntype "${bodyFile}"\r\n`);
+
+  // The shim reads the body RELATIVE TO ITSELF, so no path is ever interpolated
+  // into a shell word and no shell ever touches the JSON.
+  writeFileSync(
+    shim,
+    'import { readFileSync } from "node:fs";\n' +
+      `process.stdout.write(readFileSync(new URL("./gh-body-${n}.json", import.meta.url), "utf8"));\n`,
+  );
+
+  // Both halves exec THIS node by absolute path. `envWithPath` deliberately
+  // replaces PATH with the stub directory alone, so that a real gh on the
+  // machine can never answer — which also means the stub cannot rely on
+  // anything being on PATH. That is what broke the first attempt at this:
+  // `cat "<body>"` is an external binary, and on the Linux runner it failed
+  // with `cat: not found` where cmd's builtin `type` had worked. process.execPath
+  // needs no PATH and is the same interpreter already running the suite.
+  writeFileSync(join(binDir, "gh.cmd"), `@echo off\r\n"${process.execPath}" "${shim}"\r\n`);
   writeFileSync(
     join(binDir, "gh"),
-    `#!/bin/sh\ncat "${bodyFile.split("\\").join("/")}"\n`,
+    `#!/bin/sh\nexec "${process.execPath.split("\\").join("/")}" "${shim.split("\\").join("/")}"\n`,
     { mode: 0o755 },
   );
 
-  // Self-check: run the stub the way the hook will and require the bytes back.
+  // Self-check 1, and the one that is platform-INDEPENDENT: the POSIX stub must
+  // not name a command that has to be looked up on PATH. `cat "<body>"` passed
+  // every local run on Windows — where the .cmd half runs and `type` is a cmd
+  // builtin — and failed on the Linux runner with `cat: not found`, because
+  // envWithPath replaces PATH with the stub directory alone. Only `exec`, a
+  // shell builtin, plus absolute paths. Asserted on the TEXT so that the next
+  // person to reach for a convenient external command is stopped on the machine
+  // they are typing on rather than ten minutes later in CI.
+  // Tokenised on QUOTES, not on whitespace: process.execPath here is
+  // `C:\Program Files\nodejs\node.exe`, and the first version of this check split
+  // on /\s+/ and indicted "Files/nodejs/node.exe" as a PATH lookup. It failed on
+  // a correct stub, which also silently voided the mutation check that was
+  // supposed to prove it — the tests were red with and without the mutation.
+  const posix = readFileSync(join(binDir, "gh"), "utf8");
+  const script = posix.slice(posix.indexOf("\n") + 1); // drop the shebang
+  for (const word of script.match(/"[^"]*"|\S+/g) ?? []) {
+    const bare = word.replace(/^"|"$/g, "");
+    if (bare === "exec") continue;
+    assert.match(
+      bare,
+      /^(?:\/|[A-Za-z]:\/)/,
+      `the POSIX gh stub must reach everything by ABSOLUTE path — "${bare}" would be resolved ` +
+        `through PATH, and PATH here is the stub directory alone, so it will not be found on a ` +
+        `machine whose shell does not happen to have it built in`,
+    );
+  }
+
+  // Self-check 2: run the stub the way the hook will and require the bytes back.
   const probe = spawnSync("gh", ["pr", "view", "--json", "body"], {
     cwd: dir,
     encoding: "utf8",
