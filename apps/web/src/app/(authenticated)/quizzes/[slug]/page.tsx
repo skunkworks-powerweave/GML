@@ -25,6 +25,14 @@ import { MobileQuizRunner } from "@/components/quiz/MobileQuizRunner";
 
 export const dynamic = "force-dynamic";
 
+// Seconds past the time limit a submission is still scored. It exists for the
+// time the learner did NOT see: the countdown starts only once the page has
+// arrived and hydrated, and the auto-submit at 00:00 still has to travel back.
+// On a Ladakh 2G link that is seconds, and penalising it would be penalising
+// someone's bandwidth. It is applied HERE ONLY -- the countdown shows the real
+// limit -- because a grace that is also on the clock is no grace at all.
+const SUBMIT_GRACE_SECONDS = 30;
+
 // ---------------------------------------------------------------------------
 // Server action — wired into <QuizRunner> via the `submitAction` prop.
 // Computes percentage-correct, inserts the submission, fires audit, redirects.
@@ -101,8 +109,13 @@ export async function submitQuizAttempt(
   }
 
   // The open attempt this submission belongs to, if any.
+  // Elapsed time is measured by Postgres, the clock that wrote started_at --
+  // as the page does below -- not by this process's Date.now().
   const [openAttempt] = await db
-    .select({ id: quizAttempts.id, startedAt: quizAttempts.startedAt })
+    .select({
+      id: quizAttempts.id,
+      elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::float8`,
+    })
     .from(quizAttempts)
     .where(
       and(
@@ -115,12 +128,7 @@ export async function submitQuizAttempt(
 
   let overtime = false;
   if (quiz.timeLimitSeconds != null && openAttempt) {
-    const elapsed = (Date.now() - openAttempt.startedAt.getTime()) / 1000;
-    // A grace margin, because the limit is measured from a server timestamp
-    // while the countdown the learner watched started a round-trip later. On a
-    // Ladakh connection that difference is real, and penalising someone for it
-    // would be penalising their bandwidth.
-    overtime = elapsed > quiz.timeLimitSeconds + 30;
+    overtime = openAttempt.elapsedSeconds > quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS;
   }
   if (overtime) {
     // The attempt is closed and recorded, not silently discarded: an
@@ -260,8 +268,14 @@ export default async function QuizRunnerPage({
   //
   // Reading the attempt back and passing what is actually LEFT makes the
   // countdown agree with the rule it is displaying. Clamped at zero rather
-  // than going negative, and the +30s grace mirrors the submit-side margin so
-  // a learner is never shown less time than the server will honour.
+  // than going negative.
+  //
+  // WITHOUT the submit grace. This used to add the +30s here too "so a learner
+  // is never shown less time than the server will honour" -- which spent the
+  // whole grace on the clock: the countdown reached 00:00 exactly at the
+  // server's cut-off, so the auto-submit, arriving a page-load and an upload
+  // later, was refused as time_expired and every answer was discarded. The
+  // learner sees the limit; the grace covers the latency they cannot see.
   let remainingSeconds: number | null = quiz.timeLimitSeconds ?? null;
   if (remainingSeconds != null) {
     // Elapsed time comes from POSTGRES, not from this process.
@@ -288,7 +302,7 @@ export default async function QuizRunnerPage({
     if (attempt) {
       remainingSeconds = Math.max(
         0,
-        Math.round(remainingSeconds + 30 - (attempt.elapsedSeconds ?? 0)),
+        Math.round(remainingSeconds - (attempt.elapsedSeconds ?? 0)),
       );
     }
   }

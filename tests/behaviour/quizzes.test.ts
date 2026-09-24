@@ -305,3 +305,55 @@ test("F34: the key is shown once the last attempt is used, and Retake is no long
     assert.doesNotMatch(html, />Retake</, "a Retake link would only bounce to the history page");
   });
 });
+
+// ── F92: the countdown and the server's grace ────────────────────────────────
+
+/** Move the learner's open attempt's start `seconds` into the past. */
+async function backdateOpenAttempt(w: QuizWorld, seconds: number): Promise<void> {
+  await w.q(
+    `UPDATE quiz_attempts SET started_at = now() - make_interval(secs => $2)
+      WHERE quiz_id = $1 AND user_id = $3 AND closed_at IS NULL`,
+    [w.quizId, seconds, w.userId],
+  );
+}
+
+test("F92: a fresh timed attempt counts down the time limit, not the limit plus the server's grace", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    const shown = runner?.timeLimitSeconds;
+    assert.ok(typeof shown === "number" && shown <= 60 && shown >= 58, `countdown starts at ${shown}s on a 60s quiz`);
+  });
+});
+
+test("F92: an auto-submit at 00:00 that takes a few seconds to arrive is scored, not discarded", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    await openRunner(w);
+    // The learner reloads 20 s in; the page hands the runner what is left.
+    await backdateOpenAttempt(w, 20);
+    const { runner } = await openRunner(w);
+    const left = runner!.timeLimitSeconds!;
+    // The runner counts `left` down to 00:00 and auto-submits; on a Ladakh
+    // link the page load and the POST add seconds the server sees and the
+    // countdown did not.
+    const latency = 5;
+    await backdateOpenAttempt(w, 20 + left + latency);
+    const res = await submit(runner, answerAll(w, 0));
+    assert.match(res.redirect ?? "", /\/result\//, `an on-time auto-submit was refused: ${JSON.stringify(res)}`);
+    const [row] = await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_submissions WHERE quiz_id = $1`, [w.quizId]);
+    assert.equal(row!.n, 1);
+  });
+});
+
+test("F92: the limit is still enforced -- a submit arriving after limit + grace is not scored", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    await backdateOpenAttempt(w, 60 + 31);
+    const res = await submit(runner, answerAll(w, 0));
+    assert.match(res.redirect ?? "", /error=time_expired/);
+    const [row] = await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_submissions WHERE quiz_id = $1`, [w.quizId]);
+    assert.equal(row!.n, 0);
+  });
+});
