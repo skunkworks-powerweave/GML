@@ -10,6 +10,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -18,15 +19,21 @@ import { users } from "./identity";
 
 // Current and historical password versions. Most-recent version per slug is
 // active; old versions retained so already-issued grants don't immediately break.
-export const sectionGates = pgTable("section_gates", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  slug: sectionGateSlugEnum("slug").notNull(),
-  passwordHash: text("password_hash").notNull(),
-  version: integer("version").notNull().default(1),
-  rotatedAt: timestamp("rotated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
-  rotatedByUserId: uuid("rotated_by_user_id").references(() => users.id, { onDelete: "set null" }),
-  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
-});
+export const sectionGates = pgTable(
+  "section_gates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    slug: sectionGateSlugEnum("slug").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    version: integer("version").notNull().default(1),
+    rotatedAt: timestamp("rotated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    rotatedByUserId: uuid("rotated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  // getCurrentGate() takes the highest version; two rows at one version made
+  // that arbitrary, and one rotated password dead (migration 0032).
+  (t) => [uniqueIndex("section_gates_slug_version_uq").on(t.slug, t.version)],
+);
 
 // Per-user grant after passing the gate. Expires within 8h, enforced by CHECK.
 export const sectionGateGrants = pgTable(

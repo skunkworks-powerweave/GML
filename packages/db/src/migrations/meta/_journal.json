@@ -225,6 +225,13 @@
       "when": 1780733000000,
       "tag": "0031_one_record_per_login",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780734000000,
+      "tag": "0032_gate_version_unique",
+      "breakpoints": true
     }
   ]
 }
