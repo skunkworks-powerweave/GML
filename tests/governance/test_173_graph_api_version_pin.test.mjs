@@ -2,19 +2,27 @@
 //
 // ── THE DEFECT THIS EXISTS TO CATCH ──────────────────────────────────────────
 //
-// apps/web/src/app/api/webhooks/whatsapp/route.ts called
-// `https://graph.facebook.com/v19.0/{media-id}` with the version written into
+// apps/web/src/app/api/webhooks/whatsapp/route.ts built its media URL as
+// `https://graph.facebook.com/v19.0/{media-id}`, with the version written into
 // the URL literal. Meta's published version table gives v19.0 a release date of
 // 2024-01-23 and an EXPIRATION of 2026-05-21 — four months before this test was
-// written. The call had been aimed at an expired version and nothing said so.
+// written.
 //
-// WHY IT COULD NOT HAVE BEEN NOTICED. Meta does not fail a call to an expired
-// version; per its versioning guide the request is silently served by the
-// next-oldest usable version. Downstream, `fetchMediaUrl` returns null on any
-// non-OK response, the caller drops the media, and the webhook still answers
-// Meta with HTTP 200. So every failure mode on this path — expired version,
-// blank access token, revoked token — produces exactly the same observable
-// result as "no video was sent": nothing.
+// WHY NOTHING NOTICED — and it is not the reason the first version of this
+// header gave. Meta's versioning guide, read at the source: "once a version is
+// no longer usable, any calls made to it will be defaulted to the next oldest,
+// usable version." The call does not fail. It is served by v20.0, then v21.0,
+// changing underneath the code at each expiry, and nothing records the swap.
+// That is the whole reason it was invisible: it never failed.
+//
+// This header used to say every failure on this path produced "exactly the same
+// observable result as no video was sent: nothing" — an expired version, a
+// blank token and a revoked token alike. False: route.ts records
+// `whatsapp.media.url_failed` and `whatsapp.media.fetch_failed` on the two
+// fetch-failure paths. The expired version was the one case that left no
+// trace, precisely because it was not a failure. And whether any deployment
+// ever made this call is not established — docs/verification.md records that the
+// ingest path has never seen a real Meta delivery.
 //
 // This file pins two things that are cheap to check statically and would each
 // have caught it:
@@ -25,13 +33,15 @@
 //
 // ── ON PURPOSE: THIS TEST HAS AN EXPIRY DATE ─────────────────────────────────
 //
-// Assertion 2 compares against the real clock, so this suite WILL go red on
-// 2028-07-29 if nobody has bumped the pin by then. That is the point and it is
-// not an accident: a silent expiry is what produced the defect, and a test that
-// cannot fail on a date cannot catch a date-triggered defect. It fails loudly,
-// in CI, with a message naming the next version and the table to read — which
-// is a far better morning than discovering that media ingest has been quietly
-// degrading. GRACE_DAYS makes it fail BEFORE the cliff rather than on it.
+// Assertion 2 compares against the real clock, so this suite WILL go red if
+// nobody has bumped the pin in time — at 2028-04-30T00:00:00Z, which is
+// GRACE_DAYS (90) before v25.0's published expiry of 2028-07-29. That is the
+// point and it is not an accident: a silent expiry is what produced the defect,
+// and a test that cannot fail on a date cannot catch a date-triggered defect. It
+// fails loudly, in CI, naming the versions still current and the table to read,
+// which is a better morning than discovering the API underneath the code changed
+// months ago. The boundary was checked with a mocked clock: green at
+// 2028-04-29T23:59:59.999Z, red at 2028-04-30T00:00:00.000Z.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -148,15 +158,28 @@ test("173. the pinned Graph API version is one Meta actually publishes", () => {
 test("173. the pinned Graph API version has not expired", () => {
   // The canary. It compares against the real clock deliberately; see the header.
   const pinned = pinnedVersion();
-  const { expires } = META_VERSIONS[pinned] ?? {};
+
+  // A pin that is not in the table is assertion 3's failure, and it says so
+  // clearly. Without this early return the lookup gives `undefined` (not `null`),
+  // the date maths gives NaN, `now < NaN` is false, and this test failed ALONGSIDE
+  // assertion 3 with the unhelpful "expires undefined". One failure, one message.
+  if (!Object.hasOwn(META_VERSIONS, pinned)) return;
+
+  const { expires } = META_VERSIONS[pinned];
   if (expires === null) return; // newest release, no published expiry yet
 
-  const deadline = Date.parse(`${expires}T00:00:00Z`) - GRACE_DAYS * 86_400_000;
+  const GRACE_MS = GRACE_DAYS * 86_400_000;
+  const deadline = Date.parse(`${expires}T00:00:00Z`) - GRACE_MS;
   const now = Date.now();
 
+  // What to move TO. Measured against the same grace window the pin is held to,
+  // and excluding the pin itself: the first version of this list used `> now`,
+  // so on 2028-04-30 — the only day this message is ever printed — it would have
+  // recommended v25.0, the version that was expiring, as "still current".
   const alternatives = Object.entries(META_VERSIONS)
-    .filter(([, v]) => v.expires === null || Date.parse(`${v.expires}T00:00:00Z`) > now)
-    .map(([k]) => k);
+    .filter(([k]) => k !== pinned)
+    .filter(([, v]) => v.expires === null || Date.parse(`${v.expires}T00:00:00Z`) - GRACE_MS > now)
+    .map(([k, v]) => `${k} (${v.expires ?? "expiry not yet published"})`);
 
   assert.ok(
     now < deadline,
@@ -226,10 +249,22 @@ test("173. packages/shared does not reach for Node-only globals", () => {
       // `NodeJS.` is the namespace; the second pattern is a BARE `process.`,
       // which excludes the deliberate `(globalThis as {...}).process?.env`
       // because that one is preceded by a dot.
-      const bad =
-        /\bNodeJS\./.exec(src)?.[0] ??
-        /(?:^|[^.\w])(process\s*\.)/m.exec(src)?.[1];
-      if (bad) offenders.push(`${rel} (${bad.trim()})`);
+      // Each of these needs @types/node to typecheck and a Node runtime to run,
+      // so each reproduces the green-locally / red-on-CI failure exactly. The
+      // first version of this guard checked only the first two, which is the pair
+      // that actually broke CI; review pointed out that `Buffer` or a `node:`
+      // import would have walked straight past it. `\bBuffer\b` does not match
+      // inside `ArrayBuffer`, which is a web standard and fine here.
+      const NODE_ONLY = [
+        /\bNodeJS\./,
+        /(?:^|[^.\w])(process\s*\.)/m,
+        /\bBuffer\b/,
+        /\bfrom\s*["']node:[\w/]+["']/,
+        /\brequire\s*\(\s*["']node:/,
+        /\b__(?:dirname|filename)\b/,
+      ];
+      const bad = NODE_ONLY.map((re) => re.exec(src)).find(Boolean);
+      if (bad) offenders.push(`${rel} (${(bad[1] ?? bad[0]).trim()})`);
     }
   };
   walk("packages/shared/src");
