@@ -10,7 +10,7 @@
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { formDrafts, mentorPairings, mentors, observationCycles, videoSubmissions } from "@gml/db/schema";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { observationAccess, type Db } from "./visibility";
+import { activeGrant, observationAccess, type Db } from "./visibility";
 import { pendingTeachBackReviewWhere } from "./video/pending-review";
 
 /**
@@ -19,7 +19,10 @@ import { pendingTeachBackReviewWhere } from "./video/pending-review";
  * when the role has no badge-bearing nav rows.
  */
 export type NavCounts = {
-  /** mentor: active pairings owned by this mentor's mentor row */
+  /**
+   * mentor: active pairings owned by this mentor's mentor row. Undefined -- no
+   * badge -- while the mentorship section is locked for him.
+   */
   mentees?: number;
   /**
    * mentor + observer + teacher: open cycles THIS user can see. Undefined --
@@ -61,6 +64,21 @@ async function openCycles(db: Db, userId: string, role: RoleName): Promise<numbe
   return row?.c ?? 0;
 }
 
+/**
+ * The mentor's active pairings, or undefined while the mentorship section is
+ * locked for him. Pairings are mentorship rows: the same rule as openCycles(),
+ * for the other gated section.
+ */
+async function menteeCount(db: Db, userId: string, mentorId: string | null): Promise<number | undefined> {
+  if (!(await activeGrant(db, userId, "mentorship"))) return undefined;
+  if (!mentorId) return 0;
+  const [row] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(mentorPairings)
+    .where(and(eq(mentorPairings.mentorId, mentorId), eq(mentorPairings.status, "active")));
+  return row?.c ?? 0;
+}
+
 async function draftCount(db: Db, userId: string): Promise<number> {
   const [row] = await db
     .select({ c: sql<number>`count(*)::int` })
@@ -82,12 +100,7 @@ export async function navCounts(db: Db, userId: string, role: RoleName): Promise
 
     const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const [mentees, cycles, pendingReview, pendingForms] = await Promise.all([
-      mentorId
-        ? db
-            .select({ c: sql<number>`count(*)::int` })
-            .from(mentorPairings)
-            .where(and(eq(mentorPairings.mentorId, mentorId), eq(mentorPairings.status, "active")))
-        : Promise.resolve([{ c: 0 }]),
+      menteeCount(db, userId, mentorId),
       openCycles(db, userId, role),
       db
         .select({ c: sql<number>`count(*)::int` })
@@ -103,7 +116,7 @@ export async function navCounts(db: Db, userId: string, role: RoleName): Promise
       draftCount(db, userId),
     ]);
     return {
-      mentees: mentees[0]?.c ?? 0,
+      mentees,
       cycles,
       pendingReview: pendingReview[0]?.c ?? 0,
       pendingForms,

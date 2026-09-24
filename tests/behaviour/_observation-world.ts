@@ -30,8 +30,8 @@ export type ObservationWorld = {
   pairingId: string;
   /** A new cycle for the world's teacher, observed by the world's observer. */
   cycle: (opts?: { status?: string; observerId?: string | null; code?: string; scheduledAt?: string | null }) => Promise<{ id: string; code: string }>;
-  /** An observation-section grant, valid for 8 hours. */
-  grant: (userId: string) => Promise<void>;
+  /** A section grant (observation unless named), valid for 8 hours. */
+  grant: (userId: string, slug?: "observation" | "mentorship") => Promise<void>;
   cleanup: () => Promise<void>;
 };
 
@@ -70,9 +70,11 @@ export async function observationWorld(prefix = "obsw"): Promise<ObservationWorl
     mentor.id,
     `Mentor Row ${T}`,
   ]);
+  // As /admin/data creates one: current_quarter NULL (the pairing page reads
+  // that as Q1) and no meetings yet.
   const pairingId = await one(
-    `INSERT INTO mentor_pairings (mentor_id, teacher_id, status, started_at, meetings_count, current_quarter)
-     VALUES ($1, $2, 'active', now() - interval '30 days', 1, 1) RETURNING id`,
+    `INSERT INTO mentor_pairings (mentor_id, teacher_id, status, started_at)
+     VALUES ($1, $2, 'active', now() - interval '30 days') RETURNING id`,
     [mentorId, teacherId],
   );
 
@@ -94,11 +96,11 @@ export async function observationWorld(prefix = "obsw"): Promise<ObservationWorl
     return { id, code };
   };
 
-  const grant = async (userId: string) => {
+  const grant: ObservationWorld["grant"] = async (userId, slug = "observation") => {
     await c.query(
       `INSERT INTO section_gate_grants (user_id, gate_slug, granted_at, expires_at)
-       VALUES ($1, 'observation', now(), now() + interval '8 hours')`,
-      [userId],
+       VALUES ($1, $2::section_gate_slug, now(), now() + interval '8 hours')`,
+      [userId, slug],
     );
   };
 

@@ -1,4 +1,5 @@
-// The observation nav badge counts the cycles the viewer can SEE.
+// The observation nav badge counts the cycles the viewer can SEE, and the gated
+// badges show nothing while their section is locked.
 //
 // ── THE DEFECT ───────────────────────────────────────────────────────────────
 //
@@ -62,6 +63,22 @@ test("teacher, mentor and observer badges count their own open cycles, and only 
   } finally {
     await w.c.query(`DELETE FROM observation_cycles WHERE teacher_id = $1`, [otherTeacher]);
     await w.c.query(`DELETE FROM teachers WHERE id = $1`, [otherTeacher]);
+    await w.cleanup();
+  }
+});
+
+// The same rule for the other gated section. "My mentees" counted the mentor's
+// pairings -- mentorship rows -- with no mentorship grant, while the section
+// itself and the dashboard's mentorship cards are behind that gate.
+test("the mentor's mentees badge is withheld until the mentorship section is unlocked", { skip }, async () => {
+  const w = await observationWorld("navmentees");
+  const db = drizzle(w.c) as unknown as Db;
+  try {
+    await w.grant(w.mentor.id); // observation only
+    assert.equal((await navCounts(db, w.mentor.id, "mentor")).mentees, undefined, "mentorship locked: no badge, no count");
+    await w.grant(w.mentor.id, "mentorship");
+    assert.equal((await navCounts(db, w.mentor.id, "mentor")).mentees, 1, "his one active pairing");
+  } finally {
     await w.cleanup();
   }
 });

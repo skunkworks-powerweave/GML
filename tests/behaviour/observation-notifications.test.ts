@@ -90,6 +90,8 @@ test("a teacher whose cycle is waiting on her post-form is told so on her dashbo
   const w = await observationWorld("notifypost");
   try {
     await w.cycle({ status: "observed" });
+    // The dashboard's observation to-dos follow the section gate.
+    await w.grant(w.teacher.id);
     signIn(w.teacher);
     const { default: DashboardPage } = await import("../../apps/web/src/app/(authenticated)/dashboard/page.tsx");
     const text = (await render(withAppRouter(await DashboardPage()))).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
