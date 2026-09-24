@@ -23,9 +23,11 @@ import {
   schools,
   phases,
   sessions as classroomSessions,
-  observationCycles,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { cycleCountsByTeacher } from "@/lib/gated-reads";
+import { observationAccess } from "@/lib/visibility";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
@@ -74,6 +76,8 @@ export default async function RepoTeachersIndexPage({
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
 
   const sp = await searchParams;
   const schoolFilter = sp.school && UUID_RE.test(sp.school) ? sp.school : null;
@@ -92,14 +96,13 @@ export default async function RepoTeachersIndexPage({
     .groupBy(classroomSessions.teacherId)
     .as("session_counts");
 
-  const cycleCounts = db
-    .select({
-      teacherId: observationCycles.teacherId,
-      cyclesTotal: sql<number>`count(*)::int`.as("cycles_total"),
-    })
-    .from(observationCycles)
-    .groupBy(observationCycles.teacherId)
-    .as("cycle_counts");
+  // Observation counts are observation-section data: counted only over cycles
+  // the viewer may see, and only once the section is unlocked. This used to
+  // count every cycle in the programme, telling any signed-in user how often
+  // each colleague had been observed. See lib/gated-reads.ts.
+  const observation = await observationAccess(db, actor);
+  const cycleCounts = cycleCountsByTeacher(db, observation);
+  const cyclesLabel = (n: number | null) => (observation.granted ? String(n ?? 0) : "—");
 
   const conds: SQL[] = [eq(teachers.active, true)];
   if (schoolFilter) conds.push(eq(teachers.schoolId, schoolFilter));
@@ -248,7 +251,7 @@ export default async function RepoTeachersIndexPage({
                   { label: "School", value: t.schoolCode ?? "—", mono: true },
                   { label: "Phase", value: t.phaseLabel ?? "—" },
                   {
-                    value: `${t.sessionsTotal ?? 0} sessions · ${t.cyclesTotal ?? 0} obs. cycles`,
+                    value: `${t.sessionsTotal ?? 0} sessions · ${cyclesLabel(t.cyclesTotal)} obs. cycles`,
                   },
                 ],
               };
@@ -332,7 +335,7 @@ export default async function RepoTeachersIndexPage({
                         className="mono"
                         style={{ fontSize: 12, textAlign: "right" }}
                       >
-                        {t.cyclesTotal ?? 0}
+                        {cyclesLabel(t.cyclesTotal)}
                       </td>
                       <td style={{ textAlign: "right", color: "var(--ink-4)" }}>
                         <Link

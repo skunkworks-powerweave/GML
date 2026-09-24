@@ -57,10 +57,15 @@ test("spec 051 — detail page joins sessions → schools, classes, subjects, te
     /from\s*\(\s*teachers\s*\)/,
     /from\s*\(\s*outlineLessons\s*\)/,
     /from\s*\(\s*courseOutlines\s*\)/,
-    /from\s*\(\s*observationCycles\s*\)/,
   ]) {
     assert.match(src, ref, `detail must query ${ref}`);
   }
+  // The linked observation cycle is a GATED row. This list used to require a
+  // direct `.from(observationCycles)` here -- selected by id alone, which named
+  // any cycle's code and linked its UUID to any signed-in user, outside the
+  // observation section gate. It must come through lib/gated-reads under the
+  // viewer's observation access (executed in tests/behaviour/access-control).
+  assert.match(src, /linkedCycle\(\s*db\s*,\s*await\s+observationAccess\(\s*db\s*,\s*actor\s*\)/);
 });
 
 test("spec 051 — detail uses force-dynamic + auth gate + role redirect + notFound on missing", () => {

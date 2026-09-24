@@ -40,9 +40,12 @@ test("spec 053: routes query Drizzle against mentors + mentorPairings", () => {
   assert.match(detailSrc, /from\s+"@gml\/db"/);
   assert.match(detailSrc, /from\s+"@gml\/db\/schema"/);
   assert.match(detailSrc, /\bmentors\b/);
-  assert.match(detailSrc, /\bmentorPairings\b/);
-  assert.match(detailSrc, /\bteachers\b/);
-  assert.match(detailSrc, /eq\(mentorPairings\.mentorId,\s*id\)/);
+  // The pairing roster is mentorship-section data. It is read through
+  // lib/gated-reads under the viewer's mentorship access (section password +
+  // visibility predicate), not by a select written here -- the page used to
+  // serve it without the password. Executed in tests/behaviour/access-control.
+  assert.match(detailSrc, /mentorRoster\(\s*db\s*,\s*mentorship\s*,\s*id\s*\)/);
+  assert.match(detailSrc, /mentorshipAccess\(\s*db\s*,\s*actor\s*\)/);
 });
 
 test("spec 053: index ports JSX columns Name / नाम / Expertise / Based in / Mentees", () => {

@@ -25,6 +25,19 @@
 // / mentor pairings / classroom sessions. If a future spec adds learners,
 // the role gate documented in the spec body (super_admin/programme_admin)
 // belongs HERE, not in the client.
+//
+// PER-ACTOR SCOPING -- two of the eight branches are scoped, six are not, and
+// the split is deliberate. Observation cycles and mentor pairings come from
+// lib/gated-reads.ts under the caller's SectionAccess: nothing of either kind
+// unless the caller holds that section's gate grant, and then only the rows
+// cycleVisibilityFilter / pairingVisibilityFilter allow -- the same two
+// controls /observation and /mentorship apply. This endpoint was the third list
+// surface over those tables and the only one with neither: a teacher could
+// press Cmd+K, type "OBS", and read other teachers' cycle codes, topics and
+// real UUIDs, or type a colleague's name and get "Mentor X -> Teacher Y" with
+// the pairing UUID, without ever entering a section password (no /api prefix
+// is gated by proxy.ts). The other six branches mirror /repo, which is
+// programme-wide directory data by design, and stay unscoped.
 
 import { NextResponse } from "next/server";
 import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
@@ -34,13 +47,13 @@ import {
   schools,
   classes,
   subjects,
-  observationCycles,
-  mentorPairings,
-  mentors,
   courseOutlines,
   sessions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { searchCycles, searchPairings } from "@/lib/gated-reads";
+import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { recordAudit } from "@/lib/audit";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
@@ -73,6 +86,12 @@ export async function GET(req: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
+  // A session with no role cannot be scoped, and two branches below need
+  // scoping -- so it is unauthenticated for our purposes, not a wildcard.
+  const actor = actorFrom(session);
+  if (!actor) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
 
   const url = new URL(req.url);
   const rawQ = (url.searchParams.get("q") ?? "").trim();
@@ -95,6 +114,15 @@ export async function GET(req: Request) {
   // eight tables on each keystroke did not.
   const pattern = `%${escapeIlike(rawQ)}%`;
   const results: QuickFindResult[] = [];
+
+  // Resolved ONCE, before the fan-out, and in parallel: each is a grant lookup
+  // plus (when granted) the actor's teacher/mentor id round-trip, and QuickFind
+  // calls this endpoint on every debounced keystroke (180ms) over Ladakhi
+  // bandwidth.
+  const [observation, mentorship] = await Promise.all([
+    observationAccess(db, actor),
+    mentorshipAccess(db, actor),
+  ]);
 
   // 1) Teachers — full_name ILIKE. School code joined for the sublabel.
   const teacherRows = await db
@@ -205,18 +233,8 @@ export async function GET(req: Request) {
   }
 
   // 5) Observation cycles — `code` ILIKE (e.g. "OBS-2026-001"). Cycles are a
-  //    high-traffic deep link from the dashboard.
-  const cycleRows = await db
-    .select({
-      id: observationCycles.id,
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      topic: observationCycles.topic,
-    })
-    .from(observationCycles)
-    .where(ilike(observationCycles.code, pattern))
-    .orderBy(asc(observationCycles.code))
-    .limit(MAX_PER_KIND);
+  //    high-traffic deep link from the dashboard. Gated and scoped (header).
+  const cycleRows = await searchCycles(db, observation, pattern, MAX_PER_KIND);
   for (const r of cycleRows) {
     results.push({
       kind: "observation_cycle",
@@ -228,18 +246,9 @@ export async function GET(req: Request) {
   }
 
   // 6) Mentor pairings — via mentor name OR teacher name. The pairing has no
-  //    free-text label of its own so we hydrate both sides for the search.
-  const pairingRows = await db
-    .select({
-      id: mentorPairings.id,
-      mentorName: mentors.name,
-      teacherName: teachers.fullName,
-    })
-    .from(mentorPairings)
-    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
-    .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
-    .where(or(ilike(mentors.name, pattern), ilike(teachers.fullName, pattern)))
-    .limit(MAX_PER_KIND);
+  //    free-text label of its own so both sides are hydrated for the search.
+  //    Gated and scoped (header).
+  const pairingRows = await searchPairings(db, mentorship, pattern, MAX_PER_KIND);
   for (const r of pairingRows) {
     const label = `${r.mentorName ?? "?"} → ${r.teacherName ?? "?"}`;
     results.push({

@@ -6,6 +6,9 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { linkedCycle } from "@/lib/gated-reads";
+import { observationAccess } from "@/lib/visibility";
 import { db } from "@gml/db";
 import {
   sessions,
@@ -15,7 +18,6 @@ import {
   teachers,
   outlineLessons,
   courseOutlines,
-  observationCycles,
 } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +50,8 @@ export default async function RepoSessionPage({
   const authSession = await auth();
   const role = authSession?.user?.role;
   if (!role || !ALLOWED_ROLES.has(role)) redirect("/forbidden");
+  const actor = actorFrom(authSession);
+  if (!actor) redirect("/login");
 
   const { id } = await params;
 
@@ -78,15 +82,15 @@ export default async function RepoSessionPage({
     }
   }
 
-  let cycle: (typeof observationCycles.$inferSelect) | undefined;
-  if (s.observationCycleId) {
-    const [c] = await db
-      .select()
-      .from(observationCycles)
-      .where(eq(observationCycles.id, s.observationCycleId))
-      .limit(1);
-    cycle = c;
-  }
+  // The linked cycle's code and UUID are observation-section data, and this page
+  // is outside that section. It used to select the cycle by id alone, so any
+  // signed-in user could read the code of any cycle a session was observed
+  // under and follow its link. Now it is named only when the viewer has
+  // unlocked the observation section AND may see that cycle; otherwise the
+  // session just reads "Observed". See lib/gated-reads.ts.
+  const cycle = s.observationCycleId
+    ? await linkedCycle(db, await observationAccess(db, actor), s.observationCycleId)
+    : null;
 
   const statusChip = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
 
