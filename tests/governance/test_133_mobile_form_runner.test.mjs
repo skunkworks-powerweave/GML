@@ -182,10 +182,14 @@ test("spec 133 — MobileFormRunner reuses saveDraft from the form-draft helper"
   const src = read(MOBILE_PATH);
   // Autosave pipeline must use the SAME PUT /api/form-drafts/[id] route
   // as desktop — drafts must be cross-device portable.
+  // Through the autosave hook FormRenderer uses (draft-resilience.ts), which
+  // calls saveDraft from @/lib/form-draft -- one pipeline, so a draft stays
+  // portable across devices and both runners retry the same way.
+  assert.match(src, /useDraftAutosave\(/, "MobileFormRunner must autosave through the shared hook");
   assert.match(
-    src,
+    read("apps/web/src/components/forms/draft-resilience.ts"),
     /import\s*\{[^}]*saveDraft[^}]*\}\s*from\s*"@\/lib\/form-draft"/,
-    "MobileFormRunner must import saveDraft from @/lib/form-draft",
+    "the shared hook must import saveDraft from @/lib/form-draft",
   );
   assert.match(
     src,

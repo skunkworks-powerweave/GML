@@ -55,7 +55,11 @@ test("072 — FormRenderer wires autosave (1 s debounce) + saved-indicator ticke
   assert.match(src, /AUTOSAVE_DEBOUNCE_MS\s*=\s*1000/, "1 s debounce constant");
   assert.match(src, /setTimeout\(/, "must use setTimeout for debounce");
   assert.match(src, /setInterval\(/, "must use setInterval for live 'saved Ns ago'");
-  assert.match(src, /saveDraft\(/, "must call saveDraft");
+  // The PUT moved into the autosave hook both runners share, which retries a
+  // failed save and keeps a device copy (tests/behaviour/ui-form-autosave.test.ts
+  // executes it); the renderer must use that hook, and the hook saveDraft().
+  assert.match(src, /useDraftAutosave\(/, "must autosave through the shared hook");
+  assert.match(read("apps/web/src/components/forms/draft-resilience.ts"), /saveDraft\(/, "the hook must call saveDraft");
   assert.match(src, /clearDraft\(/, "must call clearDraft on submit success");
   assert.match(src, /Saved\s.*ago/, "must render 'Saved Ns ago' indicator copy");
 });

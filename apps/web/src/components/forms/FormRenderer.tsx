@@ -13,7 +13,8 @@
 // --serif/--deva). No Tailwind classes; tokens-only.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { clearDraft, saveDraft, type DraftKey } from "@/lib/form-draft";
+import { clearDraft, type DraftKey } from "@/lib/form-draft";
+import { failureMessage, keepLocalCopy, readLocalCopy, useDraftAutosave } from "./draft-resilience";
 import {
   MAX_TEXT_LENGTH,
   validateResponses,
@@ -660,9 +661,9 @@ export function FormRenderer({
   const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Autosave bookkeeping
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  // Autosave bookkeeping (saveState / lastSavedAt / flushSave come from
+  // useDraftAutosave below, shared with MobileFormRunner).
+  //
   // A live clock for the "Saved Ns ago" label. This used to be a discarded
   // tick counter (`const [, forceTick] = useState(0)`), which re-rendered this
   // 802-line form once a second while the label it existed to update never
@@ -690,17 +691,13 @@ export function FormRenderer({
     [draftKey],
   );
 
-  const flushSave = useCallback(async () => {
-    if (!autosaveEnabled || !draftKey) return;
-    setSaveState("pending");
-    try {
-      await saveDraft({ ...draftKey, responses: valuesRef.current });
-      setLastSavedAt(Date.now());
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-    }
-  }, [autosaveEnabled, draftKey]);
+  // A failed save is kept on the device and, when trying again can help,
+  // tried again -- it used to say "retrying" and do nothing (draft-resilience.ts).
+  const { saveState, failure: saveFailure, lastSavedAt, flushSave, cancelRetry } = useDraftAutosave(
+    draftKey,
+    autosaveEnabled,
+    valuesRef,
+  );
 
   const scheduleSave = useCallback(() => {
     if (!autosaveEnabled) return;
@@ -724,12 +721,37 @@ export function FormRenderer({
     };
   }, []);
 
+  // Answers this device kept because the server never got them (the tab was
+  // closed offline, the session expired) come back on the next visit, and go
+  // to the server with the next save.
+  useEffect(() => {
+    if (!autosaveEnabled || !draftKey) return;
+    const kept = readLocalCopy(draftKey);
+    if (!kept) return;
+    // From a timer, once hydration has painted the server's copy: the device
+    // copy is the newer one, and goes straight to the server.
+    const t = setTimeout(async () => {
+      valuesRef.current = { ...valuesRef.current, ...kept };
+      setValues((prev) => ({ ...prev, ...kept }));
+      await flushSave();
+    }, 0);
+    return () => clearTimeout(t);
+    // Once, on mount: later changes are this component's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setField = useCallback(
     (name: string, raw: unknown) => {
       setValues((prev) => {
         const next = { ...prev, [name]: raw };
         return next;
       });
+      // Onto the device AT ONCE, before the debounced PUT: this copy is what
+      // survives a closed tab on a dead link. The ref is written here too (not
+      // only after commit) so the copy and the next save are never a keystroke
+      // behind.
+      valuesRef.current = { ...valuesRef.current, [name]: raw };
+      if (autosaveEnabled && draftKey) keepLocalCopy(draftKey, valuesRef.current);
       // Clear any prior error on this field optimistically; full validation re-runs on submit.
       setErrors((prev) => {
         if (!prev[name]) return prev;
@@ -738,7 +760,7 @@ export function FormRenderer({
       });
       scheduleSave();
     },
-    [scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave],
   );
 
   // Spec 142 — client-callback submit path (`onSubmit`).
@@ -796,6 +818,9 @@ export function FormRenderer({
         // flushSave never rejects: it records a failure in saveState, and the
         // answers travel in the POST either way.
         if (autosaveEnabled) await flushSave();
+        // The POST carries the answers; a retried PUT after it would re-create
+        // the draft the submit deletes.
+        cancelRetry();
         const form = formRef.current;
         if (!form) {
           setSubmitting(false);
@@ -814,6 +839,7 @@ export function FormRenderer({
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (autosaveEnabled) await flushSave();
         await onSubmit(values);
+        cancelRetry();
         if (autosaveEnabled && draftKey) {
           // Best-effort cleanup of the draft row. Failure is non-fatal — the
           // user's submission has already gone through.
@@ -829,7 +855,7 @@ export function FormRenderer({
         setSubmitting(false);
       }
     },
-    [action, autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, values],
+    [action, autosaveEnabled, cancelRetry, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, values],
   );
 
   // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
@@ -838,13 +864,13 @@ export function FormRenderer({
   // a 1 s ticker for free — no extra timer needed here.
   const savedIndicator = useMemo(() => {
     if (!autosaveEnabled) return null;
-    if (saveState === "error") return "Save failed — retrying…";
+    if (saveState === "error") return failureMessage(saveFailure ?? "error");
     if (saveState === "pending") return "Saving…";
     if (lastSavedAt === null) return "Not saved yet";
     const seconds = Math.max(0, Math.floor(((nowMs ?? lastSavedAt) - lastSavedAt) / 1000));
     if (seconds < 1) return "Saved just now";
     return `Saved ${seconds}s ago`;
-  }, [autosaveEnabled, lastSavedAt, saveState, nowMs]);
+  }, [autosaveEnabled, lastSavedAt, saveFailure, saveState, nowMs]);
 
   return (
     <form

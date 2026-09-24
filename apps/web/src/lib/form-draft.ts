@@ -65,7 +65,12 @@ export async function saveDraft(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ responses: args.responses }),
   });
-  if (!res.ok) throw new Error(`saveDraft: ${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    // The status travels with the error: the runners retry a 5xx, but not a
+    // 401 (session expired) or a 403 (section locked), which repeating cannot
+    // fix. A network failure rejects from fetch() itself, with no status.
+    throw Object.assign(new Error(`saveDraft: ${res.status} ${await res.text()}`), { status: res.status });
+  }
 }
 
 /**
