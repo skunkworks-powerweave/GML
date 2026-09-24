@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { registerHooks } from "node:module";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { h, renderSync, openingTags, attr, React, hostElements, textOf, withAppRouter } from "./_ui.js";
+import { h, render, renderSync, openingTags, attr, React, hostElements, textOf, withAppRouter } from "./_ui.js";
 import { needsDatabase, withClient, tag, DATABASE_URL } from "./_harness.js";
 
 const skip = needsDatabase();
@@ -740,4 +740,57 @@ test("F72: migration 0030 gives an existing submission the questions its quiz ha
     const snap = (await c.query(`SELECT question_snapshot FROM quiz_submissions WHERE id = $1`, [sub])).rows[0].question_snapshot;
     assert.deepEqual(snap, [{ id: q1, prompt: "P1", options: ["a", "b"], correctIndex: 1, explanation: null }]);
   });
+});
+
+// ── F40: the mobile runner's Next/Submit bar and the shell's fixed chrome ────
+//
+// Rendered as a phone gets it: the runner inside the real MobileShell, whose
+// tab bar is position:fixed at the bottom and whose help button floats above
+// it. Measured from the styles the components actually emit.
+
+/** An element's inline style as a property map. */
+function styleOf(openTag: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const decl of (attr(openTag, "style") ?? "").split(";")) {
+    const i = decl.indexOf(":");
+    if (i > 0) out[decl.slice(0, i).trim()] = decl.slice(i + 1).trim();
+  }
+  return out;
+}
+/** The first px length in a CSS value ("calc(80px + env(...))" -> 80). */
+const px = (v: string | undefined) => Number(v?.match(/(-?\d+(?:\.\d+)?)px/)?.[1] ?? (v === "0" ? 0 : NaN));
+
+test("F40: the mobile Next/Submit bar sits clear of the fixed tab bar and the help button", async () => {
+  const { MobileShell } = await import("../../apps/web/src/components/shells/MobileShell.tsx");
+  const { MobileQuizRunner } = await import("../../apps/web/src/components/quiz/MobileQuizRunner.tsx");
+  const runner = h(MobileQuizRunner, {
+    slug: "s",
+    title: "T",
+    questions: [{ id: "q1", prompt: "One?", options: ["a", "b"] }, { id: "q2", prompt: "Two?", options: ["a", "b"] }],
+    submitAction: async () => undefined,
+  });
+  const html = await render(withAppRouter(h(MobileShell, { user: { id: "u1", email: "t@example.org", role: "teacher" } }, runner)));
+
+  const tags = openingTags(html, "div").concat(openingTags(html, "button"), openingTags(html, "nav"));
+  const shellRoot = styleOf(openingTags(html, "div")[0]!);
+  const tabBar = styleOf(tags.find((t) => /class="m-bottomnav"/.test(t))!);
+  const fab = styleOf(tags.find((t) => attr(t, "aria-label") === "Help")!);
+  const bar = styleOf(tags.find((t) => attr(t, "data-testid") === "mobile-quiz-actions")!);
+
+  assert.equal(tabBar.position, "fixed");
+  // The shell reserves this much under its content for the fixed tab bar.
+  const tabBarReserve = px(shellRoot["padding-bottom"]);
+  assert.ok(tabBarReserve > 0, "MobileShell reserves space for its tab bar");
+  assert.equal(bar.position, "sticky");
+  assert.ok(
+    px(bar.bottom) >= tabBarReserve,
+    `the bar sticks at bottom:${bar.bottom}, under the tab bar -- a tap on Next lands on a tab and the answers are lost`,
+  );
+  // The help button floats over the bar's right end; the buttons must end
+  // before it does.
+  const fabReach = px(fab.right) + px(fab.width);
+  assert.ok(
+    px(bar["padding-right"]) >= fabReach,
+    `the bar's buttons run under the help button (padding-right ${bar["padding-right"] ?? "none"}, button reaches ${fabReach}px)`,
+  );
 });

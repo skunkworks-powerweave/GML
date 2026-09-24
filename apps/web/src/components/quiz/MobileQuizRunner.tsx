@@ -456,14 +456,25 @@ export function MobileQuizRunner({
         ) : null}
       </div>
 
-      {/* Sticky bottom action bar */}
+      {/* Sticky bottom action bar.
+
+          CLEAR OF THE SHELL'S FIXED CHROME. It stuck at bottom: 0, which is
+          exactly where MobileShell draws its position:fixed tab bar, with the
+          "?" help button floating over the right end. On a 640px phone the
+          centre of "Next →" was the Inbox tab: a tap navigated away and every
+          selected answer, held only in this component's state, was gone. It
+          now sticks above the 80px the shell reserves for the tab bar (plus
+          the notch inset the tab bar pads itself with), and its right padding
+          keeps the buttons out from under the help button (right 14px,
+          44px wide). */}
       <div
         data-testid="mobile-quiz-actions"
         style={{
           position: "sticky",
-          bottom: 0,
+          bottom: "calc(80px + env(safe-area-inset-bottom, 0px))",
           padding: "12px 16px",
-          paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0))",
+          paddingRight: 66,
+          paddingBottom: 12,
           background: "var(--paper)",
           borderTop: "1px solid var(--line)",
           display: "flex",
