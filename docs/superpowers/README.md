@@ -181,6 +181,14 @@ git worktree remove .worktrees/<slug>
 git branch -d <type>/<slug>
 ```
 
+The merge gate in `pre-bash.mjs` binds THIS session and nothing else. A shell
+without the hooks, or a session started outside the repository, reaches `main`
+unimpeded. The server-side half is
+[`branch-protection.md`](branch-protection.md) — required checks, no force
+pushes, no deletions, enforced on admins too. It has to be enabled by a human
+and is not enabled as of this writing; until it is, every rule about `main` in
+this document is a convention that one `git push` ignores.
+
 ---
 
 ## Evidence per artefact
