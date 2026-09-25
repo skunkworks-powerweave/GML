@@ -26,14 +26,19 @@ export const WHATSAPP_FETCH_JOB = "whatsapp_fetch" as const;
 /**
  * Attempts before the fetch is dead-lettered.
  *
- * The queue backs off exponentially from 5 s (5, 10, 20 ... capped at an hour),
- * so ten attempts keep retrying for about 42 minutes -- enough to ride out a
- * Graph or Storage outage, or an operator rotating an expired token. Three, the
- * queue default, gives up after 15 seconds. Meta keeps the media for about 30
- * days, and a dead fetch can be re-queued from /admin/whatsapp-log inside that
- * window, because the media id is kept on the submission.
+ * The queue's fail() (packages/db/src/queue.ts) waits 1 min, 10 min, then an
+ * hour before each retry, so four attempts keep retrying for about 71 minutes
+ * -- enough to ride out a Graph or Storage outage, or an operator rotating an
+ * expired token -- and the sender, who hears only when the last attempt fails,
+ * hears within about an hour. Three, the queue default, gives up after 11
+ * minutes. This was 10, chosen when the backoff started at 5 s and doubled
+ * ("about 42 minutes"); against the current one that was about 7.2 hours.
+ * Meta keeps the media for about 30 days, and a dead fetch can be re-queued
+ * from /admin/whatsapp-log inside that window, because the media id is kept
+ * on the submission. tests/behaviour/whatsapp-ingest.test.ts measures the
+ * window on the real queue.
  */
-export const WHATSAPP_FETCH_MAX_ATTEMPTS = 10;
+export const WHATSAPP_FETCH_MAX_ATTEMPTS = 4;
 
 /**
  * A reply to a message that needs no fetch -- one that is not a video. Queued

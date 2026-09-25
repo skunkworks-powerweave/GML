@@ -27,7 +27,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { auditLog, files, observationCycles, videoSubmissions } from "@gml/db/schema";
-import { enqueue, type QueueTx, type ReapedJob } from "@gml/db/queue";
+import { enqueue, PermanentJobError, type QueueTx, type ReapedJob } from "@gml/db/queue";
 import { linkSubmissionToContext } from "@gml/db/uploads";
 import { storableVideoType, type BucketName } from "@gml/shared/storage/buckets";
 import { putObject } from "@gml/shared/storage/client";
@@ -140,13 +140,16 @@ async function download(p: WhatsAppFetchPayload, deps: FetchDeps, stop?: AbortSi
     throw new Error(`media download returned ${type.split(";")[0]}, not a video`);
   }
 
+  // The size is the media's own: every retry would refuse it the same way, so
+  // it is final now, and the sender hears at once rather than after the whole
+  // retry schedule.
   const declared = Number(res.headers.get("content-length") ?? "0");
   if (declared > MAX_WHATSAPP_MEDIA_BYTES) {
-    throw new Error(`media declares ${declared} bytes, over the ${MAX_WHATSAPP_MEDIA_BYTES}-byte cap`);
+    throw new PermanentJobError(`media declares ${declared} bytes, over the ${MAX_WHATSAPP_MEDIA_BYTES}-byte cap`);
   }
   const buf = new Uint8Array(await res.arrayBuffer());
   if (buf.byteLength > MAX_WHATSAPP_MEDIA_BYTES) {
-    throw new Error(`media delivered ${buf.byteLength} bytes, over the ${MAX_WHATSAPP_MEDIA_BYTES}-byte cap`);
+    throw new PermanentJobError(`media delivered ${buf.byteLength} bytes, over the ${MAX_WHATSAPP_MEDIA_BYTES}-byte cap`);
   }
   if (buf.byteLength === 0) throw new Error("media download was empty");
   return buf;
@@ -406,7 +409,9 @@ export async function fetchWhatsAppMedia(
     // again -- left the re-run nothing to do, and the job was recorded
     // 'succeeded'.
     if (run.signal?.aborted) throw err;
-    if (run.attempt >= run.maxAttempts) {
+    // A PermanentJobError is the last attempt, however many remain: runJob
+    // dead-letters it at once (as transcode480p's catch treats one).
+    if (run.attempt >= run.maxAttempts || err instanceof PermanentJobError) {
       await markFailed(p, reason, run.attempt);
       // Only now: an attempt that will be retried is not news to the sender.
       await replyToSender(p, async () => ({ kind: "fetch_failed" }), { fetch: fetchImpl, env });
