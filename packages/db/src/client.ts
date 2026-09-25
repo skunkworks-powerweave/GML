@@ -118,6 +118,16 @@ export function getPool(): Pool {
     _pool.on("error", (err) => {
       console.warn(`[db] an idle pooled connection failed and was discarded: ${err.message}`);
     });
+    // ...and the same for a CHECKED-OUT client. pg-pool removes its own
+    // listener while it lends a client out, so a backend that dies then -- held
+    // between the statements of a transaction, which is how the lease reaper
+    // runs -- has its error emitted on the client itself, with nothing
+    // listening. Nothing needs doing here: whoever holds the client already
+    // gets the error (its query rejects, or its next one does, "not
+    // queryable"), and the pool discards an unqueryable client on release.
+    _pool.on("connect", (client) => {
+      client.on("error", () => undefined);
+    });
   }
   return _pool;
 }

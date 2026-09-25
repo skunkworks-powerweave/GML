@@ -9,7 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsDatabase } from "./_harness.js";
+import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { needsDatabase, withClient, DATABASE_URL, tag } from "./_harness.js";
 import { withWorkerWorld, waitFor } from "./_worker.js";
 
 const skip = needsDatabase();
@@ -107,5 +110,47 @@ test(
       }, 30_000);
       assert.ok(claimed, `the worker survived but stopped claiming:\n${worker.output()}`);
     });
+  },
+);
+
+test(
+  "F148: a reset of a connection that is checked out between statements does not crash the process",
+  { skip, timeout: 60_000 },
+  async () => {
+    // The window an idle-client listener does not cover. pg-pool REMOVES its
+    // listener from a client while it is checked out, so a backend that dies
+    // while the client is held with no query in flight -- between the
+    // statements of a transaction, which is how the lease reaper runs -- has
+    // its error emitted on a client nobody listens to. Forced here: a child
+    // holds a client from the app's own pool and prints its backend pid.
+    const app = `application_name=${tag("held").replace(/-/g, "_")}`;
+    const url = `${DATABASE_URL}${DATABASE_URL!.includes("?") ? "&" : "?"}${app}`;
+    const clientModule = pathToFileURL(fileURLToPath(new URL("../../packages/db/src/client.ts", import.meta.url))).href;
+    const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+    const script = `
+      const { getPool } = await import(${JSON.stringify(clientModule)});
+      const held = await getPool().connect();
+      const { rows } = await held.query("SELECT pg_backend_pid() AS pid");
+      console.log("PID " + rows[0].pid);
+      setTimeout(() => { console.log("ALIVE"); process.exit(0); }, 3000);
+    `;
+    const child = spawn(process.execPath, ["--import", tsx, "--input-type=module", "-e", script], {
+      env: { ...process.env, DATABASE_URL: url },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c.toString()));
+    child.stderr.on("data", (c) => (out += c.toString()));
+    const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
+    try {
+      const pid = await waitFor(async () => /PID (\d+)/.exec(out)?.[1], 20_000);
+      assert.ok(pid, `the child never checked out a connection:\n${out}`);
+      await withClient((c) => c.query(`SELECT pg_terminate_backend($1)`, [Number(pid)]));
+      const code = await exited;
+      assert.equal(code, 0, `a reset of a checked-out connection killed the process:\n${out}`);
+      assert.match(out, /ALIVE/);
+    } finally {
+      child.kill();
+    }
   },
 );
