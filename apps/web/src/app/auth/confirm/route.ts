@@ -13,8 +13,8 @@
 //
 // verifyOtp({ type, token_hash }) needs nothing from the requesting browser.
 // The email templates are a Supabase dashboard setting; README-deploy §2.3 has
-// the exact text. /auth/callback stays, for a link sent before the templates
-// were changed.
+// the exact text (type=recovery, and type=magiclink for sign-in).
+// /auth/callback stays, for a link sent before the templates were changed.
 
 import { NextResponse, type NextRequest } from "next/server";
 import type { EmailOtpType } from "@supabase/supabase-js";
@@ -26,11 +26,18 @@ import { publicUrl, safeInternalPath } from "@/lib/safe-redirect";
 import { recordSignIn } from "@/lib/sign-in-events";
 
 /**
- * The link types this product sends: password recovery, and magic-link sign-in
- * ("email" is the current name, "magiclink" the older one). Sign-up and invite
- * links are not accepted: accounts are created by administrators.
+ * The link types this product sends: password recovery and magic-link sign-in.
+ * GoTrue keeps both tokens in recovery_token, and these two types are redeemed
+ * against that column only.
+ *
+ * NOT "email", although Supabase's docs use it for magic links: GoTrue
+ * resolves an "email" token_hash against confirmation_token as well, and
+ * redeems a match there as a sign-up verification (verifyTokenHash,
+ * internal/api/verify.go). Accepting it would let a sign-up or invite
+ * confirmation through; accounts here are created by administrators, so no
+ * such link should ever sign anyone in.
  */
-const ACCEPTED: ReadonlySet<string> = new Set<EmailOtpType>(["recovery", "email", "magiclink"]);
+const ACCEPTED: ReadonlySet<string> = new Set<EmailOtpType>(["recovery", "magiclink"]);
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;

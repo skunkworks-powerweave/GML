@@ -164,14 +164,21 @@ and redeploy. No code change.
    Password*: make the link
    `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/login/reset`
 4. **Magic Link template.** Same place → *Magic Link*: make the link
-   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard`
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=magiclink&next=/dashboard`
+   — `magiclink`, not the `email` that Supabase's own examples use: the
+   application refuses `type=email`, because Supabase would also accept a
+   sign-up confirmation under it.
 
 Steps 3 and 4 are what let a link work on a **different device** from the one
 that asked for it. The default templates use a code that can only be redeemed
 in the browser that made the request: a teacher who asks for a reset on a
 school computer and opens the email on her phone gets "This link has expired".
 The `/auth/confirm` links work anywhere. A reset link is good for one use, and
-the page it opens only accepts it for 15 minutes.
+the page it opens only accepts it for 15 minutes. Supabase records a session
+from either link the same way, so for those same 15 minutes after a magic-link
+sign-in, `/login/reset` will also set a new password without the current one;
+that proves no less than a reset link, which anyone who can read the mailbox
+can request.
 
 ### 2.4 AWS
 

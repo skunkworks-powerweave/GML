@@ -1,9 +1,10 @@
 // /login/reset — choose a new password.
 //
-// Reached from a Supabase recovery email, which lands on /auth/callback first;
-// that route exchanges the one-time code for a session and forwards here. So by
-// the time this page renders, the caller is authenticated and there is no token
-// in the URL to protect, lose, or leak through a Referer header.
+// Reached from a Supabase recovery email, which lands on /auth/confirm first
+// (/auth/callback for a link from the default template); that route redeems
+// the one-time link for a session and forwards here. So by the time this page
+// renders, the caller is authenticated and there is no token in the URL to
+// protect, lose, or leak through a Referer header.
 //
 // This used to be a client page that read `?token=` from the query string and
 // POSTed it to /api/auth/reset-password. Both are gone -- see reset/actions.ts
@@ -18,9 +19,10 @@ export const dynamic = "force-dynamic";
 
 export default async function ResetPasswordPage() {
   const signedIn = await auth();
-  // Only a session that came from a recovery link, recently, may set a
-  // password without the current one. Anyone else who is signed in is sent to
-  // Settings, which asks for it -- the same door, with the check.
+  // Only a session that came from an emailed link, recently, may set a
+  // password without the current one (recoverySessionState in auth.ts).
+  // Anyone else who is signed in is sent to Settings, which asks for it --
+  // the same door, with the check.
   const recovery = signedIn ? await recoverySessionState() : "signed_out";
   if (recovery === "not_recovery") redirect("/settings");
   const session = recovery === "recovery" ? signedIn : null;

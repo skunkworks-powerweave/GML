@@ -17,7 +17,7 @@ export type ResetState = { error?: string };
  * /api/auth/reset-password, which bcrypt-compared it against every unconsumed
  * row in password_reset_tokens -- an unauthenticated, unthrottled, O(N) bcrypt
  * loop. Now the recovery link is exchanged for a real session at
- * /auth/callback, and this action simply asks "who is calling?" and updates
+ * /auth/confirm, and this action simply asks "who is calling?" and updates
  * that account. There is nothing left to leak in a URL, nothing to replay from
  * a browser history entry, and no per-request bcrypt scan.
  */

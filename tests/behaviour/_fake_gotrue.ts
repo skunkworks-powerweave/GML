@@ -20,6 +20,8 @@
 //       -> 403, nothing minted
 //   an admin password change
 //       -> every session of that user is deleted
+//   POST /verify with a token_hash, for ANY type (recovery included)
+//       -> a session whose amr is [{"method":"otp"}], never "recovery"
 //
 // Access tokens are ES256 and published on /.well-known/jwks.json, as this
 // project's are, so getClaims() verifies them LOCALLY with no round trip --
@@ -136,7 +138,12 @@ export async function fakeGoTrue(options: Options = {}) {
   const users = new Map<string, FakeUser>();
   const sessions = new Map<string, FakeSession>();
   const seen: Seen[] = [];
-  const hashedOtps = new Map<string, { userId: string; type: string; ageSeconds: number }>();
+  /**
+   * Emailed token hashes, by the users column GoTrue keeps them in: a recovery
+   * email AND a magic-link email both write recovery_token (mail.go,
+   * sendMagicLink); a sign-up or invite confirmation writes confirmation_token.
+   */
+  const hashedOtps = new Map<string, { userId: string; column: "recovery" | "confirmation"; ageSeconds: number }>();
   let settings: Record<string, unknown> = { disable_signup: true, mailer_autoconfirm: false, external: { email: true } };
   /** When set, every request except the JWKS is answered with this status (an outage). */
   let outage: number | null = null;
@@ -375,10 +382,30 @@ export async function fakeGoTrue(options: Options = {}) {
     if (path === "/verify" && req.method === "POST") {
       const hash = String(body.token_hash ?? "");
       const entry = hashedOtps.get(hash);
-      if (!entry || entry.type !== body.type) return fail(res, 403, "otp_expired", "Email link is invalid or has expired");
+      // verifyTokenHash (internal/api/verify.go): which column each type may
+      // redeem. "email" tries confirmation_token as well as recovery_token, so
+      // it also redeems a sign-up confirmation; "magiclink" and "recovery"
+      // read recovery_token only.
+      const redeems: Record<string, ReadonlyArray<string>> = {
+        recovery: ["recovery"],
+        magiclink: ["recovery"],
+        email: ["recovery", "confirmation"],
+        signup: ["confirmation"],
+        invite: ["confirmation"],
+      };
+      if (!entry || !redeems[String(body.type)]?.includes(entry.column)) {
+        return fail(res, 403, "otp_expired", "Email link is invalid or has expired");
+      }
       hashedOtps.delete(hash);
       const u = users.get(entry.userId)!;
-      const s = await newSession(u.id, entry.type === "recovery" ? "recovery" : "otp", entry.ageSeconds);
+      // POST /verify issues every session with models.OTP, whatever the type:
+      // `a.issueRefreshToken(r, w.Header(), tx, user, models.OTP, grantParams)`
+      // (internal/api/verify.go:285 in v2.196.0, the local stack's version,
+      // and unchanged on master). So a recovery link redeemed this way yields
+      // amr [{"method":"otp"}]. Only the PKCE path (GET /verify, verify.go:191,
+      // issueAuthCode with the parsed type) records "recovery" or "magiclink";
+      // this stand-in does not serve it.
+      const s = await newSession(u.id, "otp", entry.ageSeconds);
       const out = await mint(u, s);
       return send(res, out.status, out.body);
     }
@@ -473,13 +500,13 @@ export async function fakeGoTrue(options: Options = {}) {
     /** Refresh as that device would, with the refresh token it holds. */
     deviceRefresh: (refreshToken: string) => post("/token?grant_type=refresh_token", { refresh_token: refreshToken }),
     /**
-     * A recovery/magic-link email's token_hash, as {{ .TokenHash }} renders it.
+     * The token_hash in an email of this kind, as {{ .TokenHash }} renders it.
      * `ageSeconds` back-dates the resulting session's amr timestamp, standing
      * in for a link that was followed that long ago.
      */
-    issueOtp(userId: string, type: "recovery" | "magiclink" | "email", ageSeconds = 0): string {
+    issueOtp(userId: string, kind: "recovery" | "magiclink" | "signup", ageSeconds = 0): string {
       const hash = createHash("sha256").update(randomUUID()).digest("hex");
-      hashedOtps.set(hash, { userId, type, ageSeconds });
+      hashedOtps.set(hash, { userId, column: kind === "signup" ? "confirmation" : "recovery", ageSeconds });
       return hash;
     },
     setSettings: (s: Record<string, unknown>) => void (settings = s),

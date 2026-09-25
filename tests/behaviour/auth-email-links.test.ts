@@ -82,8 +82,8 @@ test("a recovery link works in a browser that did not request it, and lands on /
 
 test("a magic link works cross-device and lands where it points", { skip }, async () => {
   const u = makeUser();
-  const hash = fake.issueOtp(u.id, "email");
-  const res = await openOnAnotherDevice(await confirmRoute(), `/auth/confirm?token_hash=${hash}&type=email&next=%2Fdashboard`);
+  const hash = fake.issueOtp(u.id, "magiclink");
+  const res = await openOnAnotherDevice(await confirmRoute(), `/auth/confirm?token_hash=${hash}&type=magiclink&next=%2Fdashboard`);
   assert.equal(res.location, `${ORIGIN}/dashboard`);
 });
 
@@ -95,14 +95,34 @@ test("a used or expired link says so; a mangled one says it is invalid; next can
   const again = await openOnAnotherDevice(route, `/auth/confirm?token_hash=${hash}&type=recovery&next=%2Flogin%2Freset`);
   assert.equal(again.location, `${ORIGIN}/login?error=link_expired`, "a link is single-use");
 
-  for (const q of ["", "?type=recovery", "?token_hash=x", "?token_hash=x&type=signup"]) {
+  for (const q of ["", "?type=recovery", "?token_hash=x", "?token_hash=x&type=signup", "?token_hash=x&type=email"]) {
     const r = await openOnAnotherDevice(route, `/auth/confirm${q}`);
     assert.equal(r.location, `${ORIGIN}/login?error=link_invalid`, `for ${q || "no query"}`);
   }
 
   const evil = await openOnAnotherDevice(
     route,
-    `/auth/confirm?token_hash=${fake.issueOtp(u.id, "email")}&type=email&next=%2F%2Fevil.example`,
+    `/auth/confirm?token_hash=${fake.issueOtp(u.id, "magiclink")}&type=magiclink&next=%2F%2Fevil.example`,
   );
   assert.equal(evil.location, `${ORIGIN}/dashboard`);
+});
+
+// GoTrue's verifyTokenHash resolves type=email against confirmation_token as
+// well as recovery_token, and redeems a confirmation as a SIGN-UP
+// verification (internal/api/verify.go:649-651, 734-742). type=magiclink and
+// type=recovery read recovery_token only -- which is where GoTrue keeps a
+// magic-link token too (mail.go sendMagicLink). So "email" is not accepted:
+// it is the one type that would let a confirmation link through.
+test("a sign-up confirmation link signs nobody in at /auth/confirm, whatever type it is sent as", { skip }, async () => {
+  const route = await confirmRoute();
+  const u = makeUser();
+  for (const type of ["email", "signup", "invite", "magiclink", "recovery"]) {
+    const hash = fake.issueOtp(u.id, "signup");
+    const r = await openOnAnotherDevice(route, `/auth/confirm?token_hash=${hash}&type=${type}&next=%2Fdashboard`);
+    assert.match(r.location, /\/login\?error=link_(invalid|expired)$/, `type=${type} must not be redeemed: ${r.location}`);
+    assert.ok(
+      !request.cookieWrites.some((w) => /^sb-.*-auth-token/.test(w.name) && w.value !== ""),
+      `type=${type}: no session may be written for a confirmation link`,
+    );
+  }
 });

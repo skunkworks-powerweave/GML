@@ -140,16 +140,28 @@ export async function auth(): Promise<Session | null> {
 
 const ADMIN_ROLES: ReadonlySet<RoleName> = new Set<RoleName>(["programme_admin", "super_admin"]);
 
-/** How long after following a recovery link it may be used to set a password. */
+/** How long after following an emailed link it may be used to set a password. */
 export const RECOVERY_WINDOW_SECONDS = 15 * 60;
 
 /**
- * Did the current session come from a password-recovery link, recently?
+ * How a session that came from an emailed link is recorded in `amr`.
+ *
+ * The /auth/confirm links (README-deploy §2.3) are redeemed with POST /verify,
+ * and GoTrue issues THAT session as "otp" whatever the link's type -- a
+ * recovery link included (internal/api/verify.go:285, v2.196.0). Only the
+ * older PKCE link, through /auth/callback, records "recovery" or "magiclink".
+ * These are exactly the methods GoTrue's own Session.IsRecovery() accepts
+ * (internal/models/factor.go), and it exempts them from its current-password
+ * check for the same reason: each proves recent control of the mailbox.
+ */
+const EMAILED_LINK_METHODS: ReadonlySet<unknown> = new Set(["recovery", "otp", "magiclink"]);
+
+/**
+ * Did the current session come from an emailed link, recently?
  *
  *   "recovery"      yes, within RECOVERY_WINDOW_SECONDS
  *   "expired"       yes, but longer ago than that
- *   "not_recovery"  a session established some other way (a password, a
- *                   magic link)
+ *   "not_recovery"  a session established some other way (a password)
  *   "signed_out"    no session
  *
  * WHY /login/reset NEEDS THIS. Setting a password there asks for no current
@@ -158,9 +170,16 @@ export const RECOVERY_WINDOW_SECONDS = 15 * 60;
  * unattended, signed-in school computer was enough to change the owner's
  * password and -- the action then ends every other session -- lock them out
  * everywhere. GoTrue records how a session was authenticated in the token's
- * `amr` claim; a recovery link yields {"method":"recovery","timestamp":...}.
- * The window bounds the same unattended-computer case for a browser that DID
- * follow a recovery link and was then left open.
+ * `amr` claim: {"method":"password"} for a password sign-in, one of
+ * EMAILED_LINK_METHODS for a link. The window bounds the same
+ * unattended-computer case for a browser that DID follow a link and was then
+ * left open.
+ *
+ * A MAGIC-LINK session counts too, and cannot be told apart: /auth/confirm
+ * yields "otp" for both. So for fifteen minutes after signing in by magic
+ * link, /login/reset will set a password without the current one. That proves
+ * nothing less than a recovery link does -- whoever can read the mailbox can
+ * request one of those at will.
  */
 export async function recoverySessionState(): Promise<"recovery" | "expired" | "not_recovery" | "signed_out"> {
   let amr: unknown;
@@ -173,7 +192,7 @@ export async function recoverySessionState(): Promise<"recovery" | "expired" | "
     return "signed_out";
   }
   const entry = Array.isArray(amr)
-    ? (amr as Array<{ method?: unknown; timestamp?: unknown }>).find((a) => a?.method === "recovery")
+    ? (amr as Array<{ method?: unknown; timestamp?: unknown }>).find((a) => EMAILED_LINK_METHODS.has(a?.method))
     : undefined;
   if (!entry) return "not_recovery";
   const at = typeof entry.timestamp === "number" ? entry.timestamp : 0;
