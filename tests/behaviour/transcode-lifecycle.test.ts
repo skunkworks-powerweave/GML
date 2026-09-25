@@ -15,10 +15,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { withWorkerWorld, waitFor, seedJob, seedSubmission, type WorkerWorld } from "./_worker.js";
 
 const skip = needsDatabase();
+
+// The DLQ's own rule for which verbs a row gets (the page and the actions share it).
+const dlqState = () => import("../../apps/web/src/app/(authenticated)/admin/transcode-jobs/state.ts");
 
 type Ledger = { id: string; status: string; ended: boolean; error: string | null };
 type Video = { status: string; processing_log: string | null };
@@ -102,6 +106,39 @@ test(
 );
 
 test(
+  "F04: one reaped job whose repair throws does not hold back the rest of the reaper's batch",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      // A killed transcode, exactly as the other tests seed it...
+      const sub = await seedSubmission(w, "transcoding");
+      const orphan = await seedLedger(w, sub);
+      const jobId = await seedJob(w, sub, { status: "running", attempts: 3, maxAttempts: 3 });
+      // ...and, expired in the same tick, one whose repair cannot succeed: a
+      // payload id that is not a uuid fails the ledger query with 22P02. The
+      // repair used to run in ONE transaction for the whole batch, so this
+      // rolled back every reaped job with it, on every housekeeping tick --
+      // expired leases on every queue stayed 'running' for good.
+      const [bad] = await w.q<{ id: string }>(
+        `INSERT INTO ${w.schema}.jobs (queue, name, payload, status, attempts, max_attempts, locked_by, lease_expires_at)
+           VALUES ('transcode', 'transcode', '{"videoSubmissionId":"not-a-uuid"}', 'running', 3, 3,
+                   'a-worker-that-was-killed', now() - interval '1 minute')
+         RETURNING id`,
+      );
+
+      const worker = w.spawnWorker();
+      const settled = await waitFor(async () => (await job(w, jobId)).status === "dead", 30_000);
+      assert.ok(settled, `the good job was never reaped: ${await state(w, sub, jobId)}\n${worker.output()}`);
+      assert.equal((await job(w, bad!.id)).status, "dead", "the job whose repair failed must still be reaped");
+      assert.equal((await ledger(w, sub)).find((r) => r.id === orphan)?.status, "failed");
+      assert.equal((await video(w, sub)).status, "failed");
+      assert.match(worker.output(), /could not repair/i, "a repair that failed must be logged, with its job");
+      assert.match(worker.output(), new RegExp(bad!.id));
+    });
+  },
+);
+
+test(
   "F04: a throw before the handler's try block still marks the attempt and the video failed",
   { skip, timeout: 90_000 },
   async () => {
@@ -177,6 +214,70 @@ test(
       const v = await video(w, sub);
       assert.equal(v.status, "failed", `a dead job's video said '${v.status}' -- "Transcoding in progress", forever`);
       assert.match(v.processing_log ?? "", /read-only/);
+    });
+  },
+);
+
+test(
+  "F04: rows stranded before the reaper repaired them are failed on the next tick, and the DLQ can act on them",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      // What the OLD reaper left behind, which nothing touches again: a killed
+      // attempt's ledger row 'running' and its video 'transcoding', with the
+      // job long since dead-lettered...
+      const deadJob = await seedSubmission(w, "transcoding");
+      const deadJobRow = await seedLedger(w, deadJob);
+      const deadJobId = await seedJob(w, deadJob, { status: "queued", attempts: 3, maxAttempts: 3 });
+      await w.q(`UPDATE ${w.schema}.jobs SET status = 'dead', completed_at = now() - interval '2 days' WHERE id = $1`, [deadJobId]);
+      // ...or pruned away entirely,
+      const noJob = await seedSubmission(w, "transcoding");
+      const noJobRow = await seedLedger(w, noJob);
+      // ...or with no ledger row at all (the old code wrote 'transcoding' before
+      // its ledger row, outside the try) -- nothing for the DLQ to list.
+      const noLedger = await seedSubmission(w, "transcoding");
+      // The control: an attempt another worker is running right now, lease live.
+      const live = await seedSubmission(w, "transcoding");
+      const liveRow = await seedLedger(w, live);
+      const liveJob = await seedJob(w, live, { status: "running", attempts: 1, maxAttempts: 3 });
+      await w.q(`UPDATE ${w.schema}.jobs SET lease_expires_at = now() + interval '10 minutes' WHERE id = $1`, [liveJob]);
+
+      const worker = w.spawnWorker();
+      const settled = await waitFor(async () => {
+        for (const id of [deadJob, noJob, noLedger]) if ((await video(w, id)).status !== "failed") return false;
+        return true;
+      }, 30_000);
+      assert.ok(
+        settled,
+        `stranded videos still claim to be transcoding: ${JSON.stringify(
+          await Promise.all([deadJob, noJob, noLedger].map(async (id) => ({ v: await video(w, id), l: await ledger(w, id) }))),
+        )}
+${worker.output()}`,
+      );
+
+      const { verbsFor } = await dlqState();
+      for (const [id, row] of [[deadJob, deadJobRow], [noJob, noJobRow], [noLedger, undefined]] as const) {
+        const rows = await ledger(w, id);
+        const latest = rows[rows.length - 1]!;
+        if (row) assert.equal(latest.id, row, "the stranded attempt's own row is closed, not replaced");
+        assert.equal(latest.status, "failed", `ledger: ${JSON.stringify(rows)}`);
+        assert.ok(latest.ended, "a closed attempt needs an ended_at");
+        assert.match(latest.error ?? "", /no worker/i);
+        assert.match((await video(w, id)).processing_log ?? "", /no worker/i);
+        // What /admin/transcode-jobs offers for that row now. It offered
+        // nothing: both verbs need a latest attempt that is 'failed'.
+        const verbs = verbsFor(
+          { jobId: latest.id, status: latest.status },
+          { status: (await video(w, id)).status, latestAttemptId: latest.id, liveJob: null },
+        );
+        assert.deepEqual(verbs, { retry: true, drop: true });
+      }
+
+      // Nothing live was touched.
+      assert.deepEqual((await ledger(w, live)).map((r) => [r.id, r.status]), [[liveRow, "running"]]);
+      assert.equal((await video(w, live)).status, "transcoding", "an attempt another worker is running was failed");
+      assert.equal((await job(w, liveJob)).status, "running");
+      assert.match(worker.output(), /stranded/i, "a repair of stranded rows must be logged");
     });
   },
 );

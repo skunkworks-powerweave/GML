@@ -274,6 +274,8 @@ export type ReapedJob = {
   payload: Record<string, unknown>;
   /** True when its attempts were exhausted, so it was dead-lettered, not requeued. */
   dead: boolean;
+  /** Why `onReaped` failed for this job, if it did: its repair was rolled back, its reaping was not. */
+  repairError?: string;
 };
 
 /** The transaction handle reapExpiredLeases() gives its `onReaped` callback. */
@@ -294,16 +296,23 @@ export type QueueTx = Parameters<
  * it a reaper-dead job -- and the 'N failed' chip that counts it -- stayed
  * forever.
  *
- * `onReaped` runs in the SAME transaction, with the reaped rows. This module
+ * `onReaped` runs in the SAME transaction, once per reaped job. This module
  * only knows the transport; the handler that was killed also left domain rows
  * behind (a transcode's ledger row 'running', its video 'transcoding'), and
  * nothing but this moment knows that its worker is gone. Repairing them here,
  * atomically, means a job is never requeued or dead-lettered while its domain
  * rows still claim it is running.
+ *
+ * Each job's repair runs in a SAVEPOINT of its own. They used to share the
+ * batch's transaction, so one repair that threw -- a payload id that is not a
+ * uuid fails its query with 22P02 -- rolled back the reaping of EVERY job in
+ * the batch, on every queue, and did so again on every housekeeping tick: no
+ * expired lease was ever reaped again. Now that job's repair is rolled back
+ * and reported in `repairError`, and it is reaped regardless, like the rest.
  */
 export async function reapExpiredLeases(
   db: NodePgDatabase<Record<string, unknown>>,
-  onReaped?: (tx: QueueTx, reaped: ReapedJob[]) => Promise<void>,
+  onReaped?: (tx: QueueTx, job: ReapedJob) => Promise<void>,
 ): Promise<ReapedJob[]> {
   return db.transaction(async (tx) => {
     const res = await tx.execute(sql`
@@ -317,14 +326,21 @@ export async function reapExpiredLeases(
        WHERE status = 'running' AND lease_expires_at < now()
        RETURNING id, queue, name, payload, status
     `);
-    const reaped = ((res as unknown as { rows: Record<string, unknown>[] }).rows ?? []).map((r) => ({
+    const reaped: ReapedJob[] = ((res as unknown as { rows: Record<string, unknown>[] }).rows ?? []).map((r) => ({
       id: String(r.id),
       queue: String(r.queue),
       name: String(r.name),
       payload: (r.payload ?? {}) as Record<string, unknown>,
       dead: r.status === "dead",
     }));
-    if (onReaped && reaped.length > 0) await onReaped(tx, reaped);
+    for (const job of onReaped ? reaped : []) {
+      try {
+        // A nested drizzle transaction is a SAVEPOINT, rolled back on a throw.
+        await tx.transaction((sp) => onReaped!(sp, job));
+      } catch (err) {
+        job.repairError = String(err);
+      }
+    }
     return reaped;
   });
 }

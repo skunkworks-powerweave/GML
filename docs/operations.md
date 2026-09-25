@@ -105,6 +105,14 @@ the video is marked failed, and that failed row carries Retry. The worker log
 says which: "requeued jobs with expired leases" or "dead-lettered jobs with
 expired leases".
 
+Every minute the worker also fails any attempt row still 'running', and any
+video still 'transcoding', that no queued or running job belongs to any more --
+rows left by a worker killed before the reaper repaired them, which nothing
+else would ever touch. Each gets a failed row with Retry and Drop; the log
+line is "failed stranded transcode rows (no live job)". "could not repair the
+rows of a reaped job" means the reaper took a job back but could not fix its
+rows; the job's next attempt, or for a dead job that sweep, fixes them.
+
 ## Disk filling up
 
 `/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`.

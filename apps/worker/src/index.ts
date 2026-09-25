@@ -52,7 +52,7 @@ import {
   type ClaimedJob,
 } from "@gml/db/queue";
 import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
-import { repairReapedTranscodes, sweepStaleScratch, transcode480p } from "./transcode.js";
+import { repairReapedTranscodes, repairStrandedTranscodes, sweepStaleScratch, transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
 import { log } from "./log.js";
 
@@ -286,6 +286,16 @@ async function housekeeping(): Promise<void> {
     const reaped = await reapExpiredLeases(db, repairReapedTranscodes);
     const requeued = reaped.filter((r) => !r.dead);
     const dead = reaped.filter((r) => r.dead);
+    // Reaped all the same; only their domain rows were left as they were. A
+    // requeued job's next attempt closes its stale row itself, and
+    // repairStrandedTranscodes below fails a dead one's.
+    for (const r of reaped.filter((j) => j.repairError !== undefined)) {
+      log.error("could not repair the rows of a reaped job", {
+        job: `${r.name}:${r.id}`,
+        dead: r.dead,
+        err: boundedError(r.repairError!, 500),
+      });
+    }
     if (requeued.length > 0) log.warn("requeued jobs with expired leases", { count: requeued.length });
     // Said separately: this used to be logged as "requeued" too, for jobs that
     // will never run again and need a human.
@@ -294,6 +304,16 @@ async function housekeeping(): Promise<void> {
         count: dead.length,
         jobs: dead.map((r) => `${r.name}:${r.id}`),
       });
+    }
+    // Its own try: like a failed repair above, a failure here must not stop
+    // the pruning and reconciling below.
+    try {
+      const stranded = await repairStrandedTranscodes();
+      if (stranded.attempts + stranded.videos > 0) {
+        log.warn("failed stranded transcode rows (no live job)", stranded);
+      }
+    } catch (err) {
+      log.error("stranded transcode repair failed", { err: String(err) });
     }
     const pruned = await pruneFinished(db);
     if (pruned > 0) log.info("pruned finished jobs", { count: pruned });

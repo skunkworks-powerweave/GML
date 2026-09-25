@@ -99,8 +99,8 @@ async function closeRunningAttempts(w: Writer, videoSubmissionId: string, reason
 }
 
 /**
- * Repair the domain rows of transcode attempts whose worker died: the lease
- * reaper's `onReaped`, run in its transaction.
+ * Repair the domain rows of a transcode attempt whose worker died: the lease
+ * reaper's `onReaped`, run in its transaction (a savepoint per job).
  *
  * A SIGKILL, an OOM kill, or a deploy that outlasts Docker's stop grace ends an
  * attempt without its catch block running, and the reaper only ever repaired
@@ -109,27 +109,72 @@ async function closeRunningAttempts(w: Writer, videoSubmissionId: string, reason
  * progress" -- and once attempts ran out, /admin/transcode-jobs showed a
  * 'running' row with no Retry or Drop, because both act on a failed row.
  */
-export async function repairReapedTranscodes(tx: QueueTx, reaped: ReapedJob[]): Promise<void> {
-  for (const job of reaped) {
-    if (job.name !== "transcode") continue;
-    const videoSubmissionId = String(job.payload.videoSubmissionId ?? "");
-    if (!videoSubmissionId) continue;
-    const reason = job.dead
-      ? "worker stopped responding (lease expired); attempts exhausted"
-      : "worker stopped responding (lease expired); retrying";
-    await closeRunningAttempts(tx, videoSubmissionId, reason);
-    await tx
-      .update(videoSubmissions)
-      .set(job.dead ? { status: "failed", processingLog: reason } : { status: "queued" })
-      .where(
-        and(
-          eq(videoSubmissions.id, videoSubmissionId),
-          // Never over a result: a 'ready' video whose succeed() write was lost
-          // (see runJob) stays ready.
-          inArray(videoSubmissions.status, job.dead ? ["queued", "transcoding"] : ["transcoding"]),
-        ),
-      );
-  }
+export async function repairReapedTranscodes(tx: QueueTx, job: ReapedJob): Promise<void> {
+  if (job.name !== "transcode") return;
+  const videoSubmissionId = String(job.payload.videoSubmissionId ?? "");
+  if (!videoSubmissionId) return;
+  const reason = job.dead
+    ? "worker stopped responding (lease expired); attempts exhausted"
+    : "worker stopped responding (lease expired); retrying";
+  await closeRunningAttempts(tx, videoSubmissionId, reason);
+  await tx
+    .update(videoSubmissions)
+    .set(job.dead ? { status: "failed", processingLog: reason } : { status: "queued" })
+    .where(
+      and(
+        eq(videoSubmissions.id, videoSubmissionId),
+        // Never over a result: a 'ready' video whose succeed() write was lost
+        // (see runJob) stays ready.
+        inArray(videoSubmissions.status, job.dead ? ["queued", "transcoding"] : ["transcoding"]),
+      ),
+    );
+}
+
+/**
+ * Fail the rows of transcode attempts that nothing is running any more: a
+ * ledger row 'running', or a video 'transcoding', whose submission has no live
+ * job (queued or running) at all. Run on every housekeeping tick.
+ *
+ * Only a handler holding a live job writes either value, and every way that
+ * job can end rewrites them first -- except the ones this is for: rows a killed
+ * attempt left before the reaper repaired anything (their jobs since
+ * dead-lettered, or pruned), a reaper repair that failed (repairError), and a
+ * last write that never landed. Nothing touched those again. The teacher's
+ * page said "Transcoding in progress" for good, and /admin/transcode-jobs
+ * offered neither Retry nor Drop, which both need a latest attempt that failed.
+ * A stranded video without such a row gets one, so the DLQ lists it.
+ *
+ * One statement, so every part sees the same snapshot: the insert skips the
+ * videos whose running row the first part has just failed. Idempotent, and safe
+ * beside a second worker running the same statement.
+ */
+export async function repairStrandedTranscodes(): Promise<{ attempts: number; videos: number }> {
+  const reason = "interrupted: no worker is running this attempt any more (its job ended or is gone)";
+  const noLiveJob = (submissionId: unknown) => sql`NOT EXISTS (
+    SELECT 1 FROM jobs
+     WHERE jobs.queue = 'transcode' AND jobs.status IN ('queued', 'running')
+       AND jobs.dedupe_key = 'submission:' || ${submissionId}::text)`;
+  const res = await db.execute<{ attempts: number; videos: number }>(sql`
+    WITH attempts AS (
+      UPDATE ${transcodeJobs} SET status = 'failed', ended_at = now(), error = ${reason}
+       WHERE ${transcodeJobs.status} = 'running' AND ${noLiveJob(transcodeJobs.videoSubmissionId)}
+       RETURNING video_submission_id
+    ), videos AS (
+      UPDATE ${videoSubmissions} SET status = 'failed', processing_log = ${reason}
+       WHERE ${videoSubmissions.status} = 'transcoding' AND ${noLiveJob(videoSubmissions.id)}
+       RETURNING id
+    ), recorded AS (
+      INSERT INTO ${transcodeJobs} (video_submission_id, profile, status, ended_at, error)
+      SELECT v.id, '480p', 'failed', now(), ${reason} FROM videos v
+       WHERE NOT EXISTS (SELECT 1 FROM attempts a WHERE a.video_submission_id = v.id)
+         AND COALESCE((SELECT t.status FROM ${transcodeJobs} t WHERE t.video_submission_id = v.id
+                        ORDER BY t.created_at DESC, t.id DESC LIMIT 1), '') <> 'failed'
+      RETURNING id
+    )
+    SELECT (SELECT count(*) FROM attempts)::int AS attempts, (SELECT count(*) FROM videos)::int AS videos
+  `);
+  const [row] = (res as unknown as { rows: { attempts: number; videos: number }[] }).rows ?? [];
+  return { attempts: row?.attempts ?? 0, videos: row?.videos ?? 0 };
 }
 
 /**
