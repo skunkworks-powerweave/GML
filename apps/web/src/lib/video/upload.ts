@@ -73,6 +73,18 @@ export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
  */
 export const UPLOAD_CHUNK_BYTES = 6 * 1024 * 1024;
 
+/**
+ * The cap a direct upload is held to: the programme's configured
+ * videoMaxUploadMb, bounded by what the bucket will accept. beginUpload
+ * enforces it, and /uploads states it -- the card said "Max file 500 MB" as a
+ * literal whatever the setting was.
+ */
+export async function uploadLimitBytes(): Promise<number> {
+  const settings = await getSystemSettings().catch(() => null);
+  const configuredBytes = settings?.videoMaxUploadMb ? settings.videoMaxUploadMb * 1024 * 1024 : MAX_UPLOAD_BYTES;
+  return Math.min(configuredBytes, MAX_UPLOAD_BYTES);
+}
+
 const ALLOWED_VIDEO_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
@@ -125,12 +137,7 @@ export async function beginUpload(opts: {
   if (!Number.isFinite(opts.sizeBytes) || opts.sizeBytes <= 0) {
     return { error: "That file looks empty." };
   }
-  // The programme's configured cap, bounded by what the bucket will accept.
-  const settings = await getSystemSettings().catch(() => null);
-  const configuredBytes = settings?.videoMaxUploadMb
-    ? settings.videoMaxUploadMb * 1024 * 1024
-    : MAX_UPLOAD_BYTES;
-  const effectiveMax = Math.min(configuredBytes, MAX_UPLOAD_BYTES);
+  const effectiveMax = await uploadLimitBytes();
 
   if (opts.sizeBytes > effectiveMax) {
     const mb = Math.floor(effectiveMax / (1024 * 1024));

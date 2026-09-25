@@ -1,7 +1,7 @@
 // Governance test for spec 069 — /uploads (teacher's "My Uploads" page).
 // Asserts the page exists, guards auth, queries video_submissions filtered by
-// the viewer, joins to files + observation_cycles, renders the three-card
-// explainer, hosts the <UploadProgress /> tray, ports the table from
+// the viewer, joins to files + observation_cycles, renders the explainer
+// cards, hosts the <UploadProgress /> tray, ports the table from
 // forms.jsx::UploadsPage, and uses the inline-style + CSS-var idiom shared
 // with the rest of Phase 7.
 
@@ -42,11 +42,17 @@ test("069 — queries video_submissions filtered by submittedByUserId + joins fi
   assert.match(src, /from\s+"@gml\/db\/schema"/);
 });
 
-test("069 — ports the three-card explainer (WhatsApp PRIMARY + browser + record)", () => {
+// Was "the three-card explainer (... + record)", pinning a "Record in-app" card
+// that promised "Saves to your phone first; uploads when you have wifi" and
+// linked to the same file picker as "Upload here": nothing records, saves
+// offline or waits for wifi on a desktop (F13). Recording is the phone flow's
+// "Record now" (MobileUploadRunner). tests/behaviour/upload-copy.test.ts renders
+// the page and checks the promise is gone.
+test("069 — ports the explainer cards (WhatsApp PRIMARY + browser)", () => {
   const src = read(PAGE);
   assert.match(src, /Forward via WhatsApp/);
   assert.match(src, /Upload here/);
-  assert.match(src, /Record in-app/);
+  assert.doesNotMatch(src, /title: "Record in-app"/);
   // The number comes from the ENVIRONMENT, not from this file.
   //
   // The old assertions pinned the literal `+91 90600 22013` and

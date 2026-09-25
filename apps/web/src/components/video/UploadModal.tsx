@@ -41,6 +41,7 @@
 // belongs to HlsPlayer.tsx, not here.
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { UploadProgress } from "./UploadProgress";
 
 type UploadModalProps = {
@@ -267,9 +268,11 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                   a mentee&apos;s quarterly video for her pairing.
                 </li>
               </ul>
+              {/* This said a programme admin "can attach them from the WhatsApp
+                  ingest log". No screen re-links a video; the log says so. */}
               <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 8 }}>
-                Captions without a code still land here, tagged <em>unmatched</em> — a programme admin can attach them
-                from the WhatsApp ingest log.
+                A video whose caption has no code, or one you may not use, still arrives, but linked to nothing: only
+                you and programme administrators can see it. To attach it, send it again with the right code.
               </p>
             </section>
             ) : null}
@@ -286,8 +289,19 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
               >
                 Resumable upload, MP4 / MOV / 3GP, transcodes to{" "}
                 <strong>{videoDefaultQuality ?? "480p"} HLS</strong> after the upload finishes
-                (set by the programme admin in system settings — spec 168). Use this when you
+                (set by the programme admin in system settings). Use this when you
                 already have the file on disk (e.g. classroom recording).
+              </p>
+              {/* This tray is linked to nothing. A video for a cycle, a meeting or
+                  a quarterly video belongs on /uploads, which asks what it is for
+                  -- a generic one is invisible to the observer and mentor. */}
+              <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0, marginBottom: 10 }}>
+                Uploaded here, a video is linked to nothing: only you and programme administrators see it. For an
+                observation cycle, a meeting or a quarterly video, use{" "}
+                <Link href="/uploads" style={{ color: "var(--indigo)" }}>
+                  My uploads
+                </Link>
+                , which asks what it is for.
               </p>
               <UploadProgress contextType="generic" onComplete={onUploadComplete} />
             </section>

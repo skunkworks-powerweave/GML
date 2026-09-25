@@ -720,9 +720,8 @@ export function MobileUploadRunner({
               lineHeight: 1.6,
             }}
           >
-            Your video will be watermarked with the viewer&rsquo;s name + email when
-            it is played back — please do not redistribute outside the
-            programme.
+            Whoever plays your video back sees their own name and the time over
+            it — please do not redistribute outside the programme.
           </div>
 
           {waHref ? (
@@ -810,7 +809,9 @@ export function MobileUploadRunner({
             Uploaded
           </div>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
-            Transcoding now. We&rsquo;ll notify your mentor when it&rsquo;s ready (≈ 5 min).
+            {/* This promised "We'll notify your mentor when it's ready": nothing
+                notifies anyone when a transcode finishes. */}
+            Transcoding now. It can be played once that has finished.
             Taking you to My Uploads…
           </p>
         </div>

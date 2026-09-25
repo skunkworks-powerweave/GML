@@ -1,6 +1,10 @@
 // /uploads — teacher's "My uploads" personal landing.
 // 1:1 port of `LMS GML Frontend/forms.jsx::UploadsPage` (lines 342-375).
-// - Three explainer cards (WhatsApp PRIMARY / browser tus / in-app record)
+// - Explainer cards (WhatsApp PRIMARY / browser upload). A third, "Record
+//   in-app", promised "Saves to your phone first; uploads when you have wifi"
+//   and linked to the same file picker: nothing records, saves offline or
+//   waits for wifi on a desktop, so it is gone (F13). Recording is the phone
+//   flow's "Record now".
 // - Inline <UploadProgress /> tray (spec 045) for browser uploads
 // - Table of viewer's own video_submissions (most recent 50), joined with files
 //   for the original filename and with observation_cycles for the linked cycle code.
@@ -8,7 +12,7 @@
 // Spec 135 (Workflow Run 12 final frontend-parity): on mobile we swap the
 // explainer cards + UploadProgress tray for the dedicated MobileUploadRunner
 // flow (full-screen Record / Pick → Preview → Upload progress). Desktop keeps
-// the original three-card layout untouched. The recent-uploads table is
+// its explainer cards and tray. The recent-uploads table is
 // rendered on both shells because viewing past submissions is identical work
 // regardless of device.
 //
@@ -34,6 +38,7 @@ import { UploadProgress } from "@/components/video/UploadProgress";
 import { MobileUploadRunner } from "@/components/video/MobileUploadRunner";
 import { getDeviceType } from "@/lib/device";
 import { assertEnv } from "@/lib/env";
+import { uploadLimitBytes } from "@/lib/video/upload";
 import {
   assertContextAllowed,
   describeUploadTarget,
@@ -93,7 +98,7 @@ const CONTEXT_LABEL: Record<string, string> = {
 const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation", mentorship: "Mentorship" };
 
 /**
- * Built per request, because two of these cards were lying about the product.
+ * Built per request, because these cards were lying about the product.
  *
  *   WhatsApp   The number and the wa.me link were HARDCODED to
  *              +91 90600 22013, three lines above the same file's own
@@ -110,13 +115,17 @@ const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation",
  *              whatever was in progress. The copy now describes the button
  *              that is actually there.
  *
+ *   Size       "Max file 500 MB" was a literal, while the cap beginUpload
+ *              enforces is the programme setting (10 to 2000 MB). It is now
+ *              the same number (uploadLimitBytes).
+ *
  * `whatsappText` is the caption that sends a video to the same place as this
  * page's upload: the chosen cycle's code or meeting's MM- code, "OBS-" for the
  * teacher to finish when nothing is chosen, and null when WhatsApp cannot reach
  * the target at all -- then the card is dropped, because the video would
  * arrive linked to nothing.
  */
-function explainerCards(whatsappPhone: string | null, whatsappText: string | null, chosen: boolean) {
+function explainerCards(whatsappPhone: string | null, whatsappText: string | null, chosen: boolean, maxMb: number) {
   const dialable = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : null;
   const exact = whatsappText !== null && whatsappText !== "OBS-";
   return [
@@ -138,21 +147,13 @@ function explainerCards(whatsappPhone: string | null, whatsappText: string | nul
     {
       icon: "up",
       title: "Upload here",
-      desc: "Choose a file below. Resumes on disconnect. Max file 500 MB. We'll transcode to HLS automatically.",
+      // The limit beginUpload enforces (uploadLimitBytes), not a literal.
+      desc: `Choose a file below. Resumes on disconnect. Max file ${maxMb} MB. We'll transcode to HLS automatically.`,
       accent: "var(--indigo)",
       primary: false,
       cta: "Start",
       // Until the page knows what the video is for, there is no tray to go to.
       href: chosen ? "#upload-tray" : "#upload-target",
-    },
-    {
-      icon: "rec",
-      title: "Record in-app",
-      desc: "Open camera here in the app. Saves to your phone first; uploads when you have wifi.",
-      accent: "var(--saffron)",
-      primary: false,
-      cta: "Start",
-      href: "#upload-tray",
     },
   ];
 }
@@ -240,6 +241,8 @@ export default async function UploadsPage({
   // See videos/page.tsx: WHATSAPP_PHONE_NUMBER_ID is Meta's opaque account id,
   // not a dialable number, and must never be used as a fallback here.
   const whatsappPhone = assertEnv().whatsappNumber.value ?? null;
+  const maxMb = Math.floor((await uploadLimitBytes()) / (1024 * 1024));
+  const cards = explainerCards(whatsappPhone, whatsappText, target !== null, maxMb);
 
   const rows = await db
     .select({
@@ -282,7 +285,7 @@ export default async function UploadsPage({
           Submit a lesson video
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          Three ways to submit. Pick whatever works on your network today.
+          Send it over WhatsApp or upload it here — whichever works on your network today.
         </p>
       </div>
 
@@ -416,12 +419,12 @@ export default async function UploadsPage({
             <section
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
+                gridTemplateColumns: `repeat(${cards.length}, 1fr)`,
                 gap: 14,
                 marginBottom: 18,
               }}
             >
-              {explainerCards(whatsappPhone, whatsappText, target !== null).map((c) => (
+              {cards.map((c) => (
                 <article
                   key={c.title}
                   className={`card${c.primary ? " card-hi" : ""}`}
@@ -538,7 +541,7 @@ export default async function UploadsPage({
                 You haven&apos;t uploaded anything yet.
               </div>
               <div style={{ fontSize: 12 }}>
-                Use one of the three options above — WhatsApp is the fastest on
+                Use one of the options above — WhatsApp is the fastest on
                 a flaky connection.
               </div>
             </div>
