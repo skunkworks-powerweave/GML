@@ -29,10 +29,12 @@ export const DEFAULT_LOCALE: Locale = "en";
 /**
  * Name of the cookie carrying the UI locale.
  *
- * `user_prefs.uiLanguage` remains the source of truth; this cookie is the
- * read path for code that cannot hit the database -- notably the next-intl
- * request config, which runs on every server render. It was previously a bare
- * "gml-locale" string literal repeated across four files.
+ * `user_prefs.uiLanguage` is the source of truth for a signed-in user; this
+ * cookie is the pre-auth picker's choice, and what ./resolve.ts falls back to
+ * when nobody is signed in or nothing has been saved yet. It is NOT a mirror
+ * the server can rely on: nothing writes it at sign-in, which is why reading
+ * it alone rendered the chrome in a different language from the layouts. It
+ * was previously a bare "gml-locale" string literal repeated across four files.
  */
 export const LOCALE_COOKIE = "gml-locale";
 

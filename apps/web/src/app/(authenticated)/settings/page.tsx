@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { resolveUiLocale } from "@/i18n/resolve";
 import { SettingsForm, type SettingsFormValues } from "./settings-form";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,11 @@ export default async function SettingsPage() {
     .where(eq(userPrefs.userId, userId))
     .limit(1);
 
+  // The language pill shows the locale the chrome around it is rendered in
+  // (i18n/resolve.ts), not the row's value or the "en" default: with nothing
+  // saved and Hindi picked on the login page, the pill said English under
+  // Hindi menus, and tapping हिन्दी then "changed" nothing.
+  const uiLanguage = await resolveUiLocale();
   const initial: SettingsFormValues = row
     ? {
         density: (row.density as SettingsFormValues["density"]) ?? "regular",
@@ -58,9 +64,9 @@ export default async function SettingsPage() {
         highContrast: row.highContrast ?? false,
         reducedMotion: row.reducedMotion ?? false,
         showWatermark: row.showWatermark ?? true,
-        uiLanguage: (row.uiLanguage as SettingsFormValues["uiLanguage"]) ?? "en",
+        uiLanguage,
       }
-    : DEFAULT_PREFS;
+    : { ...DEFAULT_PREFS, uiLanguage };
 
   return (
     <div>

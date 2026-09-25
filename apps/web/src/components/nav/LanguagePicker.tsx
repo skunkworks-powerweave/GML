@@ -35,7 +35,13 @@ const LABELS: Record<LocaleCode, { native: string; chip: string }> = {
 const ORDER: ReadonlyArray<LocaleCode> = ["en", "hi", "bo"];
 
 type Props = {
-  /** Current locale (read from user_prefs.uiLanguage in the parent server component). */
+  /**
+   * The locale the page is rendered in (i18n/resolve.ts, via the layout) --
+   * the same one every string came from, which is what makes the no-op for
+   * picking it again below correct. It used to be the database value while
+   * the strings followed the cookie, so the option shown as current could be
+   * the one the user was trying to switch TO, and picking it did nothing.
+   */
   current: LocaleCode;
   /** Optional translated label for the picker (rendered as sr-only text). */
   ariaLabel?: string;

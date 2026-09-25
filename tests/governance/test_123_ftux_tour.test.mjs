@@ -149,12 +149,14 @@ test("spec 123 — FTUXTour ports the prototype's ftux-* class names", () => {
 
 test("spec 123 — (authenticated)/layout.tsx selects ftuxSeenAt and mounts <FTUXTour>", () => {
   const src = read(LAYOUT);
-  // Select clause must include ftuxSeenAt alongside whatever else the layout already pulls.
-  assert.match(
-    src,
-    /ftuxSeenAt:\s*userPrefs\.ftuxSeenAt/,
-    "layout must include ftuxSeenAt: userPrefs.ftuxSeenAt in its select object",
-  );
+  // The layout used to run its own `select({ uiLanguage, ftuxSeenAt })`. It
+  // now takes the whole row from the per-request resolver that also decides
+  // the UI language (i18n/resolve.ts, F124), so the invariant is: ftuxSeenAt
+  // comes from that row, and the resolver reads user_prefs. Rendered for real
+  // in tests/behaviour/ui-locale-source.test.ts.
+  assert.match(src, /await viewerPrefs\(\)/, "layout must take user_prefs from the shared viewerPrefs() resolver");
+  assert.match(src, /prefRow\?\.ftuxSeenAt/, "layout must derive ftuxSeenAt from that row");
+  assert.match(read("apps/web/src/i18n/resolve.ts"), /\.from\(userPrefs\)/, "the resolver must read user_prefs");
   // The component must be mounted with the right props.
   assert.match(
     src,

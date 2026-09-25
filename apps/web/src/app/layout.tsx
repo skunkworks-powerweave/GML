@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { cookies } from "next/headers";
 import { Geist, Geist_Mono, Noto_Sans_Devanagari, Noto_Serif_Tibetan } from "next/font/google";
-import { DEFAULT_LOCALE, LOCALE_COOKIE, LOCALE_HTML_LANG, normalizeLocale, type Locale } from "@/i18n/config";
+import { LOCALE_HTML_LANG, type Locale } from "@/i18n/config";
+import { resolveUiLocale } from "@/i18n/resolve";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -42,21 +42,14 @@ const notoTibetan = Noto_Serif_Tibetan({
 /**
  * The locale the page will be rendered in, for <html lang>.
  *
- * Read from the same gml-locale cookie i18n/request.ts reads for every
- * server-rendered string, so the declared language always matches the text
- * next-intl actually produced. Both writers keep it in sync: the pre-auth
- * picker (login/language-picker.tsx) and the post-auth preference API
- * (api/user-prefs/route.ts). The authenticated layout re-declares lang on its
- * subtree from the database preference, which wins on a fresh device where the
- * cookie has not been written yet.
+ * The same per-request answer i18n/request.ts gives every server-rendered
+ * string and the authenticated layout gives its wrapper, font and picker
+ * (i18n/resolve.ts): the saved preference when signed in, else the gml-locale
+ * cookie. It read the cookie alone, which was a different answer from the
+ * layout's whenever the device's cookie and the saved preference differed.
  */
-async function documentLocale(): Promise<Locale> {
-  try {
-    return normalizeLocale((await cookies()).get(LOCALE_COOKIE)?.value);
-  } catch {
-    // Outside a request scope (static prerender) there are no cookies.
-    return DEFAULT_LOCALE;
-  }
+function documentLocale(): Promise<Locale> {
+  return resolveUiLocale();
 }
 
 export const metadata: Metadata = {

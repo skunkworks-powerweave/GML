@@ -17,3 +17,18 @@ export function formatBellBadge(count: number): string | null {
 export function formatQueueLabel(): string | null {
   return null;
 }
+
+// The loaders the authenticated layout awaits. Empty, as the real ones are
+// when their data source is down (they fail closed), so a test can render the
+// layout itself without a count query in the way.
+export async function loadNavCounts(): Promise<NavCounts> {
+  return {};
+}
+
+export async function loadUnreadNotifications(): Promise<number> {
+  return 0;
+}
+
+export async function loadQueueDepth(): Promise<QueueDepth> {
+  return { active: 0, waiting: 0, failed: 0 };
+}

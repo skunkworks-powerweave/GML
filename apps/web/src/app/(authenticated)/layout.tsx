@@ -5,10 +5,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
-import { eq } from "drizzle-orm";
 import { NextIntlClientProvider } from "next-intl";
-import { db } from "@gml/db";
-import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
 import { assertEnv } from "@/lib/env";
@@ -18,12 +15,8 @@ import AntiDownloadGuard from "@/components/AntiDownloadGuard";
 import { FTUXTour } from "@/components/ftux/FTUXTour";
 import { HelpPanel } from "@/components/help/HelpPanel";
 import QuickFind from "@/components/quickfind/QuickFind";
-import {
-  loadMessages,
-  normalizeLocale,
-  LOCALE_FONT_FAMILY,
-  LOCALE_HTML_LANG,
-} from "@/i18n/config";
+import { loadMessages, LOCALE_FONT_FAMILY, LOCALE_HTML_LANG } from "@/i18n/config";
+import { viewerPrefs } from "@/i18n/resolve";
 import {
   loadNavCounts,
   loadUnreadNotifications,
@@ -46,9 +39,9 @@ import { activeNavIdFor, activeTabIdFor } from "@/config/nav";
 //
 // Spec 125 — every authenticated route is also wrapped in NextIntlClientProvider
 // so the topbar, sidebar, bottom tabs and section-gate page can call
-// useTranslations() against the user's chosen UI language. The locale is read
-// from user_prefs.uiLanguage (default 'en'); see `@/i18n/config` for the
-// fallback strategy and font handling.
+// useTranslations() against the user's chosen UI language. The locale is
+// user_prefs.uiLanguage, resolved once per request by `@/i18n/resolve`; see
+// `@/i18n/config` for the fallback strategy and font handling.
 //
 // Spec 122 — every authenticated route also mounts the global HelpPanel
 // client island. It is invisible by default; HelpTip / HelpDot / HelpHeadbtn
@@ -77,17 +70,14 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
     image: session.user.image ?? null,
   };
 
-  // Read the user's UI language and ftux state from user_prefs in a single
-  // query. Defaults to 'en' + null for users who haven't visited /settings
-  // yet — the row only exists after the first pref change, by design (spec
-  // 024). A null ftuxSeenAt is exactly the signal the FTUXTour component
-  // mounts on (spec 123).
-  const [prefRow] = await db
-    .select({ uiLanguage: userPrefs.uiLanguage, ftuxSeenAt: userPrefs.ftuxSeenAt })
-    .from(userPrefs)
-    .where(eq(userPrefs.userId, session.user.id))
-    .limit(1);
-  const locale = normalizeLocale(prefRow?.uiLanguage);
+  // The user's UI language and ftux state, from the one per-request user_prefs
+  // read (i18n/resolve.ts) that i18n/request.ts and the root layout use too --
+  // so the strings, <html lang>, this wrapper's lang and font, the provider's
+  // messages and the picker's "current" cannot name different languages. The
+  // row only exists after the first pref change (spec 024); until then the
+  // locale is the pre-auth cookie's and ftuxSeenAt is null, which is exactly
+  // the signal the FTUXTour component mounts on (spec 123).
+  const { locale, prefs: prefRow } = await viewerPrefs();
   const messages = loadMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];
   const htmlLang = LOCALE_HTML_LANG[locale];
@@ -173,10 +163,9 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       {/* THE LANGUAGE IS DECLARED, NOT JUST RECORDED. This was
           data-html-lang={htmlLang}: a data attribute, invisible to the browser
           and to assistive technology, so every Hindi and Bhoti page was read
-          out as English. The root layout sets <html lang> from the gml-locale
-          cookie; this subtree override uses the DATABASE preference, which is
-          authoritative post-auth and wins on a fresh device where the cookie
-          has not been written yet. */}
+          out as English. The root layout's <html lang> comes from the same
+          resolver, so this now repeats it; it stays because the font rides on
+          the same wrapper. */}
       <div
         data-locale={locale}
         lang={htmlLang}

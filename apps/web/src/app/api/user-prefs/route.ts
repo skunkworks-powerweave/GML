@@ -95,13 +95,11 @@ export async function PUT(req: Request) {
 
   const res = NextResponse.json({ ok: true });
 
-  // Mirror the locale into the `gml-locale` cookie. user_prefs.uiLanguage stays
-  // the source of truth, but the next-intl request config (src/i18n/request.ts)
-  // runs on every server render and cannot afford a DB round-trip, so it reads
-  // this cookie instead. Without the mirror, changing the language would update
-  // the database while every server-rendered string kept the previous locale.
-  // A route handler is the right place for this: Server Components cannot write
-  // cookies.
+  // Mirror the locale into the `gml-locale` cookie. Signed in, user_prefs is
+  // what every render uses (src/i18n/resolve.ts); the cookie is what the
+  // signed-out pages (/login after sign-out) fall back to, so this keeps them
+  // in the language the user last chose on this device. A route handler is
+  // the right place for this: Server Components cannot write cookies.
   if (patch.uiLanguage) {
     res.cookies.set(LOCALE_COOKIE, patch.uiLanguage, {
       path: "/",

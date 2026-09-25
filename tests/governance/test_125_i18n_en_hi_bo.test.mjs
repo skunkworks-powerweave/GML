@@ -122,9 +122,15 @@ test("spec 125 — all three locale JSON bundles exist and seed ≥40 keys in en
 test("spec 125 — authenticated layout reads user_prefs.uiLanguage and provides NextIntlClientProvider", () => {
   const src = read(AUTH_LAYOUT);
   assert.match(src, /NextIntlClientProvider/, "authenticated layout must mount NextIntlClientProvider");
-  assert.match(src, /userPrefs/, "authenticated layout must query user_prefs (the locale source of truth)");
-  assert.match(src, /uiLanguage/, "authenticated layout must select user_prefs.uiLanguage");
-  assert.match(src, /normalizeLocale/, "authenticated layout must call normalizeLocale on the column value");
+  // F124: the layout used to query user_prefs.uiLanguage itself while
+  // i18n/request.ts read the cookie, and the two disagreed. The invariant is
+  // now ONE resolver for both: the layout takes its locale from viewerPrefs(),
+  // and that resolver reads and normalises user_prefs.uiLanguage.
+  assert.match(src, /\{\s*locale,\s*prefs:\s*prefRow\s*\}\s*=\s*await viewerPrefs\(\)/, "authenticated layout must take its locale from the shared resolver");
+  const resolver = read("apps/web/src/i18n/resolve.ts");
+  assert.match(resolver, /userPrefs/, "the resolver must query user_prefs (the locale source of truth)");
+  assert.match(resolver, /normalizeLocale\(row\.uiLanguage\)/, "the resolver must normalise user_prefs.uiLanguage");
+  assert.match(read("apps/web/src/i18n/request.ts"), /resolveUiLocale\(\)/, "the request config (every string) must use the same resolver");
   assert.match(src, /loadMessages/, "authenticated layout must call loadMessages for the resolved locale");
 });
 
@@ -177,7 +183,9 @@ test("spec 125 — gate/[slug] page is a server component that reads user_prefs 
   const src = read(GATE_PAGE);
   assert.match(src, /NextIntlClientProvider/, "gate page must provide NextIntlClientProvider (it's outside (authenticated))");
   assert.match(src, /getTranslations/, "gate page must resolve translated copy via getTranslations");
-  assert.match(src, /userPrefs/, "gate page must read user_prefs to find the locale");
+  // F124: through the shared resolver (which reads user_prefs), not a query
+  // of its own that ignored the pre-auth cookie <html lang> was using.
+  assert.match(src, /await resolveUiLocale\(\)/, "gate page must resolve the locale like every other surface");
   // The page must still reference verifyGate (spec 035 contract).
   assert.match(src, /verifyGate/, "gate page still references the verifyGate server action (spec 035 contract)");
   // GATE_BY_SLUG meta must cover every spec-035 slug.
