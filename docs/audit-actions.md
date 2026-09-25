@@ -103,6 +103,7 @@ applied or lifted the sign-in ban.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
+| `scorm.package.upload` | A `super_admin` uploaded a SCORM 1.2 package through `POST /api/scorm/packages` (the upload form on `/admin/scorm`) and every file of it was validated and stored. Refused uploads store nothing and are not audited. `entity_type` `scorm_package`, `entity_id` the new package id, `user_id` the super_admin | `title`, `rttSubjectId`, `fileCount`, `totalBytes` |
 | `scorm.package.deactivate` | A `programme_admin` or `super_admin` withdrew a package from learners on `/admin/scorm/[id]`. Its files and every learner's record are kept. `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the admin | `title` |
 | `scorm.package.activate` | A `programme_admin` or `super_admin` restored a withdrawn package on `/admin/scorm/[id]`. `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the admin | `title` |
 | `scorm.attempt.finish` | A learner's SCO called `LMSFinish` and its final commit reached `POST /api/scorm/attempts/[id]`. The many `LMSCommit`s of a session are not audited. The values are what the SCO REPORTED; the stored record keeps the learner's best status (`lib/scorm/store.ts`). `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the learner | `lessonStatus`, `scoreRaw` (0-100 or null), `sessionTimeCs` (centiseconds) |

@@ -331,6 +331,11 @@ export const config = {
     //       policy as well, and a browser enforces both: the intersection
     //       blocks the content. The route authenticates itself (auth()), and
     //       sets the baseline headers applySecurityHeaders would have.
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|api/scorm/content/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
+    //   api/scorm/packages
+    //       The SCORM upload (up to 20 MiB). Next buffers the body of any
+    //       request this file runs on, to at most 10 MB, and passes the
+    //       TRUNCATED body on without an error; the route checks its own role
+    //       with auth().
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|api/scorm/content/|api/scorm/packages|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
   ],
 };
