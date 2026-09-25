@@ -106,10 +106,19 @@ export async function observationWorld(prefix = "obsw"): Promise<ObservationWorl
 
   const cleanup = async () => {
     try {
-      // Cycles first (their forms and evidence cascade); anything a test hung
-      // on a cycle -- a video, its file -- is the test's to remove.
+      // Cycles first, after their forms and evidence (those keys are ON DELETE
+      // RESTRICT since migration 0031, so they no longer go with the cycle);
+      // anything a test hung on a cycle -- a video, its file -- is the test's
+      // to remove.
+      const cycles = `SELECT id FROM observation_cycles WHERE teacher_id = $1`;
+      await c.query(`DELETE FROM observation_forms WHERE cycle_id IN (${cycles})`, [teacherId]);
+      await c.query(`DELETE FROM observation_evidence WHERE cycle_id IN (${cycles})`, [teacherId]);
       await c.query(`DELETE FROM observation_cycles WHERE teacher_id = $1`, [teacherId]);
       await c.query(`DELETE FROM section_gate_grants WHERE user_id = ANY($1::uuid[])`, [userIds]);
+      // Meetings and feedback likewise no longer cascade with their pairing.
+      const pairings = `SELECT id FROM mentor_pairings WHERE mentor_id = $1 OR teacher_id = $2`;
+      await c.query(`DELETE FROM mentor_meetings WHERE pairing_id IN (${pairings})`, [mentorId, teacherId]);
+      await c.query(`DELETE FROM feedback_responses WHERE pairing_id IN (${pairings})`, [mentorId, teacherId]);
       await c.query(`DELETE FROM mentor_pairings WHERE mentor_id = $1 OR teacher_id = $2`, [mentorId, teacherId]);
       await c.query(`DELETE FROM mentors WHERE id = $1`, [mentorId]);
       await c.query(`DELETE FROM teachers WHERE id = $1`, [teacherId]);

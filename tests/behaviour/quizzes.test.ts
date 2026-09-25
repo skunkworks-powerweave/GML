@@ -13,7 +13,7 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import { registerHooks } from "node:module";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -129,10 +129,7 @@ async function withQuiz(
     // Any other quiz a test created on this subject (the F48 create) goes too.
     await c.query(`DELETE FROM quizzes WHERE id = $1 OR rtt_subject_id = $2`, [quizId, subjectId]);
     await c.query(`DELETE FROM users WHERE id = $1`, [userId]);
-    await c.query(
-      `DELETE FROM phases WHERE id = (SELECT t.phase_id FROM rtt_subjects s JOIN terms t ON t.id = s.term_id WHERE s.id = $1)`,
-      [subjectId],
-    );
+    await dropRttSubject(c, subjectId);
     await c.end();
   }
 }
@@ -140,12 +137,36 @@ async function withQuiz(
 /** Every question answered with option `pick` (0 is the key). */
 const answerAll = (w: QuizWorld, pick: number) => w.questionIds.map((questionId) => ({ questionId, selectedIndex: pick }));
 
-/** A phase, a term and an RTT subject: the smallest scope a quiz can have. */
+/**
+ * A phase, a term and an RTT subject: the smallest scope a quiz can have.
+ * phases.sequence is unique (migration 0032), so each phase gets its own
+ * number, well clear of the seed's 1-3 and of other test files' fixed ones.
+ */
 async function rttSubject(c: Client, t: string): Promise<string> {
   const one = async (q: string, p: unknown[]) => (await c.query(q, p)).rows[0].id as string;
-  const phase = await one(`INSERT INTO phases (label, sequence) VALUES ($1, 99) RETURNING id`, [t.slice(-24)]);
+  const phase = await one(`INSERT INTO phases (label, sequence) VALUES ($1, $2) RETURNING id`, [
+    t.slice(-24),
+    1_000_000 + randomInt(1_000_000_000),
+  ]);
   const term = await one(`INSERT INTO terms (phase_id, name, sequence) VALUES ($1, $2, 1) RETURNING id`, [phase, `Term ${t}`]);
   return one(`INSERT INTO rtt_subjects (term_id, name) VALUES ($1, $2) RETURNING id`, [term, `Subject ${t}`]);
+}
+
+/**
+ * Remove what rttSubject() made, children first: rtt_subjects -> terms ->
+ * phases are ON DELETE RESTRICT since migration 0031, so deleting the phase
+ * no longer takes its term and subject with it. The subject's quizzes must
+ * already be gone.
+ */
+async function dropRttSubject(c: Client, subjectId: string): Promise<void> {
+  const { rows } = await c.query(
+    `SELECT t.id AS term_id, t.phase_id FROM rtt_subjects s JOIN terms t ON t.id = s.term_id WHERE s.id = $1`,
+    [subjectId],
+  );
+  if (!rows[0]) return;
+  await c.query(`DELETE FROM rtt_subjects WHERE id = $1`, [subjectId]);
+  await c.query(`DELETE FROM terms WHERE id = $1`, [rows[0].term_id]);
+  await c.query(`DELETE FROM phases WHERE id = $1`, [rows[0].phase_id]);
 }
 
 /** Run `body` in a transaction that is always rolled back. */
@@ -241,7 +262,7 @@ test("F32: the quiz editor can move a quiz to another RTT subject, and refuses o
       assert.match(html, new RegExp(`&quot;rttSubjectId&quot;: &quot;${other}&quot;`));
     } finally {
       await w.q(`UPDATE quizzes SET rtt_subject_id = $2 WHERE id = $1`, [w.quizId, w.subjectId]);
-      await w.q(`DELETE FROM phases WHERE id = (SELECT t.phase_id FROM rtt_subjects s JOIN terms t ON t.id = s.term_id WHERE s.id = $1)`, [other]);
+      await dropRttSubject(w.c, other);
     }
   });
 });
