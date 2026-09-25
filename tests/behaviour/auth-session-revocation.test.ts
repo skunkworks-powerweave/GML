@@ -202,6 +202,30 @@ test("when sessions cannot be ended, the administrator and the audit log are tol
   assert.equal(meta.sessionsEnded, false, "the audit row must not record a revocation that did not happen");
 });
 
+// W3-68. That message used to say "Try again". It cannot work: the demotion
+// has committed, so a second press compares the new role with itself, is no
+// demotion, revokes nothing -- and reports plain "Role updated". The advice
+// must be something that, followed, really ends the sessions.
+test("the advice after a failed demotion revocation ends the sessions when it is followed", { skip }, async () => {
+  const actor = await makeUser("super_admin");
+  const target = await makeUser("programme_admin");
+  const phone = await fake.deviceSignIn(target.email, target.password);
+  await signInThroughApp(actor);
+  const { setRoleAction, setActiveAction } = await adminActions();
+
+  const res = await withRowFault(pg, "auth.sessions", "DELETE", `OLD.user_id = '${target.id}'::uuid`, () =>
+    setRoleAction(undefined, form({ userId: target.id, role: "mentor" })),
+  );
+  assert.doesNotMatch(res.ok ?? "", /try again/i, `a retry of the same role revokes nothing: ${res.ok}`);
+  assert.match(res.ok ?? "", /deactivate and reactivate/i, `the message must name a control that works: ${res.ok}`);
+
+  // Followed, with the fault gone.
+  assert.ok((await setActiveAction(undefined, form({ userId: target.id, active: "false" }))).ok);
+  assert.ok((await setActiveAction(undefined, form({ userId: target.id, active: "true" }))).ok);
+  assert.deepEqual(await fake.sessionsOf(target.id), []);
+  assert.equal((await fake.deviceRefresh(String(phone.body.refresh_token))).status, 400, "the phone's session is gone");
+});
+
 // The ban is the third layer of a deactivation, and lifting it is what lets a
 // reactivated account sign in. Both calls RETURN their error (auth-js does
 // not throw), and both were followed by `.catch(() => undefined)` -- the

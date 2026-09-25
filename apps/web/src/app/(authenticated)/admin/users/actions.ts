@@ -307,10 +307,15 @@ export async function setRoleAction(
   if (!wrote) noteAuditDegraded("admin/users/setRoleAction");
 
   revalidatePath("/admin/users");
+  // No "try again": the role change has committed, so pressing Set role again
+  // compares the new role with itself, is no demotion, and revokes nothing
+  // (the same reason setActiveAction offers no retry). What is true: auth()
+  // already refuses their administrator claim, a surviving session can only
+  // be renewed as the new role, and deactivating always ends every session.
   return {
     ok:
       revoked && !revoked.ok
-        ? `Role updated to ${role}, but their existing sessions could not be ended. Try again, or ask them to sign out.`
+        ? `Role updated to ${role}. Their administrator access has ended, but their existing sessions could not be ended: they stay signed in as ${role} until they sign out. To end those sessions, deactivate and reactivate the account.`
         : `Role updated to ${role}.`,
   };
 }
