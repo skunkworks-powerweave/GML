@@ -21,6 +21,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { feedbackForms, feedbackResponses } from "../schema/mentorship.js";
 import { repairDecision } from "./seed_forms_misc_repair.js";
+import { FORM_FIELD_KINDS, OPTION_BEARING_FIELD_KINDS } from "../formFieldKinds.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -40,21 +41,14 @@ type FieldKind = "boolean" | "boolean-group" | "rating" | "textarea" | "single-c
 // kind; an unmappable kind would silently fall through to the text-input
 // fallback in any future generic-renderer path (same drift class as the
 // singular "checkbox" rename fixes elsewhere in this spec).
-const CANONICAL_FIELD_KINDS = [
-  "text",
-  "textarea",
-  "select",
-  "radio",
-  "checkbox",
-  "number",
-  "date",
-  "likert",
-  "rating",
-] as const;
+//
+// The same list PUT /api/admin/forms/[id] validates against (formFieldKinds.ts):
+// an edit the route accepts is never one this seed treats as broken.
+const CANONICAL_FIELD_KINDS = FORM_FIELD_KINDS;
 
 // Kinds whose renderer draws one control PER OPTION. A field of one of these
 // kinds with no options renders as literally nothing.
-const OPTION_BEARING_KINDS = new Set(["select", "radio", "checkbox"]);
+const OPTION_BEARING_KINDS: ReadonlySet<string> = OPTION_BEARING_FIELD_KINDS;
 
 const MISC_KIND_TO_CANONICAL: Record<FieldKind, (typeof CANONICAL_FIELD_KINDS)[number]> = {
   // A SINGLE yes/no is a radio pair, not a checkbox.

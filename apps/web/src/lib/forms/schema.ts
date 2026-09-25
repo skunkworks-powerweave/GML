@@ -15,19 +15,13 @@
 // has a unique form-safe name and a kind a renderer draws.
 
 import { z } from "zod";
+import { FORM_FIELD_KINDS } from "@gml/db/form-field-kinds";
 
-export const FIELD_KINDS = [
-  "text",
-  "textarea",
-  "select",
-  "radio",
-  "checkbox",
-  "number",
-  "date",
-  "likert",
-  "rating",
-  "scale",
-] as const;
+// The kinds the renderers draw, shared with seed_forms_misc.ts's repair rule
+// (packages/db/src/formFieldKinds.ts). This list used to be its own, with a
+// "scale" no renderer draws and the seed did not know, so the seed "repaired"
+// an edit this route had accepted.
+export const FIELD_KINDS = FORM_FIELD_KINDS;
 
 const short = z.string().max(500);
 

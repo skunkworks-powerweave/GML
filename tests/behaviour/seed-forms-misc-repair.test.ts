@@ -114,3 +114,49 @@ test("a stored schema of the shape the seed once shipped broken is still repaire
     }
   });
 });
+
+// F106 (review): the route that saves an administrator's edit and the seed
+// that decides whether to "repair" it disagreed about which field kinds exist.
+// lib/forms/schema.ts accepted "scale", which neither renderer draws, and the
+// seed's canonical list did not -- so an edit the route had accepted counted
+// as broken, and the next deploy overwrote it on an unanswered form.
+test("an edit the admin route accepts, using every field kind it accepts, survives the next deploy", { skip }, async () => {
+  const { FIELD_KINDS, FormSchemaSchema } = await import("../../apps/web/src/lib/forms/schema.ts");
+  // The renderers draw one control per option for these, so they carry some.
+  const withOptions = new Set(["select", "radio", "checkbox"]);
+  const edited = {
+    title: "School visit checklist (customised)",
+    purpose: "schoolvisit",
+    fields: FIELD_KINDS.map((kind, i) => ({
+      name: `q${i}`,
+      kind,
+      label: `A ${kind} question`,
+      ...(withOptions.has(kind) ? { options: ["Yes", "No"] } : {}),
+    })),
+  };
+  assert.ok(FormSchemaSchema.safeParse(edited).success, "PUT /api/admin/forms/[id] accepts this schema");
+
+  await withClient(async (c) => {
+    const before = (await c.query(`SELECT id, schema FROM feedback_forms WHERE ${MISC}`)).rows as Array<{ id: string; schema: unknown }>;
+    try {
+      assert.equal((await runSeed()).code, 0);
+      await c.query(
+        `UPDATE feedback_forms SET schema = $1::jsonb WHERE kind = 'baseline' AND audience = 'mentor' AND version = 'schoolvisit-1'`,
+        [JSON.stringify(edited)],
+      );
+      const run = await runSeed();
+      assert.equal(run.code, 0, run.out);
+      const [{ schema }] = (
+        await c.query(`SELECT schema FROM feedback_forms WHERE kind = 'baseline' AND audience = 'mentor' AND version = 'schoolvisit-1'`)
+      ).rows as Array<{ schema: { title?: string; fields?: Array<{ kind: string }> } }>;
+      assert.equal(schema.title, edited.title, `the accepted edit was overwritten:\n${run.out}`);
+      assert.deepEqual(schema.fields?.map((f) => f.kind), [...FIELD_KINDS]);
+    } finally {
+      if (before.length === 0) {
+        await c.query(`DELETE FROM feedback_forms f WHERE (${MISC}) AND NOT EXISTS (SELECT 1 FROM feedback_responses r WHERE r.form_id = f.id)`);
+      } else {
+        for (const b of before) await c.query(`UPDATE feedback_forms SET schema = $2::jsonb WHERE id = $1`, [b.id, JSON.stringify(b.schema)]);
+      }
+    }
+  });
+});

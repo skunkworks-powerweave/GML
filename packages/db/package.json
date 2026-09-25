@@ -12,7 +12,8 @@
     "./scripts/retention": "./src/scripts/retention.ts",
     "./queue": "./src/queue.ts",
     "./uploads": "./src/uploads.ts",
-    "./notify": "./src/notify.ts"
+    "./notify": "./src/notify.ts",
+    "./form-field-kinds": "./src/formFieldKinds.ts"
   },
   "scripts": {
     "generate": "drizzle-kit generate",
