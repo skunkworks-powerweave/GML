@@ -508,8 +508,23 @@ async function ffprobe(path: string, signal?: AbortSignal): Promise<Probe & { un
   }
 }
 
+/**
+ * ffmpeg, at a lower CPU priority. It ran at the worker's own (nice 0), and a
+ * three-rung encode keeps both vCPUs busy: inside the worker's container the
+ * CPU is shared per thread, so the Node event loop and each healthcheck (a
+ * fresh `node`, 10 s timeout) got a small share of it, and the healthcheck
+ * timed out for as long as the transcode ran -- "Worker unhealthy", which the
+ * runbook reads as "cannot reach the database". nice execs ffmpeg in place, so
+ * the pid run() signals is still ffmpeg's; the probes are short and left alone.
+ * FFMPEG_NICE sets the level, 0 turns it off; Windows has no nice, so a
+ * development run there starts ffmpeg directly.
+ */
 function runFfmpeg(args: string[], signal: AbortSignal | undefined, deadlineMs: number): Promise<void> {
-  return run("ffmpeg", args, signal, deadlineMs).then(() => undefined);
+  const level = Number.parseInt(process.env.FFMPEG_NICE ?? (process.platform === "win32" ? "0" : "10"), 10);
+  const done = level > 0
+    ? run("nice", ["-n", String(level), "ffmpeg", ...args], signal, deadlineMs, "ffmpeg")
+    : run("ffmpeg", args, signal, deadlineMs);
+  return done.then(() => undefined);
 }
 
 /**
@@ -539,8 +554,16 @@ export class CommandTimeout extends Error {
  * it -- until someone restarted the worker, which then handed the job back
  * uncounted to hang again. A CommandTimeout is an ordinary failure of the
  * attempt, not a shutdown: it is recorded, counted, and ends in the DLQ.
+ *
+ * `label` names the tool in those errors when `bin` only launches it (nice).
  */
-function run(bin: string, args: string[], signal: AbortSignal | undefined, deadlineMs: number): Promise<string> {
+function run(
+  bin: string,
+  args: string[],
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+  label = bin,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], signal });
     let stdout = "";
@@ -567,12 +590,12 @@ function run(bin: string, args: string[], signal: AbortSignal | undefined, deadl
     // output pipes, which anything the child started may still hold open.
     child.on("exit", () => {
       clearTimeout(timer);
-      if (timedOut) reject(new CommandTimeout(commandTimedOut(bin, deadlineMs, stderr)));
+      if (timedOut) reject(new CommandTimeout(commandTimedOut(label, deadlineMs, stderr)));
     });
     child.on("close", (code) => {
       if (timedOut) return;
       if (code === 0) resolve(stdout);
-      else reject(new Error(commandFailure(bin, code, stderr)));
+      else reject(new Error(commandFailure(label, code, stderr)));
     });
   });
 }

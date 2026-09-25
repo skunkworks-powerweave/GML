@@ -184,3 +184,53 @@ test(
     });
   },
 );
+
+// ── W3-58 ────────────────────────────────────────────────────────────────────
+
+/** A stand-in nice: runs the rest of its command line (as coreutils' nice execs it). */
+const NICE_RUNS_THE_REST = `
+import { spawnSync } from "node:child_process";
+const [, , bin, ...rest] = process.argv.slice(2);
+process.exit(spawnSync(bin, rest, { stdio: "inherit" }).status ?? 1);
+`;
+
+test(
+  "W3-58: every ffmpeg run is started at a lower CPU priority, and ffprobe is not",
+  { skip, timeout: 120_000 },
+  async () => {
+    await transcodeWith(
+      { nice: NICE_RUNS_THE_REST, ffprobe: probeModule(), ffmpeg: FFMPEG_WRITES_OUTPUT },
+      async ({ w, sub, tools, output }) => {
+        assert.equal((await video(w, sub)).status, "ready", output());
+        // An encode at nice 0 took the worker's CPU from its own event loop
+        // and from its healthcheck, which then timed out for the whole
+        // transcode ("Worker unhealthy" means "cannot reach the database" in
+        // the runbook).
+        const niced = tools.calls("nice");
+        const ffmpeg = tools.calls("ffmpeg");
+        assert.equal(ffmpeg.length, 2, "the encode and the poster");
+        assert.equal(niced.length, ffmpeg.length, `ffmpeg ran outside nice: ${JSON.stringify(niced.map((c) => c.args.slice(0, 3)))}`);
+        for (const c of niced) assert.deepEqual(c.args.slice(0, 3), ["-n", "10", "ffmpeg"]);
+        assert.ok(!niced.some((c) => c.args[2] === "ffprobe"), "the probes are short; they need no lower priority");
+      },
+      { env: { FFMPEG_NICE: "10" } },
+    );
+  },
+);
+
+test(
+  "W3-58: an ffmpeg failure under nice is still reported as ffmpeg's",
+  { skip, timeout: 120_000 },
+  async () => {
+    const fails = `process.stderr.write("Conversion failed!\\n"); process.exit(1);`;
+    await transcodeWith(
+      { nice: NICE_RUNS_THE_REST, ffprobe: probeModule(), ffmpeg: fails },
+      async ({ w, sub }) => {
+        const [row] = await ledger(w, sub);
+        // The DLQ shows the first 60 characters; "nice exited 1" says nothing.
+        assert.match(row?.error ?? "", /^Error: ffmpeg exited 1: Conversion failed!/);
+      },
+      { env: { FFMPEG_NICE: "10" } },
+    );
+  },
+);
