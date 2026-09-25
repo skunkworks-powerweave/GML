@@ -278,20 +278,20 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   // ── Video pipeline ─────────────────────────────────────────────────────────
   watermark: {
     title: "Watermark",
-    short: "Faint text across the video showing who is watching. Stops videos being shared outside.",
-    long: "Every classroom video has a watermark — your username and the current date — drawn faintly across every frame. This is so videos can't be copied and shared. If a video ever leaks, the watermark shows whose account it came from.",
+    short: "Your name and the time, shown over the player while you watch. A reminder that classroom videos stay inside the programme.",
+    long: "While you watch a classroom video, your name and the current date and time are shown over the player, and every view is logged. The watermark is on the player, not in the video file itself, so it is a reminder rather than a lock: please do not share, download or re-record classroom videos.",
     related: ["confidentiality", "audit"],
   },
   hls: {
     title: "HLS streaming",
-    short: "Smart streaming that adjusts video quality to your network — works even on 2G.",
-    long: "HLS is the technology that lets the video player automatically drop to 240p when your network is weak and bump back to 720p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
+    short: "Streaming in short pieces, so a video starts quickly and a dropped connection costs only a few seconds.",
+    long: "HLS sends a video in short pieces rather than as one large file, so playback starts before the whole video has arrived and a dropped connection only costs the piece in flight. Every video is streamed in one version, 480p at about 800 kbps, which plays on a steady 3G connection.",
     related: ["video", "upload"],
   },
   transcoding: {
     title: "Transcoding",
-    short: "What happens to a video after upload — we re-make it in several sizes so it plays everywhere.",
-    long: "When a teacher uploads a video, our server processes it into four versions: 240p (low-band), 480p (default), 720p (sharp), and audio-only. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
+    short: "What happens to a video after upload — we re-make it as a 480p stream that plays in the browser.",
+    long: "When a teacher uploads a video, our server converts it into one 480p version for streaming, plus a still frame for the video library. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
     related: ["video", "upload", "hls"],
   },
   whatsapp_ingest: {

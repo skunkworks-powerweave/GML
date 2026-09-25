@@ -200,7 +200,7 @@ export default async function VideoLibraryPage({
             <div className="label">Video library</div>
             <h1 className="serif" style={{ fontSize: 28, marginTop: 4 }}>Submissions &amp; lesson recordings</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 6, maxWidth: 540 }}>
-              All videos are watermarked per viewer, streamed as HLS, and never available for direct download. WhatsApp
+              Videos are watermarked per viewer and streamed in the browser, and every view is logged. WhatsApp
               uploads land here automatically once a teacher sends a video with the right caption code.
             </p>
           </div>

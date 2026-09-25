@@ -25,8 +25,11 @@ import { signIn, closeAppDb } from "./_server-actions.js";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 
 stubSupabaseServer();
-after(closeAppDb);
 const skip = needsDatabase();
+// Only a run with a database opened the app's pool; the signing test runs anywhere.
+after(async () => {
+  if (!skip) await closeAppDb();
+});
 
 type SignCall = { bucket: string; keys: string[]; ttl: number };
 

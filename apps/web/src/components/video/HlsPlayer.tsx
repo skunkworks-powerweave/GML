@@ -312,7 +312,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
             <option value="auto">Auto</option>
             <option value="480p">480p</option>
             <option value="720p" disabled title="720p disabled per programme settings">
-              720p (disabled — spec 041)
+              720p (not available)
             </option>
           </select>
         </div>

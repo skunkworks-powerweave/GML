@@ -11,6 +11,19 @@ import { ExternalEmbed } from "@/components/video/ExternalEmbed";
 
 export const dynamic = "force-dynamic";
 
+const CONTEXT_HEADINGS: Record<string, string> = {
+  observation_cycle: "Classroom observation video",
+  teach_back: "Teach-back video",
+  mentor_meeting: "Mentor meeting recording",
+  mentee_quarterly: "Mentee quarterly video",
+  classroom_session: "Classroom session video",
+  generic: "Video",
+};
+
+function contextHeading(contextType: string): string {
+  return CONTEXT_HEADINGS[contextType] ?? "Video";
+}
+
 export default async function VideoPlayerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await auth();
@@ -83,12 +96,8 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
         <Link href="/videos" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
           ← Library
         </Link>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 24 }}>
-          Video review ·{" "}
-          <span className="mono" style={{ fontSize: 16, color: "var(--ink-3)" }}>
-            {id}
-          </span>
-        </h1>
+        {/* Named for what it is; the id is in the Metadata card below. */}
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 24 }}>{contextHeading(video.contextType)}</h1>
         <div className="label" style={{ marginTop: 6 }}>
           {video.contextType.replace("_", " ")} · via {video.source}
         </div>
@@ -98,7 +107,7 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
         className="page-body"
         style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18 }}
       >
-        <SectionCard title="Player" sub="Watermarked · streamed · download disabled">
+        <SectionCard title="Player" sub="Watermarked · streamed">
           <div style={{ padding: 14, position: "relative" }}>
             {video.source === "external_link" && video.externalUrl ? (
               <ExternalEmbed url={video.externalUrl} watermark={watermark} />
@@ -136,9 +145,13 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
                 lineHeight: 1.5,
               }}
             >
-              This video is watermarked with your name and the current timestamp.
-              Download is disabled; right-click is blocked. Sharing the URL with
-              others won&apos;t work — signed links are bound to your network connection.
+              {/* What is true. This said "Download is disabled" and "signed
+                  links are bound to your network connection": the IP binding
+                  went with the old token scheme, and the segment URLs are
+                  bearer links that work from anywhere until they expire. */}
+              Your name and the time are shown over this video, and every view is
+              logged. Playback links expire within a few hours. Please do not share,
+              download or re-record classroom videos.
             </p>
           </div>
         </SectionCard>
