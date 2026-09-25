@@ -86,8 +86,14 @@ is running but cannot claim looks identical to an idle one from the outside,
 which is why the check exists — previously the container had no healthcheck at
 all and a crash-loop was invisible.
 
-A job whose worker died is requeued by the lease reaper within about a minute.
-You do not need to do anything.
+A job whose worker died (killed, OOM, the box restarting) is taken back by the
+lease reaper once its lease lapses -- up to 15 minutes after the worker's last
+heartbeat, checked every minute. The reaper also closes that attempt's row in
+`/admin/transcode-jobs` as failed ("worker stopped responding"). With attempts
+left the job then runs again by itself; on its last attempt it is dead-lettered,
+the video is marked failed, and that failed row carries Retry. The worker log
+says which: "requeued jobs with expired leases" or "dead-lettered jobs with
+expired leases".
 
 ## Disk filling up
 

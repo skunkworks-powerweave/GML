@@ -196,6 +196,21 @@ export async function fail(
   return { willRetry };
 }
 
+/** A job the reaper took back from a worker that stopped heartbeating. */
+export type ReapedJob = {
+  id: string;
+  queue: string;
+  name: string;
+  payload: Record<string, unknown>;
+  /** True when its attempts were exhausted, so it was dead-lettered, not requeued. */
+  dead: boolean;
+};
+
+/** The transaction handle reapExpiredLeases() gives its `onReaped` callback. */
+export type QueueTx = Parameters<
+  Parameters<NodePgDatabase<Record<string, unknown>>["transaction"]>[0]
+>[0];
+
 /**
  * Requeue jobs whose worker stopped heartbeating.
  *
@@ -204,22 +219,44 @@ export async function fail(
  * it those jobs sit 'running' forever and their videos never transcode.
  *
  * Reaped jobs keep their incremented attempt count, so a job that reliably
- * kills its worker dead-letters instead of looping forever.
+ * kills its worker dead-letters instead of looping forever. A dead-letter sets
+ * completed_at exactly as fail() does: pruneFinished() keys on it, and without
+ * it a reaper-dead job -- and the 'N failed' chip that counts it -- stayed
+ * forever.
+ *
+ * `onReaped` runs in the SAME transaction, with the reaped rows. This module
+ * only knows the transport; the handler that was killed also left domain rows
+ * behind (a transcode's ledger row 'running', its video 'transcoding'), and
+ * nothing but this moment knows that its worker is gone. Repairing them here,
+ * atomically, means a job is never requeued or dead-lettered while its domain
+ * rows still claim it is running.
  */
 export async function reapExpiredLeases(
   db: NodePgDatabase<Record<string, unknown>>,
-): Promise<number> {
-  const res = await db.execute(sql`
-    UPDATE jobs
-       SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
-           last_error = COALESCE(last_error, '') || ' [lease expired: worker stopped responding]',
-           lease_expires_at = NULL,
-           locked_by = NULL,
-           updated_at = now()
-     WHERE status = 'running' AND lease_expires_at < now()
-     RETURNING id
-  `);
-  return ((res as unknown as { rows: unknown[] }).rows ?? []).length;
+  onReaped?: (tx: QueueTx, reaped: ReapedJob[]) => Promise<void>,
+): Promise<ReapedJob[]> {
+  return db.transaction(async (tx) => {
+    const res = await tx.execute(sql`
+      UPDATE jobs
+         SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
+             completed_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
+             last_error = COALESCE(last_error, '') || ' [lease expired: worker stopped responding]',
+             lease_expires_at = NULL,
+             locked_by = NULL,
+             updated_at = now()
+       WHERE status = 'running' AND lease_expires_at < now()
+       RETURNING id, queue, name, payload, status
+    `);
+    const reaped = ((res as unknown as { rows: Record<string, unknown>[] }).rows ?? []).map((r) => ({
+      id: String(r.id),
+      queue: String(r.queue),
+      name: String(r.name),
+      payload: (r.payload ?? {}) as Record<string, unknown>,
+      dead: r.status === "dead",
+    }));
+    if (onReaped && reaped.length > 0) await onReaped(tx, reaped);
+    return reaped;
+  });
 }
 
 /** Depth by status, for the topbar chip and the admin DLQ view. */

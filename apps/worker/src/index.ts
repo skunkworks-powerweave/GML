@@ -49,7 +49,7 @@ import {
   type ClaimedJob,
 } from "@gml/db/queue";
 import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
-import { transcode480p } from "./transcode.js";
+import { repairReapedTranscodes, transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
 import { log } from "./log.js";
 
@@ -230,8 +230,20 @@ async function consumer(queue: "transcode" | "retention", slot: number): Promise
  */
 async function housekeeping(): Promise<void> {
   try {
-    const reaped = await reapExpiredLeases(db);
-    if (reaped > 0) log.warn("requeued jobs with expired leases", { count: reaped });
+    // The transcode handler's own rows are repaired in the reaper's transaction
+    // (see repairReapedTranscodes).
+    const reaped = await reapExpiredLeases(db, repairReapedTranscodes);
+    const requeued = reaped.filter((r) => !r.dead);
+    const dead = reaped.filter((r) => r.dead);
+    if (requeued.length > 0) log.warn("requeued jobs with expired leases", { count: requeued.length });
+    // Said separately: this used to be logged as "requeued" too, for jobs that
+    // will never run again and need a human.
+    if (dead.length > 0) {
+      log.error("dead-lettered jobs with expired leases (attempts exhausted)", {
+        count: dead.length,
+        jobs: dead.map((r) => `${r.name}:${r.id}`),
+      });
+    }
     const pruned = await pruneFinished(db);
     if (pruned > 0) log.info("pruned finished jobs", { count: pruned });
     // Backstop for direct uploads whose completion call never arrived.

@@ -116,7 +116,7 @@ test("an expired lease is requeued; a heartbeated one is not", { skip }, async (
     await heartbeat(db, b!.id, 900);
 
     const reaped = await reapExpiredLeases(db);
-    assert.ok(reaped >= 1, "the abandoned job was not requeued");
+    assert.ok(reaped.some((r) => r.id === a!.id && !r.dead), "the abandoned job was not requeued");
 
     const rows = await db.execute<{ id: string; status: string }>(sql`
       SELECT id, status FROM jobs WHERE name = ${name}
@@ -135,6 +135,40 @@ test("an expired lease is requeued; a heartbeated one is not", { skip }, async (
       "a heartbeating worker's job was reaped out from under it — a 40-minute " +
         "ffmpeg run would be transcoded repeatedly until it dead-lettered",
     );
+  } finally {
+    await cleanup(db, name);
+    await close();
+  }
+});
+
+test("F04: a lease reaped at max attempts is dead-lettered WITH completed_at, so it is pruned", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("reap-dead");
+  try {
+    // The state a worker SIGKILLed on the job's last attempt leaves behind. Set
+    // directly rather than through claim(), which could hand this test another
+    // file's job from the shared queue.
+    const j = await enqueue(db, { queue: "transcode", name, payload: {}, maxAttempts: 1 });
+    await db.execute(sql`
+      UPDATE jobs SET status = 'running', attempts = 1, locked_by = 'killed',
+                      lease_expires_at = now() - interval '1 minute'
+       WHERE id = ${j.id}::uuid
+    `);
+
+    await reapExpiredLeases(db);
+    const row = async () =>
+      ((await db.execute<{ status: string; completed: boolean }>(sql`
+        SELECT status, completed_at IS NOT NULL AS completed FROM jobs WHERE id = ${j.id}::uuid
+      `)) as unknown as { rows: { status: string; completed: boolean }[] }).rows[0];
+    assert.equal((await row())?.status, "dead");
+    // pruneFinished keys dead jobs on completed_at. Without it the row -- and
+    // the 'N failed' topbar chip that counts it -- stayed forever.
+    assert.equal((await row())?.completed, true, "a reaper dead-letter must set completed_at like fail() does");
+
+    await db.execute(sql`UPDATE jobs SET completed_at = now() - interval '31 days' WHERE id = ${j.id}::uuid`);
+    await pruneFinished(db, { deadOlderThanDays: 30 });
+    assert.equal(await row(), undefined, "a month-old dead job was not pruned");
   } finally {
     await cleanup(db, name);
     await close();

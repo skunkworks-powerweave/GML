@@ -44,9 +44,10 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
+import type { QueueTx, ReapedJob } from "@gml/db/queue";
 import { files, transcodeJobs, videoSubmissions } from "@gml/db/schema";
 import { BUCKETS, hlsPrefix, hlsPlaylistKey, posterKey } from "@gml/shared/storage/buckets";
 import { putObject, getObjectStream } from "@gml/shared/storage/client";
@@ -72,33 +73,103 @@ function supabase() {
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
+/** A handle that can write the domain rows: the shared `db`, or a transaction. */
+type Writer = Pick<QueueTx, "update">;
+
+/**
+ * Close every attempt of a submission that still claims to be running.
+ *
+ * Safe to call whenever no attempt of this submission can be live: every
+ * producer enqueues with the dedupe key `submission:<id>`, so there is at most
+ * one live job per submission, and the caller is that job (or the reaper,
+ * which has just taken it back from a dead worker).
+ */
+async function closeRunningAttempts(w: Writer, videoSubmissionId: string, reason: string): Promise<void> {
+  await w
+    .update(transcodeJobs)
+    .set({ status: "failed", endedAt: new Date(), error: reason })
+    .where(and(eq(transcodeJobs.videoSubmissionId, videoSubmissionId), eq(transcodeJobs.status, "running")));
+}
+
+/**
+ * Repair the domain rows of transcode attempts whose worker died: the lease
+ * reaper's `onReaped`, run in its transaction.
+ *
+ * A SIGKILL, an OOM kill, or a deploy that outlasts Docker's stop grace ends an
+ * attempt without its catch block running, and the reaper only ever repaired
+ * the transport row. So the attempt's ledger row stayed 'running' forever and
+ * its video 'transcoding' -- which the teacher's page renders as "Transcoding in
+ * progress" -- and once attempts ran out, /admin/transcode-jobs showed a
+ * 'running' row with no Retry or Drop, because both act on a failed row.
+ */
+export async function repairReapedTranscodes(tx: QueueTx, reaped: ReapedJob[]): Promise<void> {
+  for (const job of reaped) {
+    if (job.name !== "transcode") continue;
+    const videoSubmissionId = String(job.payload.videoSubmissionId ?? "");
+    if (!videoSubmissionId) continue;
+    const reason = job.dead
+      ? "worker stopped responding (lease expired); attempts exhausted"
+      : "worker stopped responding (lease expired); retrying";
+    await closeRunningAttempts(tx, videoSubmissionId, reason);
+    await tx
+      .update(videoSubmissions)
+      .set(job.dead ? { status: "failed", processingLog: reason } : { status: "queued" })
+      .where(
+        and(
+          eq(videoSubmissions.id, videoSubmissionId),
+          // Never over a result: a 'ready' video whose succeed() write was lost
+          // (see runJob) stays ready.
+          inArray(videoSubmissions.status, job.dead ? ["queued", "transcoding"] : ["transcoding"]),
+        ),
+      );
+  }
+}
+
 export async function transcode480p(input: TranscodeJobInput): Promise<void> {
   const { videoSubmissionId, objectKey } = input;
-  const sb = supabase();
 
-  const [jobRow] = await db
-    .insert(transcodeJobs)
-    .values({
-      videoSubmissionId,
-      profile: "480p",
-      status: "running",
-      startedAt: new Date(),
-    })
-    .returning({ id: transcodeJobs.id });
-
-  // Announce the transition. The UI has always had a 'transcoding' chip and it
-  // has never once been shown, because nothing wrote the value.
-  await db
-    .update(videoSubmissions)
-    .set({ status: "transcoding" })
-    .where(eq(videoSubmissions.id, videoSubmissionId));
-
-  const workDir = await mkdtemp(join(tmpdir(), "gml-transcode-"));
-  const localInput = join(workDir, "input");
-  const localOut = join(workDir, "out");
-  const localPoster = join(workDir, "poster.jpg");
-
+  // EVERYTHING after the ledger row exists is inside the try, and so is the
+  // ledger insert. The 'transcoding' write and mkdtemp used to run before it,
+  // so a transient DB error or a full scratch disk there skipped the catch
+  // below and left the attempt 'running' forever, exactly as a SIGKILL does.
+  let jobRowId: string | undefined;
+  let workDir: string | undefined;
   try {
+    // An attempt killed before this one left its row 'running'. The reaper
+    // closes those as it requeues them; this catches any it could not (rows
+    // from before it did, a drain that ran out of time).
+    await closeRunningAttempts(
+      db,
+      videoSubmissionId,
+      "superseded: the previous attempt stopped without finishing (worker killed or restarted)",
+    );
+    const [jobRow] = await db
+      .insert(transcodeJobs)
+      .values({
+        videoSubmissionId,
+        profile: "480p",
+        status: "running",
+        startedAt: new Date(),
+      })
+      .returning({ id: transcodeJobs.id });
+    jobRowId = jobRow!.id;
+
+    // After the ledger row, so a worker with no Storage configuration records
+    // WHY on a row the DLQ shows, rather than failing where nothing looks.
+    const sb = supabase();
+
+    // Announce the transition. The UI has always had a 'transcoding' chip and it
+    // has never once been shown, because nothing wrote the value.
+    await db
+      .update(videoSubmissions)
+      .set({ status: "transcoding" })
+      .where(eq(videoSubmissions.id, videoSubmissionId));
+
+    workDir = await mkdtemp(join(tmpdir(), "gml-transcode-"));
+    const localInput = join(workDir, "input");
+    const localOut = join(workDir, "out");
+    const localPoster = join(workDir, "poster.jpg");
+
     // ── 1. Source to disk, streamed ──────────────────────────────────────────
     const src = await getObjectStream(sb, BUCKETS.videosOriginal, objectKey);
     await pipeline(Readable.fromWeb(src.body as never), createWriteStream(localInput));
@@ -195,7 +266,7 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
     await db
       .update(transcodeJobs)
       .set({ status: "succeeded", endedAt: new Date() })
-      .where(eq(transcodeJobs.id, jobRow.id));
+      .where(eq(transcodeJobs.id, jobRowId));
 
     console.log(
       `[transcode] ${videoSubmissionId} ready — ${outFiles.length - 1} segments, ` +
@@ -205,11 +276,13 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
   } catch (err) {
     console.error(`[transcode] ${videoSubmissionId} failed:`, err);
     const msg = String(err).slice(0, 4000);
-    await db
-      .update(transcodeJobs)
-      .set({ status: "failed", endedAt: new Date(), error: msg })
-      .where(eq(transcodeJobs.id, jobRow.id))
-      .catch(() => undefined);
+    if (jobRowId) {
+      await db
+        .update(transcodeJobs)
+        .set({ status: "failed", endedAt: new Date(), error: msg })
+        .where(eq(transcodeJobs.id, jobRowId))
+        .catch(() => undefined);
+    }
     await db
       .update(videoSubmissions)
       .set({ status: "failed", processingLog: msg })
@@ -217,7 +290,7 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
       .catch(() => undefined);
     throw err;
   } finally {
-    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+    if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
