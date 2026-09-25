@@ -40,6 +40,36 @@ export function commandFailure(bin: string, code: number | null, stderr: string)
   return `${bin} exited ${code}: ${lines[lines.length - 1] ?? "(no output)"}\n${stderr}`;
 }
 
+/** The same, for a run killed at its deadline: the verdict first, then what the tool had said. */
+export function commandTimedOut(bin: string, deadlineMs: number, stderr: string): string {
+  const s = Math.round(deadlineMs / 1000);
+  return `${bin} did not finish within ${s >= 120 ? `${Math.round(s / 60)} min` : `${s} s`}, so it was killed\n${stderr}`;
+}
+
+/**
+ * How long one ffprobe run, or the poster's ffmpeg, may take before it is
+ * killed. Each reads a local file and takes seconds; one still going after two
+ * minutes is stuck (a demuxer looping on a malformed upload), not slow.
+ */
+export const PROBE_DEADLINE_MS = 2 * 60_000;
+
+/**
+ * How long the HLS encode may take before it is killed: six times the source's
+ * duration, never under 30 minutes, and 4 hours when the probe could not say
+ * how long the source is.
+ *
+ * A deadline, because nothing else ends a hung encode: runJob heartbeats the
+ * lease for as long as the child runs, so the reaper never takes the job back,
+ * and one stuck ffmpeg held the only transcode slot until someone restarted
+ * the worker. Generous, because killing a real encode costs it an attempt: the
+ * ladder runs at about three times real time for a 1080p source on the 2-vCPU
+ * target, and slower while the web tier it yields to is busy.
+ */
+export function encodeDeadlineMs(durationSec: number | null | undefined): number {
+  if (!durationSec || durationSec <= 0) return 4 * 60 * 60_000;
+  return Math.max(30 * 60_000, 6 * durationSec * 1000);
+}
+
 /**
  * ffprobe's reason, when a failed probe means the SOURCE cannot be opened as
  * media at all -- which no retry changes -- or null for anything else (a

@@ -56,11 +56,14 @@ import { BUCKETS, hlsPrefix, hlsMasterPlaylistKey, posterKey } from "@gml/shared
 import { putObject, getObjectStream } from "@gml/shared/storage/client";
 import {
   commandFailure,
+  commandTimedOut,
+  encodeDeadlineMs,
   hlsEncodeArgs,
   ladderFor,
   parseProbe,
   posterArgs,
   probeArgs,
+  PROBE_DEADLINE_MS,
   renditionProbeArgs,
   renditionProblem,
   unreadableSource,
@@ -276,7 +279,7 @@ export async function transcode480p(
 
     // ── 3. Transcode ─────────────────────────────────────────────────────────
     // The encoder settings are in encode.ts, where they can be tested.
-    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal);
+    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal, deadline(encodeDeadlineMs(probe.durationSec)));
 
     // ffmpeg exiting 0 proves it wrote something, not that a phone can play
     // it. Refuse an undecodable rendition here -- any rung, since a player may
@@ -284,7 +287,7 @@ export async function transcode480p(
     // failure path with a reason attached.
     for (let i = 0; i < ladderFor(probe).length; i += 1) {
       const problem = renditionProblem(
-        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i))), signal),
+        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i))), signal, deadline(PROBE_DEADLINE_MS)),
       );
       if (problem) throw new Error(`rendition ${i}: ${problem}`);
     }
@@ -296,7 +299,7 @@ export async function transcode480p(
     let posterUploaded = false;
     try {
       const at = probe.durationSec && probe.durationSec > 2 ? probe.durationSec * 0.1 : 0;
-      await runFfmpeg(posterArgs(localInput, localPoster, at), signal);
+      await runFfmpeg(posterArgs(localInput, localPoster, at), signal, deadline(PROBE_DEADLINE_MS));
       await putObject(
         sb,
         BUCKETS.posters,
@@ -433,28 +436,61 @@ export async function transcode480p(
  */
 async function ffprobe(path: string, signal?: AbortSignal): Promise<Probe & { unreadable?: string | null }> {
   try {
-    return parseProbe(await run("ffprobe", probeArgs(path), signal));
+    return parseProbe(await run("ffprobe", probeArgs(path), signal, deadline(PROBE_DEADLINE_MS)));
   } catch (err) {
     // A shutdown is not a probe failure: let the attempt be handed back.
     if (signal?.aborted) throw err;
     console.warn("[transcode] ffprobe failed:", boundedError(String(err), 300));
-    return { durationSec: null, width: null, height: null, unreadable: unreadableSource(String(err)) };
+    // A probe killed at its deadline would hang the same way on every attempt
+    // -- the same bytes, the same demuxer -- so it is a source ffprobe cannot
+    // read, and the job is not retried into the same hang.
+    const unreadable = err instanceof CommandTimeout ? err.message.split("\n")[0]! : unreadableSource(String(err));
+    return { durationSec: null, width: null, height: null, unreadable };
   }
 }
 
-function runFfmpeg(args: string[], signal?: AbortSignal): Promise<void> {
-  return run("ffmpeg", args, signal).then(() => undefined);
+function runFfmpeg(args: string[], signal: AbortSignal | undefined, deadlineMs: number): Promise<void> {
+  return run("ffmpeg", args, signal, deadlineMs).then(() => undefined);
+}
+
+/**
+ * A command's deadline (encode.ts), or TRANSCODE_DEADLINE_MS in its place when
+ * that is set: a test cannot wait minutes for a stand-in ffprobe that never
+ * exits.
+ */
+function deadline(ms: number): number {
+  const override = Number.parseInt(process.env.TRANSCODE_DEADLINE_MS ?? "", 10);
+  return override > 0 ? override : ms;
+}
+
+/** A command that was still running at its deadline, and was killed (see run()). */
+export class CommandTimeout extends Error {
+  override name = "CommandTimeout";
 }
 
 /**
  * Spawn a binary, capture stdout, reject with the tail of stderr on failure.
  * An aborted `signal` kills the child (SIGTERM) and rejects with an AbortError.
+ *
+ * A child still running at `deadlineMs` is killed (SIGKILL: a looping demuxer
+ * need not be listening for anything gentler) and it rejects with a
+ * CommandTimeout. There was no deadline: runJob heartbeats the lease for as
+ * long as the handler waits, so an ffprobe or ffmpeg that never exited held
+ * its job 'running' -- and with WORKER_CONCURRENCY=1 every other video behind
+ * it -- until someone restarted the worker, which then handed the job back
+ * uncounted to hang again. A CommandTimeout is an ordinary failure of the
+ * attempt, not a shutdown: it is recorded, counted, and ends in the DLQ.
  */
-function run(bin: string, args: string[], signal?: AbortSignal): Promise<string> {
+function run(bin: string, args: string[], signal: AbortSignal | undefined, deadlineMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], signal });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, deadlineMs);
     child.stdout.on("data", (c) => {
       stdout += c.toString();
     });
@@ -464,8 +500,18 @@ function run(bin: string, args: string[], signal?: AbortSignal): Promise<string>
       // the one code path that only matters when something has gone wrong.
       stderr = (stderr + c.toString()).slice(-8000);
     });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    // On 'exit' for a killed child, not 'close': 'close' also waits for its
+    // output pipes, which anything the child started may still hold open.
+    child.on("exit", () => {
+      clearTimeout(timer);
+      if (timedOut) reject(new CommandTimeout(commandTimedOut(bin, deadlineMs, stderr)));
+    });
     child.on("close", (code) => {
+      if (timedOut) return;
       if (code === 0) resolve(stdout);
       else reject(new Error(commandFailure(bin, code, stderr)));
     });
