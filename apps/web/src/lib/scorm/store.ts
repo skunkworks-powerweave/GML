@@ -169,8 +169,14 @@ export async function launchState(db: Db, userId: string, packageId: string): Pr
   };
 }
 
-const RANK = sql.raw(`ARRAY[${STATUS_RANK.map((s) => `'${s}'`).join(", ")}]::text[]`);
 const excluded = (column: string) => sql.raw(`excluded."${column}"`);
+/** STATUS_RANK as SQL. The statuses are this module's own constants, never input. */
+const WHEN_RANK = sql.raw(
+  Object.entries(STATUS_RANK)
+    .map(([status, rank]) => `WHEN '${status}' THEN ${rank}`)
+    .join(" "),
+);
+const rankOf = (status: SQL | AnyColumn) => sql`(CASE ${status}::text ${WHEN_RANK} ELSE 0 END)`;
 
 /**
  * Record a commit (LMSCommit or LMSFinish) for `userId`, whoever the payload
@@ -179,16 +185,19 @@ const excluded = (column: string) => sql.raw(`excluded."${column}"`);
  *   time     A commit from a NEW session folds the previous session's latest
  *            time into the total; a repeat commit of the same session replaces
  *            its time. So a session that never calls LMSFinish still counts,
- *            and none counts twice.
+ *            and none counts twice. (Known limit: two tabs of one package open
+ *            AT ONCE interleave sessions, and each switch folds the other's
+ *            latest time in again, so their overlap is overcounted.)
  *   status   A lower status (STATUS_RANK) never replaces a higher one, and the
  *            scores move with the status: the record is the learner's best
  *            outcome, so reopening a passed module to review it does not undo
- *            the pass in the staff view.
+ *            the pass in the staff view. An equal one replaces it, so a
+ *            mastery judgement of "failed" replaces the SCO's "completed".
  *   the rest Location, suspend data and exit are always the latest -- that is
  *            what resuming needs.
  */
 export async function commitAttempt(db: Db, userId: string, packageId: string, p: CommitPayload): Promise<void> {
-  const better = sql`array_position(${RANK}, ${excluded("lesson_status")}::text) >= array_position(${RANK}, ${scormAttempts.lessonStatus}::text)`;
+  const better = sql`${rankOf(excluded("lesson_status"))} >= ${rankOf(scormAttempts.lessonStatus)}`;
   const newSession = sql`${scormAttempts.sessionId} IS DISTINCT FROM ${excluded("session_id")}`;
   const keepBest = (column: string, current: AnyColumn) => sql`CASE WHEN ${better} THEN ${excluded(column)} ELSE ${current} END`;
   await db

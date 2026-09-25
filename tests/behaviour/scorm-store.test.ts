@@ -203,6 +203,29 @@ test("a commit records the SCO's state; each session's time counts once; the bes
   }
 });
 
+test("completed and failed are both finished: the later replaces the earlier, so LMSFinish's mastery judgement is recorded; a pass still stands", { skip }, async () => {
+  const w = await rttWorld("scrk");
+  try {
+    const db = drizzle(w.c);
+    const pkgId = await insertPackage(db, sample(await w.subject(), w.admin.id));
+    const me = w.teacher.id;
+    const row = async () =>
+      (await w.c.query(`SELECT lesson_status, score_raw FROM scorm_attempts WHERE package_id = $1 AND user_id = $2`, [pkgId, me])).rows[0];
+    const session = randomUUID();
+    // The SCO reports completed with a raw score under the manifest's mastery
+    // score; LMSFinish (runtime.ts) judges that failed and sends it.
+    await commitAttempt(db, me, pkgId, payload({ sessionId: session, lessonStatus: "completed", scoreRaw: 50 }));
+    await commitAttempt(db, me, pkgId, payload({ sessionId: session, lessonStatus: "failed", scoreRaw: 50 }));
+    assert.deepEqual(await row(), { lesson_status: "failed", score_raw: 50 }, "the judged outcome is the record");
+    await commitAttempt(db, me, pkgId, payload({ lessonStatus: "passed", scoreRaw: 90 }));
+    await commitAttempt(db, me, pkgId, payload({ lessonStatus: "failed", scoreRaw: 40 }));
+    await commitAttempt(db, me, pkgId, payload({ lessonStatus: "completed", scoreRaw: 45 }));
+    assert.deepEqual(await row(), { lesson_status: "passed", score_raw: 90 }, "nothing replaces a pass");
+  } finally {
+    await w.cleanup();
+  }
+});
+
 test("staff see every learner's status, score and time; learners see their own on the subject", { skip }, async () => {
   const w = await rttWorld("sctr");
   try {

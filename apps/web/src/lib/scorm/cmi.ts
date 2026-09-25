@@ -16,13 +16,24 @@ export type LessonStatus = (typeof LESSON_STATUSES)[number];
 export const FINISHED_STATUSES: ReadonlySet<string> = new Set(["passed", "completed", "failed"]);
 
 /**
- * Order used when a later session reports a LOWER status than one recorded.
+ * How far a status goes, for when a later commit reports a LOWER one than is
+ * recorded (store.ts, commitAttempt keeps the higher).
  *
  * A teacher who passed and later reopens a module to review it must not
  * vanish from the staff completion view because the SCO said "incomplete" on
- * the way in; the record keeps her best outcome (store.ts, commitAttempt).
+ * the way in. "completed" and "failed" rank EQUAL: both say she finished, so
+ * the later replaces the earlier -- which is how LMSFinish's mastery
+ * judgement (runtime.ts) turns the SCO's "completed" into "failed" in the
+ * record. Only a pass outranks them.
  */
-export const STATUS_RANK: readonly LessonStatus[] = ["not attempted", "browsed", "incomplete", "failed", "completed", "passed"];
+export const STATUS_RANK: Readonly<Record<LessonStatus, number>> = {
+  "not attempted": 0,
+  browsed: 1,
+  incomplete: 2,
+  failed: 3,
+  completed: 3,
+  passed: 4,
+};
 
 export const EXIT_VALUES = ["time-out", "suspend", "logout", ""] as const;
 export type ExitValue = (typeof EXIT_VALUES)[number];
