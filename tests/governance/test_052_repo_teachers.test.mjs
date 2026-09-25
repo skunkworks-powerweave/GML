@@ -59,7 +59,15 @@ test("052: index pulls teachers joined to schools + phases + session/cycle count
   // Joins + aggregation
   assert.match(src, /leftJoin\(schools/);
   assert.match(src, /leftJoin\(phases/);
-  assert.match(src, /\.groupBy\(/);
+  // The session count used to be pinned as a `.groupBy(` -- a derived table
+  // that GROUPed the whole sessions table on every load (W3-15). It is now a
+  // count correlated to the listed teacher; tests/behaviour/
+  // repo-index-counts.test.ts checks the plan.
+  assert.match(
+    src,
+    /\(select count\(\*\)::int from \$\{classroomSessions\} where \$\{classroomSessions\.teacherId\} = \$\{teachers\.id\}\)/,
+    "the session count must be correlated to the listed teacher",
+  );
 });
 
 test("052: detail route fetches teacher + school/zone + phase + sessions + cycles + pairing", () => {

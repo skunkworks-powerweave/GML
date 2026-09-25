@@ -89,15 +89,13 @@ export default async function RepoTeachersIndexPage({
   const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
   const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
-  // Per-teacher session counter joined inline so the index hits the DB once.
-  const sessionCounts = db
-    .select({
-      teacherId: classroomSessions.teacherId,
-      sessionsTotal: sql<number>`count(*)::int`.as("sessions_total"),
-    })
-    .from(classroomSessions)
-    .groupBy(classroomSessions.teacherId)
-    .as("session_counts");
+  // Per-teacher session count, still in the one query, but correlated: it
+  // counts only the teachers listed, from sessions_teacher_date_idx. It was a
+  // derived table GROUPing the whole sessions table, LEFT JOINed; Postgres
+  // cannot push the join condition into a GROUP BY, so every load -- even
+  // ?school=<one school> -- aggregated every session ever logged (~130 ms at
+  // the projected 350k rows; ~1 ms counted for one school's teachers).
+  const sessionsTotal = sql<number>`(select count(*)::int from ${classroomSessions} where ${classroomSessions.teacherId} = ${teachers.id})`;
 
   // Observation counts are observation-section data: counted only over cycles
   // the viewer may see, and only once the section is unlocked. This used to
@@ -124,13 +122,12 @@ export default async function RepoTeachersIndexPage({
       schoolCode: schools.code,
       schoolName: schools.name,
       phaseLabel: phases.label,
-      sessionsTotal: sessionCounts.sessionsTotal,
+      sessionsTotal,
       cyclesTotal: cycleCounts.cyclesTotal,
     })
     .from(teachers)
     .leftJoin(schools, eq(teachers.schoolId, schools.id))
     .leftJoin(phases, eq(teachers.currentPhaseId, phases.id))
-    .leftJoin(sessionCounts, eq(sessionCounts.teacherId, teachers.id))
     .leftJoin(cycleCounts, eq(cycleCounts.teacherId, teachers.id))
     .where(and(...conds))
     .orderBy(asc(teachers.fullName))
