@@ -143,3 +143,133 @@ test("createUserAction refuses a record linked meanwhile, and removes the accoun
     }
   });
 });
+
+// ── W3-67: THE ROLLBACK ITSELF CAN FAIL ──────────────────────────────────────
+//
+// auth-js RETURNS a failed deleteUser as {error}; it does not throw. Both
+// rollbacks hung `.catch(() => undefined)` on it, which could never fire, so a
+// failed delete still told the administrator "Nothing was created" -- leaving
+// a login with the password they chose and no row in /admin/users to fix it
+// from. And the generic path deleted the login WITHOUT first deleting the
+// profile the on_auth_user_created trigger always writes, which public.users'
+// ON DELETE RESTRICT key to auth.users (_post/003) refuses on Supabase: that
+// rollback could never succeed, and nothing said so.
+//
+// This test database has no auth schema, so the key is modelled by the stub:
+// its deleteUser answers GoTrue's "Database error deleting user" while a
+// profile row still exists, as the real one does.
+
+/** Supabase Auth stubbed as GoTrue on Supabase behaves, recording each call. */
+function stubAuth(c: import("pg").Client, newId: string, calls: string[], deleteFails = false): void {
+  request.supabaseAdmin = {
+    auth: {
+      admin: {
+        createUser: async (o: { email: string }) => {
+          calls.push(`createUser ${o.email}`);
+          return { data: { user: { id: newId } }, error: null };
+        },
+        deleteUser: async (id: string) => {
+          calls.push(`deleteUser ${id}`);
+          const { rows } = await c.query(`SELECT 1 FROM users WHERE id = $1`, [id]);
+          if (deleteFails || rows.length > 0) {
+            return { data: { user: null }, error: { name: "AuthApiError", status: 500, message: "Database error deleting user" } };
+          }
+          return { data: { user: null }, error: null };
+        },
+      },
+    },
+  };
+}
+
+test("W3-67: a failed rollback of a raced account is reported, not called 'Nothing was created'", { skip }, async () => {
+  stubSupabaseServer();
+  const { createUserAction } = await import("../../apps/web/src/app/(authenticated)/admin/users/actions.ts");
+  await withClient(async (c) => {
+    const t = tag("link-rb");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const first = await f.user("teacher", "first");
+      const teacher = await f.row("teachers", { school_id: school, full_name: `Dolma ${t}`, user_id: first });
+      actAs(await f.user("programme_admin", "padmin"), "programme_admin");
+      const newId = randomUUID();
+      f.defer(`DELETE FROM users WHERE id = $1`, [newId]);
+      const calls: string[] = [];
+      stubAuth(c, newId, calls, true);
+
+      const email = `second.${t}@example.test`;
+      const r = await createUserAction(
+        undefined,
+        form({ email, name: "Second", role: "teacher", password: "long enough", linkKind: "teacher", linkId: teacher }),
+      );
+      assert.match(r.error ?? "", /already linked/, JSON.stringify(r));
+      assert.doesNotMatch(r.error ?? "", /Nothing was created/, "a login was left behind");
+      assert.ok((r.error ?? "").includes(`${email} could not be removed`), r.error);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("W3-67: a profile step that fails removes the profile before the login, so the rollback can succeed", { skip }, async () => {
+  stubSupabaseServer();
+  const { createUserAction } = await import("../../apps/web/src/app/(authenticated)/admin/users/actions.ts");
+  await withClient(async (c) => {
+    const t = tag("link-gen");
+    const f = fixture(c, t);
+    try {
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+      const newId = randomUUID();
+      f.defer(`DELETE FROM users WHERE id = $1`, [newId]);
+      const calls: string[] = [];
+      stubAuth(c, newId, calls);
+
+      // The upsert succeeds (the account is promoted to an active mentor) and
+      // the link step then fails: a malformed record id is a database error.
+      const email = `gen.${t}@example.test`;
+      const r = await createUserAction(
+        undefined,
+        form({ email, name: "Gen", role: "mentor", password: "long enough", linkKind: "mentor", linkId: "not-a-uuid" }),
+      );
+      assert.match(r.error ?? "", /Could not set up the profile/, JSON.stringify(r));
+      const { rows: profile } = await c.query(`SELECT role, active FROM users WHERE id = $1`, [newId]);
+      assert.deepEqual(profile, [], "no active account with the administrator's password may be left behind");
+      assert.deepEqual(calls, [`createUser ${email}`, `deleteUser ${newId}`]);
+      assert.match(r.error ?? "", /Nothing was created/);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("W3-67: when the profile cannot be removed either, the administrator is told where the account is", { skip }, async () => {
+  stubSupabaseServer();
+  const { createUserAction } = await import("../../apps/web/src/app/(authenticated)/admin/users/actions.ts");
+  const { withRowFault } = await import("./_fake_gotrue.ts");
+  await withClient(async (c) => {
+    const t = tag("link-gen2");
+    const f = fixture(c, t);
+    try {
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+      const newId = randomUUID();
+      f.defer(`DELETE FROM users WHERE id = $1`, [newId]);
+      const calls: string[] = [];
+      stubAuth(c, newId, calls);
+
+      const email = `gen2.${t}@example.test`;
+      const r = await withRowFault(c, "public.users", "DELETE", `OLD.id = '${newId}'::uuid`, () =>
+        createUserAction(
+          undefined,
+          form({ email, name: "Gen", role: "mentor", password: "long enough", linkKind: "mentor", linkId: "not-a-uuid" }),
+        ),
+      );
+      assert.doesNotMatch(r.error ?? "", /Nothing was created/, JSON.stringify(r));
+      assert.match(r.error ?? "", /still listed/, r.error);
+      assert.deepEqual(calls, [`createUser ${email}`], "the login cannot go while its profile remains");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});

@@ -113,8 +113,36 @@ with "already registered"), the claimed account shows in `/admin/users` as a
 deactivated teacher that one press of *Reactivate* hands to them, and the
 sign-up endpoint tells anyone which addresses already have accounts.
 `verify-auth.mjs` reports **FAIL public sign-up is disabled** until this is off.
-If an address is already squatted, delete that user in Authentication → Users
-and create the account again at `/admin/users`; do not reactivate it.
+
+If an address is already squatted, remove that account and create it again at
+`/admin/users`; do not reactivate it. Remove its profile first. The sign-up
+wrote one (the deactivated teacher above), and the profile's link to the login
+is deliberately RESTRICT, so *Delete user* in Authentication → Users fails with
+"Database error deleting user" while the profile exists.
+
+Before that, make sure it is a squatter's. A real teacher whom an
+administrator deactivated also shows as a deactivated teacher. A squatter has
+never signed in (Supabase issues no token to an inactive profile), so its row
+in `/admin/users` says *never signed in*; check that it does. In the SQL editor:
+
+```sql
+-- 1. It should be an inactive teacher that has never signed in: last_seen_at is empty.
+select id, email, role, active, last_seen_at, created_at from public.users where email = lower('<address>');
+-- 2. Remove that profile. Expect DELETE 1.
+delete from public.users
+ where email = lower('<address>') and active = false and role = 'teacher'
+   and last_seen_at is null
+   and not exists (select 1 from public.teachers where teachers.user_id = users.id)
+   and not exists (select 1 from public.mentors where mentors.user_id = users.id);
+```
+
+`DELETE 0` means the account has been used: it is active, has signed in, or is
+linked to a teacher or mentor record. Stop, and deactivate it at `/admin/users`,
+or leave it deactivated, instead. Do not loosen the statement: nothing else
+refuses this delete, because every table that refers to a profile either
+deletes its rows with it or unlinks them, so a used account's records would go
+without an error. After `DELETE 1`, delete the user in Authentication → Users,
+then create the account at `/admin/users`.
 
 **e) Bound how long a session lives.** Authentication → Sessions → *Time-box
 user sessions*: **12 hours**; *Inactivity timeout*: **2 hours** (both are Pro
@@ -133,10 +161,16 @@ Providers → *Email*:
 
 - *Minimum password length*: **8** (Supabase's default is 6);
 - *Password requirements*: leave at the default, **no required characters**;
-- *Secure password change*: **on**.
+- *Secure password change*: **on**;
+- *Require current password when changing password*: **on**.
 
 Then Authentication → Attack Protection → *Prevent use of leaked passwords*:
 **on**.
+
+If your dashboard does not show the current-password setting, set it through
+the Management API with a personal access token:
+`PATCH https://api.supabase.com/v1/projects/<project-ref>/config/auth` with the
+body `{"security_update_password_require_current_password": true}`.
 
 The application checks length on every form that sets a password (at least
 8 characters, at most 72 bytes), but a signed-in user can also call Supabase
@@ -150,18 +184,24 @@ which Supabase's Latin letter and digit classes do not count) would be refused
 by Supabase with a raw English message. Length and the leaked-password check are the controls
 that matter.
 
+*Require current password* is what stops a password being changed at a
+browser left signed in. Page scripts can read the access token from the
+session cookie by design (uploads use the token), so without it anyone at that
+browser can call Supabase's user endpoint and set a new password without
+knowing the current one. With it on, Supabase refuses that call from a session
+opened with a password unless it carries the correct current password.
+Settings sends it (it has already checked it), and `/login/reset` is
+unaffected. Supabase exempts sessions opened from an emailed link (a magic
+link or a password-reset link) for as long as they last, where the
+application's `/login/reset` accepts one only in its first 15 minutes; that
+matters only once `AUTH_EMAIL_ENABLED=true` (§2.3), and the session bounds in
+(e) still limit it.
+
 *Secure password change* is narrower than its name. Supabase asks for
 reauthentication only when the session setting the password is more than
 **24 hours** old. With the 12-hour time-box in (e), no session here reaches that
-age, so the setting never triggers. It does not stop the following: anyone at a
-browser left signed in can read the access token from the session cookie
-(page scripts can read the cookie by design, because uploads use the token)
-and call Supabase's user endpoint to set a new password without knowing the
-current one. The application's own pages do not allow this: Settings asks for
-the current password, and `/login/reset` accepts only a session opened from an
-emailed link in the last 15 minutes. The direct call is limited only by the
-session bounds in (e) and by people signing out. Leave the setting on anyway.
-It costs nothing, and it applies if (e) is ever relaxed.
+age, so the setting never triggers. Leave it on anyway. It costs nothing, and
+it applies if (e) is ever relaxed.
 
 **g) Raise Supabase's sign-in rate limit.** Authentication → Rate Limits →
 *sign-ups and sign-ins*: **300** per 5 minutes.
@@ -170,9 +210,10 @@ Every sign-in reaches Supabase from this server, so its per-IP limit (30 by
 default) is one bucket for the whole deployment: a training room of teachers
 signing in at once, or one person guessing passwords, would lock everyone out.
 The application does the real throttling itself, per account and per client
-address (10 attempts at one account from one address, 100 from one address,
-per 15 minutes). The Supabase limit only needs to sit above the whole
-deployment's legitimate peak.
+address (10 failed attempts at one account from one address, 100 failed
+attempts from one address, per 15 minutes; a successful sign-in is given back
+once it completes, so it does not use up the limit). The Supabase limit only
+needs to sit above the whole deployment's legitimate peak.
 
 ### 2.3 Optional: outbound email
 

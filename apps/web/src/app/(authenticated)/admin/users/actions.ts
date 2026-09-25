@@ -191,21 +191,19 @@ export async function createUserAction(
       }
     }
   } catch (err) {
+    const leftBehind = await rollbackNewAccount(admin, newId, email);
     if (err instanceof AlreadyLinked) {
-      // Profile first: public.users.id references auth.users ON DELETE
-      // RESTRICT (_post/003), so the auth record cannot go while it exists.
-      await db.execute(sql`DELETE FROM public.users WHERE id = ${newId}::uuid`).catch(() => undefined);
-      await admin.auth.admin.deleteUser(newId).catch(() => undefined);
       return {
-        error: `That ${linkKind} record is already linked to another login. Nothing was created; reload the page for the current list.`,
+        error: `That ${linkKind} record is already linked to another login. ${
+          leftBehind ?? "Nothing was created; reload the page for the current list."
+        }`,
       };
     }
     // The auth record exists but the profile is wrong. Leaving it would produce
-    // an account that can authenticate and then be refused a token forever,
-    // with no row in this list to fix it from -- so undo the auth record and
+    // an account that can authenticate with the password the administrator
+    // chose -- possibly already promoted to the requested role -- so undo it and
     // report honestly rather than leaving an orphan.
-    await admin.auth.admin.deleteUser(newId).catch(() => undefined);
-    return { error: `Could not set up the profile: ${String(err).slice(0, 200)}` };
+    return { error: `Could not set up the profile: ${String(err).slice(0, 200)}. ${leftBehind ?? "Nothing was created."}` };
   }
 
   const wrote = await recordAudit({
@@ -222,6 +220,39 @@ export async function createUserAction(
   return {
     ok: `Created ${email}. Give them the password you set; they will be asked to choose their own when they first sign in.`,
   };
+}
+
+/**
+ * Undo an account createUserAction made and could not finish. Never throws.
+ * Returns null when nothing is left, or a sentence telling the administrator
+ * what is and where to remove it.
+ *
+ * Profile first: the on_auth_user_created trigger always writes one, and
+ * public.users.id references auth.users ON DELETE RESTRICT (_post/003), so the
+ * login cannot go while it exists. And auth-js RETURNS a failed deleteUser as
+ * {error} rather than throwing, so the result is checked: the
+ * `.catch(() => undefined)` this used to carry could never fire, and a failed
+ * rollback still reported "Nothing was created".
+ */
+async function rollbackNewAccount(
+  admin: ReturnType<typeof supabaseAdmin>,
+  newId: string,
+  email: string,
+): Promise<string | null> {
+  try {
+    await db.execute(sql`DELETE FROM public.users WHERE id = ${newId}::uuid`);
+  } catch (err) {
+    console.error(`[admin/users] could not remove the profile of the half-created account ${newId}:`, err);
+    return `The account for ${email} could not be removed and is still listed here; deactivate it if it is active.`;
+  }
+  try {
+    const { error } = await admin.auth.admin.deleteUser(newId);
+    if (error) throw error;
+    return null;
+  } catch (err) {
+    console.error(`[admin/users] could not remove the half-created login ${newId}:`, err);
+    return `The login for ${email} could not be removed; delete it in the Supabase dashboard (Authentication → Users) before creating it again.`;
+  }
 }
 
 // ── role ──────────────────────────────────────────────────────────────────────
@@ -276,10 +307,15 @@ export async function setRoleAction(
   if (!wrote) noteAuditDegraded("admin/users/setRoleAction");
 
   revalidatePath("/admin/users");
+  // No "try again": the role change has committed, so pressing Set role again
+  // compares the new role with itself, is no demotion, and revokes nothing
+  // (the same reason setActiveAction offers no retry). What is true: auth()
+  // already refuses their administrator claim, a surviving session can only
+  // be renewed as the new role, and deactivating always ends every session.
   return {
     ok:
       revoked && !revoked.ok
-        ? `Role updated to ${role}, but their existing sessions could not be ended. Try again, or ask them to sign out.`
+        ? `Role updated to ${role}. Their administrator access has ended, but their existing sessions could not be ended: they stay signed in as ${role} until they sign out. To end those sessions, deactivate and reactivate the account.`
         : `Role updated to ${role}.`,
   };
 }

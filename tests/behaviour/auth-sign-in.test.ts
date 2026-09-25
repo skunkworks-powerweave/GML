@@ -13,6 +13,7 @@ import { fakeGoTrue, withRowFault, type FakeGoTrue } from "./_fake_gotrue.ts";
 const skip = needsDatabase();
 
 const loginActions = () => import("../../apps/web/src/app/login/actions.ts");
+const settingsActions = () => import("../../apps/web/src/app/(authenticated)/settings/actions.ts");
 
 let pg: Client;
 let fake: FakeGoTrue;
@@ -102,6 +103,52 @@ test("F79: one address spraying many accounts is throttled too", { skip }, async
   }
   assert.ok(refusedAt > 0, "the per-address limit must stop a spray across accounts");
   assert.ok(refusedAt >= 60, `the per-address limit must leave room for a room of teachers behind one school NAT (refused at ${refusedAt})`);
+});
+
+// ── W3-69: the per-address limit counted SUCCESSFUL sign-ins ─────────────────
+//
+// Every attempt was charged to the address's 100-per-15-minutes bucket and
+// none was given back, so a training venue behind one NAT address locked
+// itself out after 100 correct sign-ins -- and onboarding costs each teacher
+// two (the sign-in, then /settings re-checking the current password through
+// the same path), so about 50 teachers. The limit exists to stop guesses.
+
+test("W3-69: a venue's successful sign-ins do not use up the per-address limit", { skip }, async () => {
+  const ip = freshIp();
+  for (let i = 0; i < 120; i++) {
+    const u = makeUser();
+    const r = await submitLogin(ip, u.email, u.password);
+    assert.equal(r.kind, "redirect", `sign-in ${i + 1} from the venue was refused: ${JSON.stringify(r)}`);
+  }
+});
+
+test("W3-69: a cohort signing in and then re-checking its password at /settings is not locked out", { skip }, async () => {
+  const ip = freshIp();
+  const { changePasswordAction } = await settingsActions();
+  for (let i = 0; i < 60; i++) {
+    const u = makeUser();
+    assert.equal((await submitLogin(ip, u.email, u.password)).kind, "redirect", `teacher ${i + 1} could not sign in`);
+    const changed = await changePasswordAction(
+      undefined,
+      form({ currentPassword: u.password, newPassword: `own-choice-${i}-x`, confirmPassword: `own-choice-${i}-x` }),
+    );
+    assert.ok(changed.ok, `teacher ${i + 1} at /settings: ${JSON.stringify(changed)}`);
+  }
+});
+
+test("W3-69: correct sign-ins between guesses do not buy a sprayer more guesses", { skip }, async () => {
+  // Someone holding one real account, spraying one guess at other addresses.
+  const ip = freshIp();
+  const own = makeUser();
+  const guess = async () => {
+    const r = await submitLogin(ip, `spray-${randomUUID()}@example.test`, "guess");
+    return String((r as { value?: { error?: string } }).value?.error ?? "");
+  };
+  for (let i = 0; i < 100; i++) {
+    assert.equal((await submitLogin(ip, own.email, own.password)).kind, "redirect", `their own sign-in ${i + 1}`);
+    assert.equal(await guess(), "invalid_credentials", `guess ${i + 1} is evaluated`);
+  }
+  assert.equal(await guess(), "rate_limited", "the 101st failed attempt from one address is refused, as before");
 });
 
 test("F79: when the limiter itself is down, sign-in fails closed", { skip }, async () => {

@@ -46,11 +46,16 @@ export async function recordSignIn(userId: string, method: SignInMethod): Promis
  * up -- resolving the address to a user would be the membership oracle the
  * login page avoids. Callers skip throttled attempts, so the number of rows an
  * attacker can add is bounded by the sign-in throttle (auth.ts).
+ *
+ * `userId: null`, not omitted: a failed attempt does not clear the browser's
+ * existing session, and recordAudit would otherwise credit the attempt to
+ * whoever was left signed in on that (often shared) computer.
  */
 export async function recordSignInFailure(email: string, reason: string): Promise<void> {
   await recordAudit({
     action: "auth.sign_in_failed",
     entityType: "auth",
+    userId: null,
     metadata: { reason, emailHash: emailHash(email) },
   });
 }

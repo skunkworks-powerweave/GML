@@ -20,9 +20,28 @@ export type AuditInput = {
   // (e.g. login flow that has not yet established a session) or that run
   // outside a request scope and so cannot call `auth()` / `headers()`.
   // Both fields are optional; if absent we fall back to the request scope.
-  userId?: string;
+  //
+  // `userId: null` means "this event has no actor on purpose" and skips the
+  // session fallback. A failed sign-in needs it: signInWithPassword leaves
+  // the browser's existing session cookie alone, so on a shared computer the
+  // fallback credited whoever was left signed in with a stranger's attempt.
+  userId?: string | null;
   ipOverride?: string;
 };
+
+/** The actor to store: the caller's, none (`null`), or the request session's. */
+async function resolveActor(userId: string | null | undefined): Promise<string | null> {
+  if (userId === null) return null;
+  if (userId) return userId;
+  // `auth()` only works inside a request scope; outside one (or if it throws)
+  // we treat that as a soft miss and still persist what we have.
+  try {
+    const session = await auth();
+    return session?.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // Spec 167 — process-local degraded-mode counter for the audit channel.
 //
@@ -112,21 +131,13 @@ export function maskIp(ip: string | undefined): string | undefined {
 
 export async function recordAudit(input: AuditInput): Promise<boolean> {
   try {
-    let userId = input.userId;
+    const userId = await resolveActor(input.userId);
     let ip: string | undefined = input.ipOverride;
     let ua: string | undefined;
-    // `auth()` / `headers()` only work inside a request scope. The login
-    // flow's rate-limit-down branch already has the IP in hand; if either
-    // helper throws (no request scope) we treat that as a soft miss and
-    // still try to persist what we have.
-    try {
-      if (!userId) {
-        const session = await auth();
-        userId = session?.user?.id;
-      }
-    } catch {
-      // No session context available — proceed without userId.
-    }
+    // `headers()` only works inside a request scope. The login flow's
+    // rate-limit-down branch already has the IP in hand; if it throws (no
+    // request scope) we treat that as a soft miss and still try to persist
+    // what we have.
     try {
       const hdr = await headers();
       if (!ip) {
@@ -219,17 +230,9 @@ export async function recordAuditDedup(input: AuditDedupInput): Promise<boolean>
     // Resolve userId / ip / ua the same way recordAudit does so the dedup
     // SELECT matches what a fresh INSERT would store. We need the userId
     // BEFORE the SELECT so the where clause can pin it.
-    let userId = input.userId;
+    const userId = await resolveActor(input.userId);
     let ip: string | undefined = input.ipOverride;
     let ua: string | undefined;
-    try {
-      if (!userId) {
-        const session = await auth();
-        userId = session?.user?.id;
-      }
-    } catch {
-      // No session context available.
-    }
     try {
       const hdr = await headers();
       if (!ip) {

@@ -97,6 +97,27 @@ test("a failed sign-in is audited by a hash of the address, never the address it
   assert.doesNotMatch(JSON.stringify(failed[0]), new RegExp(u.email.replace(/[.]/g, "\\.")));
 });
 
+// W3-04. A failed signInWithPassword leaves the browser's existing session
+// cookie alone, and recordAudit fell back to auth() for a row with no userId,
+// so on a shared school computer someone left signed in (A) was credited with
+// every failed attempt a colleague then made against their own account (B).
+test("a failed sign-in in a browser someone else is signed in on is not credited to them", { skip }, async () => {
+  const a = await makeUser();
+  const b = await makeUser();
+  resetRequest({ "x-real-ip": ip() });
+  const { loginAction } = await loginActions();
+  const { auth } = await authModule();
+  const first = await outcome(() => loginAction(undefined, form({ email: a.email, password: a.password, from: "" })));
+  assert.equal(first.kind, "redirect");
+  assert.equal((await auth())?.user?.id, a.id, "precondition: A's session is in the jar");
+
+  // Same browser, no resetRequest: B types their own address and a wrong password.
+  await loginAction(undefined, form({ email: b.email, password: "not-the-password", from: "" }));
+  const failed = await rows("auth.sign_in_failed", "metadata->>'emailHash' = $2", [emailHash(b.email)]);
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0]!.user_id, null, "the leftover session is not the actor of a failed sign-in");
+});
+
 test("throttled attempts are not audited: the log must not be a flood an attacker can fill", { skip }, async () => {
   const u = await makeUser();
   const addr = ip();
