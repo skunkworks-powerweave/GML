@@ -21,7 +21,11 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { resetRequest, outcome, form, renderSync, closeAppDb } from "./_auth-harness.ts";
+import { needsDatabase } from "./_harness.js";
 import { fakeGoTrue, type FakeGoTrue } from "./_fake_gotrue.ts";
+
+// Password sign-in is throttled by a Postgres counter (auth.ts signInAllowed).
+const skip = needsDatabase();
 
 const authModule = () => import("../../apps/web/src/auth.ts");
 const serverClient = () => import("../../apps/web/src/lib/supabase/server.ts");
@@ -33,11 +37,13 @@ let restoreEnv: () => void;
 const IP = `198.19.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
 
 before(async () => {
+  if (skip) return;
   fake = await fakeGoTrue();
   restoreEnv = fake.install();
 });
 
 after(async () => {
+  if (skip) return;
   restoreEnv();
   await fake.close();
   await closeAppDb();
@@ -66,7 +72,7 @@ async function recoverySession(userId: string, ageSeconds = 0) {
 
 const NEW = "a-brand-new-password";
 
-test("a signed-in browser cannot set a new password at /login/reset without the current one", async () => {
+test("a signed-in browser cannot set a new password at /login/reset without the current one", { skip }, async () => {
   const u = makeUser();
   await passwordSession(u);
   const { resetPasswordAction } = await resetActions();
@@ -79,7 +85,7 @@ test("a signed-in browser cannot set a new password at /login/reset without the 
   assert.equal(fake.users.get(u.id)!.password, u.password, "the password must be unchanged");
 });
 
-test("the reset page sends an ordinary session to Settings instead of offering the form", async () => {
+test("the reset page sends an ordinary session to Settings instead of offering the form", { skip }, async () => {
   const u = makeUser();
   await passwordSession(u);
   const { default: ResetPasswordPage } = await resetPage();
@@ -87,7 +93,7 @@ test("the reset page sends an ordinary session to Settings instead of offering t
   assert.deepEqual(res, { kind: "redirect", location: "/settings" });
 });
 
-test("a recovery-link session sets the new password and ends the other sessions", async () => {
+test("a recovery-link session sets the new password and ends the other sessions", { skip }, async () => {
   const u = makeUser();
   const phone = await fake.deviceSignIn(u.email, u.password);
   await recoverySession(u.id);
@@ -104,7 +110,7 @@ test("a recovery-link session sets the new password and ends the other sessions"
   assert.equal((await fake.deviceRefresh(String(phone.body.refresh_token))).status, 400, "other devices are signed out");
 });
 
-test("a recovery session is only good for a short while after the link was followed", async () => {
+test("a recovery session is only good for a short while after the link was followed", { skip }, async () => {
   const u = makeUser();
   await recoverySession(u.id, 60 * 60);
   const { resetPasswordAction } = await resetActions();

@@ -64,24 +64,26 @@ test("spec 141 — recordAudit accepts optional userId + ipOverride overrides", 
   assert.match(src, /input\.ipOverride/);
 });
 
-test("spec 141 — auth.ts no longer hand-rolls sign-in throttling", () => {
+test("spec 141 — auth.ts throttles sign-in itself, and the throttle fails CLOSED", () => {
   const src = read(AUTH_PATH);
 
-  // Spec 141's concern was that a Redis fault on the LOGIN path must fail
-  // closed. That path is gone: Supabase Auth throttles sign-in centrally, so
-  // there is no local limiter on the credential check to fail open OR closed,
-  // and no bespoke audit row for its outage.
+  // CORRECTED. This test used to require that auth.ts call NO local limiter,
+  // on the premise that "Supabase Auth throttles sign-in centrally". It does,
+  // per client IP -- and every GoTrue call is made by the app server, so it
+  // sees one client for the whole deployment: unlimited guessing where it
+  // applies no limit, one shared bucket where it does (F79, reproduced with 35
+  // unthrottled wrong passwords; tests/behaviour/auth-sign-in.test.ts executes
+  // the fix). The Redis hang that motivated the old assertion is gone too:
+  // lib/rate-limit.ts is a single Postgres statement that rejects promptly.
   //
-  // This matters beyond tidiness. The old limiter could not fail closed as
-  // designed: getRedis() set maxRetriesPerRequest: null with no commandTimeout
-  // and the default offline queue, so with Redis down the command QUEUED
-  // FOREVER, rateLimit() never resolved, the documented fail-closed catch was
-  // unreachable, and every login request hung.
+  // What spec 141 established still holds, now on the login path: a limiter
+  // fault must DENY, never allow.
   const code = stripComments(src);
-  assert.ok(
-    !/rateLimit\(/.test(code),
-    "auth.ts must not call the local rate limiter — sign-in throttling is " +
-      "Supabase's, and the local limiter's own failure mode was an indefinite hang",
+  assert.match(code, /rateLimit\(/, "password sign-in must be throttled by the application");
+  assert.match(
+    code,
+    /async function signInAllowed[\s\S]*?try \{[\s\S]*?rateLimit\([\s\S]*?\} catch \{\s*return "unavailable";/,
+    "a throwing limiter must answer 'unavailable' (deny), not let the attempt through",
   );
   assert.ok(
     !/recordAudit\(/.test(code),

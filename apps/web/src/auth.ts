@@ -45,9 +45,10 @@
 //                         stale window is one access-token lifetime rather than
 //                         eight hours -- and for the two ADMINISTRATIVE roles
 //                         there is no stale window at all (see auth() below);
-//   * lockout          => deleted outright. Supabase Auth rate-limits sign-in
-//                         attempts centrally, with no per-account flag an
-//                         attacker can set on someone else's behalf.
+//   * lockout          => deleted outright, with no per-account flag an
+//                         attacker can set on someone else's behalf. Sign-in
+//                         is throttled here instead (see signInAllowed): the
+//                         per-IP limit in Supabase Auth sees only this server.
 //
 // FAIL-CLOSED. If the token carries no `user_role` claim, `auth()` returns
 // null. That is the correct response to the most likely misconfiguration --
@@ -63,6 +64,8 @@ import { db } from "@gml/db";
 import { users } from "@gml/db/schema";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/request-ip";
 
 export type SessionUser = {
   id: string;
@@ -211,6 +214,14 @@ export async function signInWithPassword(
   email: string,
   password: string,
 ): Promise<{ error: string | null }> {
+  const allowed = await signInAllowed(email);
+  if (allowed === "unavailable") {
+    return { error: "Sign-in is temporarily unavailable. Try again in a few minutes." };
+  }
+  if (allowed === "limited") {
+    return { error: "Too many sign-in attempts. Wait a few minutes and try again." };
+  }
+
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (!error) return { error: null };
@@ -228,6 +239,57 @@ export async function signInWithPassword(
     return { error: "Too many sign-in attempts. Wait a few minutes and try again." };
   }
   return { error: "Incorrect email or password." };
+}
+
+// ── Sign-in throttle ──────────────────────────────────────────────────────────
+//
+// THIS IS THE REAL CONTROL, NOT SUPABASE'S. GoTrue does rate-limit password
+// sign-in per client IP -- but every call reaches it from this server, so it
+// sees one client for the whole deployment. Where it applies no limit (a
+// self-hosted stack) online guessing was unlimited; on hosted Supabase the one
+// shared bucket means a single attacker exhausts sign-in for everyone.
+//
+// Two counters, both fixed 15-minute windows in Postgres (lib/rate-limit.ts),
+// both counting every attempt:
+//
+//   per account, per address   caps guessing at one person's password from one
+//                              source. Keyed on the address as well as the
+//                              email ON PURPOSE: an email-only key is exactly
+//                              the lockout this codebase deleted -- a stranger
+//                              who knows an address could keep its owner out
+//                              with ten requests every quarter hour.
+//   per address                caps spraying one guess across many accounts.
+//                              Generous, because a training room or a school
+//                              shares one public address behind NAT and a
+//                              whole cohort signs in at once.
+//
+// Distributed guessing from many addresses is beyond what an application
+// limiter can see; README-deploy §2.2 has the Supabase settings for that.
+const SIGN_IN_WINDOW_MS = 15 * 60 * 1000;
+const SIGN_IN_PER_ACCOUNT_PER_ADDRESS = 10;
+const SIGN_IN_PER_ADDRESS = 100;
+
+/** Fails CLOSED: a limiter that cannot count answers "unavailable". */
+async function signInAllowed(email: string): Promise<"ok" | "limited" | "unavailable"> {
+  try {
+    const ip = await clientIp();
+    const address = await rateLimit({
+      bucket: "sign-in:address",
+      id: ip,
+      limit: SIGN_IN_PER_ADDRESS,
+      windowMs: SIGN_IN_WINDOW_MS,
+    });
+    if (!address.ok) return "limited";
+    const account = await rateLimit({
+      bucket: "sign-in:account",
+      id: `${email.trim().toLowerCase()}|${ip}`,
+      limit: SIGN_IN_PER_ACCOUNT_PER_ADDRESS,
+      windowMs: SIGN_IN_WINDOW_MS,
+    });
+    return account.ok ? "ok" : "limited";
+  } catch {
+    return "unavailable";
+  }
 }
 
 /**
