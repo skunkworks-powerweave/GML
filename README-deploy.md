@@ -488,6 +488,20 @@ schema change degrades to "no deploy happened" rather than "the site is down".
 (A bare `docker compose up -d` does NOT give you this: it recreates `app` before
 it waits for `migrate`.)
 
+**Read the migrate output after an upgrade.** A migration that changes existing
+data reports each change as a `[migrate] NOTICE:` line, and that line is the
+only record of it. The two to look for:
+
+- `teachers <id>: unlinked from login <uuid> ...` / `mentors <id>: ...`: two
+  records were linked to one login, the older kept it, and this one is now
+  under "Awaiting an account" in `/admin/users`. Link it to the right login.
+- `section_gates <id>: <slug> version N renumbered to M`: two rotations of one
+  gate collided. If in doubt, rotate that gate once more at `/admin/gates`.
+
+`deploy.sh` prints the migrate output as it runs; if the terminal is gone,
+re-running `docker compose run --rm --no-deps migrate` will not repeat them
+(each migration runs once), so copy them from the deploy's scrollback or log.
+
 ### Rolling back
 
 ```bash
