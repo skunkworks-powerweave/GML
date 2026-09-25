@@ -72,7 +72,18 @@ type Options = {
   accessTokenTtl?: number;
   /** Keep sessions as rows in `auth.sessions` of this database (see header). */
   sessionTable?: Queryable;
+  /**
+   * Security.UpdatePasswordRequireCurrentPassword, the project setting
+   * README-deploy §2.2f turns on: PUT /user may set a new password only with
+   * the correct `current_password`, unless the session came from an emailed
+   * link (user.go:171-186 in v2.196.0; Session.IsRecovery() is any amr of
+   * otp, magiclink or recovery, factor.go:66-72). Off by default, as GoTrue's is.
+   */
+  requireCurrentPassword?: boolean;
 };
+
+/** Session.IsRecovery() in GoTrue: the amr methods its current-password check exempts. */
+const RECOVERY_AMR = new Set(["otp", "magiclink", "recovery"]);
 
 const API_VERSION = { "x-supabase-api-version": "2024-01-01" };
 
@@ -150,6 +161,7 @@ export async function fakeGoTrue(options: Options = {}) {
   /** When set, a request it returns an error for is answered with that error instead (one failing call). */
   let fault: ((r: Seen) => { status: number; code: string; message: string } | null) | null = null;
   let ttl = options.accessTokenTtl ?? 900;
+  let requireCurrentPassword = options.requireCurrentPassword ?? false;
   const table = options.sessionTable;
   const hook = options.hook ?? (() => ({ role: "teacher" }));
   let url = "";
@@ -421,7 +433,18 @@ export async function fakeGoTrue(options: Options = {}) {
       if (req.method === "GET") return send(res, 200, userJson(who.user));
       if (req.method === "PUT") {
         if (typeof body.password === "string") {
-          if (body.password === who.user.password) {
+          // Checked before same_password, in GoTrue's order.
+          const fromEmailedLink = who.session.amr.some((a) => RECOVERY_AMR.has(a.method));
+          if (requireCurrentPassword && body.password !== "" && who.user.password && !fromEmailedLink) {
+            const current = body.current_password;
+            if (typeof current !== "string" || current === "") {
+              return fail(res, 400, "current_password_required", "Current password required when setting new password.");
+            }
+            if (current !== who.user.password && !fromEmailedLink) {
+              return fail(res, 400, "current_password_mismatch", "Current password required when setting new password.");
+            }
+          }
+          if (body.password === who.user.password && !fromEmailedLink) {
             return fail(res, 422, "same_password", "New password should be different from the old password.");
           }
           who.user.password = body.password;
@@ -519,6 +542,8 @@ export async function fakeGoTrue(options: Options = {}) {
     /** Fail the requests `f` picks out (null: none); every other request is answered as usual. */
     setFault: (f: typeof fault) => void (fault = f),
     setAccessTokenTtl: (s: number) => void (ttl = s),
+    /** Turn GoTrue's require-current-password setting on or off (see Options). */
+    setRequireCurrentPassword: (on: boolean) => void (requireCurrentPassword = on),
     /** Point the app's Supabase clients at this server. Returns a restore(). */
     install(): () => void {
       const keys = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY"] as const;

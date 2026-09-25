@@ -79,8 +79,13 @@ export async function changePasswordAction(
   }
   if (verify.error) return { error: "That is not your current password." };
 
+  // current_password goes to GoTrue as well. With the project's "require
+  // current password" setting on (README-deploy §2.2f), GoTrue refuses a
+  // password change from a password session without it -- the check that
+  // stops a direct call with the page-readable token -- and every change here
+  // would fail. With the setting off, GoTrue ignores the field.
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.updateUser({ password: next });
+  const { error } = await supabase.auth.updateUser({ password: next, current_password: current });
   if (error) {
     // Supabase's message is specific (length, strength policy, reuse) and safe
     // to surface: the caller has just proved they hold the current password.
