@@ -26,7 +26,7 @@ import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { actorFrom, videoVisibilityFilter } from "@/lib/authz";
+import { actorFrom, lockedVideoScope, videoVisibilityFilter } from "@/lib/authz";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { UploadModal } from "@/components/video/UploadModal";
 import { assertEnv } from "@/lib/env";
@@ -130,6 +130,11 @@ export default async function VideoLibraryPage({
   if (!actor) redirect("/login");
   const visibility = await videoVisibilityFilter(actor);
   if (visibility) scopeConds.push(visibility);
+  // The section gate: mentorship and observation videos only once that
+  // section is unlocked (own uploads excepted). Separate from the visibility
+  // predicate, which is undefined for admins -- and admins are gated too.
+  const locked = await lockedVideoScope(actor);
+  if (locked) scopeConds.push(locked);
 
   // The source filter narrows BOTH: with ?source=whatsapp the chips should
   // count WhatsApp videos. The STATUS filter deliberately does not -- the chips

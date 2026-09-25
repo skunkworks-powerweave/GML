@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
+import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
 import { HlsPlayer } from "@/components/video/HlsPlayer";
@@ -30,6 +30,13 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
   const video = await assertCanAccessVideo(actor, id);
+
+  // SECTION GATE. A mentorship or observation video is served only to a user
+  // holding that section's live grant, as inside /mentorship and /observation
+  // (see videoGateRequired in lib/authz.ts). Checked after ownership, and
+  // before the view is audited or a player source is built.
+  const gate = await videoGateRequired(actor, video);
+  if (gate) redirect(`/gate/${gate}?next=${encodeURIComponent(`/videos/${id}`)}`);
 
   // Audit the view
   void recordAudit({

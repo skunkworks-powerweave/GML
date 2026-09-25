@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, notInArray, or, type SQL } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { db } from "@gml/db";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@gml/db/schema";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import {
+  activeGrant,
   cycleVisibility,
   isAdmin,
   menteeTeacherIds as menteeTeacherIdsIn,
@@ -312,6 +313,69 @@ export async function videoVisibilityFilter(actor: Actor): Promise<SQL | undefin
 
   // The "own uploads" clause is always present, so this is never an empty OR.
   return clauses.length === 1 ? clauses[0] : (or(...clauses) as SQL);
+}
+
+// ── The section gate, on the video surfaces ─────────────────────────────────
+//
+// Mentorship recordings, mentee quarterly videos and observation evidence
+// belong to the two gated sections. The rule (lib/visibility.ts,
+// observationAccess; lib/gated-reads.ts) is that a surface serving their data
+// OUTSIDE the section applies BOTH controls: the ownership predicate above, and
+// a live grant for the section. /videos, /videos/[id], /api/media/playlist/[id]
+// and /api/videos/[id]/event applied only the first, so a user who had not
+// unlocked mentorship -- or whose grant had expired, or been revoked by
+// rotating the password (the rotate route deletes the grant rows) -- could
+// still list and stream the product's most sensitive recordings.
+//
+// Admins are gated too, as the section layouts gate them. One exemption, on
+// purpose: your OWN upload. The uploader already holds the bytes, and /uploads
+// links each teacher to her own videos without sending her through a
+// password she may never have been given.
+//
+// Order at each call site: assertCanAccessVideo first (an unauthorised id is a
+// 404), then the gate -- so a gate answer never confirms a row exists to
+// someone who may not see it.
+
+type VideoGateSlug = "mentorship" | "observation";
+
+const GATED_VIDEO_CONTEXTS: Record<VideoGateSlug, string[]> = {
+  mentorship: ["mentor_meeting", "mentee_quarterly"],
+  observation: ["observation_cycle"],
+};
+
+/** The gated section a video's context belongs to, or null. */
+export function videoGateSlug(contextType: string): VideoGateSlug | null {
+  if (GATED_VIDEO_CONTEXTS.mentorship.includes(contextType)) return "mentorship";
+  if (GATED_VIDEO_CONTEXTS.observation.includes(contextType)) return "observation";
+  return null;
+}
+
+/**
+ * The section `actor` must unlock before this video may be served, or null.
+ * Call after assertCanAccessVideo, with the row it returned.
+ */
+export async function videoGateRequired(
+  actor: Actor,
+  video: { contextType: string; submittedByUserId: string | null },
+): Promise<VideoGateSlug | null> {
+  const slug = videoGateSlug(video.contextType);
+  if (!slug) return null;
+  if (video.submittedByUserId && video.submittedByUserId === actor.id) return null;
+  return (await activeGrant(db, actor.id, slug)) ? null : slug;
+}
+
+/**
+ * WHERE predicate hiding the videos of every gated section `actor` has not
+ * unlocked (their own uploads excepted). undefined when both are unlocked.
+ * ANDed into a video list independently of videoVisibilityFilter, which is
+ * undefined for admins.
+ */
+export async function lockedVideoScope(actor: Actor): Promise<SQL | undefined> {
+  const slugs = Object.keys(GATED_VIDEO_CONTEXTS) as VideoGateSlug[];
+  const grants = await Promise.all(slugs.map((slug) => activeGrant(db, actor.id, slug)));
+  const locked = slugs.filter((_, i) => !grants[i]).flatMap((slug) => GATED_VIDEO_CONTEXTS[slug]);
+  if (locked.length === 0) return undefined;
+  return or(eq(videoSubmissions.submittedByUserId, actor.id), notInArray(videoSubmissions.contextType, locked)) as SQL;
 }
 
 /**
