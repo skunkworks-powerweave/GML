@@ -68,3 +68,68 @@ test("the database refuses two rows with one slug and version", { skip }, async 
     }
   });
 });
+
+// ── MIGRATION 0032 ON A DEPLOYMENT THAT ALREADY HAS A DUPLICATE ──────────────
+//
+// The index cannot be built over existing duplicates, so 0032 renumbers them
+// first. Its first version moved every row after the first of a duplicated
+// (slug, version) to max(version) + 1 -- ABOVE any later, legitimate
+// rotation. With v3 twice on 1 September and a real rotation to v4 on 10
+// September, the stale 1 September duplicate became v5, the current gate,
+// and the password the 10 September admin had distributed stopped working.
+//
+// Executed: the migration's own renumbering block, on a copy of section_gates
+// in a scratch schema of a rolled-back transaction (the real table has the
+// index, so it cannot hold a duplicate), then getCurrentGate()'s query --
+// lib/gates.ts: that slug's highest version -- on the same transaction.
+test("migration 0032 keeps the latest rotation current when a duplicate sits below it", { skip }, async () => {
+  const { readFileSync } = await import("node:fs");
+  const { drizzle } = await import("drizzle-orm/node-postgres");
+  const { desc, eq } = await import("drizzle-orm");
+  const { sectionGates } = await import("../../packages/db/src/schema/gates.ts");
+  const migration = readFileSync(new URL("../../packages/db/src/migrations/0032_gate_version_unique.sql", import.meta.url), "utf8");
+  const [renumber, index] = migration.split("--> statement-breakpoint");
+  assert.match(renumber!, /DO \$\$/);
+  assert.match(index!, /CREATE UNIQUE INDEX/);
+  await withClient(async (c) => {
+    const schema = `gate_mig_${tag("m").replace(/[^a-z0-9]/gi, "_").toLowerCase()}`;
+    await c.query("BEGIN");
+    try {
+      await c.query(`CREATE SCHEMA ${schema}`);
+      await c.query(`CREATE TABLE ${schema}.section_gates (LIKE public.section_gates INCLUDING DEFAULTS)`);
+      await c.query(`SET LOCAL search_path = ${schema}, public`);
+      const put = (slug: string, version: number, hash: string, at: string) =>
+        c.query(`INSERT INTO section_gates (slug, version, password_hash, created_at, rotated_at) VALUES ($1, $2, $3, $4, $4)`, [
+          slug,
+          version,
+          hash,
+          at,
+        ]);
+      await put("tkt", 1, "tkt-aug-01", "2026-08-01T04:00:00Z");
+      await put("tkt", 2, "tkt-aug-15", "2026-08-15T04:00:00Z");
+      await put("tkt", 3, "tkt-sep-01-a", "2026-09-01T04:00:00Z");
+      await put("tkt", 3, "tkt-sep-01-b", "2026-09-01T04:00:01Z");
+      await put("tkt", 4, "tkt-sep-10", "2026-09-10T04:00:00Z");
+      // A slug with no duplicate keeps its numbers, gaps and all.
+      await put("ttt", 1, "ttt-v1", "2026-08-01T04:00:00Z");
+      await put("ttt", 3, "ttt-v3", "2026-08-20T04:00:00Z");
+
+      await c.query(renumber!);
+      await c.query(index!); // the index now builds
+
+      const current = async (slug: "tkt" | "ttt") =>
+        (await drizzle(c).select().from(sectionGates).where(eq(sectionGates.slug, slug)).orderBy(desc(sectionGates.version)).limit(1))[0];
+      assert.equal((await current("tkt"))?.passwordHash, "tkt-sep-10", "the 10 September rotation must stay the current password");
+      const { rows } = await c.query(`SELECT password_hash, version FROM section_gates WHERE slug = 'tkt' ORDER BY version`);
+      assert.deepEqual(
+        rows.map((r) => r.password_hash),
+        ["tkt-aug-01", "tkt-aug-15", "tkt-sep-01-a", "tkt-sep-01-b", "tkt-sep-10"],
+        "versions follow creation order",
+      );
+      const { rows: ttt } = await c.query(`SELECT version FROM section_gates WHERE slug = 'ttt' ORDER BY version`);
+      assert.deepEqual(ttt.map((r) => r.version), [1, 3]);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+});

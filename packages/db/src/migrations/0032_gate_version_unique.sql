@@ -9,26 +9,29 @@
 -- index makes a duplicate impossible whatever writes the table.
 --
 -- Existing duplicates are renumbered first, or the index could not be built
--- and `docker compose up` would stop at the migrate step. Within a duplicated
--- (slug, version), the rows after the first (by created_at, then id) move above
--- that gate's highest version, in creation order -- so the most recent
--- rotation is the current one, which is what the admin who performed it was
--- told. Each move is reported; if in doubt, rotate that gate once more.
+-- and `docker compose up` would stop at the migrate step. Every gate that has
+-- a duplicate is renumbered 1..n in (version, created_at, id) order: the
+-- versions keep their order, and within a duplicated version the later row
+-- comes second. So a LATER rotation stays above the duplicate -- the password
+-- the last rotating admin distributed stays current. (Moving the duplicate to
+-- max(version)+1 instead would put a stale password above that rotation.)
+-- Gates without a duplicate keep their numbers. Each change is reported; if
+-- in doubt, rotate that gate once more.
 
 DO $$
-DECLARE r record; top integer;
+DECLARE r record;
 BEGIN
   FOR r IN
-    SELECT id, slug, version FROM (
+    SELECT id, slug, version, n FROM (
       SELECT id, slug, version,
-             row_number() OVER (PARTITION BY slug, version ORDER BY created_at, id) AS n
+             row_number() OVER (PARTITION BY slug ORDER BY version, created_at, id) AS n
       FROM section_gates
-    ) d WHERE n > 1
-    ORDER BY slug, version, n
+      WHERE slug IN (SELECT slug FROM section_gates GROUP BY slug, version HAVING count(*) > 1)
+    ) d WHERE n <> version
+    ORDER BY slug, n
   LOOP
-    SELECT max(version) INTO top FROM section_gates WHERE slug = r.slug;
-    UPDATE section_gates SET version = top + 1 WHERE id = r.id;
-    RAISE NOTICE 'section_gates %: duplicate % version % renumbered to %', r.id, r.slug, r.version, top + 1;
+    UPDATE section_gates SET version = r.n WHERE id = r.id;
+    RAISE NOTICE 'section_gates %: % version % renumbered to %', r.id, r.slug, r.version, r.n;
   END LOOP;
 END $$;--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "section_gates_slug_version_uq" ON "section_gates" USING btree ("slug", "version");
