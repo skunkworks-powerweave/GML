@@ -268,18 +268,29 @@ test("spec 162 — page renders Retry + Drop buttons wired to server actions", (
 });
 
 test("spec 162 — page restricts Retry + Drop to failed rows only", () => {
+  // CORRECTED (F63). This pinned `canRetry = r.status === "failed"` -- the row's
+  // OWN status alone -- and that was the defect: the worker writes one row per
+  // attempt, so the old failed attempt of a video that a later attempt made
+  // ready still qualified, and Drop on it broke a playable video. The gate is
+  // now shared with the actions (./state.ts) and requires, beyond a failed row,
+  // that it is the submission's latest attempt, that the submission is failed,
+  // and that nothing is live for it. tests/behaviour/dlq-actions.test.ts
+  // executes this; the regexes pin the shape.
   const src = read(PAGE_PATH);
-  // The conditional gate must be the literal status check 'failed'.
   assert.match(
     src,
-    /canRetry\s*=\s*r\.status\s*===\s*"failed"/,
-    "Retry button must be conditional on row.status === 'failed'",
+    /\{\s*retry:\s*canRetry,\s*drop:\s*canDrop\s*\}\s*=\s*verbsFor\(r,\s*state\)/,
+    "Retry/Drop must come from the shared verbsFor() rule",
   );
-  assert.match(
-    src,
-    /canDrop\s*=\s*r\.status\s*===\s*"failed"/,
-    "Drop button must be conditional on row.status === 'failed'",
-  );
+  const state = read(PAGE_PATH.replace(/page\.tsx$/, "state.ts"));
+  for (const [re, what] of [
+    [/row\.status\s*===\s*"failed"/, "a failed attempt row"],
+    [/state\.latestAttemptId\s*===\s*row\.jobId/, "the submission's latest attempt"],
+    [/state\.status\s*===\s*"failed"/, "a submission that is failed now"],
+    [/state\.liveJob\s*===\s*null/, "no queued or running job for it"],
+  ]) {
+    assert.match(state, re, `verbsFor() must require ${what}`);
+  }
 });
 
 test("spec 162 — page audits the surface view itself", () => {
@@ -419,23 +430,23 @@ test("spec 162 — dropTranscodeJobAction marks status='dropped' and audits", ()
 });
 
 test("spec 162 — both actions validate row.jobStatus === 'failed' before mutating", () => {
+  // CORRECTED (F63). This pinned a bare `row.jobStatus !== "failed"` guard in
+  // each action, which is the check that let a stale failed attempt through
+  // (see the page test above). Both actions now re-check the shared rule
+  // against state loaded under a lock on the submission, inside the
+  // transaction that writes it, and report a refusal with an ?error= code.
   const src = read(ACTIONS_PATH);
-  // Both actions reject non-failed rows with a redirect carrying an error.
-  assert.match(
-    src,
-    /not_retriable_status/,
-    "retry action must reject non-failed rows with error=not_retriable_status",
-  );
-  assert.match(
-    src,
-    /not_droppable_status/,
-    "drop action must reject non-failed rows with error=not_droppable_status",
-  );
-  const statusGuardMatches = src.match(/row\.jobStatus\s*!==\s*"failed"/g) ?? [];
-  assert.ok(
-    statusGuardMatches.length >= 2,
-    "both actions must each guard on row.jobStatus !== 'failed' — defence in depth",
-  );
+  const guards = src.match(/verbsFor\([^)]*\)\.(retry|drop)/g) ?? [];
+  assert.ok(guards.length >= 2, "both actions must each check verbsFor() before mutating — defence in depth");
+  const locked = src.match(/loadSubmissionStates\(tx,[^)]*forUpdate:\s*true/g) ?? [];
+  assert.ok(locked.length >= 2, "both actions must read the submission's state under a row lock, in their transaction");
+  const refused = src.match(/redirect\(`\$\{DLQ_PATH\}\?error=\$\{refusal\}`\)/g) ?? [];
+  assert.ok(refused.length >= 2, "both actions must redirect a refusal back with its error code");
+  // Every code refusalFor() can return has a message on the page.
+  const page = read(PAGE_PATH);
+  for (const code of ["not_failed_attempt", "not_latest_attempt", "job_live", "submission_not_failed"]) {
+    assert.match(page, new RegExp(`${code}:`), `the page must explain ?error=${code}`);
+  }
 });
 
 test("spec 162 — both actions revalidate + redirect back to /admin/transcode-jobs", () => {

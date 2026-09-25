@@ -35,9 +35,15 @@ export type TranscodeJobInput = {
  * Because the uniqueness is scoped to queued/running only, a deliberate retry
  * AFTER a job has finished is still allowed. That distinction is the whole
  * reason the index is partial.
+ *
+ * `database` lets a caller enqueue inside its own transaction (the DLQ Retry
+ * does, so the status change and the job commit together or not at all).
  */
-export async function enqueueTranscode(input: TranscodeJobInput): Promise<void> {
-  await enqueue(db, {
+export async function enqueueTranscode(
+  input: TranscodeJobInput,
+  database: Parameters<typeof enqueue>[0] = db,
+): Promise<void> {
+  await enqueue(database, {
     queue: "transcode",
     name: "transcode",
     payload: input as unknown as Record<string, unknown>,

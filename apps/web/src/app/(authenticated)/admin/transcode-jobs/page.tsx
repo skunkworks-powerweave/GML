@@ -37,6 +37,7 @@ import { transcodeQueueDepthOrNull } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { retryTranscodeJobAction, dropTranscodeJobAction } from "./actions";
+import { loadSubmissionStates, verbsFor } from "./state";
 
 export const dynamic = "force-dynamic";
 
@@ -152,6 +153,12 @@ export default async function TranscodeJobsAdminPage({
       "Only a failed job can be retried. This one has since changed state; reload to see its current status.",
     not_droppable_status:
       "Only a failed job can be dropped. Reload to see its current status.",
+    not_failed_attempt: "Only a failed attempt can be retried or dropped. Reload to see its current status.",
+    not_latest_attempt:
+      "That was an older attempt of this video. Only its latest attempt can be retried or dropped.",
+    job_live: "That video already has a transcode queued or running. Reload to see its current status.",
+    submission_not_failed:
+      "That video is no longer failed — it has been retried or has become ready since. Reload to see it.",
   };
   const dlqError = sp.error ? DLQ_ERRORS[sp.error] ?? "That action could not be completed." : null;
 
@@ -224,6 +231,10 @@ export default async function TranscodeJobsAdminPage({
     }
   }
 
+  // Which rows are actionable is the SUBMISSION's call, not the row's (see
+  // ./state.ts): the same rule the actions enforce.
+  const states = await loadSubmissionStates(db, submissionIds);
+
   const depth = await loadDlqDepth();
   // Spec 168 — explicit "Redis unreachable" flag drives the banner
   // ABOVE the table. loadDlqDepth already returns null on error; this
@@ -237,8 +248,10 @@ export default async function TranscodeJobsAdminPage({
         <p className="text-sm text-neutral-500">
           Inspect and operate the ffmpeg → HLS 480p pipeline. Failed
           rows are listed first; click Retry to re-enqueue a job onto
-          the queue, or Drop to bury it without retry. Every action is
-          logged to the audit trail.
+          the queue, or Drop to bury it without retry. Each attempt is its
+          own row; only a video&apos;s latest attempt, while the video is
+          failed, can be retried or dropped. Every action is logged to the
+          audit trail.
         </p>
       </header>
 
@@ -331,6 +344,7 @@ export default async function TranscodeJobsAdminPage({
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Submission</th>
               <th className="px-3 py-2">Source</th>
+              <th className="px-3 py-2">Video now</th>
               <th className="px-3 py-2">Error</th>
               <th className="px-3 py-2">Attempts</th>
               <th className="px-3 py-2">Updated</th>
@@ -340,21 +354,22 @@ export default async function TranscodeJobsAdminPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
                   No transcode jobs match the current filter.
                 </td>
               </tr>
             ) : (
               rows.map((r) => {
-                const canRetry = r.status === "failed";
-                const canDrop = r.status === "failed";
+                const state = states.get(r.videoSubmissionId);
+                const { retry: canRetry, drop: canDrop } = verbsFor(r, state);
+                const superseded = r.status === "failed" && state?.latestAttemptId !== r.jobId;
                 const errorShort = (r.error ?? "").trim();
                 const errorPreview =
                   errorShort.length > 60 ? `${errorShort.slice(0, 60)}…` : errorShort || "—";
                 const attempts = attemptsBySubmission.get(r.videoSubmissionId) ?? 1;
                 const updated = r.endedAt ?? r.startedAt ?? r.createdAt;
                 return (
-                  <tr key={r.jobId} className="border-t border-neutral-100">
+                  <tr key={r.jobId} data-job-id={r.jobId} className="border-t border-neutral-100">
                     <td className="px-3 py-2 text-xs">
                       <span className={STATUS_CHIP[r.status] ?? "chip"}>{r.status}</span>
                     </td>
@@ -368,6 +383,9 @@ export default async function TranscodeJobsAdminPage({
                     </td>
                     <td className="px-3 py-2 text-xs">
                       <span className="chip">{r.source}</span>
+                    </td>
+                    <td className="px-3 py-2 text-xs" data-testid="dlq-video-status">
+                      {state?.status ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-xs" title={errorShort}>
                       {errorPreview}
@@ -403,7 +421,9 @@ export default async function TranscodeJobsAdminPage({
                           </form>
                         ) : null}
                         {!canRetry && !canDrop ? (
-                          <span className="text-neutral-400">—</span>
+                          <span className="text-neutral-400">
+                            {superseded ? "superseded by a later attempt" : "—"}
+                          </span>
                         ) : null}
                       </div>
                     </td>

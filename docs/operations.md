@@ -68,7 +68,11 @@ are not certain why they lost access.
 1. `/admin/transcode-jobs` — is there a failed or dead job for it?
 2. **Dead** means attempts are exhausted and it needs a human. **Failed** means
    it will be retried. The distinction is deliberate.
-3. Retry re-enqueues it. This works even for a submission that has been
+3. Retry re-enqueues it. Each attempt is its own row, and only a video's
+   latest attempt offers Retry or Drop, only while the video itself is failed
+   and nothing is queued or running for it. An older failed attempt of a video
+   that a later attempt fixed says "superseded by a later attempt"; acting on
+   it used to break a playable video. Retry does work for a video that was
    transcoded before — the dedupe key is scoped to live jobs precisely so a
    deliberate retry is possible.
 4. If the job succeeded but playback fails, check `/api/health` for
