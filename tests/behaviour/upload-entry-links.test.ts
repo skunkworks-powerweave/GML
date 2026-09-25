@@ -137,6 +137,39 @@ test("F50: quarterly videos and meeting recordings whose bytes have arrived are 
   });
 });
 
+// A long meeting sent over WhatsApp arrives in parts, and a first recording
+// can be the wrong file or fail to transcode. Each later recording used to be
+// accepted and then shown nowhere: the page read only recording_video_id, which
+// holds the first, and hid "Attach recording" once it was set.
+test("F50: every recording of a meeting is listed, and its mentor can add another once one is attached", { skip }, async () => {
+  await withWorld(async (w) => {
+    const past = await meeting(w, "past");
+    const first = await w.video({ contextType: "mentor_meeting", contextId: past, by: w.mentor.id, status: "failed" });
+    await w.q(`UPDATE mentor_meetings SET recording_video_id = $2 WHERE id = $1`, [past, first]);
+    const second = await w.video({ contextType: "mentor_meeting", contextId: past, by: w.mentor.id, status: "queued" });
+    const arriving = await w.video({
+      contextType: "mentor_meeting",
+      contextId: past,
+      by: w.mentor.id,
+      status: "received",
+      fileStatus: "uploading",
+    });
+
+    for (const who of [w.mentor, w.teacherA]) {
+      const links = hrefs(await pairingHtml(who, w.pairingA)).map((a) => a.href);
+      assert.ok(links.includes(`/videos/${first}`), `${who.role}: the first recording`);
+      assert.ok(links.includes(`/videos/${second}`), `${who.role}: and the one sent after it: ${JSON.stringify(links)}`);
+      assert.ok(!links.includes(`/videos/${arriving}`), `${who.role}: not one whose bytes have not arrived`);
+    }
+    const mentor = hrefs(await pairingHtml(w.mentor, w.pairingA));
+    assert.ok(
+      mentor.some((a) => a.href === `/uploads?context=mentor_meeting&contextId=${past}` && /another/i.test(a.text)),
+      `a replacement or a next part can still be attached: ${JSON.stringify(mentor)}`,
+    );
+    assert.ok(!mentor.some((a) => a.href.includes(`confirmCancel=${past}`)), "a meeting with a recording is kept, as before");
+  });
+});
+
 // The cycle page's own upload stays; it also links the upload page bound to
 // the cycle, which is where the phone flow and the exact WhatsApp caption are.
 test("F18: the cycle page links the upload page for that cycle, and not once it is signed off", { skip }, async () => {

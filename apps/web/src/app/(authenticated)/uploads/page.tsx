@@ -44,6 +44,7 @@ import {
   assertContextAllowed,
   describeUploadTarget,
   encodeTarget,
+  lockedSection,
   openUploadContexts,
   uploadHref,
   type GatedSection,
@@ -104,7 +105,8 @@ const ATTACH_NOTICE: Record<string, { text: string; ok: boolean }> = {
   done: { text: "Attached. The video now shows where you chose.", ok: true },
   invalid: { text: "Choose what to attach the video to.", ok: false },
   refused: { text: "The video could not be attached there. Choose another place.", ok: false },
-  not_attachable: { text: "Only your own videos that are not linked yet can be attached.", ok: false },
+  not_attachable: { text: "Only your own videos that are not linked yet, and have not failed, can be attached.", ok: false },
+  locked: { text: "Unlock that section first, then attach the video.", ok: false },
 };
 
 /**
@@ -207,25 +209,29 @@ export default async function UploadsPage({
   const viewerId = session.user.id;
   const sp = (await searchParams) ?? {};
 
-  // WHAT THIS UPLOAD IS FOR, from the link that brought the user here. The
-  // same check the reservation runs (a target this user may not see is a 404,
-  // like the cycle or pairing page itself); then its section's gate, since the
-  // names shown are that section's data.
+  // WHAT THIS UPLOAD IS FOR, from the link that brought the user here. First
+  // its section's gate, since everything said about the target -- its name, a
+  // refusal such as "This cycle has been signed off", even a 404 rather than an
+  // "unlock" -- is that section's data. Then the same check the reservation
+  // runs (a target this user may not see is a 404, like the cycle or pairing
+  // page itself).
   let target: (UploadTarget & { description: TargetDescription }) | null = null;
   let refusal: string | null = null;
   let locked: { section: GatedSection; back: string } | null = null;
   if (sp.context) {
-    const check = await assertContextAllowed(actor, {
-      contextType: sp.context,
-      contextId: sp.contextId ?? null,
-      quarter: sp.quarter ? Number(sp.quarter) : null,
-    });
-    if (!check.ok) {
-      refusal = check.error;
+    const asked = { contextType: sp.context, contextId: sp.contextId ?? null, quarter: sp.quarter ? Number(sp.quarter) : null };
+    const gate = await lockedSection(actor, asked.contextType);
+    if (gate) {
+      locked = { section: gate, back: uploadHref(asked) };
     } else {
-      const d = await describeUploadTarget(actor, check.target);
-      if (d.locked) locked = { section: d.locked, back: uploadHref(check.target) };
-      else target = { ...check.target, description: d.description };
+      const check = await assertContextAllowed(actor, asked);
+      if (!check.ok) {
+        refusal = check.error;
+      } else {
+        const d = await describeUploadTarget(actor, check.target);
+        if (d.locked) locked = { section: d.locked, back: uploadHref(check.target) };
+        else target = { ...check.target, description: d.description };
+      }
     }
   }
   // Without a target: the user's own open cycles, meetings and quarterly
@@ -283,8 +289,12 @@ export default async function UploadsPage({
     .limit(50);
 
   // What an unlinked video of hers can still be attached to: the same open
-  // cycles, meetings and quarterly slots the chooser offers.
-  const attachOptions = rows.some((r) => r.contextType === "generic")
+  // cycles, meetings and quarterly slots the chooser offers. Not a failed one
+  // (attachSubmissionToContext refuses it): its bytes never came, or it will
+  // not play. One still uploading can be: its completion links the row's
+  // context as it is then.
+  const attachable = (r: { contextType: string; status: string }) => r.contextType === "generic" && r.status !== "failed";
+  const attachOptions = rows.some(attachable)
     ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: `${o.title} · ${o.detail}` }))
     : [];
   const attachNotice = sp.attach ? (ATTACH_NOTICE[sp.attach] ?? null) : null;
@@ -649,7 +659,7 @@ export default async function UploadsPage({
                           {linkedTo}
                           {/* An unlinked video can still be put where it
                               belongs, instead of sent again (attachUploadAction). */}
-                          {r.contextType === "generic" && attachOptions.length > 0 ? (
+                          {attachable(r) && attachOptions.length > 0 ? (
                             <form action={attachUploadAction} style={{ display: "flex", gap: 4, marginTop: 4 }}>
                               <input type="hidden" name="submissionId" value={r.id} />
                               <select

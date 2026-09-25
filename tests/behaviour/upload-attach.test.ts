@@ -33,7 +33,7 @@ const asUser = (u: WorldUser): TestUser => ({ id: u.id, role: u.role, name: u.na
 
 type World = ObservationWorld & {
   cycle: { id: string; code: string };
-  video: (by: WorldUser, o?: { contextType?: string; contextId?: string | null; fileStatus?: string }) => Promise<string>;
+  video: (by: WorldUser, o?: { contextType?: string; contextId?: string | null; fileStatus?: string; status?: string }) => Promise<string>;
 };
 
 async function withWorld(body: (w: World) => Promise<void>) {
@@ -57,8 +57,8 @@ async function withWorld(body: (w: World) => Promise<void>) {
       return (
         await w.c.query(
           `INSERT INTO video_submissions (file_id, source, status, context_type, context_id, submitted_by_user_id, caption_raw)
-           VALUES ($1, 'direct', 'queued', $2, $3, $4, 'fractions lesson') RETURNING id`,
-          [fileId, o.contextType ?? "generic", o.contextId ?? null, by.id],
+           VALUES ($1, 'direct', $5::video_status, $2, $3, $4, 'fractions lesson') RETURNING id`,
+          [fileId, o.contextType ?? "generic", o.contextId ?? null, by.id, o.status ?? "queued"],
         )
       ).rows[0].id as string;
     };
@@ -67,6 +67,10 @@ async function withWorld(body: (w: World) => Promise<void>) {
     signIn(null);
     request.headers = {};
     await w.c.query(`DELETE FROM observation_evidence WHERE video_submission_id IN (SELECT id FROM video_submissions WHERE file_id = ANY($1::uuid[]))`, [fileIds]);
+    await w.c.query(
+      `DELETE FROM jobs WHERE dedupe_key IN (SELECT 'submission:' || id FROM video_submissions WHERE file_id = ANY($1::uuid[]))`,
+      [fileIds],
+    );
     await w.c.query(`DELETE FROM video_submissions WHERE file_id = ANY($1::uuid[])`, [fileIds]);
     await w.c.query(`DELETE FROM files WHERE id = ANY($1::uuid[])`, [fileIds]);
     await w.cleanup();
@@ -154,5 +158,90 @@ test("F18: a quarterly slot can be attached too, with its quarter", { skip }, as
     const r = await attach(w.teacher, id, `mentee_quarterly|${w.pairingId}|1`);
     assert.equal(r.kind, "redirect");
     assert.deepEqual(await row(w, id), { context_type: "mentee_quarterly", context_id: w.pairingId, context_quarter: 1 });
+  });
+});
+
+// Attach is offered on a row whose bytes are still arriving, and the
+// completion that follows reads the context the caller saw BEFORE the attach.
+// finalizeUpload links the claimed row's own context, read under its lock --
+// the attach must not be lost to that stale read.
+test("F18: a video attached while its file is still uploading is linked to where it was attached, when its upload completes", { skip }, async () => {
+  await withWorld(async (w) => {
+    const id = await w.video(w.teacher, { status: "received", fileStatus: "uploading" });
+    const [{ file_id: fileId, bucket, object_key: objectKey }] = (
+      await w.c.query(`SELECT v.file_id, f.bucket, f.object_key FROM video_submissions v JOIN files f ON f.id = v.file_id WHERE v.id = $1`, [id])
+    ).rows;
+
+    const r = await attach(w.teacher, id, `observation_cycle|${w.cycle.id}|`);
+    assert.equal(r.kind, "redirect", JSON.stringify(r));
+    assert.equal((await row(w, id)).context_type, "observation_cycle");
+    const evidence = async () =>
+      (await w.c.query(`SELECT cycle_id FROM observation_evidence WHERE video_submission_id = $1`, [id])).rows;
+    assert.deepEqual(await evidence(), [], "nothing is on the Evidence card before the bytes exist");
+
+    // The completion, carrying what its caller read before the attach.
+    const { finalizeUpload } = await import("../../packages/db/src/uploads.ts");
+    const { db } = await import("../../packages/db/src/client.ts");
+    const done = await finalizeUpload(db, {
+      submissionId: id,
+      fileId,
+      bucket,
+      objectKey,
+      storedBytes: 4096,
+      contextType: "generic",
+      contextId: null,
+    });
+    assert.equal(done.finalized, true);
+    assert.deepEqual(await evidence(), [{ cycle_id: w.cycle.id }], "the attach is honoured when the bytes land");
+  });
+});
+
+test("F18: a failed upload offers no attach, and is not moved", { skip }, async () => {
+  await withWorld(async (w) => {
+    const failed = await w.video(w.teacher, { status: "failed" });
+    await w.video(w.teacher); // a live generic row, so the page has options to offer
+    const html = await uploadsHtml(w.teacher);
+    assert.equal(elements(html, "form").filter((f) => f.inner.includes(`value="${failed}"`)).length, 0, "no attach control on a failed row");
+    const r = await attach(w.teacher, failed, `observation_cycle|${w.cycle.id}|`);
+    assert.deepEqual(r, { kind: "redirect", location: "/uploads?attach=not_attachable" });
+    assert.equal((await row(w, failed)).context_type, "generic");
+    const ev = await w.c.query(`SELECT 1 FROM observation_evidence WHERE video_submission_id = $1`, [failed]);
+    assert.equal(ev.rowCount, 0, "a broken video is not put on a cycle's Evidence");
+  });
+});
+
+// The control offers a cycle, a meeting or a quarterly slot, and nothing else
+// is attachable: a crafted teach-back target used to reach the uuid column
+// unchecked (Postgres 22P02, a 500), or move a private video into every
+// mentor's teach-back queue.
+test("F18: only a cycle, a meeting or a quarterly slot can be attached, with a well-formed id", { skip }, async () => {
+  await withWorld(async (w) => {
+    const id = await w.video(w.teacher);
+    for (const target of [
+      "teach_back|abc|",
+      `teach_back|${w.cycle.id}|`,
+      "classroom_session||",
+      `classroom_session|${w.cycle.id}|`,
+      "observation_cycle|not-a-uuid|",
+      "mentor_meeting||",
+    ]) {
+      const r = await attach(w.teacher, id, target);
+      assert.deepEqual(r, { kind: "redirect", location: "/uploads?attach=invalid" }, target);
+      assert.equal((await row(w, id)).context_type, "generic", target);
+    }
+  });
+});
+
+// /uploads offers attach options only once their section is unlocked; the
+// action now asks for the same grant, as every action inside the section does.
+test("F18: attaching into a gated section needs that section unlocked", { skip }, async () => {
+  await withWorld(async (w) => {
+    const id = await w.video(w.teacher);
+    await w.c.query(`DELETE FROM section_gate_grants WHERE user_id = $1`, [w.teacher.id]);
+    for (const target of [`observation_cycle|${w.cycle.id}|`, `mentee_quarterly|${w.pairingId}|1`]) {
+      const r = await attach(w.teacher, id, target);
+      assert.deepEqual(r, { kind: "redirect", location: "/uploads?attach=locked" }, target);
+      assert.equal((await row(w, id)).context_type, "generic", target);
+    }
   });
 });

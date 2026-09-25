@@ -25,9 +25,9 @@
 // code never reached the cycle's Evidence card -- the same drift this file
 // already describes for the reconciler.
 
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { files, mentorMeetings, observationCycles, observationEvidence, videoSubmissions } from "./schema";
+import { auditLog, files, mentorMeetings, observationCycles, observationEvidence, videoSubmissions } from "./schema";
 import { enqueue } from "./queue";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -133,11 +133,16 @@ export type ContextLink = {
  *                      card reads only that table. Not for a cycle that has
  *                      been signed off (the locking transition) in the
  *                      meantime -- the video is kept, the closed record is not
- *                      reopened.
- *   mentor_meeting     the meeting's recording_video_id, which the pairing
- *                      page's "Open recording" reads and which nothing used to
- *                      write. Only while it is empty: an attached recording is
- *                      never silently swapped for a later one.
+ *                      reopened, and the video is made 'generic' again
+ *                      (audited video.context.unlinked). Left claiming the
+ *                      cycle, it was on no Evidence card, read "Linked to
+ *                      OBS-..." on its uploader's /uploads, and could not be
+ *                      attached anywhere else, since only a generic video can.
+ *   mentor_meeting     the meeting's recording_video_id, which nothing used to
+ *                      write, when it is empty: the first recording. A later
+ *                      one (the next part of a long meeting, a replacement)
+ *                      does not swap it; the pairing page lists every
+ *                      'mentor_meeting' submission stored for the meeting.
  *   mentee_quarterly   nothing to write. The submission itself is the
  *                      pairing's quarterly video (context_id = the pairing,
  *                      context_quarter = 1 or 4).
@@ -157,6 +162,26 @@ export async function linkSubmissionToContext(tx: AnyDb, link: ContextLink): Pro
        WHERE ${observationCycles.id} = ${link.contextId}::uuid
          AND ${observationCycles.status} <> 'complete'
          AND NOT EXISTS (SELECT 1 FROM ${observationEvidence} WHERE ${observationEvidence.videoSubmissionId} = ${link.submissionId}::uuid)`);
+    // Signed off while the video was on its way: hand it back to its uploader.
+    const unlinked = await tx
+      .update(videoSubmissions)
+      .set({ contextType: "generic", contextId: null, contextQuarter: null })
+      .where(
+        and(
+          eq(videoSubmissions.id, link.submissionId),
+          sql`EXISTS (SELECT 1 FROM ${observationCycles} WHERE ${observationCycles.id} = ${link.contextId}::uuid AND ${observationCycles.status} = 'complete')`,
+          sql`NOT EXISTS (SELECT 1 FROM ${observationEvidence} WHERE ${observationEvidence.videoSubmissionId} = ${link.submissionId}::uuid)`,
+        ),
+      )
+      .returning({ id: videoSubmissions.id });
+    if (unlinked.length > 0) {
+      await tx.insert(auditLog).values({
+        action: "video.context.unlinked",
+        entityType: "video_submission",
+        entityId: link.submissionId,
+        metadata: { contextType: link.contextType, contextId: link.contextId, reason: "observation_cycle.signed_off" },
+      });
+    }
     return;
   }
   if (link.contextType === "mentor_meeting") {
@@ -173,7 +198,9 @@ export async function linkSubmissionToContext(tx: AnyDb, link: ContextLink): Pro
  * web's assertContextAllowed); this only moves a row that is still generic and
  * still the uploader's, so it cannot take a video off the evidence it is on or
  * move someone else's. A submission whose bytes have not arrived yet is linked
- * by its own finalize, which reads the context from the row.
+ * by its own finalize, which reads the context from the row. A failed one is
+ * not moved: its bytes never came, or it will not play, and a cycle's Evidence
+ * or a meeting is no place for either.
  *
  * Returns false when there was nothing to move.
  */
@@ -190,6 +217,7 @@ export async function attachSubmissionToContext(
           eq(videoSubmissions.id, a.submissionId),
           eq(videoSubmissions.submittedByUserId, a.userId),
           eq(videoSubmissions.contextType, "generic"),
+          ne(videoSubmissions.status, "failed"),
         ),
       )
       .returning({ id: videoSubmissions.id, fileId: videoSubmissions.fileId, captionRaw: videoSubmissions.captionRaw });

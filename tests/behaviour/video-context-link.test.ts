@@ -22,6 +22,19 @@
 // uploads.ts), run where each path verifies the bytes: finalizeUpload for a
 // direct upload, the worker's fetch for WhatsApp.
 //
+// A meeting can have more than one recording: a long meeting sent over
+// WhatsApp arrives in parts (a video message stops at 16 MB), and a first
+// upload can be the wrong file or fail to transcode. The first fix wrote only
+// the first into recording_video_id and the page showed only that column, so
+// every later part was accepted -- the sender told "It will be on the meeting"
+// -- and then shown nowhere. The pairing page now lists every recording stored
+// against the meeting.
+//
+// A cycle signed off while its video was still arriving gets no evidence row
+// (the closed record is not reopened), and the video no longer claims the
+// cycle either: it is made 'generic' again, audited, so its uploader sees it
+// as not linked on /uploads and can attach it where it belongs.
+//
 // ── HOW ──────────────────────────────────────────────────────────────────────
 //
 // A signed Meta payload through the real webhook, then the real worker handler
@@ -32,7 +45,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, closeAppDb } from "./_server-actions.js";
-import { render, withAppRouter, decodeEntities } from "./_ui.js";
+import { render, withAppRouter, decodeEntities, elements, attr } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import {
   acceptAndClaim,
@@ -74,7 +87,14 @@ async function evidenceFor(w: World, submissionId: string) {
   ).rows as Array<{ cycle_id: string; caption: string | null }>;
 }
 
-/** The world's teacher as the mentee of a pairing with one meeting. */
+/** What linkSubmissionToContext recorded when it took a video off a closed cycle. */
+async function unlinkedAudits(w: World, submissionId: string) {
+  return (
+    await w.c.query(`SELECT metadata FROM audit_log WHERE action = 'video.context.unlinked' AND entity_id = $1`, [submissionId])
+  ).rows.map((r) => r.metadata as Record<string, unknown>);
+}
+
+/** The world's teacher as the mentee of a pairing with one past meeting. */
 async function withMeeting(w: World, body: (m: { meetingId: string; pairingId: string }) => Promise<void>) {
   const one = async (q: string, p: unknown[]) => (await w.c.query(q, p)).rows[0].id as string;
   const mentorId = await one(`INSERT INTO mentors (name) VALUES ($1) RETURNING id`, [`Mentor ${w.T}`]);
@@ -82,10 +102,14 @@ async function withMeeting(w: World, body: (m: { meetingId: string; pairingId: s
     mentorId,
     w.teacher.teacherId,
   ]);
-  const meetingId = await one(`INSERT INTO mentor_meetings (pairing_id, scheduled_at) VALUES ($1, now()) RETURNING id`, [pairingId]);
+  const meetingId = await one(
+    `INSERT INTO mentor_meetings (pairing_id, scheduled_at) VALUES ($1, now() - interval '1 hour') RETURNING id`,
+    [pairingId],
+  );
   try {
     await body({ meetingId, pairingId });
   } finally {
+    await w.c.query(`DELETE FROM section_gate_grants WHERE user_id = $1`, [w.teacher.userId]);
     await w.c.query(`DELETE FROM mentor_meetings WHERE id = $1`, [meetingId]);
     await w.c.query(`DELETE FROM mentor_pairings WHERE id = $1`, [pairingId]);
     await w.c.query(`DELETE FROM mentors WHERE id = $1`, [mentorId]);
@@ -138,6 +162,22 @@ async function cyclePageText(w: World) {
   return decodeEntities(html.replace(/<!-- -->/g, ""));
 }
 
+/** Every /videos/<id> the pairing page links, rendered as the world's teacher (the mentee). */
+async function pairingVideoLinks(w: World, pairingId: string) {
+  await w.c.query(
+    `INSERT INTO section_gate_grants (user_id, gate_slug, granted_at, expires_at)
+     VALUES ($1, 'mentorship', now(), now() + interval '1 hour')`,
+    [w.teacher.userId],
+  );
+  signIn({ id: w.teacher.userId, role: "teacher" });
+  const { default: PairingDetailPage } = await import("../../apps/web/src/app/(authenticated)/mentorship/[pairingId]/page.tsx");
+  const html = await render(await PairingDetailPage({ params: Promise.resolve({ pairingId }), searchParams: Promise.resolve({}) }));
+  signIn(null);
+  return elements(decodeEntities(html), "a")
+    .map((a) => attr(a.open, "href") ?? "")
+    .filter((h) => h.startsWith("/videos/"));
+}
+
 test("F03: a WhatsApp lesson video captioned with its cycle code reaches the cycle's Evidence once its bytes are stored", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {
@@ -165,34 +205,49 @@ test("F03: a WhatsApp lesson video captioned with its cycle code reaches the cyc
   );
 });
 
-test("F03: an MM- recording becomes its meeting's recording once stored, and a later one does not replace it", { skip }, async () => {
+test("F03/F50: every MM- recording of a meeting is on the meeting -- the first and a later part alike", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld((w) =>
-      withMeeting(w, async ({ meetingId }) => {
+      withMeeting(w, async ({ meetingId, pairingId }) => {
         const recording = async () => (await w.c.query(`SELECT recording_video_id FROM mentor_meetings WHERE id = $1`, [meetingId])).rows[0].recording_video_id;
-        const first = await acceptAndClaim(w, { caption: `MM-${meetingId}` });
+        const first = await acceptAndClaim(w, { caption: `MM-${meetingId} part 1` });
         assert.equal(await recording(), null, "not before the bytes are stored");
         await fetchJob(first.job);
         const firstSub = await w.submission(first.id);
-        assert.equal(await recording(), firstSub!.id, "the pairing page shows a meeting's recording through this column");
+        assert.equal(await recording(), firstSub!.id, "the first stored recording is the meeting's recording");
 
-        const second = await acceptAndClaim(w, { caption: `MM-${meetingId}` });
+        // Part 2 of a long meeting, as WhatsApp's 16 MB video cap forces.
+        const second = await acceptAndClaim(w, { caption: `MM-${meetingId} part 2` });
         await fetchJob(second.job);
+        const secondSub = await w.submission(second.id);
+        assert.deepEqual([secondSub!.context_type, secondSub!.context_id], ["mentor_meeting", meetingId]);
         assert.equal(await recording(), firstSub!.id, "an attached recording is never silently swapped for another");
+
+        // The sender was told "It will be on the meeting": both parts are.
+        const links = await pairingVideoLinks(w, pairingId);
+        assert.ok(links.includes(`/videos/${firstSub!.id}`), `part 1 is on the meeting: ${JSON.stringify(links)}`);
+        assert.ok(links.includes(`/videos/${secondSub!.id}`), `part 2 is on the meeting too: ${JSON.stringify(links)}`);
       }),
     ),
   );
 });
 
-test("F03: a direct meeting recording is linked the same way, when its upload is confirmed", { skip }, async () => {
+test("F03: a direct meeting recording is linked the same way, when its upload is confirmed -- and a second one is listed with it", { skip }, async () => {
   await withWorld((w) =>
-    withMeeting(w, async ({ meetingId }) => {
+    withMeeting(w, async ({ meetingId, pairingId }) => {
       try {
         const id = await directUpload(w, "mentor_meeting", meetingId);
         const [m] = (await w.c.query(`SELECT recording_video_id FROM mentor_meetings WHERE id = $1`, [meetingId])).rows;
         assert.equal(m.recording_video_id, id);
         const [v] = (await w.c.query(`SELECT caption_raw FROM video_submissions WHERE id = $1`, [id])).rows;
         assert.equal(v.caption_raw, "lesson note", "the uploader's note is kept on the submission, whatever it is for");
+
+        // A replacement for a wrong file or a failed transcode, uploaded from
+        // the meeting's "Attach another recording".
+        const again = await directUpload(w, "mentor_meeting", meetingId);
+        const links = await pairingVideoLinks(w, pairingId);
+        assert.ok(links.includes(`/videos/${id}`), JSON.stringify(links));
+        assert.ok(links.includes(`/videos/${again}`), `the second recording is on the meeting: ${JSON.stringify(links)}`);
       } finally {
         await removeDirectUploads(w);
       }
@@ -200,7 +255,7 @@ test("F03: a direct meeting recording is linked the same way, when its upload is
   );
 });
 
-test("F03: a signed-off cycle's closed record gains no evidence, by either path", { skip }, async () => {
+test("F03: a signed-off cycle's closed record gains no evidence, by either path -- and the video is its uploader's to re-file", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {
       try {
@@ -224,6 +279,14 @@ test("F03: a signed-off cycle's closed record gains no evidence, by either path"
         const sub = await w.submission(id);
         assert.equal(sub!.status, "queued", "the video itself is kept and transcoded");
         assert.deepEqual(await evidenceFor(w, String(sub!.id)), []);
+        assert.deepEqual(
+          [sub!.context_type, sub!.context_id],
+          ["generic", null],
+          "not left claiming a cycle it is not on: /uploads shows it as not linked, and it can be attached elsewhere",
+        );
+        assert.deepEqual(await unlinkedAudits(w, String(sub!.id)), [
+          { contextType: "observation_cycle", contextId: w.cycleId, reason: "observation_cycle.signed_off" },
+        ]);
 
         // Direct: reserved while open, confirmed after sign-off.
         await w.c.query(`UPDATE observation_cycles SET status = 'observed' WHERE id = $1`, [w.cycleId]);
@@ -235,6 +298,11 @@ test("F03: a signed-off cycle's closed record gains no evidence, by either path"
         const done = await completeUpload({ submissionId: reservation.submissionId, userId: w.teacher.userId, isAdmin: false, stat: async () => ({ size: 4096 }) });
         assert.equal(done.ok, true);
         assert.deepEqual(await evidenceFor(w, reservation.submissionId), []);
+        const [direct] = (
+          await w.c.query(`SELECT context_type, context_id FROM video_submissions WHERE id = $1`, [reservation.submissionId])
+        ).rows;
+        assert.deepEqual(direct, { context_type: "generic", context_id: null });
+        assert.equal((await unlinkedAudits(w, reservation.submissionId)).length, 1);
       } finally {
         await removeDirectUploads(w);
       }

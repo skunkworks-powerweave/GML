@@ -8,7 +8,7 @@ import "server-only";
 // pairing a link points at, so the page and the reservation cannot disagree
 // about who may upload where.
 
-import { and, desc, eq, isNull, lte, ne } from "drizzle-orm";
+import { and, desc, eq, lte, ne } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorMeetings, mentorPairings, mentors, observationCycles, teachers } from "@gml/db/schema";
 import { notFound } from "next/navigation";
@@ -88,7 +88,8 @@ export async function assertContextAllowed(
       // Sign-off is the locking transition: the cycle page stops offering an
       // upload, and this refuses one that arrives anyway, before anything is
       // reserved. (One reserved before sign-off and finished after it gets no
-      // evidence row: packages/db/src/uploads.ts, linkSubmissionToContext.)
+      // evidence row and is made generic again, for its uploader to re-file:
+      // packages/db/src/uploads.ts, linkSubmissionToContext.)
       if (cycle.status === "complete") {
         return { ok: false, error: "This cycle has been signed off. Its record is closed, so no more evidence can be added." };
       }
@@ -129,7 +130,9 @@ export async function assertContextAllowed(
     case "classroom_session":
       // Not scoped to a per-row owner: a teach-back is the uploader's own work,
       // and a classroom session is programme-wide reference data. The
-      // submission still records who uploaded it.
+      // submission still records who uploaded it. A malformed id names
+      // nothing; it used to reach the uuid column and fail there (22P02, a 500).
+      if (contextId && !isUuid(contextId)) notFound();
       return { ok: true, target: { contextType, contextId, quarter: null } };
   }
 }
@@ -144,11 +147,25 @@ export async function assertContextAllowed(
 
 export type GatedSection = "observation" | "mentorship";
 
-const SECTION_OF: Partial<Record<UploadContextType, GatedSection>> = {
+const SECTION_OF: Partial<Record<string, GatedSection>> = {
   observation_cycle: "observation",
   mentor_meeting: "mentorship",
   mentee_quarterly: "mentorship",
 };
+
+/**
+ * The gated section a context belongs to, when this user has not unlocked it;
+ * null when it has no section or the password has been given.
+ *
+ * Asked BEFORE assertContextAllowed wherever its answer reaches the user: a
+ * refusal ("This cycle has been signed off"), or a 404 against an "unlock",
+ * already says something about a row of the section.
+ */
+export async function lockedSection(actor: Actor, contextType: string): Promise<GatedSection | null> {
+  const section = SECTION_OF[contextType];
+  if (!section) return null;
+  return (await activeGrant(db, actor.id, section)) ? null : section;
+}
 
 export type TargetDescription = {
   /** "Lesson video for OBS-2026-009 · Fractions" */
@@ -182,8 +199,8 @@ export async function describeUploadTarget(
   actor: Actor,
   target: UploadTarget,
 ): Promise<{ locked: GatedSection } | { locked: null; description: TargetDescription }> {
-  const section = SECTION_OF[target.contextType];
-  if (section && !(await activeGrant(db, actor.id, section))) return { locked: section };
+  const locked = await lockedSection(actor, target.contextType);
+  if (locked) return { locked };
 
   const described = (description: TargetDescription) => ({ locked: null, description }) as const;
   const id = target.contextId;
@@ -280,7 +297,7 @@ export function uploadHref(t: { contextType: string; contextId?: string | null; 
  *   teacher   her cycles not yet signed off; her Q1 video (Q4 in the last
  *             quarter) for each active pairing
  *   observer  the cycles she observes, not yet signed off
- *   mentor    his mentees' open cycles; his past meetings without a recording
+ *   mentor    his mentees' open cycles; his most recent past meetings
  *
  * Administrators get none: they arrive from the cycle or pairing they are
  * looking at, and a list of every open cycle in the programme is not a choice.
@@ -324,8 +341,10 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         .innerJoin(mentors, eq(mentors.id, mentorPairings.mentorId))
         .where(and(eq(mentorPairings.status, "active"), access.where));
       for (const p of pairings) {
-        const quarter = (p.currentQuarter ?? 1) === 4 ? 4 : (p.currentQuarter ?? 1) === 1 ? 1 : null;
-        if (!quarter) continue;
+        // The Q1 video until the last quarter -- a baseline sent late is still
+        // the baseline, as the check above and the pairing page have it -- and
+        // the Q4 video in it. Q2 and Q3 used to offer no slot at all.
+        const quarter: VideoQuarter = (p.currentQuarter ?? 1) >= 4 ? 4 : 1;
         const target: UploadTarget = { contextType: "mentee_quarterly", contextId: p.id, quarter };
         options.push({
           target,
@@ -340,14 +359,9 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         .from(mentorMeetings)
         .innerJoin(mentorPairings, eq(mentorPairings.id, mentorMeetings.pairingId))
         .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
-        .where(
-          and(
-            eq(mentorPairings.status, "active"),
-            isNull(mentorMeetings.recordingVideoId),
-            lte(mentorMeetings.scheduledAt, new Date()),
-            access.where,
-          ),
-        )
+        // With or without a recording: a meeting can have several (the next
+        // part of a long one, a replacement), and the pairing page lists each.
+        .where(and(eq(mentorPairings.status, "active"), lte(mentorMeetings.scheduledAt, new Date()), access.where))
         .orderBy(desc(mentorMeetings.scheduledAt))
         .limit(10);
       for (const m of meetings) {

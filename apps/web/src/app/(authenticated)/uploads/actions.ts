@@ -17,7 +17,7 @@ import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { beginUpload, completeUpload } from "@/lib/video/upload";
 import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
-import { assertContextAllowed, decodeTarget } from "./context";
+import { assertContextAllowed, decodeTarget, lockedSection } from "./context";
 
 export type BeginUploadState =
   | {
@@ -175,7 +175,15 @@ export async function completeUploadAction(
  * see is a 404), and the move itself only touches a row that is still
  * generic and still this user's (attachSubmissionToContext), so a linked video
  * is never taken off its evidence and nobody else's is moved.
+ *
+ * Only the three places the control offers can be chosen, each by a
+ * well-formed id: a teach-back target reached the uuid column unchecked (a
+ * 500), and would have moved a private video into every mentor's teach-back
+ * queue. And, as every action inside the two gated sections does, it needs
+ * the section unlocked -- the page offers these targets only then.
  */
+const ATTACHABLE: ReadonlySet<string> = new Set(["observation_cycle", "mentor_meeting", "mentee_quarterly"]);
+
 export async function attachUploadAction(formData: FormData): Promise<void> {
   const session = await auth();
   const actor = actorFrom(session);
@@ -183,7 +191,10 @@ export async function attachUploadAction(formData: FormData): Promise<void> {
 
   const submissionId = String(formData.get("submissionId") ?? "").trim();
   const target = decodeTarget(String(formData.get("target") ?? ""));
-  if (!isUuid(submissionId) || !target || target.contextType === "generic") redirect("/uploads?attach=invalid");
+  if (!isUuid(submissionId) || !target || !ATTACHABLE.has(target.contextType) || !target.contextId || !isUuid(target.contextId)) {
+    redirect("/uploads?attach=invalid");
+  }
+  if (await lockedSection(actor, target.contextType)) redirect("/uploads?attach=locked");
 
   const allowed = await assertContextAllowed(actor, target);
   if (!allowed.ok || !allowed.target.contextId) redirect("/uploads?attach=refused");

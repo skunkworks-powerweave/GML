@@ -157,6 +157,7 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | `resource.view.client_ping` | A client-side ping from a PDF viewer kept-alive over the wire — same surface as above, sent ~every 60 s of active dwell | `resourceId`, `userId`, `dwellSec` |
 | `video.view` | A user landed on `/videos/[id]` and the HLS player started loading | `videoId`, `userId`, `quality` ("480p" / "720p") |
 | `video.context.attached` | The uploader attached one of her own unlinked (`generic`) videos to a cycle, meeting or quarterly slot from `/uploads`. `entity_type` `video_submission` | `contextType`, `contextId`, `quarter` (quarterly videos only, else null) |
+| `video.context.unlinked` | A video captioned or uploaded for an observation cycle arrived after the cycle was signed off, so it was not added to the closed record and was made `generic` again: its uploader sees it as not linked on `/uploads` and can attach it elsewhere. Written by the link step on both paths (`packages/db/src/uploads.ts`, linkSubmissionToContext), with no actor. `entity_type` `video_submission` | `contextType` ("observation_cycle"), `contextId` (the cycle), `reason` ("observation_cycle.signed_off") |
 
 ## observation.* — cycle lifecycle (spec 059)
 

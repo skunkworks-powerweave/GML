@@ -185,3 +185,65 @@ test("F18: with nothing open to choose from, the upload is plainly not linked to
     assert.match(h, /data-testid="upload-target"[\s\S]*only you and programme administrators/i);
   });
 });
+
+// The section's password comes before anything the page says about a target
+// in it. The reservation's check ran first, so a user who had not unlocked
+// Observation still learned a cycle's state ("This cycle has been signed off")
+// and told a 404 from an "unlock" answer.
+test("F18: a link into a locked section asks for its password before saying anything about the target", { skip }, async () => {
+  await withWorld(
+    async (w) => {
+      // Her own cycle, signed off (the world's `cycle` is the open one).
+      const closed = (
+        await w.c.query(
+          `INSERT INTO observation_cycles (code, teacher_id, kind, status, topic) VALUES ($1, $2, 'evaluative', 'complete', 'x') RETURNING id`,
+          [`${w.T}-CLOSED`, w.teacherId],
+        )
+      ).rows[0] as { id: string };
+      const h = await html(w.teacher, { context: "observation_cycle", contextId: closed.id });
+      assert.doesNotMatch(h, /signed off/i, "the cycle's state is observation data");
+      const back = `/uploads?context=observation_cycle&contextId=${closed.id}`;
+      assert.ok(links(h).some((l) => l.href === `/gate/observation?next=${encodeURIComponent(back)}`), "unlock first");
+
+      // A cycle she may not see reads the same as one she may, until she unlocks.
+      const foreign = await w.c.query(`INSERT INTO teachers (school_id, full_name) VALUES ($1, 'Someone else') RETURNING id`, [w.schoolId]);
+      const foreignCycle = (
+        await w.c.query(
+          `INSERT INTO observation_cycles (code, teacher_id, kind, status, topic) VALUES ($1, $2, 'evaluative', 'nominated', 'x') RETURNING id`,
+          [`${w.T}-FOREIGN`, foreign.rows[0].id],
+        )
+      ).rows[0].id as string;
+      try {
+        const r = await page(w.teacher, { context: "observation_cycle", contextId: foreignCycle });
+        assert.equal(r.kind, "returned", "not a 404 that says the id exists and is someone else's");
+        assert.match((r as { html: string }).html, /Unlock Observation/);
+      } finally {
+        await w.c.query(`DELETE FROM observation_cycles WHERE id = $1`, [foreignCycle]);
+        await w.c.query(`DELETE FROM teachers WHERE id = $1`, [foreign.rows[0].id]);
+      }
+
+      // The same for a meeting.
+      const m = await html(w.teacher, { context: "mentor_meeting", contextId: w.meetingId });
+      assert.match(m, /Unlock Mentorship/);
+    },
+    { grants: false },
+  );
+});
+
+// The upload check accepts a late Q1 video in any quarter ("a baseline sent
+// late is still the baseline"), and the pairing page always offers it; the
+// chooser offered no quarterly slot at all in Q2 and Q3.
+test("F50: the chooser offers a mentee her Q1 video through Q3, and her Q4 video from Q4", { skip }, async () => {
+  await withWorld(async (w) => {
+    const slot = (q: number) => `/uploads?context=mentee_quarterly&contextId=${w.pairingId}&quarter=${q}`;
+    for (const quarter of [2, 3]) {
+      await w.c.query(`UPDATE mentor_pairings SET current_quarter = $2 WHERE id = $1`, [w.pairingId, quarter]);
+      const offered = links(await html(w.teacher)).map((l) => l.href);
+      assert.ok(offered.includes(slot(1)), `Q${quarter}: the Q1 video is still offered: ${JSON.stringify(offered)}`);
+      assert.ok(!offered.includes(slot(4)), `Q${quarter}: not the Q4 video yet`);
+    }
+    await w.c.query(`UPDATE mentor_pairings SET current_quarter = 4 WHERE id = $1`, [w.pairingId]);
+    const inQ4 = links(await html(w.teacher)).map((l) => l.href);
+    assert.ok(inQ4.includes(slot(4)), "the Q4 video in the last quarter");
+  });
+});

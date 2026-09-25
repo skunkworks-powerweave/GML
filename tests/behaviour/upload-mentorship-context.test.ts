@@ -177,3 +177,16 @@ test("F50: what the guard lets one side of a pairing attach, the other side can 
     }
   });
 });
+
+// A teach-back or classroom-session id was sent to the uuid column unchecked,
+// so a malformed one was a Postgres 22P02 -- a 500 -- instead of an answer.
+test("F18: a malformed teach-back or classroom-session id names nothing; it is not sent to the database", { skip }, async () => {
+  await withWorld(async (w) => {
+    for (const contextType of ["teach_back", "classroom_session"]) {
+      assert.deepEqual(await begin(w.teacher, { contextType, contextId: "abc" }), { kind: "notFound" }, contextType);
+    }
+    // A well-formed one, and none at all, reserve as before.
+    reserved(await begin(w.teacher, { contextType: "teach_back", contextId: w.pairingId }));
+    reserved(await begin(w.teacher, { contextType: "classroom_session" }));
+  });
+});
