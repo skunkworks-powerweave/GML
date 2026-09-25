@@ -143,7 +143,10 @@ recorded.
 
 **Enforcement.** Drizzle's journal for numbered migrations, plus a
 `_post_migrations_applied` ledger for the raw-SQL lane, each applied inside a
-transaction by `packages/db/scripts/migrate.ts`. A failed `migrate` exits
+transaction by `packages/db/scripts/migrate.ts`. The one exception is
+`_post/always/`: idempotent invariants over "every table" (RLS on every public
+table), re-applied unledgered on every deploy, because a ledgered file only
+ever sees the tables that existed when it first ran. A failed `migrate` exits
 non-zero, and `app`/`worker` block on it via
 `depends_on: service_completed_successfully` — so a bad schema change degrades
 to "no deploy happened" rather than "the site is down".

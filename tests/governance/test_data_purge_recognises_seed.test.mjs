@@ -46,13 +46,6 @@ function purgeConstArray(name) {
   return m ? allMatches(/["']([^"']+)["']/g, m[1]) : null;
 }
 
-/** A `const NAME = "..."` string declared in purge_demo_data.ts. */
-function purgeConstString(name) {
-  const m = PURGE.match(new RegExp(`const\\s+${name}\\s*=\\s*["']([^"']+)["']`));
-  assert.ok(m, `purge_demo_data.ts must declare ${name}`);
-  return m[1];
-}
-
 test("purge recognises every mentor the seed invents", () => {
   const seeded = allMatches(/\bname:\s*"([^"]+)"/g, seedInsertBlock("mentors")).sort();
   assert.ok(seeded.length > 0, "found no mentor names in seed.ts");
@@ -81,27 +74,37 @@ test("purge recognises every school the seed invents", () => {
   assert.deepEqual([...purged].sort(), seeded);
 });
 
-test("purge's teacher phone prefix covers every teacher the seed invents", () => {
-  const prefix = purgeConstString("DEMO_TEACHER_PHONE_PREFIX");
+// The teacher and cycle recognisers used to be PREFIXES, `+91 94191000%` and
+// `OBS-2026-0%`, and these tests only checked that each prefix COVERED the
+// seed. That was the wrong invariant: /observation/new mints real codes as
+// OBS-<year>-<max+1>, so the cycle prefix also matched every real cycle
+// created in 2026, and the day-one purge deleted the nominated ones (F102).
+// The recognisers are now the seed's exact literals, pinned in both
+// directions: a seeded row the purge missed would stay live, and a literal the
+// seed never wrote could only ever match a real row.
+// tests/behaviour/seed-after-purge.test.ts runs the purge itself.
+
+test("purge recognises exactly the teachers the seed invents, by their exact mobiles", () => {
   const start = SEED.indexOf("teachersData");
   const block = SEED.slice(start, SEED.indexOf("];", start));
-  const phones = allMatches(/\bphone:\s*"([^"]+)"/g, block);
+  const phones = allMatches(/\bphone:\s*"([^"]+)"/g, block).sort();
   assert.ok(phones.length > 0, "found no teacher phones in seed.ts");
-  for (const p of phones) {
-    assert.ok(p.startsWith(prefix), `seeded teacher phone ${p} is not matched by ${prefix}%`);
-  }
+  const purged = purgeConstArray("DEMO_TEACHER_PHONES");
+  assert.ok(purged, "purge_demo_data.ts must declare DEMO_TEACHER_PHONES");
+  assert.deepEqual([...purged].sort(), phones);
 });
 
-test("purge's cycle prefix covers the seed's OBS-2026-NNN cycle codes", () => {
-  const prefix = purgeConstString("DEMO_CYCLE_CODE_PREFIX");
+test("purge recognises exactly the seed's OBS-2026-NNN cycle codes, not a prefix", () => {
   assert.match(
     SEED,
     /code:\s*`OBS-2026-\$\{String\(i \+ 1\)\.padStart\(3, "0"\)\}`/,
-    "seed.ts cycle codes changed shape; re-check DEMO_CYCLE_CODE_PREFIX",
+    "seed.ts cycle codes changed shape; re-check DEMO_CYCLE_CODES",
   );
-  // teachersInsert.slice(0, 8) -> OBS-2026-001 .. OBS-2026-008
-  for (let i = 1; i <= 8; i += 1) {
-    const code = `OBS-2026-${String(i).padStart(3, "0")}`;
-    assert.ok(code.startsWith(prefix), `${code} is not matched by ${prefix}%`);
-  }
+  const slice = SEED.match(/const cyclesValues = teachersInsert\.slice\(0, (\d+)\)/);
+  assert.ok(slice, "seed.ts no longer takes its cycles from teachersInsert.slice(0, N); update this test");
+  const seeded = Array.from({ length: Number(slice[1]) }, (_, i) => `OBS-2026-${String(i + 1).padStart(3, "0")}`);
+  const purged = purgeConstArray("DEMO_CYCLE_CODES");
+  assert.ok(purged, "purge_demo_data.ts must declare DEMO_CYCLE_CODES");
+  assert.deepEqual([...purged].sort(), seeded);
+  assert.doesNotMatch(PURGE, /\bLIKE\s+(\$\{|')/, "no demo recogniser may be a LIKE pattern");
 });

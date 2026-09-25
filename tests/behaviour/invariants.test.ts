@@ -56,6 +56,33 @@ test("SM-1: an audit row cannot be deleted", { skip }, async () => {
   });
 });
 
+test("SM-1: the audit log cannot be emptied with TRUNCATE, even by the app's own role", { skip }, async () => {
+  // The app, the worker and migrate all connect as the role that OWNS
+  // audit_log (on Supabase, `postgres`; here, whoever DATABASE_URL names), and
+  // _post/001 only revoked TRUNCATE from PUBLIC and other roles -- never from
+  // the owner. The row triggers above do not fire on TRUNCATE, so one
+  // `TRUNCATE audit_log` erased the whole trail. Run in a transaction that is
+  // always rolled back, so a failure here cannot empty the log it tests.
+  await withClient(async (c) => {
+    const { rows } = await c.query(
+      `SELECT pg_get_userbyid(relowner) = current_user AS owner FROM pg_class WHERE oid = 'audit_log'::regclass`,
+    );
+    assert.equal(rows[0].owner, true, "precondition: this connects as the table owner, as the app does");
+    await c.query("BEGIN");
+    try {
+      await c.query(`INSERT INTO audit_log (action, entity_type) VALUES ($1, 'test')`, [tag("sm1-truncate")]);
+      await assert.rejects(
+        () => c.query("TRUNCATE audit_log"),
+        /append-only|SM-1/i,
+        "the database must refuse a TRUNCATE -- one statement from an app bug or a stray psql " +
+          "session would otherwise erase the entire forensic record",
+      );
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+});
+
 test("SM-1: deleting a user does NOT destroy their audit trail", { skip }, async () => {
   await withClient(async (c) => {
     // The FK on audit_log.user_id was ON DELETE SET NULL, implemented as an

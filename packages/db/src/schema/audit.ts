@@ -30,7 +30,10 @@ export const auditLog = pgTable(
     // "SET NULL" is an UPDATE — which audit_log's own BEFORE UPDATE trigger
     // rejects, because the table is append-only (SM-1). The two features
     // cancelled out, so any user who had ever acted could never be deleted:
-    //   DELETE user -> "audit_log is append-only (SM-1). UPDATE/DELETE blocked."
+    //   DELETE user -> "audit_log is append-only (SM-1). UPDATE blocked."
+    // (The SET NULL is the UPDATE. The message said "UPDATE/DELETE blocked."
+    // until _post/007 made it name the operation; 0023's header quotes it as
+    // it was then.)
     //
     // CASCADE would be worse — deleting a user would erase their own trail.
     // A forensic log should carry no referential action at all: it records what

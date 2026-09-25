@@ -3,8 +3,11 @@
 //   SM-8          notifications older than 90 days are deleted.
 //   rate_limits   counters whose window started more than 24 hours ago are
 //                 deleted (see pruneRateLimits below).
+//   section_gate_grants
+//                 grants that expired more than 24 hours ago are deleted (see
+//                 pruneExpiredGateGrants below).
 //
-// The worker runs both, once a day, from the job scheduleDailyWork() enqueues
+// The worker runs all three, once a day, from the job scheduleDailyWork() enqueues
 // (apps/worker/src/index.ts, the `deleteOldNotifications` arm of the job
 // switch; spec 107). The script is still directly runnable for ad-hoc IT use:
 //   pnpm --filter @gml/db retention
@@ -17,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDb, getPool } from "../client.js";
 import { notifications } from "../schema/notifications";
 import { rateLimits } from "../schema/rateLimits";
+import { sectionGateGrants } from "../schema/gates";
 
 const RETAIN_DAYS = 90;
 
@@ -93,10 +97,42 @@ export async function pruneRateLimits(
   return rowCount;
 }
 
+/** How long a section-gate grant is kept after it stopped authorising anything. */
+const GATE_GRANT_RETAIN_HOURS_AFTER_EXPIRY = 24;
+
+/**
+ * Delete section-gate grants that expired more than `olderThanHours` ago.
+ * Returns the number of rows deleted.
+ *
+ * Every gate unlock writes a grant carrying the user, the section, the unlock
+ * time and the client IP, and the only other DELETE is rotation's delete-by-
+ * slug. So a gate that is never rotated turned the table into a permanent log
+ * of who unlocked which section from which address -- the same concern that
+ * made rate_limits prunable. A grant authorises nothing once expires_at has
+ * passed (at most 8 hours after issue, by CHECK); the day of grace only keeps
+ * a recent one visible to an administrator looking into last night's access.
+ *
+ * Same connection rules as pruneRateLimits(): the shared @gml/db handle by
+ * default, so it goes over the TLS client.ts configures.
+ */
+export async function pruneExpiredGateGrants(
+  olderThanHours: number = GATE_GRANT_RETAIN_HOURS_AFTER_EXPIRY,
+  database: Pick<NodePgDatabase<Record<string, unknown>>, "delete"> = getDb(),
+): Promise<number> {
+  const seconds = Math.max(0, Math.round(olderThanHours * 3600));
+  const result = await database
+    .delete(sectionGateGrants)
+    .where(sql`${sectionGateGrants.expiresAt} < now() - make_interval(secs => ${seconds})`);
+  const rowCount = result.rowCount ?? 0;
+  console.log(`[retention] deleted section_gate_grants expired more than ${olderThanHours}h ago: ${rowCount} rows`);
+  return rowCount;
+}
+
 export async function main(): Promise<void> {
   try {
     await deleteOldNotifications();
     await pruneRateLimits();
+    await pruneExpiredGateGrants();
   } finally {
     // Both sweeps borrow the shared pool; without this the CLI lingers until
     // the pool's idle timeout instead of exiting.

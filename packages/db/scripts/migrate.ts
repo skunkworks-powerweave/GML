@@ -61,6 +61,42 @@ async function applyPostMigrations(pool: Pool): Promise<void> {
   }
 }
 
+/**
+ * Apply `_post/always/*.sql` on EVERY run, after the ledgered _post files and
+ * without a ledger entry.
+ *
+ * The ledgered lane is right for one-off changes and wrong for an invariant
+ * over "every table": a file that loops over the tables that exist when it
+ * runs never sees a table a later migration creates. _post/002's RLS lockdown
+ * was exactly that, so tables added after it (jobs, rate_limits,
+ * quiz_attempts, and every one to come) kept RLS off on any database it had
+ * already run on. Files here must be idempotent and must touch nothing once
+ * the invariant holds -- a deploy runs while the previous app is serving.
+ */
+async function applyEveryDeploySql(pool: Pool): Promise<void> {
+  const alwaysDir = resolve(__dirname, "..", "src", "migrations", "_post", "always");
+  if (!existsSync(alwaysDir)) return;
+  const files = readdirSync(alwaysDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  for (const file of files) {
+    const sql = readFileSync(join(alwaysDir, file), "utf8");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(sql);
+      await client.query("COMMIT");
+      console.log(`[migrate] ran _post/always/${file}`);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error(`[migrate] FAILED _post/always/${file}:`, err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -78,6 +114,7 @@ async function main() {
   await migrate(db, { migrationsFolder });
   console.log("[migrate] drizzle migrations done; applying _post SQL ...");
   await applyPostMigrations(pool);
+  await applyEveryDeploySql(pool);
   console.log("[migrate] all done.");
   await pool.end();
 }

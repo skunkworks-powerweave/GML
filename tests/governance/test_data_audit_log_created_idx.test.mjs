@@ -151,18 +151,20 @@ test("every index the schema declares is created by a migration", () => {
   assert.deepEqual(missing, [], "a schema-declared index with no migration exists only in TypeScript");
 });
 
-test("the /admin/audit action dropdown is bounded by time, not by a hardcoded list", () => {
+test("the /admin/audit action dropdown comes from the data, cheaply, not from a hardcoded list", () => {
   // The dropdown's selectDistinct ran over the whole table on every page load.
   // A static catalogue was the bug the page had just fixed -- nine literal
   // names that drifted from what the code writes, so every option returned
-  // zero rows. Bounding by created_at keeps the no-drift property and is
-  // served by audit_log_created_idx.
-  const src = tsCode(read("apps/web/src/app/(authenticated)/admin/audit/page.tsx"));
-  const distinct = src.match(/selectDistinct\(\s*\{\s*action[\s\S]*?\.orderBy\(/);
-  assert.ok(distinct, "could not find the selectDistinct({ action }) query in admin/audit/page.tsx");
-  assert.match(
-    distinct[0],
-    /\.where\(\s*gte\(\s*auditLog\.createdAt\s*,/,
-    "the distinct-actions query must be bounded with .where(gte(auditLog.createdAt, ...))",
-  );
+  // zero rows. This used to pin `selectDistinct ... .where(gte(createdAt))`,
+  // but a 90-day bound caps the age of what that reads, not the amount: every
+  // row of 90 days, 1.9 s at 2M rows (F108). The invariant now: the options are
+  // still read from audit_log and still limited to recent actions, by a loose
+  // index scan -- one "next action" probe per distinct action.
+  // tests/behaviour/admin-audit-lookups.test.ts counts the rows it reads.
+  const page = tsCode(read("apps/web/src/app/(authenticated)/admin/audit/page.tsx"));
+  assert.match(page, /const actionOptions = await recentAuditActions\(/, "the page must take its options from recentAuditActions()");
+  const lookups = tsCode(read("apps/web/src/admin/audit-lookups.ts"));
+  assert.match(lookups, /WITH RECURSIVE/, "the options must come from a loose index scan over audit_log");
+  assert.match(lookups, /a\.action > actions\.action ORDER BY a\.action LIMIT 1/, "each step must be a single next-action probe");
+  assert.match(lookups, /created_at >= now\(\)/, "the options must stay limited to recently recorded actions");
 });

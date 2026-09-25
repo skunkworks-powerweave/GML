@@ -25,6 +25,12 @@
 --   2. Enable RLS with NO permissive policies, so even a re-granted role reads
 --      nothing.
 --
+-- ONLY FOR THE TABLES THAT EXISTED WHEN THIS RAN. This file is ledgered, so it
+-- never runs again, and tables from later migrations (0024 jobs/rate_limits,
+-- 0026 quiz_attempts, ...) were left with RLS off on every database it had
+-- already run on. _post/always/001_rls_on_every_table.sql now re-applies both
+-- layers on every deploy; this file is kept as the record of the first run.
+--
 -- This costs the application nothing: it connects as the table OWNER, and an
 -- owner bypasses RLS unless FORCE ROW LEVEL SECURITY is set (it is not). When
 -- per-user RLS is introduced later it will need a dedicated non-owner role —
@@ -82,8 +88,15 @@ BEGIN
   ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
   ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
 
-  -- Revoke schema-level USAGE last: without it the grants above cannot be
-  -- exercised even if a table grant were restored by hand.
+  -- INERT, AND KEPT ONLY AS HISTORY. This was meant to stop a hand-restored
+  -- table grant from being usable at all. It cannot: anon and authenticated
+  -- hold USAGE on `public` through PUBLIC (`=U/pg_database_owner`), which
+  -- revoking from the two roles by name does not touch, so
+  -- has_schema_privilege('anon', 'public', 'USAGE') is still true. Revoking it
+  -- from PUBLIC is not safe either: Supabase's own service roles (storage
+  -- among them) reach `public` the same way, as does any function a Storage
+  -- RLS policy calls there. The barriers are the table grants and RLS -- see
+  -- _post/always/001.
   REVOKE USAGE ON SCHEMA public FROM anon, authenticated;
 END
 $$;--> statement-breakpoint

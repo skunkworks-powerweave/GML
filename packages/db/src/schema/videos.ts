@@ -111,6 +111,11 @@ export const videoSubmissions = pgTable(
     index("video_submissions_file_idx").on(t.fileId),
     index("video_submissions_submitter_idx").on(t.submittedByUserId, t.createdAt),
     index("video_submissions_status_idx").on(t.status, t.createdAt),
+    // The teach-back review queue: only unreviewed rows. Migration 0022;
+    // declared so the snapshot describes the database (F107).
+    index("video_submissions_pending_review_idx")
+      .on(t.contextType, t.createdAt)
+      .where(sql`${t.reviewedAt} IS NULL`),
     // Spec 144 — partial unique index for WhatsApp idempotency. Only enforced
     // when whatsapp_message_id IS NOT NULL so other ingest sources are exempt.
     uniqueIndex("video_submissions_whatsapp_message_id_uq")

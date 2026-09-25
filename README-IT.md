@@ -311,6 +311,7 @@ one retention job a day, within the hour after 03:00 UTC (08:30 IST).
 |---|---|---|
 | `notifications` | 90 days (SM-8) | the nightly retention job |
 | `rate_limits` | 24 hours after the caller's last rate-limit window started | the same nightly job |
+| `section_gate_grants` | 24 hours after the grant expired (a grant lasts at most 8 hours) — each row holds the user, the section and the client IP | the same nightly job; rotating a gate also deletes its grants |
 | `audit_log` | **forever** — nothing in the running system can delete it (SM-1) | only the manual archive below |
 
 **`rate_limits` holds client IP addresses.** Its keys are the sign-in link
@@ -320,8 +321,8 @@ is deleted once its window started more than 24 hours ago, so an address is
 not kept for more than about a day after its last attempt. To run the sweep by
 hand: `docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/retention.ts`.
 
-**`audit_log` only grows.** DELETE and TRUNCATE are revoked and a trigger
-rejects every row delete, deliberately. The default `/admin/audit` view stays
+**`audit_log` only grows.** Triggers reject every UPDATE, DELETE and
+TRUNCATE, deliberately. The default `/admin/audit` view stays
 fast as it grows (it walks `audit_log_created_idx`, migration 0028), but disk
 use does not stop. Check it monthly:
 
@@ -332,8 +333,10 @@ SELECT pg_size_pretty(pg_total_relation_size('audit_log')) AS size, count(*) AS 
 
 If it ever has to shrink, archiving is a **deliberate, signed-off break of
 SM-1**: two people, a written reason, and the export kept with the backups. It
-needs the table owner (on Supabase, the `postgres` role); the app's own role
-cannot do it, by design. Pick a cut-off, then:
+needs the table owner (on Supabase, the `postgres` role) to switch a trigger
+off. Be aware that the app, the worker and migrate connect as that same role
+today, so what stops an application bug is the triggers, not a missing
+privilege. Pick a cut-off, then:
 
 ```bash
 # 1. Export everything older than the cut-off, and keep this file with the backups.
@@ -358,7 +361,7 @@ COMMIT;
 
 ## Security notes (substrate moats)
 
-- **SM-1**: `audit_log` is append-only at the database layer — UPDATE and DELETE are revoked, so not even an application bug can rewrite history.
+- **SM-1**: `audit_log` is append-only at the database layer — triggers refuse UPDATE, DELETE and TRUNCATE from every role, so an application bug cannot rewrite or empty history. The app connects as the table owner, which could still disable those triggers on purpose; running it as a non-owner role is what would close that.
 - **SM-4 (anti-download)** is **deterrence, not prevention**. Watermarks, signed URLs and suppressed right-click stop casual sharing. Screen capture and proxy interception still work; there is no DRM here. Say so to users rather than implying otherwise.
 - **SM-7**: Hindi and Bodhi name fields are always optional — never add a NOT NULL constraint to one.
 - **SM-9**: reading the learners table writes an audit row automatically, and bulk CSV export requires `super_admin`.
