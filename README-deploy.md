@@ -223,7 +223,7 @@ can request.
 | Instance | `m7i-flex.large` (2 vCPU, 8 GiB) — or `t3.large` in **unlimited** credit mode |
 | AMI | Ubuntu Server 24.04 LTS (x86_64). §2.5's commands are written for it. |
 | Root volume | 30 GiB gp3 |
-| Data volume | 100 GiB gp3 mounted at `/var/lib/gml`: Docker's data root (images, build cache, the worker's ffmpeg scratch — §2.5) and the local dumps |
+| Data volume | 100 GiB gp3 mounted at `/var/lib/gml`: Docker's data root (images, build cache, the worker's ffmpeg scratch — §2.5) and the local dumps. (A single root volume of 60 GiB or more, with Docker's data root left on it, also passes `scripts/preflight.sh`; df shows such a disk as about 56–58 GiB.) |
 | Region | `ap-south-1` |
 | Security group in | 80, 443 from `0.0.0.0/0`; 22 from your admin range **only** |
 | Security group out | 443 (Supabase, Let's Encrypt, Meta) **and 80** — `docker/worker.Dockerfile` installs ffmpeg with apt, and `node:22-slim`'s Debian sources are `http://deb.debian.org` on port 80. With 443 only, the worker image fails to build on the first deploy. |

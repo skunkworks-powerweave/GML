@@ -295,13 +295,21 @@ test("WhatsApp: a secret without the token, verify token or phone number id is a
 // root, /var/lib/docker -- on the root volume -- and no step moved it. The
 // disk check only looked at `.`.
 
-/** A df that places each path on the filesystem a test says it is on. */
+/**
+ * A df that places each path on the filesystem a test says it is on. The size
+ * is whole GiB, or `{ kib }` for the exact figure a real filesystem reports --
+ * never a whole number of GiB, because the partition table, the EFI and /boot
+ * partitions and ext4's own metadata come out of the disk first.
+ */
 const dfFor = (mounts) => `
 last=""; for a in "$@"; do last="$a"; done
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
 case "$last" in
 ${Object.entries(mounts)
-  .map(([path, [dev, gib, mnt]]) => `  ${path}) printf '%s %s 1 %s 1%% %s\\n' ${dev} ${gib * 1048576} ${gib * 943718} ${mnt} ;;`)
+  .map(([path, [dev, size, mnt]]) => {
+    const kib = typeof size === "object" ? size.kib : size * 1048576;
+    return `  ${path}) printf '%s %s 1 %s 1%% %s\\n' ${dev} ${kib} ${Math.floor(kib * 0.9)} ${mnt} ;;`;
+  })
   .join("\n")}
   *) printf '/dev/root 31457280 1 20971520 1%% /\\n' ;;
 esac`;
@@ -343,4 +351,50 @@ test("Disk: Docker's data root on the data volume passes", () => {
   });
   assert.ok(line(r.out, "PASS", /Docker data root \/var\/lib\/gml\/docker is on \/var\/lib\/gml/), r.out);
   assert.ok(!line(r.out, "FAIL", /Docker data root/), r.out);
+});
+
+// W3-48. The check's own rule is "a single root disk of 60 GiB or more is not
+// a failure", but it compared df's size -- the FILESYSTEM, rounded down to
+// whole GiB -- against 60. A 60 GiB EBS volume on the Ubuntu 24.04 AMI
+// (BIOS, EFI and /boot partitions, then ext4 metadata) reports 60831118 KiB:
+// 58 GiB. So the disk it said was fine was FAILed, and preflight refused to
+// call the host safe to deploy.
+
+test("Disk: a single 60 GiB root disk passes, at the size df really reports for it", () => {
+  const r = preflightDocker("/var/lib/docker", {
+    "/": ["/dev/root", { kib: 60831118 }, "/"],
+    "/var/lib/docker": ["/dev/root", { kib: 60831118 }, "/"],
+  });
+  assert.ok(
+    !line(r.out, "FAIL", /Docker data root/),
+    `a 60 GiB root disk is the documented single-disk layout, and preflight failed it:\n${r.out}`,
+  );
+  assert.ok(line(r.out, "PASS", /Docker data root \/var\/lib\/docker is on the root volume/), r.out);
+});
+
+test("Disk: a root disk well under 60 GiB still fails when Docker's data root is on it", () => {
+  // 50 GiB after the same overhead: the allowance must not swallow the rule.
+  const r = preflightDocker("/var/lib/docker", {
+    "/": ["/dev/root", { kib: 50691000 }, "/"],
+    "/var/lib/docker": ["/dev/root", { kib: 50691000 }, "/"],
+  });
+  assert.ok(line(r.out, "FAIL", /Docker data root/), r.out);
+});
+
+test("Disk: the free-space hint describes what the root volume holds now", () => {
+  // The hint still said "images, transcode scratch and backups need room",
+  // which is what README-deploy.md 2.5 moves OFF the root volume.
+  const sb = preflightSandbox();
+  sb.stub("df", `printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/root 31457280 1 10485760 1%% /\\n'`);
+  try {
+    const r = sb.run("scripts/preflight.sh");
+    const out = `${r.stdout}${r.stderr}`;
+    const l = line(out, "FAIL", /disk: 10 GiB free here/);
+    assert.ok(l, out);
+    const hint = out.slice(out.indexOf(l)).split("\n").slice(0, 3).join("\n");
+    assert.doesNotMatch(hint, /transcode scratch and backups/, `the hint names what belongs on the data volume:\n${hint}`);
+    assert.match(hint, /README-deploy\.md 2\.5/, `and points at the step that moves it there:\n${hint}`);
+  } finally {
+    sb.cleanup();
+  }
 });
