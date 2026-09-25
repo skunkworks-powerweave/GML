@@ -61,6 +61,21 @@ test("the runner names the mentee the form is about, and goes back to her pairin
   });
 });
 
+// The about-line printed ?quarter= verbatim ("About X · Q<anything>"), so a
+// crafted link put a wrong or odd quarter on the header meant to reassure the
+// mentor. Only 1..4 is taken from the URL; otherwise the pairing's own.
+test("the runner's about-line takes only a quarter 1..4 from the URL, else the pairing's", { skip }, async () => {
+  await withWorld(async (w, form) => {
+    await w.q(`UPDATE mentor_pairings SET current_quarter = 2 WHERE id = $1`, [w.pairingA]);
+    const about = async (quarter: string) =>
+      /data-testid="form-about"[^>]*>([^<]*)</.exec(await runnerHtml(form.slug, { pairingId: w.pairingA, quarter }))?.[1];
+    assert.equal(await about("3"), `About ${w.teacherA.name} · Q3`);
+    for (const odd of ["9", "0", "2.5", "Q3 — closed", "1e0x"]) {
+      assert.equal(await about(odd), `About ${w.teacherA.name} · Q2`, `?quarter=${odd}`);
+    }
+  });
+});
+
 test("an untitled form is headed readably, not 'baseline · mentor'", { skip }, async () => {
   await withWorld(async (w, form) => {
     const html = await runnerHtml(form.slug, { pairingId: w.pairingA });

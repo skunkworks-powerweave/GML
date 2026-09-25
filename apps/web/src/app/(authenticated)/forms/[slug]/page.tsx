@@ -541,7 +541,9 @@ export default async function FormRunnerPage({
     // stopped her rating the wrong teacher before sealing the record.
     const [mentee] = await db.select({ name: teachers.fullName }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
     const [mentor] = await db.select({ name: mentors.name }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
-    const quarter = readParam(sp.quarter) || String(pairing.currentQuarter ?? 1);
+    // Only a quarter 1..4 from the URL (sanitizeContextValue); it was printed
+    // verbatim, so a crafted link could put any text after the "Q".
+    const quarter = sanitizeContextValue("quarter", readParam(sp.quarter)) ?? String(pairing.currentQuarter ?? 1);
     aboutLine =
       sessionRole === "teacher"
         ? `With your mentor ${mentor?.name ?? "—"} · Q${quarter}`
