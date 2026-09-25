@@ -8,6 +8,7 @@
 // 80 cycles; now the filter chips submit GET against the same URL so the
 // WHERE clause runs in Postgres, not over an already-fetched mock array.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, eq, sql, type SQL } from "drizzle-orm";
@@ -18,6 +19,8 @@ import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
 import { listCycles, parsePage, videoCell } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Observation cycles" };
 
 const KIND_CHIP: Record<string, string> = {
   baseline: "",
@@ -208,6 +211,7 @@ export default async function ObservationListPage({
                 <Link
                   key={f.v}
                   href={buildHref(f.v, kindFilter)}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink)" : "transparent",
@@ -231,6 +235,7 @@ export default async function ObservationListPage({
                 <Link
                   key={f.v}
                   href={buildHref(statusFilter, f.v)}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink-2)" : "transparent",

@@ -15,6 +15,7 @@
 //
 // Anti-download is a deterrent, not DRM — we say so out loud in the footer.
 
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq } from "drizzle-orm";
@@ -26,6 +27,8 @@ import { recordAudit } from "@/lib/audit";
 import { PdfViewer } from "@/components/pdf/PdfViewer";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Reading viewer" };
 
 export default async function RepoResourceViewPage({
   params,

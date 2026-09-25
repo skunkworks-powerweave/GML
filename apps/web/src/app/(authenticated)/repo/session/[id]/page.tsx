@@ -2,6 +2,7 @@
 // Port of repository.jsx::RepoSessionPage (lines 751-824) — 1:1 visual fidelity.
 // Two-column layout: lesson notes + linked observation cycle (left), KV details (right).
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
@@ -22,6 +23,8 @@ import {
 } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Session" };
 
 const ALLOWED_ROLES = new Set([
   "super_admin",

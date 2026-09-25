@@ -7,6 +7,7 @@
 // and the video-upload context handle. All status transitions go through
 // guarded server actions in ./actions.ts.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
@@ -34,6 +35,8 @@ import {
 } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Observation cycle" };
 
 const CYCLE_STAGES = [
   { id: "nominated", label: "Nominated" },
@@ -429,6 +432,8 @@ export default async function CycleDetailPage({
             rows={3}
             required
             className="text"
+            // Named: a placeholder is not a label, and vanishes as you type.
+            aria-label="New note"
             placeholder="Add a note. Existing notes are kept above."
             style={{ fontSize: 13 }}
           />
@@ -470,8 +475,12 @@ function StageFields({
     <>
       {STAGE_FORMS[kind].fields.map((f) => (
         <Fragment key={f.name}>
-          <label className="label" style={{ fontSize: 11 }}>{f.label}</label>
+          {/* htmlFor/id: the label sat beside the box without naming it, so a
+              screen reader announced only the placeholder, which is gone
+              once anything is typed. */}
+          <label htmlFor={`cycle-${kind}-${f.name}`} className="label" style={{ fontSize: 11 }}>{f.label}</label>
           <DraftTextarea
+            id={`cycle-${kind}-${f.name}`}
             name={f.name}
             draftScope={draftScope(drafts.userId, drafts.cycleId, f.name)}
             draftVersion={drafts.version}

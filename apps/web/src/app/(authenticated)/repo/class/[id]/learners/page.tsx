@@ -7,6 +7,7 @@
 //   3. The page reads learners.name + guardian + age + attendance% (the PII columns)
 //      — that's why the audit is mandatory.
 
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { and, asc, eq, isNull } from "drizzle-orm";
@@ -17,6 +18,8 @@ import { uuidOrNotFound } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Class learners" };
 
 export default async function RepoClassLearnersPage({ params }: { params: Promise<{ id: string }> }) {
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.

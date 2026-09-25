@@ -14,6 +14,7 @@
 // the existing 200-row cap still applies. Filter form submits via native
 // HTML GET (no client component) and bookmarkable URLs are first-class.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, ilike, sql, type SQL } from "drizzle-orm";
@@ -34,6 +35,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Teachers" };
 
 // Mirrors `subjectColor(...)` in the JSX prototype (repository.jsx line 854):
 // English/Science → blue → chip-indigo; Mathematics/EVS → green → chip-lichen;

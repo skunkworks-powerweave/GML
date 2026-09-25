@@ -2,6 +2,7 @@
 // Port of repository.jsx::RepoSchoolPage (lines 226-314) — 1:1 visual fidelity.
 // Two-column body: left = Classes + Recent sessions, right = Details KV + Teachers list.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, desc, eq } from "drizzle-orm";
@@ -21,6 +22,8 @@ import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "School" };
 
 const READ_ROLES = new Set([
   "super_admin",

@@ -8,6 +8,7 @@
 // districts.code so Postgres returns the visible set directly. Counts
 // come from a single GROUP BY round-trip.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
@@ -27,6 +28,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Schools" };
 
 const READ_ROLES = new Set([
   "super_admin",
@@ -232,6 +235,7 @@ export default async function RepoSchoolsIndexPage({
               <Link
                 key={f.v}
                 href={href}
+                aria-current={active ? "page" : undefined}
                 className="btn btn-sm"
                 style={{
                   background: active ? "var(--ink)" : "transparent",

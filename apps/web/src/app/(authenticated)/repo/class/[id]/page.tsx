@@ -3,6 +3,7 @@
 // right column is conditionally rendered for super_admin / programme_admin only — clicking
 // through to /learners is what triggers the SM-9 audit hook (see ./learners/page.tsx).
 
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { and, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
@@ -14,6 +15,8 @@ import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Class" };
 
 // Stage chip kinds — map to the new `.chip` utility class variants in globals.css.
 // The `bg` field is the underlying CSS var the chip-* class resolves to (kept here

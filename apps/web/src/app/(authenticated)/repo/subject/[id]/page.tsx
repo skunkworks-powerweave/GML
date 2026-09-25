@@ -4,6 +4,7 @@
 // `repository.jsx` RepoSubjectPage (lines 489-560) 1:1, with a small
 // "teachers who teach it" panel added per spec narrative.
 
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
@@ -22,6 +23,8 @@ import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Subject" };
 
 // Status → chip-* utility class + label. Matches JSX `Chip kind={...}` pattern
 // using the global utilities now in globals.css.

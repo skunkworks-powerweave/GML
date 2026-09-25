@@ -20,6 +20,7 @@
 // at the DB. Adds a ?source= filter (whatsapp / direct / external_link /
 // google_drive) so operators can scope by ingest channel.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
@@ -34,6 +35,8 @@ import { getSystemSettings } from "@/lib/system-settings";
 import { signPosterUrls } from "@/lib/video/storage";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Video library" };
 
 const STATE_LABEL: Record<string, string> = {
   received: "received",
@@ -251,6 +254,7 @@ export default async function VideoLibraryPage({
                 <Link
                   key={f.l}
                   href={href}
+                  aria-current={isActive ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: isActive ? "var(--ink)" : "transparent",
@@ -270,6 +274,7 @@ export default async function VideoLibraryPage({
             {filter ? <input type="hidden" name="status" value={filter} /> : null}
             <select
               name="source"
+              aria-label="Filter by source"
               defaultValue={sourceFilter ?? ""}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12 }}

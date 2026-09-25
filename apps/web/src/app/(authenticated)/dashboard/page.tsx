@@ -34,6 +34,7 @@
 // round-trip. The helper is wrapped in React.cache so the variant-builder and
 // the TodayChecklist row builder share one materialisation per request.
 
+import type { Metadata } from "next";
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@gml/db";
@@ -62,6 +63,8 @@ import { countOpenAssessments } from "@/lib/rtt/assessments";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Dashboard" };
 
 type Stat = { label: string; value: string | number; hint?: string };
 

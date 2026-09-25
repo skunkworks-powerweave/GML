@@ -1,5 +1,6 @@
 // /videos/[id] — HLS player page with signed URL + watermark.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
@@ -10,6 +11,8 @@ import { signPosterUrls } from "@/lib/video/storage";
 import { ExternalEmbed } from "@/components/video/ExternalEmbed";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Video" };
 
 const CONTEXT_HEADINGS: Record<string, string> = {
   observation_cycle: "Classroom observation video",

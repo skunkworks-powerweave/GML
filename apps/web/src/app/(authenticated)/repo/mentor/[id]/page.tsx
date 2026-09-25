@@ -12,6 +12,7 @@
 // mentorship.ts) so the WHERE clause uses `and(eq(mentors.id, id), eq(mentors.
 // active, true))`. A soft-retired mentor now 404s consistently with the index.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
@@ -24,6 +25,8 @@ import { mentorRoster } from "@/lib/gated-reads";
 import { mentorshipAccess } from "@/lib/visibility";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Mentor" };
 
 const STATUS_ORDER = ["active", "review", "paused", "complete", "ended"] as const;
 type Status = (typeof STATUS_ORDER)[number];

@@ -6,6 +6,7 @@
 // filters for grade, term, and status. Each one is a URL searchParam so the
 // filtered view is bookmarkable and the WHERE clause runs in Postgres.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { and, asc, eq, ilike, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -16,6 +17,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Course outlines" };
 
 const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
   planned: { kind: "chip-ink", label: "Planned" },

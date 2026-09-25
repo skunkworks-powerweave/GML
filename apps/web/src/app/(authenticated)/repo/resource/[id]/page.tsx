@@ -4,6 +4,7 @@
 // SectionCard and a Details KV sidebar (Kind / Owner / Pages / Updated / Subjects /
 // Tags). The "View PDF" button routes to the in-browser viewer shipped in spec 087.
 
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq } from "drizzle-orm";
@@ -13,6 +14,8 @@ import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Reading" };
 
 export default async function RepoResourceDetailPage({
   params,

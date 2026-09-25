@@ -7,6 +7,7 @@
 // see globals.css for the canonical tokens (var(--serif), var(--mono), var(--r-3),
 // var(--ink-3), var(--line)). No raw hex colours; everything routes through tokens.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { QuickFindTrigger } from "@/components/quickfind/QuickFindTrigger";
 import { and, asc, between, count, eq } from "drizzle-orm";
@@ -24,6 +25,8 @@ import {
 } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Repository" };
 
 // ---------- date helpers (ISO week, Mon–Fri) ----------
 function currentWeekMonFri(today: Date = new Date()): { mon: string; fri: string; monLabel: string; friLabel: string } {

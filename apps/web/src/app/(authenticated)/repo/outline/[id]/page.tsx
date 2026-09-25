@@ -2,6 +2,7 @@
 // Ports LMS GML Frontend/repository.jsx :: RepoOutlinePage (lines 601-688).
 // Two-column layout (1.6fr / 1fr): outcomes + lessons + sessions ↔ details + readings.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { asc, eq, inArray, desc } from "drizzle-orm";
@@ -19,6 +20,8 @@ import {
 } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Course outline" };
 
 const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
   planned: { kind: "", label: "Planned" },

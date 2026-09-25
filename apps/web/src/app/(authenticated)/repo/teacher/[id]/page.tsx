@@ -3,6 +3,7 @@
 // KV details (name+Hindi, subject, school, phase, phone, joined), active mentor
 // pairing card, recent observation cycles, sessions-taught list.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
@@ -25,6 +26,8 @@ import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Teacher" };
 
 const SUBJECT_COLOR: Record<string, { chip: string }> = {
   English: { chip: "chip-indigo" },

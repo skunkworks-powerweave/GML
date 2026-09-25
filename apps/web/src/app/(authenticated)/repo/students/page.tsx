@@ -17,6 +17,7 @@
 // page-render audit; the new "learners.search" row is a SEPARATE event
 // keyed on the search query text.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { and, asc, eq, ilike, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -27,6 +28,8 @@ import { isUuid } from "@/lib/ids";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Learners" };
 
 const PAGE_SIZE = 100;
 
