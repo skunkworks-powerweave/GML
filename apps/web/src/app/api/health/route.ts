@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { pingDb, pingMigrations, pingStorage } from "@/lib/health";
+import { pingDb, pingMigrations, pingStorage, whatsappHealth } from "@/lib/health";
 
 // Disable Next.js caching for this route — health must reflect current state.
 export const dynamic = "force-dynamic";
@@ -30,10 +30,11 @@ export async function HEAD(): Promise<Response> {
  * run outside production) to include them.
  */
 export async function GET(): Promise<Response> {
-  const [db, storage, migrations] = await Promise.all([
+  const [db, storage, migrations, whatsapp] = await Promise.all([
     pingDb(),
     pingStorage(),
     pingMigrations(),
+    whatsappHealth(),
   ]);
 
   // `redis` and `minio` are gone from this AND, not merely from the response
@@ -55,7 +56,12 @@ export async function GET(): Promise<Response> {
       // applied" without revealing anything about the deployment's internals.
       migrationsApplied: migrations.applied ?? null,
       migrationsExpected: migrations.expected ?? null,
-      ...(verbose ? { details: { db, storage, migrations } } : {}),
+      // WhatsApp ingest (lib/health.ts, whatsappHealth): "off" | "partial" | "on".
+      // Reported, deliberately NOT part of `ok` -- the integration is switched
+      // on after go-live, and a Meta problem must not fail readiness. The
+      // missing variable names and the fetch counts are in `details`.
+      whatsapp: whatsapp.state,
+      ...(verbose ? { details: { db, storage, migrations, whatsapp } } : {}),
       ts: new Date().toISOString(),
     },
     {

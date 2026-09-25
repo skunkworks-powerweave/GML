@@ -95,6 +95,74 @@ export async function pingStorage(): Promise<PingResult> {
 }
 
 /**
+ * WhatsApp ingest: how it is configured, and whether it is working.
+ *
+ * ── WHY ──────────────────────────────────────────────────────────────────────
+ *
+ * Nothing reported this. With WHATSAPP_APP_SECRET set and WHATSAPP_ACCESS_TOKEN
+ * empty -- the state docker-compose accepts -- the webhook accepted every video
+ * and none could be fetched, while /api/health said ok. The secret switches the
+ * webhook ON; the verify token is what Meta's handshake checks; the access
+ * token is what fetches media and sends replies; the phone number id is what
+ * replies are sent from. Each one missing breaks something different, so each
+ * is named.
+ *
+ * NOT part of readiness. WhatsApp is switched on after go-live, so "off" is a
+ * legitimate state for a healthy LMS, and a Meta problem must not restart the
+ * web container. This is reported beside the probes, never ANDed into `ok`.
+ *
+ * Names only, never values.
+ */
+export type WhatsAppHealth = {
+  state: "off" | "partial" | "on";
+  /** The WHATSAPP_* variables that are unset, when the secret is set. */
+  missing: string[];
+  /** Media fetches waiting for (or being retried by) the worker. */
+  pendingFetches: number | null;
+  /** Fetches that gave up in the last 24 hours. */
+  deadFetches24h: number | null;
+  /** The last time a WhatsApp video was fetched into Storage. */
+  lastFetchedAt: string | null;
+};
+
+const WHATSAPP_REQUIRED = [
+  "WHATSAPP_VERIFY_TOKEN",
+  "WHATSAPP_ACCESS_TOKEN",
+  "WHATSAPP_PHONE_NUMBER_ID",
+] as const;
+
+/** Configuration only: cheap, no database. */
+export function whatsappConfig(env: Record<string, string | undefined> = process.env): Pick<WhatsAppHealth, "state" | "missing"> {
+  if (!env.WHATSAPP_APP_SECRET?.trim()) return { state: "off", missing: [] };
+  const missing = WHATSAPP_REQUIRED.filter((k) => !env[k]?.trim());
+  return { state: missing.length === 0 ? "on" : "partial", missing };
+}
+
+export async function whatsappHealth(): Promise<WhatsAppHealth> {
+  const config = whatsappConfig();
+  const out: WhatsAppHealth = { ...config, pendingFetches: null, deadFetches24h: null, lastFetchedAt: null };
+  if (!process.env.DATABASE_URL) return out;
+  try {
+    const { getPool } = await import("@gml/db");
+    const q = await getPool().query<{ pending: string; dead: string; last: Date | null }>(`
+      SELECT
+        (SELECT count(*) FROM jobs WHERE queue = 'whatsapp' AND name = 'whatsapp_fetch'
+            AND status IN ('queued', 'running'))::text AS pending,
+        (SELECT count(*) FROM jobs WHERE queue = 'whatsapp' AND name = 'whatsapp_fetch'
+            AND status = 'dead' AND completed_at > now() - interval '24 hours')::text AS dead,
+        (SELECT max(created_at) FROM audit_log WHERE action = 'whatsapp.media.fetched') AS last
+    `);
+    const row = q.rows[0];
+    out.pendingFetches = Number(row?.pending ?? 0);
+    out.deadFetches24h = Number(row?.dead ?? 0);
+    out.lastFetchedAt = row?.last ? new Date(row.last).toISOString() : null;
+  } catch {
+    // The database probe reports the database; this stays configuration-only.
+  }
+  return out;
+}
+
+/**
  * Reports Drizzle migration application state. Compares the count of
  * entries in `packages/db/src/migrations/meta/_journal.json` (the expected
  * migrations baked into the build) against the live row count in

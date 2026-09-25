@@ -28,6 +28,7 @@ import { db } from "@gml/db";
 import { videoSubmissions, auditLog, files } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { whatsappHealth } from "@/lib/health";
 import { resendTranscodeAction, retryWhatsAppFetchAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -145,6 +146,17 @@ export default async function WhatsappIngestLogPage({
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(PAGE_LIMIT);
 
+  // The integration's own state, first. A partly configured deployment -- the
+  // secret set, the access token not -- accepted every video and fetched none,
+  // and this page, the one an operator opens when a teacher says "I sent it",
+  // said nothing about why.
+  const health = await whatsappHealth();
+  const MISSING_EFFECT: Record<string, string> = {
+    WHATSAPP_VERIFY_TOKEN: "Meta's webhook verification is refused",
+    WHATSAPP_ACCESS_TOKEN: "videos are recorded but cannot be fetched from Meta",
+    WHATSAPP_PHONE_NUMBER_ID: "senders get no reply",
+  };
+
   // WHO SENT IT. The webhook writes the sender onto the submission
   // (video_submissions.whatsapp_from, migration 0031), and that is read first.
   //
@@ -197,6 +209,38 @@ export default async function WhatsappIngestLogPage({
           ask the teacher to send it again with the cycle code as the caption.
         </p>
       </header>
+
+      {health.state !== "on" ? (
+        <section
+          className="rounded-lg border border-neutral-200 bg-white p-4 text-sm"
+          data-testid="whatsapp-config"
+          role="status"
+        >
+          {health.state === "off" ? (
+            <p>
+              WhatsApp ingest is off: WHATSAPP_APP_SECRET is not set, so the webhook refuses all
+              traffic. Direct upload is unaffected.
+            </p>
+          ) : (
+            <>
+              <p className="font-medium">WhatsApp ingest is only partly configured.</p>
+              <ul className="mt-1 list-disc pl-5">
+                {health.missing.map((name) => (
+                  <li key={name}>
+                    <span className="font-mono">{name}</span> is not set: {MISSING_EFFECT[name] ?? "see README-IT.md"}.
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      ) : null}
+      {health.deadFetches24h ? (
+        <p className="text-sm text-rust" role="status">
+          {health.deadFetches24h} WhatsApp video fetch(es) gave up in the last 24 hours; each row below
+          shows why, with Retry fetch.
+        </p>
+      ) : null}
 
       <form
         method="get"

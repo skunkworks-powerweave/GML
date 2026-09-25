@@ -147,8 +147,12 @@ typing the URL.
   that distinction is what separates "will retry itself" from "needs a human".
 - **`/admin/system-settings`** — programme name, academic-year label, default
   video quality, and which inbox notification types are on globally.
-- **`/admin/whatsapp-log`** — recent WhatsApp ingest events: signature failures,
-  replay-ignores, media fetch results, unmatched context.
+- **`/admin/whatsapp-log`** — every video sent to the WhatsApp number: who sent
+  it, the caption and what it was linked to, its status, and — for one whose
+  media has not arrived — why (a missing or rejected access token, a Graph
+  error), with **Retry fetch**. It also says when the integration is only
+  partly configured. Signature failures and the other webhook events are in
+  `/admin/audit` under `whatsapp.*` (docs/audit-actions.md).
 - **`/admin`** and **`/admin/data/<table>`** — the no-code tables: schools,
   teachers, mentors, pairings, classes, learners, sessions, course outlines,
   resources, RTT modules / lessons / readings / sessions, observation cycles and
@@ -307,7 +311,7 @@ calls:
 | Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs`. |
 | `/api/health` returns 503 | Read which of `db`, `storage`, `migrations` is false | `docker compose logs migrate` first — it is usually that. |
 | Worker unhealthy, videos stuck transcoding | It cannot reach the database, or ffmpeg failed | Check `DATABASE_URL` uses the session pooler (5432); then `/admin/transcode-jobs`. |
-| WhatsApp videos not arriving | `WHATSAPP_APP_SECRET` unset or wrong | Unset: the webhook answers 503 `whatsapp_not_configured` and logs `WhatsApp ingest is OFF` once. Wrong: it answers 401 and audits `whatsapp.signature_failed`. Check `docker compose logs app`. |
+| WhatsApp videos not arriving | The integration is off or partly configured, or a secret or token is wrong | `/api/health` reports `whatsapp: off / partial / on` (its `details` name the missing variables), and `/admin/whatsapp-log` says the same. Secret unset: 503 `whatsapp_not_configured` and one `WhatsApp ingest is OFF` log line. Secret wrong: 401, `whatsapp.signature_failed` rows and a log line naming `WHATSAPP_APP_SECRET`. Access token missing or expired: the videos are listed on `/admin/whatsapp-log` as awaiting media, with the reason; fix the token, then **Retry fetch**. Check `docker compose logs app worker`. |
 
 ## Support
 

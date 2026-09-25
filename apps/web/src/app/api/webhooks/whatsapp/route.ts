@@ -66,7 +66,20 @@ export async function GET(req: Request) {
   if (mode === "subscribe" && token && token === process.env.WHATSAPP_VERIFY_TOKEN) {
     return new Response(challenge ?? "", { status: 200 });
   }
+  // Meta's handshake used to be refused with nothing in the logs when the
+  // variable was simply missing, which reads exactly like Meta never calling.
+  if (mode === "subscribe" && !process.env.WHATSAPP_VERIFY_TOKEN) warnVerifyTokenUnsetOnce();
   return NextResponse.json({ error: "verify_failed" }, { status: 403 });
+}
+
+let warnedVerifyToken = false;
+function warnVerifyTokenUnsetOnce(): void {
+  if (warnedVerifyToken) return;
+  warnedVerifyToken = true;
+  console.warn(
+    "[whatsapp] refused Meta's webhook verification: WHATSAPP_VERIFY_TOKEN is not set. Set it to the " +
+      "verify token typed into the Meta dashboard (see README-IT.md, WhatsApp setup).",
+  );
 }
 
 // POST handler: actual message ingestion
@@ -669,6 +682,15 @@ async function auditSignatureFailure(req: Request, signatureProvided: boolean): 
     entityType: "webhook",
     metadata: { ipMasked, signatureProvided },
   });
+  // A WRONG secret made every real delivery a 401 and printed nothing; the one
+  // log line the troubleshooting tables pointed at is printed only when the
+  // secret is UNSET. Bounded by the same counter as the audit row.
+  if (signatureProvided) {
+    console.warn(
+      `[whatsapp] signature check failed for a POST from ${ipMasked}. If this is Meta, ` +
+        "WHATSAPP_APP_SECRET does not match the app secret in the Meta dashboard (App settings > Basic).",
+    );
+  }
 }
 
 let warnedUnconfigured = false;
