@@ -11,6 +11,12 @@
 //   - The RTT subject page lists the subject's packages the learner may
 //     launch, with her own status and a Start / Resume / Review link to
 //     /scorm/<id>. A withdrawn package is not offered.
+//   - /rtt/progress carries SCORM under that page's own rules: a learner sees
+//     how many of each subject's modules she has completed; staff see each
+//     teacher's record -- an administrator every teacher's, a mentor only her
+//     mentees', and only with the mentorship section open.
+//   - An administrator's own launch ("Open as a learner") is not a learner's
+//     record: the counts leave it out and the tracking page says so.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -20,14 +26,14 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { render, withAppRouter, elements, openingTags, attr } from "./_ui.js";
 import { signIn, closeAppDb, outcome, form } from "./_server-actions.js";
 import { needsDatabase } from "./_harness.js";
-import { rttWorld, type RttWorld } from "./_rtt-world.js";
+import { rttWorld, type RttWorld, type RttUser } from "./_rtt-world.js";
 
 const skip = needsDatabase();
 after(async () => {
   if (!skip) await closeAppDb();
 });
 
-async function withTracked(body: (x: { w: RttWorld; subjectId: string; pkgId: string; other: { id: string; name: string } }) => Promise<void>) {
+async function withTracked(body: (x: { w: RttWorld; subjectId: string; pkgId: string; other: RttUser }) => Promise<void>) {
   const w = await rttWorld("scsf");
   try {
     const { insertPackage, commitAttempt } = await import("../../apps/web/src/lib/scorm/store.ts");
@@ -51,6 +57,7 @@ async function withTracked(body: (x: { w: RttWorld; subjectId: string; pkgId: st
     const commit = (userId: string, lessonStatus: "passed" | "incomplete", scoreRaw: number | null, sessionTimeCs: number) =>
       commitAttempt(db, userId, pkgId, {
         sessionId: randomUUID(),
+        seq: 1,
         lessonStatus,
         lessonLocation: "",
         scoreRaw,
@@ -62,7 +69,7 @@ async function withTracked(body: (x: { w: RttWorld; subjectId: string; pkgId: st
       });
     await commit(w.teacher.id, "passed", 72.5, 5 * 60 * 100 + 4000 * 100);
     await commit(other.user.id, "incomplete", null, 1500);
-    await body({ w, subjectId, pkgId, other: { id: other.user.id, name: other.user.name } });
+    await body({ w, subjectId, pkgId, other: other.user });
   } finally {
     signIn(null);
     await w.cleanup();
@@ -175,5 +182,72 @@ test("the subject page offers the learner her packages with her own status; a wi
     html = await page();
     assert.ok(openingTags(html, "a").some((a) => attr(a, "href") === `/scorm/${pkgId}`), "an administrator still sees it");
     assert.match(html.slice(html.indexOf("SCORM modules")), /Withdrawn/);
+  });
+});
+
+test("/rtt/progress carries SCORM by that page's rules: a learner her own, a mentor her mentees' behind the password, an administrator every teacher's", { skip }, async () => {
+  await withTracked(async ({ w, subjectId, other }) => {
+    const { default: ProgressPage } = await import("../../apps/web/src/app/(authenticated)/rtt/progress/page.tsx");
+    const progress = async (sp: Record<string, string> = {}) =>
+      render(withAppRouter(await ProgressPage({ searchParams: Promise.resolve(sp) })));
+    const { rows: named } = await w.c.query(`SELECT name FROM rtt_subjects WHERE id = $1`, [subjectId]);
+    const subject = named[0].name as string;
+    const module = `Phonics ${w.T}`;
+    const mentee = `Teacher Row ${w.T}`;
+    const unpaired = `Zara Row ${w.T}`;
+
+    signIn(w.teacher);
+    assert.match(rows(await progress()).find((r) => r.includes(subject)) ?? "", /1\/1 modules completed/, "hers: passed");
+    signIn(other);
+    assert.match(rows(await progress()).find((r) => r.includes(subject)) ?? "", /0\/1 modules completed/, "still in progress");
+
+    signIn(w.admin);
+    let html = await progress({ subject: subjectId });
+    assert.match(html, /SCORM modules/);
+    const passed = rows(html).find((r) => r.includes(mentee) && r.includes(module));
+    assert.ok(passed, `every teacher's record (rows: ${JSON.stringify(rows(html))})`);
+    assert.match(passed!, /Passed/);
+    assert.match(passed!, /72\.5/);
+    assert.match(rows(html).find((r) => r.includes(unpaired) && r.includes(module)) ?? "", /In progress/);
+
+    signIn(w.mentor);
+    html = await progress({ subject: subjectId });
+    assert.ok(!html.includes(mentee), "mentees are mentorship rows: nothing without the section password");
+    await w.grant(w.mentor.id, "mentorship");
+    html = await progress({ subject: subjectId });
+    assert.match(rows(html).find((r) => r.includes(mentee) && r.includes(module)) ?? "", /Passed/, "her mentee's record");
+    assert.ok(!html.includes(unpaired), "not a teacher she does not mentor");
+  });
+});
+
+test("an administrator's own launch is not counted as a learner's, and the tracking page says so", { skip }, async () => {
+  await withTracked(async ({ w, pkgId }) => {
+    const { commitAttempt } = await import("../../apps/web/src/lib/scorm/store.ts");
+    // "Open as a learner", played through to a pass.
+    await commitAttempt(drizzle(w.c), w.admin.id, pkgId, {
+      sessionId: randomUUID(),
+      seq: 1,
+      lessonStatus: "passed",
+      lessonLocation: "",
+      scoreRaw: 100,
+      scoreMin: null,
+      scoreMax: null,
+      suspendData: "",
+      exit: "",
+      sessionTimeCs: 500,
+    });
+    signIn(w.admin);
+    const { default: ListPage } = await import("../../apps/web/src/app/(authenticated)/admin/scorm/page.tsx");
+    const list = await render(withAppRouter(await ListPage({ searchParams: Promise.resolve({}) })));
+    assert.match(rows(list).find((r) => r.includes(`Phonics ${w.T}`)) ?? "", /2 learners · 1 finished/);
+
+    const { default: TrackingPage } = await import("../../apps/web/src/app/(authenticated)/admin/scorm/[id]/page.tsx");
+    const html = await render(withAppRouter(await TrackingPage({ params: Promise.resolve({ id: pkgId }) })));
+    assert.match(html, /2 learners/);
+    assert.match(html, /1 finished/);
+    assert.match(rows(html).find((r) => r.includes(w.admin.name)) ?? "", /not counted/i, "listed, and labelled");
+
+    const { rows: n } = await w.c.query(`SELECT count(*)::int AS n FROM scorm_attempts WHERE package_id = $1`, [pkgId]);
+    assert.equal(n[0].n, 3, "the record is kept");
   });
 });

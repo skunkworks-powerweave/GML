@@ -78,6 +78,11 @@ export const scormAttempts = pgTable(
     totalTimeCs: bigint("total_time_cs", { mode: "number" }).notNull().default(0),
     sessionTimeCs: bigint("session_time_cs", { mode: "number" }).notNull().default(0),
     sessionId: uuid("session_id"),
+    // The number of the newest commit applied from session `session_id`
+    // (lib/scorm/cmi.ts, CommitPayload.seq). A session's commits are separate
+    // requests answered in any order; one numbered no higher is older and is
+    // not applied.
+    sessionSeq: integer("session_seq").notNull().default(0),
     sessionCount: integer("session_count").notNull().default(0),
     firstLaunchedAt: timestamp("first_launched_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

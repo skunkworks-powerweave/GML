@@ -16,16 +16,22 @@
 // Persisted per learner (lib/scorm/store.ts): lesson_status, lesson_location,
 // score raw/min/max, suspend_data, exit, and the session's time. Every commit
 // sends that WHOLE state, so a commit lost on a bad connection is repaired by
-// the next one. Objectives, interactions, comments and preferences are
-// accepted with full validation -- a SCO that cannot set them stops tracking
-// -- and live for the launch only.
+// the next one, and is numbered within the session, so one answered late
+// cannot overwrite a newer one. Objectives, interactions, comments and
+// preferences are accepted with full validation -- a SCO that cannot set them
+// stops tracking -- and live for the launch only.
 //
 // ── LMS BEHAVIOUR THE SPEC LEAVES TO THE LMS ─────────────────────────────────
 //
 //   - A SCO that finishes without ever reporting a status is recorded as
 //     "incomplete": it was launched, and nothing said it was completed.
-//   - With a mastery score from the manifest, LMSFinish judges a reported raw
-//     score passed / failed (RTE 3.4.4, cmi.student_data.mastery_score).
+//   - With a mastery score from the manifest, a reported raw score is judged
+//     passed / failed (RTE 3.4.4, cmi.student_data.mastery_score) -- in
+//     LMSFinish's commit whatever the status, since the session is over, and
+//     in every other commit once the SCO says it has finished (completed,
+//     passed, failed). So a session that ends without LMSFinish, in a closed
+//     tab, is judged too, and a score part-way through is not. The judgement
+//     is what is RECORDED; the SCO still reads back the status it set.
 //   - Session time is the SCO's cmi.core.session_time; a SCO that never
 //     reports one is credited with the time the launch was open.
 //
@@ -34,6 +40,7 @@
 
 import {
   EXIT_VALUES,
+  FINISHED_STATUSES,
   LESSON_LOCATION_MAX,
   LESSON_STATUSES,
   SUSPEND_DATA_MAX,
@@ -129,6 +136,8 @@ export class Scorm12Runtime {
   readonly sessionId = uuid();
 
   private phase: "idle" | "running" | "finished" = "idle";
+  /** The last commit's number in this session (CommitPayload.seq). */
+  private seq = 0;
   private lastError = "0";
   private diagnostic = "";
   private startedAt = 0;
@@ -217,18 +226,25 @@ export class Scorm12Runtime {
     if (this.phase !== "running") return this.fail("301", "LMSFinish before LMSInitialize or after LMSFinish", "false");
     if (arg !== "" && arg !== undefined) return this.fail("201", "LMSFinish takes the empty string", "false");
     if (this.lessonStatus === "not attempted") this.lessonStatus = "incomplete";
-    if (this.init.masteryScore !== null && this.scoreRaw !== "") {
-      this.lessonStatus = Number(this.scoreRaw) >= this.init.masteryScore ? "passed" : "failed";
-    }
     const sent = this.transport(this.payload(true));
     this.phase = "finished";
     return sent ? this.ok("true") : this.fail("101", "the final commit could not be sent", "false");
   }
 
+  /** The status to record: the SCO's, or the mastery judgement of its score (see the top of this file). */
+  private recordedStatus(final: boolean): LessonStatus {
+    const mastery = this.init.masteryScore;
+    if (mastery === null || this.scoreRaw === "" || !(final || FINISHED_STATUSES.has(this.lessonStatus))) {
+      return this.lessonStatus as LessonStatus;
+    }
+    return Number(this.scoreRaw) >= mastery ? "passed" : "failed";
+  }
+
   private payload(final: boolean): CommitPayload & { final: boolean } {
     return {
       sessionId: this.sessionId,
-      lessonStatus: this.lessonStatus as LessonStatus,
+      seq: ++this.seq,
+      lessonStatus: this.recordedStatus(final),
       lessonLocation: this.lessonLocation,
       scoreRaw: num(this.scoreRaw),
       scoreMin: num(this.scoreMin),

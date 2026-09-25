@@ -10,9 +10,10 @@
 // Takes the database as a parameter, like lib/rtt/*, so the behaviour suite
 // runs it directly.
 
-import { and, asc, desc, eq, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { phases, rttSubjects, scormAttempts, scormPackageFiles, scormPackages, terms, users } from "@gml/db/schema";
+import { ADMIN_ROLES } from "@gml/shared/auth/roles";
 import type { Actor } from "@/lib/visibility";
 import { rttScope } from "../rtt/scope";
 import { FINISHED_STATUSES, STATUS_RANK, type CommitPayload, type LessonStatus } from "./cmi";
@@ -179,27 +180,41 @@ const WHEN_RANK = sql.raw(
 const rankOf = (status: SQL | AnyColumn) => sql`(CASE ${status}::text ${WHEN_RANK} ELSE 0 END)`;
 
 /**
- * Record a commit (LMSCommit or LMSFinish) for `userId`, whoever the payload
- * claims to be: the learner is the signed-in user.
+ * Record a commit (LMSCommit, LMSFinish or the player's flush) for `userId`,
+ * whoever the payload claims to be: the learner is the signed-in user.
  *
+ *   order    Each commit is its own request -- LMSCommit then LMSFinish, or
+ *            the flush when the page goes away beside the SCO's own unload
+ *            commit -- and the server can finish them in either order. So a
+ *            commit of the session already recorded applies only if its seq
+ *            is higher than the last one applied; an older one, answered
+ *            late, changes nothing (it would otherwise put the SCO's
+ *            "completed" back over LMSFinish's judged "failed", and its
+ *            shorter time over the longer). The first commit of a new session
+ *            always applies.
  *   time     A commit from a NEW session folds the previous session's latest
- *            time into the total; a repeat commit of the same session replaces
+ *            time into the total; a newer commit of the same session replaces
  *            its time. So a session that never calls LMSFinish still counts,
  *            and none counts twice. (Known limit: two tabs of one package open
  *            AT ONCE interleave sessions, and each switch folds the other's
- *            latest time in again, so their overlap is overcounted.)
+ *            latest time in again, so their overlap is overcounted. A commit
+ *            of an earlier session answered after the next session's first
+ *            is taken the same way.)
  *   status   A lower status (STATUS_RANK) never replaces a higher one, and the
  *            scores move with the status: the record is the learner's best
  *            outcome, so reopening a passed module to review it does not undo
- *            the pass in the staff view. An equal one replaces it, so a
- *            mastery judgement of "failed" replaces the SCO's "completed".
- *   the rest Location, suspend data and exit are always the latest -- that is
- *            what resuming needs.
+ *            the pass in the staff view. An equal one from a newer commit
+ *            replaces it, so a mastery judgement of "failed" replaces the
+ *            SCO's "completed".
+ *   the rest Location, suspend data and exit are always the newest commit's
+ *            -- that is what resuming needs.
  */
 export async function commitAttempt(db: Db, userId: string, packageId: string, p: CommitPayload): Promise<void> {
-  const better = sql`${rankOf(excluded("lesson_status"))} >= ${rankOf(scormAttempts.lessonStatus)}`;
   const newSession = sql`${scormAttempts.sessionId} IS DISTINCT FROM ${excluded("session_id")}`;
+  const newer = sql`(${newSession} OR ${excluded("session_seq")} > ${scormAttempts.sessionSeq})`;
+  const better = sql`${newer} AND ${rankOf(excluded("lesson_status"))} >= ${rankOf(scormAttempts.lessonStatus)}`;
   const keepBest = (column: string, current: AnyColumn) => sql`CASE WHEN ${better} THEN ${excluded(column)} ELSE ${current} END`;
+  const latest = (column: string, current: AnyColumn) => sql`CASE WHEN ${newer} THEN ${excluded(column)} ELSE ${current} END`;
   await db
     .insert(scormAttempts)
     .values({
@@ -214,6 +229,7 @@ export async function commitAttempt(db: Db, userId: string, packageId: string, p
       exit: p.exit,
       sessionTimeCs: p.sessionTimeCs,
       sessionId: p.sessionId,
+      sessionSeq: p.seq,
       sessionCount: 1,
       completedAt: FINISHED_STATUSES.has(p.lessonStatus) ? sql`now()` : null,
     })
@@ -224,14 +240,16 @@ export async function commitAttempt(db: Db, userId: string, packageId: string, p
         scoreRaw: keepBest("score_raw", scormAttempts.scoreRaw),
         scoreMin: keepBest("score_min", scormAttempts.scoreMin),
         scoreMax: keepBest("score_max", scormAttempts.scoreMax),
-        lessonLocation: excluded("lesson_location"),
-        suspendData: excluded("suspend_data"),
-        exit: excluded("exit"),
+        lessonLocation: latest("lesson_location", scormAttempts.lessonLocation),
+        suspendData: latest("suspend_data", scormAttempts.suspendData),
+        exit: latest("exit", scormAttempts.exit),
         totalTimeCs: sql`${scormAttempts.totalTimeCs} + CASE WHEN ${newSession} THEN ${scormAttempts.sessionTimeCs} ELSE 0 END`,
-        sessionTimeCs: excluded("session_time_cs"),
+        sessionTimeCs: latest("session_time_cs", scormAttempts.sessionTimeCs),
+        sessionSeq: latest("session_seq", scormAttempts.sessionSeq),
         sessionId: excluded("session_id"),
         sessionCount: sql`${scormAttempts.sessionCount} + CASE WHEN ${newSession} THEN 1 ELSE 0 END`,
-        completedAt: sql`COALESCE(${scormAttempts.completedAt}, ${excluded("completed_at")})`,
+        // Only a status that was applied can stamp the first finish.
+        completedAt: sql`COALESCE(${scormAttempts.completedAt}, CASE WHEN ${better} THEN ${excluded("completed_at")} END)`,
         updatedAt: sql`now()`,
       },
     });
@@ -314,6 +332,13 @@ export type PackageSummary = {
   finished: number;
 };
 
+// The counts are of learners. An administrator's own launch ("Open as a
+// learner", to check a package) is a record like any other, and the tracking
+// page lists it, labelled; it is not counted.
+const adminIds = sql`SELECT adm.id FROM ${users} adm WHERE ${inArray(sql`adm.role`, [...ADMIN_ROLES])}`;
+const learnerAttempts = sql`${scormAttempts}
+  WHERE ${scormAttempts.packageId} = ${scormPackages.id} AND ${scormAttempts.userId} NOT IN (${adminIds})`;
+
 const summarySelect = {
   id: scormPackages.id,
   title: scormPackages.title,
@@ -324,8 +349,8 @@ const summarySelect = {
   totalBytes: scormPackages.totalBytes,
   createdAt: scormPackages.createdAt,
   uploadedBy: users.name,
-  learners: sql<number>`(SELECT count(*)::int FROM ${scormAttempts} WHERE ${scormAttempts.packageId} = ${scormPackages.id})`,
-  finished: sql<number>`(SELECT count(*)::int FROM ${scormAttempts} WHERE ${scormAttempts.packageId} = ${scormPackages.id} AND ${scormAttempts.completedAt} IS NOT NULL)`,
+  learners: sql<number>`(SELECT count(*)::int FROM ${learnerAttempts})`,
+  finished: sql<number>`(SELECT count(*)::int FROM ${learnerAttempts} AND ${scormAttempts.completedAt} IS NOT NULL)`,
 };
 
 function summaries(db: Db) {
@@ -338,7 +363,7 @@ function summaries(db: Db) {
     .leftJoin(users, eq(users.id, scormPackages.uploadedByUserId));
 }
 
-/** Every package, newest first, with how many learners have a record and how many finished. For staff. */
+/** Every package, newest first, with how many learners (not administrators) have a record and how many finished. For staff. */
 export async function packageSummaries(db: Db): Promise<PackageSummary[]> {
   return summaries(db).orderBy(desc(scormPackages.createdAt));
 }

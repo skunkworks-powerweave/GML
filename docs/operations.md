@@ -105,11 +105,22 @@ learners open it from that subject's page, and it resumes where they left it.
 - **What is tracked** (`/admin/scorm/[id]`): each learner's status, score, time
   and first finish, as the module reports them. SCORM 1.2 is self-reported by
   design. A learner's best status is kept, so reviewing a passed module does not
-  undo the pass.
+  undo the pass. With a mastery score in the manifest, a score is recorded as
+  passed or failed once the module says it has finished, or when it exits.
+- **Who sees it.** Administrators: every package on `/admin/scorm`. On
+  `/rtt/progress`, under that page's rules: a teacher sees how many of each
+  subject's modules she has completed; programme and super admins see every
+  teacher's record, and a mentor her mentees' once the mentorship section is
+  unlocked. An administrator's own "Open as a learner" is listed on the
+  package's page, labelled "not counted", and left out of its counts.
 - **Storage.** Files live in the private `scorm-packages` bucket
   (`_post/009`), served to learners through `/api/scorm/content/...` — the one
   route whose Content-Security-Policy allows inline script. Audit rows:
   `scorm.*` in [`audit-actions.md`](audit-actions.md).
+- **A failed upload** removes whatever it had stored. If Storage refuses that
+  clean-up too, the web log says `[scorm] a failed upload's clean-up left up to
+  N … objects under <id>/`: nothing refers to them, so delete that folder from
+  the `scorm-packages` bucket in the Supabase dashboard.
 
 ## The queue is backing up
 

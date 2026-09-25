@@ -12,6 +12,12 @@
 //     a session are not, and docs/audit-actions.md documents the row.
 //   - End to end: a SCO driving the real runtime, through this route, is
 //     resumed on relaunch from what it committed.
+//   - A session's commits are separate requests (LMSCommit, LMSFinish, the
+//     player's flushes), answered in whatever order the network and the
+//     server manage: the record is the LATEST the SCO made, never a late,
+//     older one -- so LMSFinish's mastery judgement is what staff see.
+//   - A session that ends without LMSFinish (a closed tab) is judged against
+//     the mastery score too, once the SCO has said it finished.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -27,7 +33,7 @@ after(async () => {
   if (!skip) await closeAppDb();
 });
 
-async function withPackage(body: (x: { w: RttWorld; pkgId: string; farId: string }) => Promise<void>) {
+async function withPackage(body: (x: { w: RttWorld; pkgId: string; farId: string }) => Promise<void>, masteryScore: number | null = null) {
   const w = await rttWorld("scco");
   try {
     const { insertPackage } = await import("../../apps/web/src/lib/scorm/store.ts");
@@ -40,7 +46,7 @@ async function withPackage(body: (x: { w: RttWorld; pkgId: string; farId: string
         manifestIdentifier: "x",
         launchPath: "index.html",
         launchQuery: "",
-        masteryScore: null,
+        masteryScore,
         launchData: null,
         uploadedByUserId: w.admin.id,
         totalBytes: 1,
@@ -55,6 +61,7 @@ async function withPackage(body: (x: { w: RttWorld; pkgId: string; farId: string
 
 const commitBody = (over: Record<string, unknown> = {}) => ({
   sessionId: randomUUID(),
+  seq: 1,
   lessonStatus: "incomplete",
   lessonLocation: "p1",
   scoreRaw: null,
@@ -102,6 +109,7 @@ test("the route refuses what it cannot trust, and writes nothing", { skip }, asy
     assert.equal((await post(pkgId, "{not json", { "content-type": "application/json" })).status, 400);
     assert.equal((await post(pkgId, commitBody({ lessonStatus: "aced" }))).status, 400);
     assert.equal((await post(pkgId, commitBody({ suspendData: "x".repeat(4097) }))).status, 400);
+    assert.equal((await post(pkgId, commitBody({ seq: undefined }))).status, 400, "a commit the server cannot order");
     const huge = await post(pkgId, commitBody(), { "content-type": "application/json", "content-length": String(1024 * 1024) });
     assert.equal(huge.status, 413);
     assert.equal((await post(farId, commitBody())).status, 404, "a package she may not launch");
@@ -116,7 +124,7 @@ test("LMSFinish is audited with what the SCO reported, LMSCommit is not, and the
   await withPackage(async ({ w, pkgId }) => {
     signIn(w.teacher);
     await post(pkgId, commitBody());
-    await post(pkgId, commitBody({ lessonStatus: "passed", scoreRaw: 90, exit: "", final: true }));
+    await post(pkgId, commitBody({ seq: 2, lessonStatus: "passed", scoreRaw: 90, exit: "", final: true }));
     const { rows } = await w.c.query(
       `SELECT action, entity_type, entity_id, user_id, metadata FROM audit_log WHERE entity_id = $1 AND action LIKE 'scorm.%' ORDER BY created_at`,
       [pkgId],
@@ -179,4 +187,64 @@ test("end to end: a SCO driving the real runtime through this route is resumed o
     assert.equal(row.score_raw, 88);
     assert.equal(Number(row.total_time_cs) + Number(row.session_time_cs), 27000, "3:00 + 1:30, each counted once");
   });
+});
+
+/** A SCO's session on the real runtime, whose commits are held for the test to deliver. */
+async function heldSession(w: RttWorld, pkgId: string, masteryScore: number | null) {
+  const { Scorm12Runtime } = await import("../../apps/web/src/lib/scorm/runtime.ts");
+  const { launchState } = await import("../../apps/web/src/lib/scorm/store.ts");
+  const held: unknown[] = [];
+  const state = await launchState(drizzle(w.c), w.teacher.id, pkgId);
+  const rt = new Scorm12Runtime({ ...state, studentId: w.teacher.id, studentName: w.teacher.name, launchData: null, masteryScore }, (p) => {
+    held.push(p);
+    return true;
+  });
+  return { rt, api: rt.api, held };
+}
+
+test("a session's commits land in the order the SCO made them, whatever order the network answers them in", { skip }, async () => {
+  await withPackage(async ({ w, pkgId }) => {
+    signIn(w.teacher);
+    const { api, held } = await heldSession(w, pkgId, 80);
+    api.LMSInitialize("");
+    api.LMSSetValue("cmi.core.lesson_status", "completed");
+    api.LMSSetValue("cmi.suspend_data", "q=b");
+    api.LMSSetValue("cmi.core.session_time", "0000:01:29.90");
+    api.LMSCommit("");
+    // The usual end of a SCO: its score, then LMSFinish -- which judges it
+    // against the mastery score.
+    api.LMSSetValue("cmi.core.score.raw", "50");
+    api.LMSSetValue("cmi.suspend_data", "q=b;done");
+    api.LMSSetValue("cmi.core.session_time", "0000:01:30");
+    api.LMSFinish("");
+    assert.equal(held.length, 2);
+    // Two keepalive requests; the finish is answered first.
+    for (const p of held.reverse()) assert.equal((await post(pkgId, p)).status, 200);
+
+    const row = await attempt(w, pkgId, w.teacher.id);
+    assert.deepEqual(
+      { status: row.lesson_status, raw: row.score_raw, suspend: row.suspend_data, time: Number(row.session_time_cs) },
+      { status: "failed", raw: 50, suspend: "q=b;done", time: 9000 },
+      "the judged outcome, the newer suspend data and the longer time are the record",
+    );
+    const { rows } = await w.c.query(`SELECT metadata FROM audit_log WHERE entity_id = $1 AND action = 'scorm.attempt.finish'`, [pkgId]);
+    assert.equal(rows[0]?.metadata.lessonStatus, row.lesson_status, "the record agrees with the audit row");
+  }, 80);
+});
+
+test("a session that ends without LMSFinish is still judged against the mastery score", { skip }, async () => {
+  await withPackage(async ({ w, pkgId }) => {
+    signIn(w.teacher);
+    const { rt, api, held } = await heldSession(w, pkgId, 80);
+    api.LMSInitialize("");
+    api.LMSSetValue("cmi.core.lesson_status", "completed");
+    api.LMSSetValue("cmi.core.score.raw", "50");
+    api.LMSCommit("");
+    // The learner closes the tab: the player flushes; LMSFinish never comes.
+    rt.flush();
+    for (const p of held) assert.equal((await post(pkgId, p)).status, 200);
+    const row = await attempt(w, pkgId, w.teacher.id);
+    assert.equal(row.lesson_status, "failed", "completed with 50 against a mastery score of 80");
+    assert.equal(row.score_raw, 50);
+  }, 80);
 });

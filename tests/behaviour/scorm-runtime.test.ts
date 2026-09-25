@@ -11,9 +11,11 @@
 // back typically stops tracking without telling anyone.
 //
 // And what the LMS relies on: a commit carries the SCO's whole persisted
-// state, the same session id for every commit of one launch, and a session
-// time -- the SCO's own report, or the time the launch was open when it never
-// reports one.
+// state, the same session id for every commit of one launch, a number that
+// orders it within the launch (the requests can be answered in any order), a
+// session time -- the SCO's own report, or the time the launch was open when
+// it never reports one -- and, with a mastery score, the status that score
+// earns once the SCO has finished.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -162,10 +164,24 @@ test("what the SCO sets is read back and committed as its whole state, under one
   assert.equal(a!.sessionId, b!.sessionId, "one launch, one session");
   assert.deepEqual(
     { ...a, sessionId: "" },
-    { sessionId: "", lessonStatus: "incomplete", lessonLocation: "slide-3", scoreRaw: 72.5, scoreMin: 0, scoreMax: 100, suspendData: "a=1", exit: "suspend", sessionTimeCs: 15050, final: false },
+    { sessionId: "", seq: 1, lessonStatus: "incomplete", lessonLocation: "slide-3", scoreRaw: 72.5, scoreMin: 0, scoreMax: 100, suspendData: "a=1", exit: "suspend", sessionTimeCs: 15050, final: false },
   );
   assert.equal(api.LMSCommit("x"), "false");
   assert.equal(error(api), "201");
+});
+
+test("every payload carries the session's next number, so the server can tell a late one from a new one", () => {
+  const { api, rt, sent } = runtime();
+  api.LMSInitialize("");
+  api.LMSCommit("");
+  rt.flush();
+  api.LMSCommit("");
+  api.LMSFinish("");
+  assert.deepEqual(sent.map((p) => [p.seq, p.final]), [[1, false], [2, false], [3, false], [4, true]]);
+  const next = runtime();
+  next.api.LMSInitialize("");
+  next.api.LMSCommit("");
+  assert.equal(next.sent[0]!.seq, 1, "numbered per session");
 });
 
 test("a new launch is a new session", () => {
@@ -206,6 +222,46 @@ test("with a mastery score, LMSFinish judges a raw score passed or failed (RTE 3
   api.LMSSetValue("cmi.core.lesson_status", "completed");
   api.LMSFinish("");
   assert.equal(sent.at(-1)!.lessonStatus, "completed", "no raw score, nothing to judge");
+  const quit = runtime({ masteryScore: 80 });
+  quit.api.LMSInitialize("");
+  quit.api.LMSSetValue("cmi.core.lesson_status", "incomplete");
+  quit.api.LMSSetValue("cmi.core.score.raw", "50");
+  quit.api.LMSFinish("");
+  assert.equal(quit.sent.at(-1)!.lessonStatus, "failed", "LMSFinish ends the session: its score is judged whatever the status");
+});
+
+test("with a mastery score, a finished SCO's score is judged in every commit, so a session that never calls LMSFinish is judged too", () => {
+  const { api, rt, sent } = runtime({ masteryScore: 80 });
+  api.LMSInitialize("");
+  api.LMSSetValue("cmi.core.lesson_status", "incomplete");
+  api.LMSSetValue("cmi.core.score.raw", "50");
+  api.LMSCommit("");
+  rt.flush();
+  assert.deepEqual(sent.map((p) => p.lessonStatus), ["incomplete", "incomplete"], "not finished yet: a score part-way is not judged");
+
+  api.LMSSetValue("cmi.core.lesson_status", "completed");
+  api.LMSCommit("");
+  assert.equal(sent.at(-1)!.lessonStatus, "failed", "completed under the mastery score");
+  assert.equal(api.LMSGetValue("cmi.core.lesson_status"), "completed", "the SCO still reads what it set");
+  // The tab is closed (pagehide, or hidden and then discarded on a phone).
+  rt.flush();
+  assert.equal(sent.at(-1)!.lessonStatus, "failed");
+  assert.equal(sent.at(-1)!.final, false);
+
+  api.LMSSetValue("cmi.core.score.raw", "90");
+  rt.flush();
+  assert.equal(sent.at(-1)!.lessonStatus, "passed");
+  api.LMSSetValue("cmi.core.lesson_status", "passed");
+  api.LMSSetValue("cmi.core.score.raw", "70");
+  api.LMSCommit("");
+  assert.equal(sent.at(-1)!.lessonStatus, "failed", "the manifest's mastery score decides, not the SCO's own verdict");
+
+  const none = runtime();
+  none.api.LMSInitialize("");
+  none.api.LMSSetValue("cmi.core.lesson_status", "completed");
+  none.api.LMSSetValue("cmi.core.score.raw", "10");
+  none.rt.flush();
+  assert.equal(none.sent.at(-1)!.lessonStatus, "completed", "no mastery score: the SCO's status stands");
 });
 
 test("session time is the SCO's report, or the time the launch was open when it reports none", () => {

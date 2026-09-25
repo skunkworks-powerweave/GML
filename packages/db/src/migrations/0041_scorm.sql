@@ -44,6 +44,7 @@ CREATE TABLE "scorm_attempts" (
 	"total_time_cs" bigint DEFAULT 0 NOT NULL,
 	"session_time_cs" bigint DEFAULT 0 NOT NULL,
 	"session_id" uuid,
+	"session_seq" integer DEFAULT 0 NOT NULL,
 	"session_count" integer DEFAULT 0 NOT NULL,
 	"first_launched_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,

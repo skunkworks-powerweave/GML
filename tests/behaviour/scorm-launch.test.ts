@@ -80,6 +80,7 @@ test("the launch page gives the player our-origin launch URL and the learner's r
     });
     await commitAttempt(db, w.teacher.id, id, {
       sessionId: randomUUID(),
+      seq: 1,
       lessonStatus: "incomplete",
       lessonLocation: "slide-9",
       scoreRaw: null,

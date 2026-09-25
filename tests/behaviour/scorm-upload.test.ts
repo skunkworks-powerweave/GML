@@ -13,7 +13,9 @@
 //     (lib/scorm/package.ts); a refusal names the reason and the files.
 //   - Stored files are opaque bytes under `<id>/<n>`, the registry lists
 //     exactly the validated files, and the upload is audited.
-//   - A Storage failure part-way leaves nothing behind: no row, no objects.
+//   - A Storage failure part-way leaves nothing behind: no row, no objects --
+//     even after more objects than Storage removes in one request. A clean-up
+//     Storage refuses is logged with what it left, never swallowed.
 //   - The body is bounded before it is read, cross-origin posts are refused,
 //     and proxy.ts does not buffer the route (it truncates bodies over 10 MB).
 //   - End to end: what was uploaded is what the content route serves.
@@ -178,29 +180,70 @@ test("the request itself is bounded and checked before any archive is read", { s
   });
 });
 
+/** Storage that refuses the `failAt`-th upload, and every remove `failRemove` picks; the rest reach `real`. */
+function failingStorage(real: ReturnType<typeof createClient>, failAt: number, failRemove: (call: number) => boolean = () => false) {
+  let uploads = 0;
+  const removes: number[] = [];
+  request.supabaseAdmin = {
+    storage: {
+      from: (bucket: string) => {
+        const r = real.storage.from(bucket);
+        return {
+          upload: (key: string, data: unknown, opts: unknown) =>
+            ++uploads === failAt ? Promise.resolve({ data: null, error: { message: "storage is down" } }) : r.upload(key, data as Blob, opts as never),
+          remove: (keys: string[]) => {
+            removes.push(keys.length);
+            return failRemove(removes.length) ? Promise.resolve({ data: null, error: { message: "storage is down" } }) : r.remove(keys);
+          },
+          createSignedUrl: (key: string, ttl: number) => r.createSignedUrl(key, ttl),
+        };
+      },
+    },
+  };
+  return { removes };
+}
+
+/** A valid package of `n` pages besides its launch file. */
+const bigZip = (n: number) =>
+  buildZip([
+    { name: "imsmanifest.xml", data: manifest12({ title: "Big" }) },
+    { name: "index.html", data: INDEX },
+    ...Array.from({ length: n }, (_, i) => ({ name: `p/${i}.html`, data: `<p>${i}</p>`, method: 0 })),
+  ]);
+
 test("a Storage failure part-way leaves no row and no objects", { skip }, async () => {
   await withUpload(async ({ w, storage, subjectId, superAdmin }) => {
     const real = request.supabaseAdmin as ReturnType<typeof createClient>;
-    let uploads = 0;
-    request.supabaseAdmin = {
-      storage: {
-        from: (bucket: string) => {
-          const r = real.storage.from(bucket);
-          return {
-            upload: (key: string, data: unknown, opts: unknown) =>
-              ++uploads === 3 ? Promise.resolve({ data: null, error: { message: "storage is down" } }) : r.upload(key, data as Blob, opts as never),
-            remove: (keys: string[]) => r.remove(keys),
-            createSignedUrl: (key: string, ttl: number) => r.createSignedUrl(key, ttl),
-          };
-        },
-      },
-    };
     signIn(superAdmin);
-    const res = await upload({ file: goodZip(), rttSubjectId: subjectId });
+    // Early, and after more than 1,000 objects: more than Storage removes in
+    // one request.
+    for (const [file, failAt] of [[goodZip(), 3], [bigZip(1200), 1100]] as const) {
+      failingStorage(real, failAt);
+      const res = await upload({ file, rttSubjectId: subjectId });
+      assert.equal(res.status, 502);
+      assert.equal(((await res.json()) as { error: { code: string } }).error.code, "storage_failed");
+      assert.equal((await packagesOf(w, subjectId)).length, 0);
+      assert.deepEqual(storage.keys("scorm-packages"), [], `every object already written is removed again (failing at upload ${failAt})`);
+    }
+  });
+});
+
+test("a clean-up that Storage refuses is logged with what it left, and the rest is still removed", { skip }, async (t) => {
+  await withUpload(async ({ storage, subjectId, superAdmin }) => {
+    const logged = t.mock.method(console, "error", () => undefined);
+    const { removes } = failingStorage(request.supabaseAdmin as ReturnType<typeof createClient>, 1100, (call) => call === 1);
+    signIn(superAdmin);
+    const res = await upload({ file: bigZip(1200), rttSubjectId: subjectId });
     assert.equal(res.status, 502);
-    assert.equal(((await res.json()) as { error: { code: string } }).error.code, "storage_failed");
-    assert.equal((await packagesOf(w, subjectId)).length, 0);
-    assert.deepEqual(storage.keys("scorm-packages"), [], "every object already written is removed again");
+    const left = storage.keys("scorm-packages");
+    assert.ok(removes.length > 1 && removes.every((n) => n <= 1000), `removed in requests Storage accepts: ${JSON.stringify(removes)}`);
+    assert.equal(left.length, removes[0], "only the refused remove's objects are left");
+    const prefix = left[0]!.split("/")[0]!;
+    const lines = logged.mock.calls.map((c) => c.arguments.map(String).join(" "));
+    assert.ok(
+      lines.some((l) => l.includes(`${left.length} `) && l.includes(`${prefix}/`) && l.includes("scorm-packages")),
+      `the log says how many objects were left, and where: ${JSON.stringify(lines)}`,
+    );
   });
 });
 

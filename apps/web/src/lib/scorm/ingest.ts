@@ -20,12 +20,15 @@
 // 3. Only then are the package row and its file registry inserted, in one
 //    transaction. A Storage or database failure at 2 or 3 removes every
 //    object this upload wrote, so a failed upload leaves no row and no bytes.
+//    That clean-up is itself a Storage call and can fail; what it could not
+//    remove is logged, with where it is, never discarded.
 
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { rttSubjects } from "@gml/db/schema";
+import { BUCKETS } from "@gml/shared/storage/buckets";
 import { validateScormPackage, type ScormPackageError } from "./package";
 import { insertPackage } from "./store";
 import { putScormObject, removeScormObjects } from "./storage";
@@ -34,7 +37,34 @@ type Db = NodePgDatabase<Record<string, unknown>>;
 
 /** Parallel Storage writes: packages are many small files, and one at a time is minutes over a WAN. */
 const CONCURRENCY = 4;
+/** Keys per Storage remove. Its bulk delete refuses more than 1,000; a package may have 2,000 files. */
+const REMOVE_BATCH = 500;
 const TITLE_MAX = 240;
+
+/**
+ * Remove what a failed upload wrote, batch by batch; a batch Storage refuses
+ * does not stop the rest. The objects left behind are unreachable -- no row
+ * names them -- so the log line is the only record of them.
+ */
+async function removeUploaded(id: string, keys: string[]): Promise<void> {
+  let left = 0;
+  let firstError: unknown = null;
+  for (let i = 0; i < keys.length; i += REMOVE_BATCH) {
+    const batch = keys.slice(i, i + REMOVE_BATCH);
+    try {
+      await removeScormObjects(batch);
+    } catch (err) {
+      left += batch.length;
+      firstError ??= err;
+    }
+  }
+  if (left > 0) {
+    console.error(
+      `[scorm] a failed upload's clean-up left up to ${left} of ${keys.length} objects under ${id}/ in the ${BUCKETS.scormPackages} bucket; remove them by hand`,
+      firstError,
+    );
+  }
+}
 
 export type IngestError = { code: ScormPackageError["code"] | "unknown_subject" | "storage_failed"; message: string; paths?: string[] };
 
@@ -56,7 +86,7 @@ export async function ingestPackage(
   const id = randomUUID();
   const files = pkg.files.map((f, n) => ({ ...f, objectKey: `${id}/${n}` }));
   const attempted: string[] = [];
-  const undo = () => removeScormObjects(attempted).catch(() => undefined);
+  const undo = () => removeUploaded(id, attempted);
 
   for (let i = 0; i < files.length; i += CONCURRENCY) {
     const batch = files.slice(i, i + CONCURRENCY);

@@ -22,9 +22,10 @@ export const FINISHED_STATUSES: ReadonlySet<string> = new Set(["passed", "comple
  * A teacher who passed and later reopens a module to review it must not
  * vanish from the staff completion view because the SCO said "incomplete" on
  * the way in. "completed" and "failed" rank EQUAL: both say she finished, so
- * the later replaces the earlier -- which is how LMSFinish's mastery
- * judgement (runtime.ts) turns the SCO's "completed" into "failed" in the
- * record. Only a pass outranks them.
+ * the later (in the order the SCO made them, not the order they arrived)
+ * replaces the earlier -- which is how the mastery judgement (runtime.ts)
+ * turns the SCO's "completed" into "failed" in the record. Only a pass
+ * outranks them.
  */
 export const STATUS_RANK: Readonly<Record<LessonStatus, number>> = {
   "not attempted": 0,
@@ -93,6 +94,13 @@ export function cmiStudentName(name: string | null, email: string | null): strin
 export type CommitPayload = {
   /** One per LMSInitialize; lets the server fold a session's time in once. */
   sessionId: string;
+  /**
+   * 1, 2, 3 ... per session, in the order the runtime made the commits. Each
+   * commit is its own request, so they can be answered in any order; the
+   * server applies one only if it is newer than the session's last
+   * (store.ts, commitAttempt).
+   */
+  seq: number;
   lessonStatus: LessonStatus;
   lessonLocation: string;
   scoreRaw: number | null;
@@ -106,6 +114,8 @@ export type CommitPayload = {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_SESSION_CS = (9999 * 3600 + 59 * 60 + 59) * 100 + 99;
+/** scorm_attempts.session_seq is an integer column. */
+const MAX_SEQ = 2 ** 31 - 1;
 
 const scoreOk = (v: unknown): v is number | null => v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100);
 
@@ -114,6 +124,7 @@ export function parseCommitPayload(body: unknown): CommitPayload | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   if (typeof b.sessionId !== "string" || !UUID.test(b.sessionId)) return null;
+  if (typeof b.seq !== "number" || !Number.isInteger(b.seq) || b.seq < 1 || b.seq > MAX_SEQ) return null;
   if (typeof b.lessonStatus !== "string" || !(LESSON_STATUSES as readonly string[]).includes(b.lessonStatus)) return null;
   if (typeof b.lessonLocation !== "string" || b.lessonLocation.length > LESSON_LOCATION_MAX) return null;
   if (!scoreOk(b.scoreRaw) || !scoreOk(b.scoreMin) || !scoreOk(b.scoreMax)) return null;
@@ -124,6 +135,7 @@ export function parseCommitPayload(body: unknown): CommitPayload | null {
   }
   return {
     sessionId: b.sessionId.toLowerCase(),
+    seq: b.seq,
     lessonStatus: b.lessonStatus as LessonStatus,
     lessonLocation: b.lessonLocation,
     scoreRaw: b.scoreRaw,

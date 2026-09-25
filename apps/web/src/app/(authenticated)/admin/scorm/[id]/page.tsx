@@ -4,10 +4,13 @@
 // The record is the SCO's own report (SCORM 1.2 is self-reported by
 // design), keeping each learner's best status (lib/scorm/store.ts). Only
 // learners who have launched the package have a row; the header counts them.
+// An administrator who opened it as a learner has a row too, labelled, and is
+// not counted.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@gml/db";
+import { ADMIN_ROLES, hasAnyRole } from "@gml/shared/auth/roles";
 import { requireRole } from "@/lib/guards";
 import { uuidOrNotFound } from "@/lib/ids";
 import { formatDuration, statusChip, statusLabel } from "@/lib/scorm/format";
@@ -85,7 +88,12 @@ export default async function ScormTrackingPage({ params }: { params: Promise<{ 
                       <div>{r.name ?? r.email ?? r.userId}</div>
                       {r.name && r.email ? <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{r.email}</div> : null}
                     </td>
-                    <td>{r.role}</td>
+                    <td>
+                      {r.role}
+                      {hasAnyRole(r.role, ADMIN_ROLES) ? (
+                        <div style={{ fontSize: 11, color: "var(--ink-3)" }}>not counted</div>
+                      ) : null}
+                    </td>
                     <td>
                       <span className={statusChip(r.lessonStatus)}>{statusLabel(r.lessonStatus)}</span>
                     </td>

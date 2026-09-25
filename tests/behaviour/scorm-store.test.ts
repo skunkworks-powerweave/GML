@@ -15,6 +15,10 @@
 //     commits of one session replace its time, and the next session folds it
 //     into the total. A later, lower status (reopening a passed module to
 //     review it) does not erase the learner's best outcome.
+//   - A session's commits count in the order the SCO made them (the runtime
+//     numbers them), not the order they arrive in: LMSCommit, LMSFinish and
+//     the player's flushes are separate requests, and any may be answered
+//     first. A late, older one changes nothing.
 //   - A relaunch resumes: suspend data, location, and entry "resume" after an
 //     exit of "suspend".
 //   - Staff see every learner's status, score and time.
@@ -96,9 +100,13 @@ function sample(subjectId: string, uploadedBy: string | null, id = randomUUID())
   };
 }
 
+// Each call is the next commit in send order, as the runtime numbers them; a
+// test that means to deliver commits out of order passes `seq` itself.
+let sent = 0;
 function payload(over: Partial<CommitPayload>): CommitPayload {
   return {
     sessionId: randomUUID(),
+    seq: ++sent,
     lessonStatus: "incomplete",
     lessonLocation: "",
     scoreRaw: null,
@@ -226,6 +234,74 @@ test("completed and failed are both finished: the later replaces the earlier, so
   }
 });
 
+test("a session's commits apply in the order the SCO made them, whatever order they arrive in", { skip }, async () => {
+  const w = await rttWorld("scsq");
+  try {
+    const db = drizzle(w.c);
+    const pkgId = await insertPackage(db, sample(await w.subject(), w.admin.id));
+    const me = w.teacher.id;
+    const row = async () =>
+      (
+        await w.c.query(
+          `SELECT lesson_status, score_raw, lesson_location, suspend_data, exit, session_time_cs::int AS session_time,
+                  total_time_cs::int AS total_time, session_count, completed_at
+             FROM scorm_attempts WHERE package_id = $1 AND user_id = $2`,
+          [pkgId, me],
+        )
+      ).rows[0];
+
+    // LMSCommit (seq 1) and then LMSFinish (seq 2), whose mastery judgement
+    // turned the SCO's "completed" into "failed". Each is its own keepalive
+    // request, and the server answered the finish first.
+    const session = randomUUID();
+    const commit = payload({ sessionId: session, seq: 1, lessonStatus: "completed", scoreRaw: 50, lessonLocation: "q9", suspendData: "v1", exit: "suspend", sessionTimeCs: 8990 });
+    const finish = payload({ sessionId: session, seq: 2, lessonStatus: "failed", scoreRaw: 50, lessonLocation: "end", suspendData: "v2", exit: "", sessionTimeCs: 9000 });
+    await commitAttempt(db, me, pkgId, finish);
+    await commitAttempt(db, me, pkgId, commit);
+    const judged = { lesson_status: "failed", score_raw: 50, lesson_location: "end", suspend_data: "v2", exit: "", session_time: 9000, total_time: 0, session_count: 1 };
+    const r = await row();
+    assert.deepEqual({ ...r, completed_at: undefined }, { ...judged, completed_at: undefined }, "the late, older commit changes nothing");
+    assert.ok(r.completed_at instanceof Date);
+
+    // The player re-sends a commit it saw fail once the browser is back
+    // online; if it had in fact arrived, the repeat changes nothing either.
+    await commitAttempt(db, me, pkgId, finish);
+    assert.deepEqual({ ...(await row()), completed_at: undefined }, { ...judged, completed_at: undefined });
+
+    // The next launch is a new session: its first commit is taken, whatever
+    // its number, and the last session's time is folded in once.
+    await commitAttempt(db, me, pkgId, payload({ seq: 1, lessonStatus: "incomplete", suspendData: "again", sessionTimeCs: 100 }));
+    assert.deepEqual(
+      { ...(await row()), completed_at: undefined },
+      { ...judged, lesson_location: "", suspend_data: "again", session_time: 100, total_time: 9000, session_count: 2, completed_at: undefined },
+      "the best status stays across sessions; the rest is the new session's",
+    );
+
+    // Three commits of one session, answered 1, 3, 2: the record is 3's.
+    const third = await w.user("Order", "teacher");
+    const s3 = randomUUID();
+    for (const n of [1, 3, 2]) {
+      await commitAttempt(db, third.id, pkgId, payload({ sessionId: s3, seq: n, suspendData: `v${n}`, sessionTimeCs: n * 100 }));
+    }
+    const { rows: ordered } = await w.c.query(
+      `SELECT suspend_data, session_time_cs::int AS t FROM scorm_attempts WHERE package_id = $1 AND user_id = $2`,
+      [pkgId, third.id],
+    );
+    assert.deepEqual(ordered[0], { suspend_data: "v3", t: 300 }, "each applied commit raises the bar");
+
+    // A late older commit that says "finished" does not stamp a finish the
+    // newer one never reported.
+    const other = await w.user("Late", "teacher");
+    const s2 = randomUUID();
+    await commitAttempt(db, other.id, pkgId, payload({ sessionId: s2, seq: 2, lessonStatus: "incomplete", sessionTimeCs: 50 }));
+    await commitAttempt(db, other.id, pkgId, payload({ sessionId: s2, seq: 1, lessonStatus: "completed", sessionTimeCs: 40 }));
+    const { rows } = await w.c.query(`SELECT lesson_status, completed_at, session_time_cs::int AS t FROM scorm_attempts WHERE package_id = $1 AND user_id = $2`, [pkgId, other.id]);
+    assert.deepEqual(rows[0], { lesson_status: "incomplete", completed_at: null, t: 50 });
+  } finally {
+    await w.cleanup();
+  }
+});
+
 test("staff see every learner's status, score and time; learners see their own on the subject", { skip }, async () => {
   const w = await rttWorld("sctr");
   try {
@@ -278,6 +354,12 @@ test("the commit body is validated field by field before it reaches the database
     ["exit outside the vocabulary", { ...ok, exit: "quit" }],
     ["fractional time", { ...ok, sessionTimeCs: 1.5 }],
     ["negative time", { ...ok, sessionTimeCs: -1 }],
+    ["no sequence number", { ...ok, seq: undefined }],
+    ["sequence number zero", { ...ok, seq: 0 }],
+    ["fractional sequence number", { ...ok, seq: 2.5 }],
+    ["sequence number as a string", { ...ok, seq: "3" }],
+    ["sequence number past an integer column", { ...ok, seq: 2 ** 31 }],
   ];
+  assert.equal(parseCommitPayload({ ...ok, seq: 2 ** 31 - 1 })?.seq, 2 ** 31 - 1);
   for (const [why, body] of bad) assert.equal(parseCommitPayload(body), null, why);
 });

@@ -1,5 +1,5 @@
 // /rtt/progress — a learner's own RTT progress, and the staff view of quiz
-// results and attendance.
+// results, SCORM modules and attendance.
 //
 // Nothing showed either (F36). A teacher could not see what she had done or
 // whether she was marked present; a programme admin or mentor could not see
@@ -16,6 +16,8 @@
 //   everyone else                 their own progress only
 // Observers are not given the staff view: whether classroom observers should
 // read teachers' training scores is a programme decision nobody has made.
+// SCORM records follow the same rules (F41): before, only /admin/scorm showed
+// them, so a mentor could not see how her mentees did in a module.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -32,9 +34,11 @@ import {
   attendanceRows,
   progressBySubject,
   quizResults,
+  scormResults,
   STAFF_ROW_LIMIT,
   type StaffFilter,
 } from "@/lib/rtt/progress";
+import { formatDuration, statusChip, statusLabel } from "@/lib/scorm/format";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +85,7 @@ export default async function RttProgressPage({
                     <th>Lessons</th>
                     <th>Readings</th>
                     <th>Assessments</th>
+                    <th>Modules</th>
                     <th>Sessions</th>
                   </tr>
                 </thead>
@@ -97,6 +102,13 @@ export default async function RttProgressPage({
                       <td className="mono">{r.readingsDone}/{r.readingsTotal} readings</td>
                       <td className="mono">{r.quizzesPassed}/{r.quizzesTotal} quizzes passed</td>
                       <td className="mono">
+                        {r.modulesTotal === 0 ? (
+                          <span title="This subject has no SCORM modules">—</span>
+                        ) : (
+                          `${r.modulesCompleted}/${r.modulesTotal} modules completed`
+                        )}
+                      </td>
+                      <td className="mono">
                         {r.sessionsMarked === 0 ? (
                           <span title="No attendance has been taken for you in this subject yet">—</span>
                         ) : (
@@ -110,8 +122,8 @@ export default async function RttProgressPage({
             </div>
           )}
           <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 10 }}>
-            Lessons and readings count when you mark them done on the subject page. Sessions count once
-            attendance has been taken.
+            Lessons and readings count when you mark them done on the subject page. A module counts once it
+            reports that you passed or completed it. Sessions count once attendance has been taken.
           </p>
         </div>
       </div>
@@ -128,7 +140,7 @@ export default async function RttProgressPage({
           <Header title="RTT progress & results" />
           <div className="page-body">
             <p style={{ fontSize: 13 }}>
-              Your mentees&apos; quiz results and attendance are part of the mentorship section.{" "}
+              Your mentees&apos; quiz results, SCORM modules and attendance are part of the mentorship section.{" "}
               <Link href={`/gate/mentorship?next=${encodeURIComponent("/rtt/progress")}`}>
                 Unlock mentorship
               </Link>{" "}
@@ -145,7 +157,7 @@ export default async function RttProgressPage({
   // District > zone, as on /rtt: the teachers whose school is in the place.
   const scope = await rttScope(db, actor, sp);
   const filter: StaffFilter = { teacherIds, subjectId, teachersWhere: teachersIn(scope.place) };
-  const [places, subjects, results, attendance] = await Promise.all([
+  const [places, subjects, results, modules, attendance] = await Promise.all([
     placeOptions(db),
     db
       .select({ id: rttSubjects.id, name: rttSubjects.name })
@@ -153,6 +165,7 @@ export default async function RttProgressPage({
       .where(isAdmin ? undefined : eq(rttSubjects.active, true))
       .orderBy(asc(rttSubjects.name)),
     quizResults(db, filter),
+    scormResults(db, filter),
     attendanceRows(db, filter),
   ]);
   const whose =
@@ -227,6 +240,54 @@ export default async function RttProgressPage({
             </table>
           )}
           {results.more ? <More /> : null}
+        </section>
+
+        <section className="card card-hi" style={{ overflowX: "auto" }}>
+          <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>SCORM modules</div>
+            <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+              Each SCORM module {whose} have opened: status, score and time, as the module reports them.
+            </div>
+          </div>
+          {modules.rows.length === 0 ? (
+            <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+              No SCORM module has been opened yet.
+            </div>
+          ) : (
+            <table className="t">
+              <thead>
+                <tr>
+                  <th>Teacher</th>
+                  <th>Module</th>
+                  <th>Status</th>
+                  <th>Score</th>
+                  <th>Time</th>
+                  <th>Last activity</th>
+                </tr>
+              </thead>
+              <tbody>
+                {modules.rows.map((r) => (
+                  <tr key={`${r.teacherId}:${r.packageId}`}>
+                    <td>
+                      {r.teacherName}
+                      <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{r.schoolName}</div>
+                    </td>
+                    <td>
+                      {r.packageTitle}
+                      <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{r.subjectName}</div>
+                    </td>
+                    <td>
+                      <span className={statusChip(r.lessonStatus)}>{statusLabel(r.lessonStatus)}</span>
+                    </td>
+                    <td className="mono">{r.scoreRaw === null ? "—" : String(r.scoreRaw)}</td>
+                    <td className="mono">{formatDuration(r.timeCs)}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.updatedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {modules.more ? <More /> : null}
         </section>
 
         <section className="card card-hi" style={{ overflowX: "auto" }}>

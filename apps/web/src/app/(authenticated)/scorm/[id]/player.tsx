@@ -16,7 +16,10 @@
 // exit button. Every commit carries the whole state (lib/scorm/runtime.ts), so
 // one that fails on a bad connection is repaired by the next; the learner is
 // told while her progress is unsaved, and it is re-sent when the browser
-// reports it is back online.
+// reports it is back online. Commits are not queued behind one another (a
+// queue would not survive the page closing): each is numbered by the runtime,
+// and the server applies a session's commits in that order, whichever request
+// it finishes first (lib/scorm/store.ts).
 
 import { useCallback, useState } from "react";
 import { Scorm12Runtime, type RuntimeInit } from "@/lib/scorm/runtime";

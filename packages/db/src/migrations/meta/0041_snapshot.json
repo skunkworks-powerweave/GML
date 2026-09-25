@@ -6136,6 +6136,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "session_seq": {
+          "name": "session_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "session_count": {
           "name": "session_count",
           "type": "integer",

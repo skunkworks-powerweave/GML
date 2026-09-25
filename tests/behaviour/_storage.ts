@@ -160,6 +160,10 @@ export async function startFakeStorage(): Promise<FakeStorage> {
       }
       if (req.method === "DELETE" && !key) {
         const { prefixes = [] } = JSON.parse(body.toString() || "{}") as { prefixes?: string[] };
+        // As Storage's own request schema: at most 1,000 keys per remove.
+        if (prefixes.length > 1000) {
+          return json(400, { statusCode: "400", error: "Bad Request", message: "body/prefixes must NOT have more than 1000 items" });
+        }
         for (const p of prefixes) objects.delete(id(bucket, p));
         return json(200, []);
       }
