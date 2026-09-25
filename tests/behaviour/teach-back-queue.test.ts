@@ -389,3 +389,25 @@ test("the review pane offers 'Mark reviewed' only for a clip that plays", { skip
     await w.cleanup();
   }
 });
+
+// W3-74: 'failed' is terminal -- only an operator's retry from
+// /admin/transcode-jobs moves it -- and the pane told the reviewer to wait for
+// it like any clip still in progress.
+test("the review pane says a failed clip needs a programme admin, not that review opens once it is ready", { skip }, async () => {
+  const w = await world("tbf");
+  try {
+    const failed = await w.clip({ status: "failed", createdAgo: "1 hour" });
+    const onFailed = await queue(w.mentor, { id: failed });
+    assert.ok(!reviewForm(onFailed.html, failed), "a clip that never played cannot be reviewed");
+    assert.doesNotMatch(onFailed.text, /Review opens once the video is ready/, "it will not become ready by itself");
+    assert.match(onFailed.text, /failed to process.*programme admin/i);
+    // The clips still on their way keep the wait-for-it wording.
+    for (const status of ["received", "queued", "transcoding"]) {
+      const id = await w.clip({ status, createdAgo: "2 hours" });
+      const pane = await queue(w.mentor, { id });
+      assert.match(pane.text, new RegExp(`Review opens once the video is ready \\(status: ${status}\\)`));
+    }
+  } finally {
+    await w.cleanup();
+  }
+});

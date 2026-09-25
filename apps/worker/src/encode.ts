@@ -22,7 +22,11 @@ export type Probe = {
   colorTransfer?: string | null;
   colorPrimaries?: string | null;
   colorSpace?: string | null;
-  /** Whether it has sound. Unknown (a failed probe) is treated as yes. */
+  /**
+   * Whether it has sound. Unknown (a failed probe) is treated as yes: the
+   * audio is mapped explicitly, so a SILENT source then fails the encode on
+   * that map (missingAudioMap), and the worker encodes it again without.
+   */
   hasAudio?: boolean | null;
   /** Whether it has a picture at all. False only when the probe WORKED and found none. */
   hasVideo?: boolean | null;
@@ -38,6 +42,36 @@ export type Probe = {
 export function commandFailure(bin: string, code: number | null, stderr: string): string {
   const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
   return `${bin} exited ${code}: ${lines[lines.length - 1] ?? "(no output)"}\n${stderr}`;
+}
+
+/** The same, for a run killed at its deadline: the verdict first, then what the tool had said. */
+export function commandTimedOut(bin: string, deadlineMs: number, stderr: string): string {
+  const s = Math.round(deadlineMs / 1000);
+  return `${bin} did not finish within ${s >= 120 ? `${Math.round(s / 60)} min` : `${s} s`}, so it was killed\n${stderr}`;
+}
+
+/**
+ * How long one ffprobe run, or the poster's ffmpeg, may take before it is
+ * killed. Each reads a local file and takes seconds; one still going after two
+ * minutes is stuck (a demuxer looping on a malformed upload), not slow.
+ */
+export const PROBE_DEADLINE_MS = 2 * 60_000;
+
+/**
+ * How long the HLS encode may take before it is killed: six times the source's
+ * duration, never under 30 minutes, and 4 hours when the probe could not say
+ * how long the source is.
+ *
+ * A deadline, because nothing else ends a hung encode: runJob heartbeats the
+ * lease for as long as the child runs, so the reaper never takes the job back,
+ * and one stuck ffmpeg held the only transcode slot until someone restarted
+ * the worker. Generous, because killing a real encode costs it an attempt: the
+ * ladder runs at about three times real time for a 1080p source on the 2-vCPU
+ * target, and slower while the web tier it yields to is busy.
+ */
+export function encodeDeadlineMs(durationSec: number | null | undefined): number {
+  if (!durationSec || durationSec <= 0) return 4 * 60 * 60_000;
+  return Math.max(30 * 60_000, 6 * durationSec * 1000);
 }
 
 /**
@@ -249,6 +283,17 @@ export function hlsEncodeArgs(input: string, outDir: string, probe: Probe): stri
     "-var_stream_map", rungs.map((_, i) => (audio ? `v:${i},a:${i}` : `v:${i}`)).join(" "),
     join(outDir, "v%v.m3u8"),
   ];
+}
+
+/**
+ * Whether a failed hlsEncodeArgs() run failed because the source has no audio
+ * stream for its `-map 0:a:0`. The old single encode left stream selection to
+ * ffmpeg, which skips a missing audio stream quietly; the ladder maps it by
+ * name, which is fatal. ffmpeg 7.1 says "Stream map '' matches no streams",
+ * 5.1 names the map, and both then say they failed to set it.
+ */
+export function missingAudioMap(ffmpegError: string): boolean {
+  return /Stream map '[^']*' matches no streams|Failed to set value '0:a:0' for option 'map'/.test(ffmpegError);
 }
 
 /** ffprobe arguments for what the encoder actually wrote into a segment. */

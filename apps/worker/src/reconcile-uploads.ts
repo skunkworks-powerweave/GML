@@ -35,7 +35,13 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { files, videoSubmissions } from "@gml/db/schema";
-import { finalizeUpload, isOversize, reconcileDecision, UPLOAD_COMPLETE_GRACE_MINUTES } from "@gml/db/uploads";
+import {
+  finalizeUpload,
+  isOversize,
+  reconcileDecision,
+  UPLOAD_ABANDON_AFTER_HOURS,
+  UPLOAD_COMPLETE_GRACE_MINUTES,
+} from "@gml/db/uploads";
 import { BUCKETS } from "@gml/shared/storage/buckets";
 import { removeObjects, statObject } from "@gml/shared/storage/client";
 import { log } from "./log.js";
@@ -95,6 +101,8 @@ export async function reconcileStalledUploads(opts: { stat?: Stat; remove?: Remo
   let failed = 0;
   let inFlight = 0;
   let unanswered = 0;
+  let oldestUnansweredSeconds = 0;
+  let unansweredErr = "";
 
   for (const row of waiting) {
     // statObject answers null for "not there" and throws when Storage errs.
@@ -103,8 +111,10 @@ export async function reconcileStalledUploads(opts: { stat?: Stat; remove?: Remo
     let found: { size: number } | null;
     try {
       found = await stat(BUCKETS.videosOriginal, row.objectKey);
-    } catch {
+    } catch (err) {
       unanswered += 1;
+      oldestUnansweredSeconds = Math.max(oldestUnansweredSeconds, Number(row.ageSeconds));
+      unansweredErr = String(err).slice(0, 300);
       continue;
     }
     const decision = reconcileDecision({
@@ -162,4 +172,20 @@ export async function reconcileStalledUploads(opts: { stat?: Stat; remove?: Remo
   }
 
   log.info("reconciled stalled uploads", { completed, failed, inFlight, unanswered, examined: waiting.length });
+
+  // Leaving an upload alone while Storage does not answer is right for an
+  // outage, but it has no end: the abandon rule is reached only through an
+  // answer, so an upload whose stat keeps throwing (a permission error on the
+  // bucket, a revoked key) stays 'received' for good. That was a count in the
+  // info line above. Said on its own, and as an error once it has outlasted
+  // twice the abandon window, which no outage this sweep waits out does.
+  if (unanswered > 0) {
+    const oldestHours = Math.floor(oldestUnansweredSeconds / 3600);
+    const say = oldestHours >= 2 * UPLOAD_ABANDON_AFTER_HOURS ? log.error : log.warn;
+    say("Storage did not answer for stalled uploads; they stay 'received' until it does", {
+      unanswered,
+      oldestHours,
+      err: unansweredErr,
+    });
+  }
 }

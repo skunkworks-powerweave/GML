@@ -47,7 +47,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { boundedError, PermanentJobError, type QueueTx, type ReapedJob } from "@gml/db/queue";
@@ -56,11 +56,15 @@ import { BUCKETS, hlsPrefix, hlsMasterPlaylistKey, posterKey } from "@gml/shared
 import { putObject, getObjectStream } from "@gml/shared/storage/client";
 import {
   commandFailure,
+  commandTimedOut,
+  encodeDeadlineMs,
   hlsEncodeArgs,
   ladderFor,
+  missingAudioMap,
   parseProbe,
   posterArgs,
   probeArgs,
+  PROBE_DEADLINE_MS,
   renditionProbeArgs,
   renditionProblem,
   unreadableSource,
@@ -135,7 +139,8 @@ export async function repairReapedTranscodes(tx: QueueTx, job: ReapedJob): Promi
       and(
         eq(videoSubmissions.id, videoSubmissionId),
         // Never over a result: a 'ready' video whose succeed() write was lost
-        // (see runJob) stays ready.
+        // (see runJob) is left ready here, and the requeued re-run finds it
+        // ready and does nothing (transcode480p).
         inArray(videoSubmissions.status, job.dead ? ["queued", "transcoding"] : ["transcoding"]),
       ),
     );
@@ -155,6 +160,16 @@ export async function repairReapedTranscodes(tx: QueueTx, job: ReapedJob): Promi
  * offered neither Retry nor Drop, which both need a latest attempt that failed.
  * A stranded video without such a row gets one, so the DLQ lists it.
  *
+ * The same goes for a video already 'failed' by a transcode that died with no
+ * failed attempt on record -- the last attempt's row 'cancelled' by a shutdown
+ * whose release() never landed (the reaper then dead-lettered the job), or
+ * never written at all because the ledger refused the insert. Those were
+ * failed without a failed latest row, so the DLQ offered neither verb, and a
+ * direct upload had no way back. Only for a video whose transcode job is DEAD:
+ * a WhatsApp fetch or an upload that failed never reached a transcode, and a
+ * Retry could only transcode bytes that are not there. An operator's
+ * 'dropped' is a decision, and is left alone.
+ *
  * One statement, so every part sees the same snapshot: the insert skips the
  * videos whose running row the first part has just failed. Idempotent, and safe
  * beside a second worker running the same statement.
@@ -165,6 +180,9 @@ export async function repairStrandedTranscodes(): Promise<{ attempts: number; vi
     SELECT 1 FROM jobs
      WHERE jobs.queue = 'transcode' AND jobs.status IN ('queued', 'running')
        AND jobs.dedupe_key = 'submission:' || ${submissionId}::text)`;
+  const latestAttempt = (submissionId: unknown) => sql`COALESCE((
+    SELECT t.status FROM ${transcodeJobs} t WHERE t.video_submission_id = ${submissionId}
+     ORDER BY t.created_at DESC, t.id DESC LIMIT 1), '')`;
   const res = await db.execute<{ attempts: number; videos: number }>(sql`
     WITH attempts AS (
       UPDATE ${transcodeJobs} SET status = 'failed', ended_at = now(), error = ${reason}
@@ -178,11 +196,21 @@ export async function repairStrandedTranscodes(): Promise<{ attempts: number; vi
       INSERT INTO ${transcodeJobs} (video_submission_id, profile, status, ended_at, error)
       SELECT v.id, '480p', 'failed', now(), ${reason} FROM videos v
        WHERE NOT EXISTS (SELECT 1 FROM attempts a WHERE a.video_submission_id = v.id)
-         AND COALESCE((SELECT t.status FROM ${transcodeJobs} t WHERE t.video_submission_id = v.id
-                        ORDER BY t.created_at DESC, t.id DESC LIMIT 1), '') <> 'failed'
+         AND ${latestAttempt(sql`v.id`)} <> 'failed'
+      RETURNING id
+    ), unrecorded AS (
+      INSERT INTO ${transcodeJobs} (video_submission_id, profile, status, ended_at, error)
+      SELECT v.id, '480p', 'failed', now(), COALESCE(v.processing_log, 'failed with no attempt on record')
+        FROM ${videoSubmissions} v
+       WHERE v.status = 'failed' AND ${noLiveJob(sql`v.id`)}
+         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.video_submission_id = v.id)
+         AND EXISTS (SELECT 1 FROM jobs WHERE jobs.queue = 'transcode' AND jobs.status = 'dead'
+                       AND jobs.dedupe_key = 'submission:' || v.id::text)
+         AND ${latestAttempt(sql`v.id`)} NOT IN ('failed', 'dropped')
       RETURNING id
     )
-    SELECT (SELECT count(*) FROM attempts)::int AS attempts, (SELECT count(*) FROM videos)::int AS videos
+    SELECT (SELECT count(*) FROM attempts)::int AS attempts,
+           ((SELECT count(*) FROM videos) + (SELECT count(*) FROM unrecorded))::int AS videos
   `);
   const [row] = (res as unknown as { rows: { attempts: number; videos: number }[] }).rows ?? [];
   return { attempts: row?.attempts ?? 0, videos: row?.videos ?? 0 };
@@ -218,6 +246,20 @@ export async function transcode480p(
   let jobRowId: string | undefined;
   let workDir: string | undefined;
   try {
+    // A second delivery of a transcode that already finished: its succeed()
+    // write was lost (see runJob), and the reaper requeued the job. This used
+    // to announce 'transcoding' over the playable video -- the playlist route
+    // refuses anything not 'ready' -- and, if the re-run failed, mark it
+    // failed. No producer enqueues a transcode for a ready video on purpose.
+    const [current] = await db
+      .select({ status: videoSubmissions.status, hlsMasterKey: videoSubmissions.hlsMasterKey })
+      .from(videoSubmissions)
+      .where(eq(videoSubmissions.id, videoSubmissionId));
+    if (current?.status === "ready" && current.hlsMasterKey) {
+      console.warn(`[transcode] ${videoSubmissionId} is ready already (a re-delivered job); nothing to do`);
+      return;
+    }
+
     // An attempt killed before this one left its row 'running'. The reaper
     // closes those as it requeues them; this catches any it could not (rows
     // from before it did, a drain that ran out of time).
@@ -276,7 +318,23 @@ export async function transcode480p(
 
     // ── 3. Transcode ─────────────────────────────────────────────────────────
     // The encoder settings are in encode.ts, where they can be tested.
-    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal);
+    const encode = () =>
+      runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal, deadline(encodeDeadlineMs(probe.durationSec)));
+    try {
+      await encode();
+    } catch (err) {
+      // With the probe failed, whether the source has sound is unknown, and
+      // unknown is encoded as sound: a silent source then failed on its audio
+      // map, on every attempt whose probe failed, where a video-only encode
+      // works. Again without audio ONLY on ffmpeg's word that there is none --
+      // guessing silent would publish a lesson with its sound missing.
+      if (probe.hasAudio != null || signal?.aborted || !missingAudioMap(String(err))) throw err;
+      console.warn(`[transcode] ${videoSubmissionId}: the source has no audio stream; encoding it without`);
+      probe.hasAudio = false;
+      await rm(localOut, { recursive: true, force: true });
+      await mkdir(localOut, { recursive: true });
+      await encode();
+    }
 
     // ffmpeg exiting 0 proves it wrote something, not that a phone can play
     // it. Refuse an undecodable rendition here -- any rung, since a player may
@@ -284,7 +342,7 @@ export async function transcode480p(
     // failure path with a reason attached.
     for (let i = 0; i < ladderFor(probe).length; i += 1) {
       const problem = renditionProblem(
-        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i))), signal),
+        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i))), signal, deadline(PROBE_DEADLINE_MS)),
       );
       if (problem) throw new Error(`rendition ${i}: ${problem}`);
     }
@@ -296,7 +354,7 @@ export async function transcode480p(
     let posterUploaded = false;
     try {
       const at = probe.durationSec && probe.durationSec > 2 ? probe.durationSec * 0.1 : 0;
-      await runFfmpeg(posterArgs(localInput, localPoster, at), signal);
+      await runFfmpeg(posterArgs(localInput, localPoster, at), signal, deadline(PROBE_DEADLINE_MS));
       await putObject(
         sb,
         BUCKETS.posters,
@@ -384,10 +442,12 @@ export async function transcode480p(
       // has for exactly this.
       console.warn(`[transcode] ${videoSubmissionId} interrupted by worker shutdown; handing it back`);
       if (jobRowId) {
+        // Only while it is still running: a row the reaper has already failed
+        // (its lease lapsed while this handler lived on) must stay failed.
         await db
           .update(transcodeJobs)
           .set({ status: "cancelled", endedAt: new Date(), error: "interrupted: the worker was shut down" })
-          .where(eq(transcodeJobs.id, jobRowId))
+          .where(and(eq(transcodeJobs.id, jobRowId), eq(transcodeJobs.status, "running")))
           .catch(() => undefined);
       }
       await db
@@ -416,7 +476,9 @@ export async function transcode480p(
           ? { status: "failed", processingLog: msg }
           : { status: "queued", processingLog: `attempt failed, retrying: ${msg}` },
       )
-      .where(eq(videoSubmissions.id, videoSubmissionId))
+      // Never over a result: a video this attempt made ready before a later
+      // write threw (the ledger's 'succeeded') is playable, and stays so.
+      .where(and(eq(videoSubmissions.id, videoSubmissionId), ne(videoSubmissions.status, "ready")))
       .catch(() => undefined);
     throw err;
   } finally {
@@ -433,28 +495,84 @@ export async function transcode480p(
  */
 async function ffprobe(path: string, signal?: AbortSignal): Promise<Probe & { unreadable?: string | null }> {
   try {
-    return parseProbe(await run("ffprobe", probeArgs(path), signal));
+    return parseProbe(await run("ffprobe", probeArgs(path), signal, deadline(PROBE_DEADLINE_MS)));
   } catch (err) {
     // A shutdown is not a probe failure: let the attempt be handed back.
     if (signal?.aborted) throw err;
     console.warn("[transcode] ffprobe failed:", boundedError(String(err), 300));
-    return { durationSec: null, width: null, height: null, unreadable: unreadableSource(String(err)) };
+    // A probe killed at its deadline would hang the same way on every attempt
+    // -- the same bytes, the same demuxer -- so it is a source ffprobe cannot
+    // read, and the job is not retried into the same hang.
+    const unreadable = err instanceof CommandTimeout ? err.message.split("\n")[0]! : unreadableSource(String(err));
+    return { durationSec: null, width: null, height: null, unreadable };
   }
 }
 
-function runFfmpeg(args: string[], signal?: AbortSignal): Promise<void> {
-  return run("ffmpeg", args, signal).then(() => undefined);
+/**
+ * ffmpeg, at a lower CPU priority. It ran at the worker's own (nice 0), and a
+ * three-rung encode keeps both vCPUs busy: inside the worker's container the
+ * CPU is shared per thread, so the Node event loop and each healthcheck (a
+ * fresh `node`, 10 s timeout) got a small share of it, and the healthcheck
+ * timed out for as long as the transcode ran -- "Worker unhealthy", which the
+ * runbook reads as "cannot reach the database". nice execs ffmpeg in place, so
+ * the pid run() signals is still ffmpeg's; the probes are short and left alone.
+ * FFMPEG_NICE sets the level, 0 turns it off; Windows has no nice, so a
+ * development run there starts ffmpeg directly.
+ */
+function runFfmpeg(args: string[], signal: AbortSignal | undefined, deadlineMs: number): Promise<void> {
+  const level = Number.parseInt(process.env.FFMPEG_NICE ?? (process.platform === "win32" ? "0" : "10"), 10);
+  const done = level > 0
+    ? run("nice", ["-n", String(level), "ffmpeg", ...args], signal, deadlineMs, "ffmpeg")
+    : run("ffmpeg", args, signal, deadlineMs);
+  return done.then(() => undefined);
+}
+
+/**
+ * A command's deadline (encode.ts), or TRANSCODE_DEADLINE_MS in its place when
+ * that is set: a test cannot wait minutes for a stand-in ffprobe that never
+ * exits.
+ */
+function deadline(ms: number): number {
+  const override = Number.parseInt(process.env.TRANSCODE_DEADLINE_MS ?? "", 10);
+  return override > 0 ? override : ms;
+}
+
+/** A command that was still running at its deadline, and was killed (see run()). */
+export class CommandTimeout extends Error {
+  override name = "CommandTimeout";
 }
 
 /**
  * Spawn a binary, capture stdout, reject with the tail of stderr on failure.
  * An aborted `signal` kills the child (SIGTERM) and rejects with an AbortError.
+ *
+ * A child still running at `deadlineMs` is killed (SIGKILL: a looping demuxer
+ * need not be listening for anything gentler) and it rejects with a
+ * CommandTimeout. There was no deadline: runJob heartbeats the lease for as
+ * long as the handler waits, so an ffprobe or ffmpeg that never exited held
+ * its job 'running' -- and with WORKER_CONCURRENCY=1 every other video behind
+ * it -- until someone restarted the worker, which then handed the job back
+ * uncounted to hang again. A CommandTimeout is an ordinary failure of the
+ * attempt, not a shutdown: it is recorded, counted, and ends in the DLQ.
+ *
+ * `label` names the tool in those errors when `bin` only launches it (nice).
  */
-function run(bin: string, args: string[], signal?: AbortSignal): Promise<string> {
+function run(
+  bin: string,
+  args: string[],
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+  label = bin,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], signal });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, deadlineMs);
     child.stdout.on("data", (c) => {
       stdout += c.toString();
     });
@@ -464,10 +582,20 @@ function run(bin: string, args: string[], signal?: AbortSignal): Promise<string>
       // the one code path that only matters when something has gone wrong.
       stderr = (stderr + c.toString()).slice(-8000);
     });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    // On 'exit' for a killed child, not 'close': 'close' also waits for its
+    // output pipes, which anything the child started may still hold open.
+    child.on("exit", () => {
+      clearTimeout(timer);
+      if (timedOut) reject(new CommandTimeout(commandTimedOut(label, deadlineMs, stderr)));
+    });
     child.on("close", (code) => {
+      if (timedOut) return;
       if (code === 0) resolve(stdout);
-      else reject(new Error(commandFailure(bin, code, stderr)));
+      else reject(new Error(commandFailure(label, code, stderr)));
     });
   });
 }

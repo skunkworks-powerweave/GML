@@ -376,6 +376,12 @@ export async function queueDepth(
  * without bound. Dead jobs are kept far longer than successes: a success is
  * noise once the video is playable, whereas a dead job is the only record that
  * something needs a human.
+ *
+ * A dead job's age falls back to updated_at: the reaper dead-lettered jobs
+ * without setting completed_at until it was fixed, and `completed_at < ...` is
+ * never true of NULL, so every such row stayed -- in the 'N failed' chip and
+ * the DLQ list -- for good. updated_at is when it was reaped (health.ts counts
+ * those rows the same way).
  */
 export async function pruneFinished(
   db: NodePgDatabase<Record<string, unknown>>,
@@ -386,7 +392,7 @@ export async function pruneFinished(
      WHERE (status = 'succeeded'
             AND completed_at < now() - make_interval(hours => ${opts.succeededOlderThanHours ?? 24}))
         OR (status = 'dead'
-            AND completed_at < now() - make_interval(days => ${opts.deadOlderThanDays ?? 30}))
+            AND COALESCE(completed_at, updated_at) < now() - make_interval(days => ${opts.deadOlderThanDays ?? 30}))
      RETURNING id
   `);
   return ((res as unknown as { rows: unknown[] }).rows ?? []).length;

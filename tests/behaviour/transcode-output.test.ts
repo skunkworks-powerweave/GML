@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   hlsEncodeArgs,
+  missingAudioMap,
   parseProbe,
   posterArgs,
   probeArgs,
@@ -379,4 +380,36 @@ test("F144: a source without sound still gets its ladder", { skip }, () => {
   const out = transcode(source("ladder-silent.mp4", { size: "1280x720", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
   assert.equal(out.variants.length, 3);
   for (const v of out.variants) assert.equal(v.audio, false, `${v.uri} claims a sound track the source never had`);
+});
+
+// ── W3-57: a silent source the probe could not read ─────────────────────────
+//
+// A failed probe leaves hasAudio unknown, and unknown maps audio (0:a:0). On a
+// source with no sound that is fatal, where the old single encode's default
+// stream selection skipped it; the worker recognises this failure and encodes
+// again without audio.
+
+test("W3-57: a silent source probed as unknown fails on its audio map, in words missingAudioMap knows", { skip }, () => {
+  const src = source("silent-unprobed.mp4", { size: "1280x720", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] });
+  const outDir = join(dir, "silent-unprobed-out");
+  mkdirSync(outDir, { recursive: true });
+  const unknown = { durationSec: null, width: null, height: null };
+  const r = spawnSync("ffmpeg", hlsEncodeArgs(src, outDir, unknown), { encoding: "utf8" });
+  assert.notEqual(r.status, 0, "ffmpeg accepted an audio map for a source with no sound");
+  assert.ok(missingAudioMap(r.stderr), `not recognised as a missing audio stream:\n${r.stderr.slice(-1500)}`);
+
+  // The worker's second encode, video-only, works.
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+  run("ffmpeg", hlsEncodeArgs(src, outDir, { ...unknown, hasAudio: false }));
+  assert.equal(variantsOf(readFileSync(join(outDir, "master.m3u8"), "utf8")).length, 3);
+});
+
+test("W3-57: missingAudioMap is that failure and no other", () => {
+  // ffmpeg 7.1, and 5.1 (Debian bookworm, the production image).
+  assert.ok(missingAudioMap("Stream map '' matches no streams.\nTo ignore this, add a trailing '?' to the map.\nFailed to set value '0:a:0' for option 'map': Invalid argument"));
+  assert.ok(missingAudioMap("Stream map '0:a:0' matches no streams.\nTo ignore this, add a trailing '?' to the map."));
+  // A source that is not media at all, and an encoder that failed.
+  assert.ok(!missingAudioMap("input: Invalid data found when processing input\nError opening input files: Invalid data found when processing input"));
+  assert.ok(!missingAudioMap("Error while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height"));
 });

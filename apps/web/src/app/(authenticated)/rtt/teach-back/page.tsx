@@ -618,9 +618,13 @@ export default async function TeachBackQueuePage({
                 // Not playable yet (or failed). The button used to render for
                 // every unreviewed row, and a review recorded now would keep
                 // the clip out of "Pending review" once it became watchable;
-                // the review route refuses it too.
+                // the review route refuses it too. A failed clip is not on its
+                // way: nothing but an operator's retry from Transcode jobs
+                // moves it, so it is not told to wait like the others.
                 <span style={{ padding: "8px 0", color: "var(--ink-3)", fontSize: 12 }}>
-                  Review opens once the video is ready (status: {selected.status.replace("_", " ")}).
+                  {selected.status === "failed"
+                    ? "This video failed to process. Ask a programme admin to retry it."
+                    : `Review opens once the video is ready (status: ${selected.status.replace("_", " ")}).`}
                 </span>
               ) : (
                 <form

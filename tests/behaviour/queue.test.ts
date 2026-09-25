@@ -407,3 +407,37 @@ test("pruneFinished does not delete live work", { skip }, async () => {
     await close();
   }
 });
+
+test("W3-59: a dead job the old reaper left without completed_at is pruned once it is old", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("prune-legacy-dead");
+  try {
+    // What reapExpiredLeases wrote before it set completed_at: 'dead', with
+    // completed_at NULL and updated_at the moment it was reaped. Rows like it
+    // are in every deployment that ran that reaper, and `completed_at < ...`
+    // is never true of NULL -- so they stayed in the 'N failed' chip and the
+    // DLQ list for good.
+    await db.execute(sql`
+      INSERT INTO jobs (queue, name, payload, status, attempts, max_attempts, completed_at, created_at, updated_at)
+      VALUES ('transcode', ${name}, '{"which":"legacy-old"}', 'dead', 3, 3, NULL,
+              now() - interval '32 days', now() - interval '31 days'),
+             ('transcode', ${name}, '{"which":"legacy-recent"}', 'dead', 3, 3, NULL,
+              now() - interval '3 days', now() - interval '2 days')
+    `);
+
+    await pruneFinished(db, { deadOlderThanDays: 30 });
+
+    const left = await db.execute<{ which: string }>(sql`
+      SELECT payload->>'which' AS which FROM jobs WHERE name = ${name}
+    `);
+    assert.deepEqual(
+      ((left as unknown as { rows: { which: string }[] }).rows ?? []).map((r) => r.which),
+      ["legacy-recent"],
+      "a legacy dead job past the window must go, and one inside it must stay",
+    );
+  } finally {
+    await cleanup(db, name);
+    await close();
+  }
+});
