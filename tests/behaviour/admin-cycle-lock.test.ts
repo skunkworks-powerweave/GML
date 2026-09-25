@@ -235,3 +235,128 @@ test("the grid's error banner never repeats free text from the URL", { skip }, a
     }
   });
 });
+
+// ── THE OBSERVER IS PART OF THE SIGNED-OFF RECORD TOO ───────────────────────
+//
+// The lock above covered teacherId and kind and left the observer editable at
+// every stage. But lib/authz.ts grants an observer a cycle through
+// cycle.observer_id, as it grants a teacher through teacher_id: once the
+// observer has written the rubric, reassigning the observer moved read access
+// to that record, the observer dashboard counts and the completion notices
+// onto someone who never observed the lesson. The grid and the CSV id-update
+// both accepted it on a COMPLETE cycle ({ok:true}).
+//
+// And the live-observer rule ran on every update, observerId changed or not:
+// once a signed-off cycle's observer account was deactivated, no edit to that
+// cycle (a topic typo) could be saved unless the admin reassigned the observer
+// -- which is exactly the harmful change. The rule now judges only a changed
+// observer, against the row the write replaces.
+
+test("once the observer has observed, the cycle's observer can no longer be changed", () => {
+  const guard = ADMIN_ENTITIES["observation-cycles"]!.guardMutation!;
+  for (const status of ["observed", "post_submitted", "complete"]) {
+    const row = { status, teacherId: A, observerId: A, kind: "evaluative" };
+    assert.match(guard("update", row, { ...row, observerId: B }) ?? "", /observer/, `reassigning the observer at "${status}"`);
+    assert.equal(guard("update", row, { ...row, topic: "Decimals" }), null, `other edits at "${status}"`);
+  }
+  for (const status of ["nominated", "pre_submitted"]) {
+    const row = { status, teacherId: A, observerId: A, kind: "evaluative" };
+    assert.equal(guard("update", row, { ...row, observerId: B }), null, `before the observation ("${status}") it can be reassigned`);
+  }
+});
+
+test("the grid and the CSV keep a signed-off cycle's observer, and a deactivated observer does not freeze the row", { skip }, async () => {
+  const { updateRowAction } = await actions();
+  const { importCsv } = await import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/csv.ts");
+  await withClient(async (c) => {
+    const t = tag("cycle-observer");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const teacher = await f.row("teachers", { school_id: school, full_name: `A ${t}` });
+      const obsA = await f.user("observer", "obsa");
+      const obsB = await f.user("observer", "obsb");
+      const obsGone = await f.user("observer", "obsgone");
+      const mentorUser = await f.user("mentor", "mentor");
+      await c.query(`UPDATE users SET active = false WHERE id = $1`, [obsGone]);
+      const admin = await f.user("programme_admin", "padmin");
+      await f.row("section_gate_grants", { user_id: admin, gate_slug: "observation", expires_at: new Date(Date.now() + 3600_000) });
+      const done = await f.row("observation_cycles", {
+        code: `OBS-${t}`,
+        teacher_id: teacher,
+        observer_id: obsA,
+        kind: "evaluative",
+        status: "complete",
+        topic: "Fractions",
+        scheduled_at: new Date("2026-10-01T04:30:00Z"),
+      });
+      await f.row("observation_forms", { cycle_id: done, kind: "observer", submitted_by_user_id: obsA, responses: JSON.stringify({ about: "A" }) });
+      const fresh = await f.row("observation_cycles", {
+        code: `NOM-${t}`,
+        teacher_id: teacher,
+        observer_id: obsA,
+        kind: "baseline",
+        status: "nominated",
+        scheduled_at: new Date("2026-11-01T04:30:00Z"),
+      });
+      actAs(admin, "programme_admin");
+      const observerOf = async (id: string) =>
+        (await c.query(`SELECT observer_id FROM observation_cycles WHERE id = $1`, [id])).rows[0]?.observer_id;
+      const edit = (rowId: string, code: string, over: Record<string, string>) =>
+        updateRowAction(
+          undefined,
+          form({
+            entitySlug: "observation-cycles",
+            rowId,
+            code,
+            teacherId: teacher,
+            observerId: obsA,
+            kind: rowId === done ? "evaluative" : "baseline",
+            scheduledAt: rowId === done ? "2026-10-01T04:30:00Z" : "2026-11-01T04:30:00Z",
+            topic: "Fractions",
+            ...over,
+          }),
+        );
+
+      // A signed-off cycle keeps its observer, through either door.
+      const moved = await edit(done, `OBS-${t}`, { observerId: obsB });
+      assert.equal(moved.ok, false, "the grid reassigned a signed-off cycle's observer");
+      assert.match(moved.error ?? "", /observer/i);
+      assert.equal(await observerOf(done), obsA);
+      const imported = await importCsv("observation-cycles", `id,observerId\n${done},${obsB}\n`);
+      assert.equal(imported.updated, 0, JSON.stringify(imported));
+      assert.equal(imported.errors[0]?.row, 2, JSON.stringify(imported));
+      assert.match(imported.errors[0]?.message ?? "", /observer/i);
+      assert.equal(await observerOf(done), obsA);
+
+      // The observer's account is closed after the cycle was signed off. A
+      // typo in the topic can still be fixed, in the grid and by CSV, and the
+      // observer stays who observed.
+      await c.query(`UPDATE users SET active = false WHERE id = $1`, [obsA]);
+      const typo = await edit(done, `OBS-${t}`, { topic: "Fractions (Gr 4)" });
+      assert.deepEqual(typo, { ok: true }, "a topic edit was refused because the observer has left");
+      const csvTypo = await importCsv("observation-cycles", `id,topic\n${done},Fractions (Grade 4)\n`);
+      assert.deepEqual({ updated: csvTypo.updated, errors: csvTypo.errors }, { updated: 1, errors: [] });
+      const { rows: [after] } = await c.query(`SELECT topic, observer_id FROM observation_cycles WHERE id = $1`, [done]);
+      assert.deepEqual(after, { topic: "Fractions (Grade 4)", observer_id: obsA });
+
+      // A cycle not yet observed can be reassigned -- but only to a live
+      // observer account; the rule still holds for a CHANGED observer.
+      for (const bad of [obsGone, mentorUser]) {
+        const r = await edit(fresh, `NOM-${t}`, { observerId: bad });
+        assert.equal(r.ok, false, `a nomination was pointed at ${bad === obsGone ? "a deactivated observer" : "a mentor"}`);
+        assert.ok(r.fieldErrors?.observerId, "the error belongs to the observer field");
+      }
+      const csvBad = await importCsv("observation-cycles", `id,observerId\n${fresh},${mentorUser}\n`);
+      assert.match(csvBad.errors[0]?.message ?? "", /observerId: must be an active observer/);
+      assert.equal(await observerOf(fresh), obsA);
+      const reassigned = await edit(fresh, `NOM-${t}`, { observerId: obsB });
+      assert.deepEqual(reassigned, { ok: true });
+      assert.equal(await observerOf(fresh), obsB);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});

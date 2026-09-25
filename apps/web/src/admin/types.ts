@@ -70,9 +70,16 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
   /**
    * Rules zod cannot check because they need the database (an observer id must
    * belong to a live observer account). Returns field -> message, or null.
-   * Run by the create and update actions and by CSV import, after zod.
+   * Run by the create and update actions and by CSV import, after zod. On an
+   * update `before` is the stored row the write replaces, so a rule can judge
+   * only what changes: a value stored long ago may no longer pass (an account
+   * since deactivated) and must not block an unrelated edit.
    */
-  validate?: (db: AdminDb, row: Record<string, unknown>) => Promise<Record<string, string> | null>;
+  validate?: (
+    db: AdminDb,
+    row: Record<string, unknown>,
+    before?: Record<string, unknown>,
+  ) => Promise<Record<string, string> | null>;
   /**
    * State-dependent write rules. Called by the grid's update (with the row as
    * it is and as it would become) and delete (with the row as it is), inside

@@ -271,8 +271,10 @@ export async function importCsv(slug: string, csv: string): Promise<{
       continue;
     }
     // The entity's database-backed rules, which the grid's form enforces too
-    // (a cycle's observer must be a live observer account).
-    const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
+    // (a cycle's observer must be a live observer account). An update is
+    // judged against the row it changes, so a stored value the file does not
+    // change (an observer deactivated since) does not refuse it.
+    const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>, before);
     if (problems) {
       const [field, message] = Object.entries(problems)[0]!;
       errors.push({ row: line, message: `${field}: ${message}` });
