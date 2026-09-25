@@ -23,27 +23,35 @@
 // 240p / 360p / 480p ladder (apps/worker/src/encode.ts), so the menu is built
 // from the renditions the stream actually offers once hls.js has parsed it --
 // "480p" used to set currentLevel = 0, which in a ladder is 240p. A video
-// transcoded before the ladder offers its one 480p rendition. 720p stays a
-// disabled option: 480p is the ceiling (SM-4).
+// transcoded before the ladder has one rendition and no master playlist, so
+// hls.js knows nothing of its size and the menu offers only Auto (which is
+// that rendition). 720p stays a disabled option: 480p is the ceiling (SM-4).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Level = { width: number; height: number };
 
-/** A rendition's label: its SHORT side, so a portrait 480x854 rung is "480p". */
-function shortSide(l: Level): number {
-  return Math.min(l.width || l.height, l.height || l.width);
+/**
+ * A rendition's label: its SHORT side, so a portrait 480x854 rung is "480p".
+ * Null when the stream does not say how big it is. hls.js takes a level's size
+ * only from a master playlist's RESOLUTION, and a bare media playlist (every
+ * video transcoded before the ladder) is one level of size 0x0 -- which this
+ * used to label "0p".
+ */
+function label(l: Level): string | null {
+  const short = Math.min(l.width || l.height, l.height || l.width);
+  return short > 0 ? `${short}p` : null;
 }
 
 /** The quality menu's rendition entries, in the stream's own order (lowest first). */
 export function renditionOptions(levels: Level[]): string[] {
-  return levels.map((l) => `${shortSide(l)}p`);
+  return levels.map(label).filter((l): l is string => l !== null);
 }
 
 /** hls.currentLevel for a menu choice: -1 for Auto, else that rendition's index. */
 export function levelIndexFor(levels: Level[], choice: string): number {
   if (choice === "auto") return -1;
-  return levels.findIndex((l) => `${shortSide(l)}p` === choice);
+  return levels.findIndex((l) => label(l) === choice);
 }
 
 type HlsPlayerProps = {

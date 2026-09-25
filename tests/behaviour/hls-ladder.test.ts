@@ -14,7 +14,9 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { registerHooks } from "node:module";
+import { createRequire, registerHooks } from "node:module";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Client } from "pg";
 import "./_ui.js";
 import { needsDatabase, tag, DATABASE_URL } from "./_harness.js";
@@ -34,6 +36,18 @@ registerHooks({
 
 const route = () => import("../../apps/web/src/app/api/media/playlist/[id]/route.ts");
 const player = () => import("../../apps/web/src/components/video/HlsPlayer.tsx");
+
+type HlsLevel = { width: number; height: number };
+type HlsJs = {
+  M3U8Parser: { parseMasterPlaylist(text: string, url: string): { levels: object[] } };
+  Level: new (parsed: object) => HlsLevel;
+  AttrList: new (attrs: object) => object;
+};
+/** The player's own hls.js (apps/web's dependency), its ESM build as the browser bundle gets it. */
+const hlsJs = async (): Promise<HlsJs> => {
+  const pkg = createRequire(new URL("../../apps/web/package.json", import.meta.url)).resolve("hls.js/package.json");
+  return (await import(pathToFileURL(join(dirname(pkg), "dist", "hls.mjs")).href)) as HlsJs;
+};
 
 const MASTER = [
   "#EXTM3U",
@@ -188,4 +202,31 @@ test("F144: the player's quality menu offers the ladder's renditions, and 480p p
   assert.equal(indexFor!(landscape, "480p"), 2);
   assert.equal(indexFor!(portrait, "360p"), 1);
   assert.equal(indexFor!(landscape, "auto"), -1);
+});
+
+// The levels below are built by hls.js itself (1.6's M3U8Parser and Level), as
+// its MANIFEST_PARSED hands them to the player. A bare media playlist -- every
+// video transcoded before the ladder -- is not parsed as a master at all:
+// hls.js wraps it in one level with no attributes (src/loader/playlist-loader.ts,
+// `singleLevel`), and Level takes its size only from a RESOLUTION attribute, so
+// that level is 0x0. The menu used to name it "0p".
+test("F144: a video transcoded before the ladder offers no '0p' quality, and a ladder is unchanged", async () => {
+  const { M3U8Parser, Level, AttrList } = await hlsJs();
+  const { renditionOptions, levelIndexFor } = await player();
+  const asPlayerSeesThem = (levels: HlsLevel[]) => levels.map((l) => ({ width: l.width, height: l.height }));
+
+  const legacy = asPlayerSeesThem([new Level({ attrs: new AttrList({}), bitrate: 0, name: "", url: "http://app.test/p" })]);
+  assert.deepEqual(legacy, [{ width: 0, height: 0 }], "hls.js no longer gives a bare media playlist's level a 0x0 size");
+  assert.deepEqual(renditionOptions(legacy), [], "a rendition of unknown size must not be offered (it was labelled '0p')");
+  assert.equal(levelIndexFor(legacy, "0p"), -1, "no menu choice may pin a rendition of unknown size");
+
+  const ladder = asPlayerSeesThem(
+    M3U8Parser.parseMasterPlaylist(MASTER, "http://app.test/p").levels.map((l) => new Level(l)),
+  );
+  assert.deepEqual(renditionOptions(ladder), ["240p", "360p", "480p"]);
+  assert.equal(levelIndexFor(ladder, "480p"), 2);
+  // A level without a size inside a ladder keeps the others' indices right.
+  const mixed = [{ width: 0, height: 0 }, ...ladder];
+  assert.deepEqual(renditionOptions(mixed), ["240p", "360p", "480p"]);
+  assert.equal(levelIndexFor(mixed, "240p"), 1);
 });
