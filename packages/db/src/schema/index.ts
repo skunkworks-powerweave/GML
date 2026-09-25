@@ -21,3 +21,4 @@ export * from "./quizzes";
 export * from "./systemSettings";
 export * from "./jobs";
 export * from "./rateLimits";
+export * from "./scorm";

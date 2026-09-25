@@ -226,6 +226,8 @@ export async function rttWorld(prefix = "rttw"): Promise<RttWorld> {
           [subs],
         );
         await c.query(`DELETE FROM rtt_modules WHERE rtt_subject_id = ANY($1::uuid[])`, [subs]);
+        // SCORM packages RESTRICT their subject; files and attempts cascade.
+        await c.query(`DELETE FROM scorm_packages WHERE rtt_subject_id = ANY($1::uuid[])`, [subs]);
         await c.query(`DELETE FROM rtt_subjects WHERE id = ANY($1::uuid[])`, [subs]);
         await c.query(`DELETE FROM terms WHERE id = $1`, [termId]);
         await c.query(`DELETE FROM phases WHERE id = $1`, [phaseId]);

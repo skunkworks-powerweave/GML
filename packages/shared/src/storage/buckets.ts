@@ -20,6 +20,8 @@ export const BUCKETS = {
   posters: "posters",
   /** Reading material served through the media proxy. */
   pdfs: "pdfs",
+  /** SCORM package files, served same-origin by /api/scorm/content (_post/009). */
+  scormPackages: "scorm-packages",
 } as const;
 
 export type BucketName = (typeof BUCKETS)[keyof typeof BUCKETS];
