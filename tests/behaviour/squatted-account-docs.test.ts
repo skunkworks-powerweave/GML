@@ -103,3 +103,63 @@ test("README-deploy §2.2d: the squatted-account remedy works against the real t
     }
   });
 });
+
+// ── A USED ACCOUNT THAT WAS DEACTIVATED AGAIN ────────────────────────────────
+//
+// `active = false and role = 'teacher'` alone cannot tell a squatter from a
+// real teacher an administrator deactivated after the account was used: both
+// show in /admin/users as a deactivated teacher, which is what an operator sees
+// when a returning teacher's address fails with "already registered". And the
+// delete never raises a foreign-key error -- every key onto public.users is
+// CASCADE or SET NULL -- so without a stricter guard it returned DELETE 1 and
+// took the teacher's progress, notifications and record links with it.
+//
+// A squatter never gets a token (the access-token hook refuses an inactive
+// profile), so it has never signed in, and nobody linked it to a record.
+test("README-deploy §2.2d: the documented delete leaves a used, deactivated account and its records alone", { skip }, async () => {
+  const statements = documentedStatements();
+  const t = tag("w370u").replace(/-/g, "_");
+  await withClient(async (c) => {
+    await c.query("BEGIN");
+    try {
+      const one = async (q: string, p: unknown[]) => (await c.query(q, p)).rows[0].id as string;
+      const d = await one(`INSERT INTO districts (name, code) VALUES ($1, $2) RETURNING id`, [`D ${t}`, t.slice(-12)]);
+      const z = await one(`INSERT INTO zones (district_id, name) VALUES ($1, 'z') RETURNING id`, [d]);
+      const s = await one(`INSERT INTO schools (zone_id, name, code) VALUES ($1, 's', $2) RETURNING id`, [z, t.slice(-12)]);
+      // Each is an inactive teacher profile, as the section's step 1 shows it.
+      const profile = async (label: string, lastSeen: boolean) =>
+        one(
+          `INSERT INTO users (id, email, role, active, last_seen_at) VALUES ($1, $2, 'teacher', false, $3) RETURNING id`,
+          [randomUUID(), `${label}.${t}@school.example`, lastSeen ? new Date() : null],
+        );
+
+      // Signed in, got a notification, then was deactivated.
+      const used = await profile("used", true);
+      await c.query(`INSERT INTO notifications (user_id, kind, subject) VALUES ($1, 'test', 'kept')`, [used]);
+      // Created at /admin/users and linked to a teacher record, deactivated
+      // before the first sign-in; likewise one linked to a mentor record.
+      const linkedTeacher = await profile("linked-teacher", false);
+      const teacher = await one(`INSERT INTO teachers (school_id, full_name, user_id) VALUES ($1, 'Kept', $2) RETURNING id`, [s, linkedTeacher]);
+      const linkedMentor = await profile("linked-mentor", false);
+      const mentor = await one(`INSERT INTO mentors (name, user_id) VALUES ('Kept', $1) RETURNING id`, [linkedMentor]);
+
+      for (const [label, id] of [["used", used], ["linked-teacher", linkedTeacher], ["linked-mentor", linkedMentor]] as const) {
+        const address = `${label}.${t}@school.example`;
+        for (const st of statements) {
+          const r = await c.query(st.replaceAll("<address>", address));
+          if (r.command === "DELETE") assert.equal(r.rowCount, 0, `the documented delete removed the ${label} account: expect DELETE 0`);
+        }
+        assert.equal((await c.query(`SELECT 1 FROM users WHERE id = $1`, [id])).rowCount, 1, `the ${label} profile is still there`);
+      }
+      assert.equal(
+        (await c.query(`SELECT 1 FROM notifications WHERE user_id = $1`, [used])).rowCount,
+        1,
+        "the used account's notification was not cascaded away",
+      );
+      assert.equal((await c.query(`SELECT user_id FROM teachers WHERE id = $1`, [teacher])).rows[0].user_id, linkedTeacher);
+      assert.equal((await c.query(`SELECT user_id FROM mentors WHERE id = $1`, [mentor])).rows[0].user_id, linkedMentor);
+    } finally {
+      await c.query("ROLLBACK");
+    }
+  });
+});

@@ -118,19 +118,31 @@ If an address is already squatted, remove that account and create it again at
 `/admin/users`; do not reactivate it. Remove its profile first. The sign-up
 wrote one (the deactivated teacher above), and the profile's link to the login
 is deliberately RESTRICT, so *Delete user* in Authentication → Users fails with
-"Database error deleting user" while the profile exists. In the SQL editor:
+"Database error deleting user" while the profile exists.
+
+Before that, make sure it is a squatter's. A real teacher whom an
+administrator deactivated also shows as a deactivated teacher. A squatter has
+never signed in (Supabase issues no token to an inactive profile), so its row
+in `/admin/users` says *never signed in*; check that it does. In the SQL editor:
 
 ```sql
--- 1. It should be an inactive teacher nobody approved.
-select id, email, role, active, created_at from public.users where email = lower('<address>');
+-- 1. It should be an inactive teacher that has never signed in: last_seen_at is empty.
+select id, email, role, active, last_seen_at, created_at from public.users where email = lower('<address>');
 -- 2. Remove that profile. Expect DELETE 1.
-delete from public.users where email = lower('<address>') and active = false and role = 'teacher';
+delete from public.users
+ where email = lower('<address>') and active = false and role = 'teacher'
+   and last_seen_at is null
+   and not exists (select 1 from public.teachers where teachers.user_id = users.id)
+   and not exists (select 1 from public.mentors where mentors.user_id = users.id);
 ```
 
-`DELETE 0`, or a foreign-key error, means the account has been used (for
-example, it was reactivated): stop, and deactivate it at `/admin/users`
-instead. Otherwise delete the user in Authentication → Users, then create the
-account at `/admin/users`.
+`DELETE 0` means the account has been used: it is active, has signed in, or is
+linked to a teacher or mentor record. Stop, and deactivate it at `/admin/users`,
+or leave it deactivated, instead. Do not loosen the statement: nothing else
+refuses this delete, because every table that refers to a profile either
+deletes its rows with it or unlinks them, so a used account's records would go
+without an error. After `DELETE 1`, delete the user in Authentication → Users,
+then create the account at `/admin/users`.
 
 **e) Bound how long a session lives.** Authentication → Sessions → *Time-box
 user sessions*: **12 hours**; *Inactivity timeout*: **2 hours** (both are Pro
