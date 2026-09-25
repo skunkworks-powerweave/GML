@@ -48,6 +48,8 @@ import {
   files,
   teachers,
   schools,
+  zones,
+  districts,
   mentors,
   feedbackForms,
   feedbackResponses,
@@ -62,6 +64,7 @@ import { getActiveGrant } from "@/lib/gates";
 import { countOpenAssessments } from "@/lib/rtt/assessments";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 import { greetingKey, PROGRAMME_TIME_ZONE } from "./greeting";
+import { FieldMapSection } from "./FieldMap";
 
 export const dynamic = "force-dynamic";
 
@@ -631,8 +634,13 @@ const getFieldMapSchools = cache(async () => {
       id: schools.id,
       code: schools.code,
       name: schools.name,
+      // The school's real district, via its zone: the map colours and places
+      // by it (./FieldMap.tsx), no longer by a guess from the school code.
+      districtCode: districts.code,
     })
     .from(schools)
+    .innerJoin(zones, eq(schools.zoneId, zones.id))
+    .innerJoin(districts, eq(zones.districtId, districts.id))
     .where(eq(schools.active, true))
     .orderBy(schools.code)
     .limit(120);
@@ -856,69 +864,5 @@ function TodoRow({ text, href }: { text: string; href: string }) {
       <span>{text}</span>
       <span style={{ fontSize: 12, color: "var(--ink-3)" }}>→</span>
     </Link>
-  );
-}
-
-// FieldMapSection — schematic SVG of Ladakh with one dot per real school.
-// Clicking a dot deep-links to /repo/school/[id]. Coordinates are derived from
-// a hash of the school code so the layout is stable across renders without
-// requiring a geo column on the schools table.
-function FieldMapSection({ schools }: { schools: Array<{ id: string; code: string; name: string }> }) {
-  // Stable hash → 0..1 mapping so dots stay put across renders.
-  const placed = schools.map((s) => {
-    let h = 0;
-    for (let i = 0; i < s.code.length; i++) h = (h * 31 + s.code.charCodeAt(i)) >>> 0;
-    const x = 60 + (h % 400);
-    const y = 80 + ((h >>> 8) % 200);
-    // Use code prefix to color-code: GMS / GPS / GHS / etc.
-    const isKargil = s.code.startsWith("GMS-K") || s.code.startsWith("GPS-K") || s.code.startsWith("GHS-K");
-    return { ...s, x, y, color: isKargil ? "var(--saffron)" : "var(--indigo)" };
-  });
-  return (
-    <article className="card card-hi">
-      <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
-        <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
-          Field operations
-        </h2>
-        <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-          {schools.length} school{schools.length === 1 ? "" : "s"} — click a marker to open its repo page
-        </div>
-      </header>
-      <div style={{ padding: 14 }}>
-        {schools.length === 0 ? (
-          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>No active schools registered.</div>
-        ) : (
-          <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", border: "1px solid var(--line)", background: "var(--paper-2)" }}>
-            <svg viewBox="0 0 520 320" style={{ width: "100%", display: "block" }}>
-              {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
-                <path
-                  key={i}
-                  d={`M0 ${40 + i * 38} Q ${130 + i * 4} ${20 + i * 40} ${260 + i * 2} ${50 + i * 38} T 520 ${30 + i * 40}`}
-                  fill="none"
-                  stroke="var(--line-2)"
-                  strokeWidth="0.6"
-                  opacity={0.7}
-                />
-              ))}
-              <text x="200" y="290" fill="var(--ink-3)" fontFamily="var(--mono)" fontSize="10" letterSpacing="2">
-                KARGIL
-              </text>
-              <text x="400" y="290" fill="var(--ink-3)" fontFamily="var(--mono)" fontSize="10" letterSpacing="2">
-                LEH
-              </text>
-              <line x1="280" y1="60" x2="280" y2="270" stroke="var(--line-2)" strokeDasharray="3 4" />
-              {placed.map((m) => (
-                <a key={m.id} href={`/repo/school/${m.id}`}>
-                  <g style={{ cursor: "pointer" }}>
-                    <circle cx={m.x} cy={m.y} r="6" fill={m.color} stroke="var(--paper)" strokeWidth="2" />
-                    <title>{m.name} ({m.code})</title>
-                  </g>
-                </a>
-              ))}
-            </svg>
-          </div>
-        )}
-      </div>
-    </article>
   );
 }
