@@ -115,6 +115,9 @@ services:
       GATE_PASSWORD_MENTORSHIP: ${GATE_PASSWORD_MENTORSHIP:-}
       GATE_PASSWORD_ADMIN: ${GATE_PASSWORD_ADMIN:-}
       SEED_DRY_RUN: ${SEED_DRY_RUN:-}
+      # Postgres connections (see DB_POOL_MAX on app). The one-offs run here --
+      # migrate, the seeds, verify-auth -- query one statement at a time.
+      DB_POOL_MAX: "2"
       # The Supabase pooler CA -- see the note on the app service.
       SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
     volumes:
@@ -142,6 +145,15 @@ services:
       context: .
       dockerfile: docker/app.Dockerfile
     restart: unless-stopped
+    # CPU PRIORITY FOR THE WEB TIER. One ffmpeg at -preset veryfast saturates
+    # both vCPUs (see WORKER_CONCURRENCY on the worker), and every service ran
+    # at Docker's default weight of 1024, so for the length of each transcode
+    # ffmpeg took an equal share with Next.js and page and API latency rose for
+    # everyone. A weight only matters under contention: ffmpeg still has the
+    # whole box when nobody is browsing, and while someone is, app and caddy win
+    # 4:1. Not a `cpus:` cap on the worker, which would slow every transcode,
+    # even at night.
+    cpu_shares: 4096
     logging: *default-logging
     environment:
       NODE_ENV: production
@@ -173,6 +185,12 @@ services:
       # turned on during an incident without editing this file.
       HEALTH_DEBUG: ${HEALTH_DEBUG:-}
       TZ: ${TZ:-Asia/Kolkata}
+      # POSTGRES CONNECTIONS, BUDGETED. The session pooler admits as many
+      # clients as its pool size -- 15 by default -- and every open connection
+      # holds one. app 8 + worker 4 + the migrate one-offs 2 + the worker
+      # healthcheck 1 = 15. Raise the pool size in the Supabase dashboard before
+      # raising these (README-deploy.md 2.1).
+      DB_POOL_MAX: ${APP_DB_POOL_MAX:-8}
       # THE SUPABASE POOLER CA. packages/db/src/client.ts verifies the pooler
       # only when SUPABASE_CA_CERT is set IN THE CONTAINER, and this file used to
       # forward it to no service -- so every container ran encrypted but
@@ -241,6 +259,8 @@ services:
       # of the target instance; a second starves the web tier it shares the box
       # with. Queue depth absorbs bursts -- that is what a queue is for.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      # Its share of the pooler budget -- see DB_POOL_MAX on app.
+      DB_POOL_MAX: ${WORKER_DB_POOL_MAX:-4}
       TZ: ${TZ:-Asia/Kolkata}
       # The Supabase pooler CA -- see the note on the app service.
       SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
@@ -281,6 +301,8 @@ services:
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
+    # Same weight as app, for the same reason: every request is TLS here first.
+    cpu_shares: 4096
     logging: *default-logging
     ports:
       - "80:80"

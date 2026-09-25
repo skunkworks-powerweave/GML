@@ -32,11 +32,26 @@ export function poolConfig(): PoolConfig {
   return {
     connectionString: url,
     ssl: sslConfig(url),
-    // Conservative defaults — tune per env if needed.
-    max: 10,
+    // Connections per process. Each holds a Supabase session-pooler slot for
+    // as long as it is open, and in session mode the slots ARE the pool size
+    // (15 by default on the smaller computes), so the containers' ceilings have
+    // to add up: this was a fixed 10 in app AND worker, enough between them to
+    // exhaust the pooler, after which every new connect fails. docker-compose.yml
+    // sets DB_POOL_MAX per container; README-deploy.md 2.1 has the arithmetic.
+    max: poolMax(),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
   };
+}
+
+/** DB_POOL_MAX as a whole number from 1 to 100; unset or unusable, 10. */
+function poolMax(): number {
+  const raw = process.env.DB_POOL_MAX?.trim();
+  if (!raw) return 10;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 1 && n <= 100) return n;
+  console.warn(`[db] DB_POOL_MAX=${JSON.stringify(raw)} is not a whole number from 1 to 100 -- using 10`);
+  return 10;
 }
 
 /**

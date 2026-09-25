@@ -48,6 +48,24 @@ Note: **point-in-time recovery is NOT included in Pro.** It is a separate paid
 add-on. Without it, Supabase's own recovery granularity is "yesterday", which is
 why §7 exists.
 
+**Connection budget.** `DATABASE_URL` is the *session* pooler (§10), which
+admits only as many clients as its **pool size** — 15 by default on the smaller
+computes (Project Settings → Database → Connection pooling) — and every open
+connection holds one. The sixteenth connect fails with "max clients reached":
+pages error, `/api/health` answers 503, the worker cannot claim. The stack is
+sized to fit 15 exactly:
+
+| Who | Connections | Set by |
+|---|---|---|
+| `app` | 8 | `APP_DB_POOL_MAX` in `.env` |
+| `worker` | 4 | `WORKER_DB_POOL_MAX` in `.env` |
+| `migrate`, seed, verify-auth (during a deploy) | 2 | fixed in `docker-compose.yml` |
+| worker healthcheck | 1 | — |
+
+`backup.sh`'s `pg_dump` takes one more at 02:00; do not deploy then. To give
+the app more, raise the pool size in the dashboard first, then
+`APP_DB_POOL_MAX`.
+
 ### 2.2 Three manual dashboard steps
 
 None has a SQL equivalent. The application does not work without the first,
