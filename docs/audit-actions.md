@@ -256,6 +256,18 @@ fails because of it. `/admin/system-settings` shows the latest
 | `restore.complete` | A restore drill passed and stamped `workspace/last_restore_drill.json` | `source` (dump file name), `backup_age_days`, `tables`, `users`, `storage_verified` (false: the drill covers the database only) |
 | `restore.failed` | A restore drill failed and stamped the failure | `source`, `error` |
 
+## demo_data.* — the day-one demo purge
+
+Written by `packages/db/src/scripts/purge_demo_data.ts --apply` (README-deploy
+3.1), in the same transaction as the deletes, so the row exists exactly when
+they happened. `user_id` and `entity_id` are null (an operator runs the
+script; no account acts), `entity_type` is `host_job`. A dry run, and an
+`--apply` that finds nothing to remove, write nothing.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `demo_data.purged` | `--apply` removed the seed's fictional rows | `cycles` (`id`, `code` each), `pairings`, `teachers`, `mentors` (ids), `schools` (`id`, `code` each), `counts` (`cycles`, `pairings`, `teachers`, `mentors`, `schools`, `templates`, `unlinked_sessions`, `unowned_outlines`), `kept` (how many candidates of each kind it kept for real work) |
+
 ## Deferred prefixes (reserved but not yet wired)
 
 These prefixes have docs / specs but no live `recordAudit` call sites

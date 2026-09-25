@@ -441,15 +441,14 @@ docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/purge_demo_d
 
 That is a **dry run** — it lists every cycle, pairing, teacher, mentor and
 school it would remove, and every candidate it would keep and why, and changes
-nothing. Under the list it counts what goes with those rows: unsubmitted
-observation templates, the removed teachers' classroom sessions and RTT
-attendance marks, and the demo schools' classes and **learners** (children's
-records). Apart from the three templates the seed hangs on `OBS-2026-001`,
-the seed writes none of those, so any other count above zero is something
-someone entered; check it before going on. Read the list before adding
-`--apply` to commit, which runs in a single transaction and removes exactly
-what the list names. If a draft is saved on one of the listed rows while it
-runs, it stops and removes nothing.
+nothing. Under the list it counts the unsubmitted observation templates that
+go with the removed cycles (the three the seed hangs on `OBS-2026-001`), and
+the sessions and course outlines that stay but lose their link to a removed
+cycle or teacher. Read the list before adding `--apply` to commit, which runs
+in a single transaction, removes exactly what the list names, and writes one
+`demo_data.purged` row to the audit log naming it. If a draft, a classroom
+session, an RTT mark, a class or a learner is entered on one of the listed rows
+while it runs, it stops and removes nothing.
 
 Three things it does deliberately:
 
@@ -464,10 +463,15 @@ Three things it does deliberately:
 - **It keeps anything with real work attached.** A demo cycle that has acquired
   a genuine form, video, evidence row or draft; a demo pairing with a meeting,
   a feedback response, a quarterly video, commitments or a draft; a demo
-  teacher who has been given a login, with all their cycles and pairings; and a
+  teacher who has been given a login, or whose classroom sessions or RTT
+  attendance someone has recorded, with all their cycles and pairings; a demo
+  school with a class, a **learner** (a child's record) or a session; and a
   demo-named mentor record with a login linked to it are all reported and left
   alone. Whatever a kept row cannot exist without — its teacher, its mentor,
-  the teacher's school — is kept with it.
+  the teacher's school — is kept with it. The seed writes none of those, so a
+  demo school or teacher listed as kept for them is in real use: correct its
+  details at `/admin/data/schools` or `/admin/data/teachers` rather than
+  delete it.
 
 Safe to run twice; the second run removes nothing.
 

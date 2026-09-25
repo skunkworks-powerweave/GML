@@ -44,6 +44,13 @@
 // marks, learners and classes it removes with the listed rows were named but
 // never counted.
 //
+// Then they were counted, and still deleted (W3-77). The seed writes no
+// classroom session, RTT attendance mark, class or learner, so each is
+// someone's work -- the rule the purge applies to cycles and pairings -- yet a
+// demo school that had been used for 30 real children went with all 30 of
+// their records, deleted by school_id, so a learner added after the dry run
+// went too, uncounted. Nothing in the audit log recorded any of it.
+//
 // ── HOW THESE TESTS RUN ──────────────────────────────────────────────────────
 //
 // Both scripts are executed as the operator runs them, in a child process.
@@ -63,7 +70,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -281,16 +288,13 @@ test(
         // Real work: one evidence row. This is what the purge's keep-filter
         // counts, and what makes it keep the cycle.
         await r.add("observation_evidence", { cycle_id: ck, caption: "real work" });
-        // The removed teacher also has a pairing with nothing on it and an RTT
-        // attendance mark. Those used to cascade; since migration 0031 they are
-        // RESTRICT, so the purge has to remove them itself or roll back.
+        // The removed teacher also has a pairing with nothing on it. Pairings
+        // used to cascade; since migration 0031 they are RESTRICT, so the
+        // purge has to remove it itself or roll back. (This teacher used to
+        // carry an RTT attendance mark as well; a mark is someone's work and
+        // now keeps its teacher -- realAndDemo below covers that.)
         const m = await r.add("mentors", { name: `Purge mentor ${id}` });
         const p = await r.add("mentor_pairings", { mentor_id: m, teacher_id: tg });
-        const ph = await r.add("phases", { label: `PP ${id}`, sequence: 901 });
-        const tm = await r.add("terms", { phase_id: ph, name: "Purge term", sequence: 1 });
-        const rs = await r.add("rtt_subjects", { term_id: tm, name: "Purge subject" });
-        const se = await r.add("rtt_sessions", { rtt_subject_id: rs, sequence: 1, title: "Purge webinar" });
-        await r.add("rtt_attendance", { rtt_session_id: se, teacher_id: tg });
 
         const run = await runTsx([PURGE, "--apply"], plainUrl());
         const out = show(run);
@@ -322,9 +326,9 @@ test(
  * exactly the seed's -- the situation a live database is in after a few weeks.
  */
 async function realAndDemo(c: Client, r: ReturnType<typeof rows>, id: string) {
-  const [demoCode, reusedCode, linkedCode, draftCycleCode] = await freeCodes(c, SEED_CYCLE_CODES, 4);
+  const [demoCode, reusedCode, linkedCode, draftCycleCode, usedCode] = await freeCodes(c, SEED_CYCLE_CODES, 5);
   const [mintedCode] = await freeCodes(c, MINTED_2026_CODES, 1);
-  const [demoSchoolCode] = await freeCodes(c, SEED_SCHOOL_CODES, 1, "schools");
+  const [demoSchoolCode, usedSchoolCode] = await freeCodes(c, SEED_SCHOOL_CODES, 2, "schools");
   const d = await r.add("districts", { name: `Purge real ${id}`, code: `PR${id}` });
   const z = await r.add("zones", { district_id: d, name: "purge real zone" });
   const s = await r.add("schools", { zone_id: z, code: `PR-${id}`, name: "Purge real school" });
@@ -389,32 +393,41 @@ async function realAndDemo(c: Client, r: ReturnType<typeof rows>, id: string) {
     user_id: login2, observation_cycle_id: draftCycle, responses: '{"notes":"half-written observation"}',
   });
 
-  // What the purge removes along with the rows it lists, none of which the
-  // seed writes: the idle cycle's unsubmitted template, the idle teacher's
-  // classroom session and RTT attendance mark, and a demo school's class and
-  // learner -- a child's record.
+  // What the purge removes along with the rows it lists: the idle cycle's
+  // unsubmitted template, which seed_forms_observation.ts writes, and an idle
+  // demo school with nothing at it.
   const template = await r.add("observation_forms", { cycle_id: idleCycle, kind: "pre", responses: "{}" });
+  const ds = await r.add("schools", { zone_id: z, code: demoSchoolCode, name: `Demo school ${id}` });
+
+  // And what the seed never writes, so someone entered: a demo teacher's
+  // classroom session and RTT attendance mark (a trainer marked them present),
+  // and a demo school's class and learner -- a child's record. Each makes the
+  // teacher or school it belongs to real, and the teacher's idle seed-coded
+  // cycle with them, as a login does.
+  const dUsed = await r.add("teachers", { school_id: s, full_name: `Demo used ${id}`, phone: SEED_PHONES[8], active: false });
+  const usedCycle = await r.add("observation_cycles", { code: usedCode, teacher_id: dUsed, kind: "baseline" });
   const subject = await r.add("subjects", { name: `Purge subject ${id}`, code: `PS${id}` });
   const cls = await r.add("classes", { school_id: s, grade: 5, stage: "Primary" });
   const session = await r.add("sessions", {
-    school_id: s, class_id: cls, subject_id: subject, teacher_id: dIdle, scheduled_date: "2026-09-01",
+    school_id: s, class_id: cls, subject_id: subject, teacher_id: dUsed, scheduled_date: "2026-09-01",
   });
   const ph = await r.add("phases", { label: `PR ${id}`, sequence: 902 });
   const tm = await r.add("terms", { phase_id: ph, name: "Purge real term", sequence: 1 });
   const rs = await r.add("rtt_subjects", { term_id: tm, name: "Purge real subject" });
   const se = await r.add("rtt_sessions", { rtt_subject_id: rs, sequence: 1, title: "Purge real webinar" });
-  const attendance = await r.add("rtt_attendance", { rtt_session_id: se, teacher_id: dIdle });
-  const ds = await r.add("schools", { zone_id: z, code: demoSchoolCode, name: `Demo school ${id}` });
-  const dsClass = await r.add("classes", { school_id: ds, grade: 3, stage: "Primary" });
-  const learner = await r.add("learners", { class_id: dsClass, school_id: ds, grade: 3, name: `Learner ${id}` });
+  const attendance = await r.add("rtt_attendance", { rtt_session_id: se, teacher_id: dUsed });
+  const us = await r.add("schools", { zone_id: z, code: usedSchoolCode, name: `Demo school in use ${id}` });
+  const usClass = await r.add("classes", { school_id: us, grade: 3, stage: "Primary" });
+  const learner = await r.add("learners", { class_id: usClass, school_id: us, grade: 3, name: `Learner ${id}` });
 
   return {
-    demoCode, mintedCode, reusedCode, linkedCode, draftCycleCode, demoSchoolCode,
+    demoCode, mintedCode, reusedCode, linkedCode, draftCycleCode, usedCode, demoSchoolCode, usedSchoolCode,
     keep: {
       minted, reused, real, dFeedback, dMeeting, mLinked, mLinkedUnpaired, mMeeting, pFeedback, pMeeting, response, meeting,
       dLinked, linkedCycle, dDraft, pDraft, pairingDraft, dCycleDraft, draftCycle, cycleDraft,
+      dUsed, usedCycle, session, attendance, us, usClass, learner,
     },
-    gone: { idleCycle, pIdle, dIdle, mIdle, template, session, attendance, ds, dsClass, learner },
+    gone: { idleCycle, pIdle, dIdle, mIdle, template, ds },
   };
 }
 
@@ -466,25 +479,44 @@ test(
           `the dry run must say a cycle is kept for the draft on it:\n${out}`,
         );
 
-        // Rows the listed ones take with them are counted, table by table, so
-        // "the demo schools' classes" cannot hide a school's children.
-        for (const [what, label] of [
-          ["the idle cycle's unsubmitted template", "observation form templates"],
-          ["the idle teacher's classroom session", "classroom sessions"],
-          ["the idle teacher's RTT attendance mark", "RTT attendance marks"],
-          ["the demo school's learner", "learners"],
-          ["the demo school's class", "classes"],
+        // The seed's templates on the idle cycle are all that goes with the
+        // listed rows, and they are counted.
+        assert.match(
+          removed,
+          /^\s*observation form templates\s+1\b/m,
+          `the dry run must count the idle cycle's unsubmitted template among the rows removed:\n${out}`,
+        );
+        assert.ok(removed.includes(w.demoSchoolCode!), `the dry run must list the idle demo school as removed:\n${out}`);
+
+        // A classroom session, an RTT mark, a class or a learner is someone's
+        // work: it keeps its teacher or school, and the listing says so. It is
+        // never among the rows removed, not even as a count.
+        for (const [what, needle] of [
+          ["the demo teacher with a session and an RTT mark", `Demo used ${id}`],
+          ["that teacher's idle seed-coded cycle", w.usedCode],
+          ["the demo school with a class and a learner", w.usedSchoolCode],
         ]) {
-          assert.match(
-            removed,
-            new RegExp(`^\\s*${label}\\s+1\\b`, "m"),
-            `the dry run must count ${what} among the rows removed ("${label}  1"):\n${out}`,
-          );
+          assert.ok(!removed.includes(needle!), `the dry run lists ${what} (${needle}) as removed:\n${out}`);
         }
+        assert.doesNotMatch(
+          removed,
+          /^\s*(classroom sessions|RTT attendance marks|learners|classes)\s+[1-9]/m,
+          `nothing anyone entered may be removed with the demo rows:\n${out}`,
+        );
+        assert.match(
+          kept,
+          new RegExp(`Demo used ${id}.*sessions=1 marks=1`),
+          `the dry run must say a demo teacher is kept for their session and RTT mark:\n${out}`,
+        );
+        assert.match(
+          kept,
+          new RegExp(`${w.usedSchoolCode}.*classes=1 learners=1`),
+          `the dry run must say a demo school is kept for the class and learner at it:\n${out}`,
+        );
 
         for (const [table, rowId] of [
           ["observation_cycles", w.gone.idleCycle], ["mentor_pairings", w.gone.pIdle], ["teachers", w.gone.dIdle],
-          ["mentors", w.gone.mIdle], ["sessions", w.gone.session], ["learners", w.gone.learner],
+          ["mentors", w.gone.mIdle], ["observation_forms", w.gone.template], ["schools", w.gone.ds],
         ]) {
           assert.ok(await exists(c, table!, rowId!), `a dry run must change nothing, but ${table} ${rowId} is gone`);
         }
@@ -507,6 +539,13 @@ test(
         const run = await runTsx([PURGE, "--apply"], plainUrl());
         const out = show(run);
         assert.equal(run.code, 0, `purge --apply must succeed:\n${out}`);
+        // audit_log is append-only (SM-1): the row this writes stays, and is
+        // found again by the ids in it.
+        const audit = await c.query(
+          `SELECT user_id, entity_type, metadata FROM audit_log
+            WHERE action = 'demo_data.purged' AND metadata::text LIKE '%' || $1 || '%'`,
+          [w.gone.dIdle],
+        );
 
         const kept: Array<[string, string, string]> = [
           ["observation_cycles", w.keep.minted, `a real teacher's 2026 cycle ${w.mintedCode} (minted after the seed's)`],
@@ -529,6 +568,13 @@ test(
           ["form_drafts", w.keep.cycleDraft, "an observer's draft on an otherwise idle demo cycle"],
           ["observation_cycles", w.keep.draftCycle, `the cycle ${w.draftCycleCode} that draft is on`],
           ["teachers", w.keep.dCycleDraft, "that cycle's teacher"],
+          ["sessions", w.keep.session, "a demo teacher's classroom session"],
+          ["rtt_attendance", w.keep.attendance, "a demo teacher's RTT attendance mark"],
+          ["teachers", w.keep.dUsed, "the demo teacher that session and mark belong to"],
+          ["observation_cycles", w.keep.usedCycle, `that teacher's idle cycle ${w.usedCode}`],
+          ["learners", w.keep.learner, "a child's record at a demo school"],
+          ["classes", w.keep.usClass, "that child's class"],
+          ["schools", w.keep.us, `the demo school ${w.usedSchoolCode} they are at`],
         ];
         for (const [table, rowId, what] of kept) {
           assert.ok(await exists(c, table, rowId), `${what} must be kept, but ${table} ${rowId} was deleted:\n${out}`);
@@ -539,15 +585,33 @@ test(
           ["teachers", w.gone.dIdle, "a demo teacher with nothing keeping them"],
           ["mentors", w.gone.mIdle, "a demo mentor with no login and no pairing left"],
           ["observation_forms", w.gone.template, "the idle demo cycle's unsubmitted template"],
-          ["sessions", w.gone.session, "the removed teacher's classroom session"],
-          ["rtt_attendance", w.gone.attendance, "the removed teacher's RTT attendance mark"],
-          ["learners", w.gone.learner, "the demo school's learner"],
-          ["classes", w.gone.dsClass, "the demo school's class"],
-          ["schools", w.gone.ds, `the demo school ${w.demoSchoolCode}, which no teacher is left in`],
+          ["schools", w.gone.ds, `the demo school ${w.demoSchoolCode}, with no teacher and nothing entered at it`],
         ];
         for (const [table, rowId, what] of gone) {
           assert.ok(!(await exists(c, table, rowId)), `${what} must still be removed:\n${out}`);
         }
+
+        // One audit row says what went, by id, so the trail shows a bulk
+        // delete happened and of what. No one is signed in to a script.
+        assert.equal(audit.rowCount, 1, `--apply must write one demo_data.purged audit row naming what it removed:\n${out}`);
+        const a = audit.rows[0];
+        assert.equal(a.user_id, null);
+        assert.equal(a.entity_type, "host_job");
+        const m = a.metadata as Record<string, unknown>;
+        const listed = JSON.stringify(m);
+        for (const [what, needle] of [
+          ["the idle cycle's code", w.demoCode], ["the idle pairing", w.gone.pIdle], ["the idle mentor", w.gone.mIdle],
+          ["the idle demo school's code", w.demoSchoolCode],
+        ]) {
+          assert.ok(listed.includes(needle!), `the audit row must name ${what} (${needle}): ${listed}`);
+        }
+        for (const needle of [w.keep.dUsed, w.keep.us, w.keep.pFeedback, w.usedSchoolCode]) {
+          assert.ok(!listed.includes(needle!), `the audit row names ${needle}, which was kept: ${listed}`);
+        }
+        assert.equal((m.counts as Record<string, number>)?.templates, 1, `the audit row must count the templates: ${listed}`);
+
+        const doc = readFileSync(new URL("../../docs/audit-actions.md", import.meta.url), "utf8");
+        assert.match(doc, /^\| `demo_data\.purged` \|/m, "docs/audit-actions.md must document demo_data.purged");
       } finally {
         await r.cleanup();
       }
@@ -622,6 +686,67 @@ test(
         await mentorSession.query("ROLLBACK").catch(() => undefined);
         await mentorSession.end().catch(() => undefined);
         if (draft) await c.query("DELETE FROM form_drafts WHERE id = $1", [draft]).catch(() => undefined);
+        await r.cleanup();
+      }
+    });
+  },
+);
+
+test(
+  "purge --apply stops, rather than take them, when a child is enrolled at a listed demo school while it runs",
+  { skip: purgeSkip() },
+  async () => {
+    const id = tag("pl").slice(-8);
+    await withClient(async (c) => {
+      const r = rows(c);
+      // A second session plays the programme team entering a class register.
+      const office = await connect();
+      let cls: string | undefined;
+      let learner: string | undefined;
+      try {
+        const [schoolCode] = await freeCodes(c, SEED_SCHOOL_CODES, 1, "schools");
+        const d = await r.add("districts", { name: `Purge enrol ${id}`, code: `PL${id}` });
+        const z = await r.add("zones", { district_id: d, name: "purge enrol zone" });
+        const s = await r.add("schools", { zone_id: z, code: schoolCode, name: `Demo school ${id}` });
+
+        // Inserted but not committed when the purge plans, so the plan lists
+        // the school as idle; the foreign-key checks hold a KEY SHARE lock on
+        // the school row until the register is committed.
+        await office.query("BEGIN");
+        cls = (await office.query(
+          `INSERT INTO classes (school_id, grade, stage) VALUES ($1, 4, 'Primary') RETURNING id`, [s],
+        )).rows[0].id as string;
+        learner = (await office.query(
+          `INSERT INTO learners (class_id, school_id, grade, name) VALUES ($1, $2, 4, $3) RETURNING id`,
+          [cls, s, `Enrolled while purging ${id}`],
+        )).rows[0].id as string;
+        const officePid = (await office.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+
+        const purge = runTsx([PURGE, "--apply"], plainUrl());
+        const blocked = await waitFor(
+          async () =>
+            (await c.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", [officePid]))
+              .rows[0].n > 0,
+          30_000,
+        );
+        await office.query("COMMIT");
+        const run = await purge;
+        const out = show(run);
+        assert.ok(blocked, `the purge never reached the school the child is enrolled at:\n${out}`);
+
+        assert.ok(await exists(c, "learners", learner), `a child enrolled while the purge ran must not be deleted:\n${out}`);
+        assert.ok(await exists(c, "schools", s), `the school they are enrolled at must be kept:\n${out}`);
+        assert.notEqual(run.code, 0, `the purge must fail rather than remove less than, or other than, it listed:\n${out}`);
+        assert.match(
+          run.stdout + run.stderr,
+          new RegExp(`school ${schoolCode}[^\\n]*learners=1[\\s\\S]*Nothing was removed`),
+          `the operator must be told what stopped the purge, and that nothing was removed:\n${out}`,
+        );
+      } finally {
+        await office.query("ROLLBACK").catch(() => undefined);
+        await office.end().catch(() => undefined);
+        if (learner) await c.query("DELETE FROM learners WHERE id = $1", [learner]).catch(() => undefined);
+        if (cls) await c.query("DELETE FROM classes WHERE id = $1", [cls]).catch(() => undefined);
         await r.cleanup();
       }
     });
