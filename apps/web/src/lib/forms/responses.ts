@@ -19,7 +19,7 @@
 import { and, desc, eq, type SQL } from "drizzle-orm";
 import { feedbackForms, feedbackResponses, users } from "@gml/db/schema";
 import { isAdmin, type Actor, type Db } from "@/lib/visibility";
-import { formTitle } from "@/lib/forms/quarterly";
+import { formTitle, isQuarterlyForm } from "@/lib/forms/quarterly";
 
 export type AnswerView = { name: string; label: string; value: string };
 
@@ -94,6 +94,7 @@ export async function pairingResponses(db: Db, actor: Actor, pairingId: string):
   const rows = await db
     .select({
       id: feedbackResponses.id,
+      formId: feedbackResponses.formId,
       responses: feedbackResponses.responses,
       submittedAt: feedbackResponses.submittedAt,
       respondentUserId: feedbackResponses.respondentUserId,
@@ -108,7 +109,21 @@ export async function pairingResponses(db: Db, actor: Actor, pairingId: string):
     .where(and(...scope))
     .orderBy(desc(feedbackResponses.submittedAt))
     .limit(200);
-  return rows.map((r) => ({
+  // ONE PER QUARTER'S FORM AND RESPONDENT. Sending a quarter's form again now
+  // replaces its record (submitFormAction), but it used to file another copy,
+  // and those copies are still in the table: the newest -- the first seen,
+  // newest first -- is the one that counts. A repeatable form (the School
+  // visit checklist) keeps every record, and so does a response whose author
+  // was deleted: several such are not one person's copies.
+  const seen = new Set<string>();
+  const current = rows.filter((r) => {
+    if (!isQuarterlyForm(r.schema) || !r.respondentUserId) return true;
+    const key = `${r.formId}|${r.respondentUserId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return current.map((r) => ({
     id: r.id,
     title: formTitle(r.schema, r.kind, r.audience),
     kind: r.kind,
