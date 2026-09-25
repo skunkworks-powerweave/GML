@@ -234,3 +234,43 @@ export function dropLocalCopy(owner: string | null | undefined, key: DraftKey): 
     // ignore
   }
 }
+
+/** Every device copy on this device, whoever it belongs to (storageKey's prefix). */
+function allLocalCopyKeys(s: Storage): string[] {
+  const keys: string[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const k = s.key(i);
+    if (k !== null && k.startsWith("gml-form-draft:")) keys.push(k);
+  }
+  return keys;
+}
+
+/** Whether this device holds form answers the server does not have yet. */
+export function hasLocalCopies(): boolean {
+  const s = store();
+  if (!s) return false;
+  try {
+    return allLocalCopyKeys(s).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remove every device copy, for sign-out (SignOutButton). A copy is otherwise
+ * removed only when a save lands (or a newer one supersedes it on the next
+ * visit), and localStorage outlives the tab and the browser, so a shared
+ * school machine kept one user's unsent answers after she had signed out. Every owner's, not only the signed-in user's: the button
+ * does not know who that is, and a copy an earlier user left behind is just
+ * what a shared machine should not keep. The button asks before calling this,
+ * since each copy was promised to be kept.
+ */
+export function clearAllLocalCopies(): void {
+  const s = store();
+  if (!s) return;
+  try {
+    for (const k of allLocalCopyKeys(s)) s.removeItem(k);
+  } catch {
+    // Blocked storage: nothing can be read from it either.
+  }
+}

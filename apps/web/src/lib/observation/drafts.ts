@@ -49,3 +49,17 @@ export function saveDraft(store: DraftStore, scope: string, version: string, tex
   if (text.trim()) store.setItem(key, text);
   else store.removeItem(key);
 }
+
+/**
+ * Remove every observation draft in the store, whoever typed it and whatever
+ * version it was typed against. For sign-out (SignOutButton): otherwise a
+ * draft stays until the tab closes -- a saved one too, since only typing in
+ * the same box again removes an older version's key -- and on a shared school
+ * machine the rubric or note is still readable after its author signed out.
+ */
+export function clearAllDrafts(store: DraftStore): void {
+  for (let i = store.length - 1; i >= 0; i--) {
+    const k = store.key(i);
+    if (k !== null && k.startsWith(PREFIX)) store.removeItem(k);
+  }
+}
