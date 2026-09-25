@@ -21,6 +21,14 @@ const OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const LOCAL_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/;
 const ZONED_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i;
+const ZONE = /(?:Z|([+-])(\d{2}):?(\d{2}))$/i;
+
+/** The UTC offset a zoned ISO string names, in milliseconds. */
+function zoneOffsetMs(s: string): number {
+  const m = ZONE.exec(s);
+  if (!m || !m[1]) return 0; // "Z"
+  return (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) * 60 * 1000;
+}
 
 /** The wall-clock fields of `d` in the programme's timezone, as an ISO prefix. */
 function istIso(d: Date): string {
@@ -43,10 +51,13 @@ export function parseAdminDate(raw: string): Date {
   else if (ZONED_DATETIME.test(s)) d = new Date(s);
   else return new Date(Number.NaN);
   if (Number.isNaN(d.getTime())) return d;
-  // Date rolls 2026-02-31 over to 3 March; a date that does not exist is an error.
-  if ((DATE_ONLY.test(s) || LOCAL_DATETIME.test(s)) && istIso(d).slice(0, 10) !== s.slice(0, 10)) {
-    return new Date(Number.NaN);
-  }
+  // Date rolls 2026-02-31 over to 3 March (and T24:00 over to the next day);
+  // a date that does not exist is an error. A zoned value is checked in the
+  // zone it names: 2026-02-30T00:00:00Z was accepted as 2 March.
+  const wallDate = ZONED_DATETIME.test(s)
+    ? new Date(d.getTime() + zoneOffsetMs(s)).toISOString().slice(0, 10)
+    : istIso(d).slice(0, 10);
+  if (wallDate !== s.slice(0, 10)) return new Date(Number.NaN);
   return d;
 }
 
