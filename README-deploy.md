@@ -48,10 +48,12 @@ Note: **point-in-time recovery is NOT included in Pro.** It is a separate paid
 add-on. Without it, Supabase's own recovery granularity is "yesterday", which is
 why §7 exists.
 
-### 2.2 Three manual dashboard steps
+### 2.2 Manual dashboard steps
 
 None has a SQL equivalent. The application does not work without the first,
-and does not accept a real lesson video without the third.
+and does not accept a real lesson video without the third. The others close
+holes that are open by default; `scripts/verify-auth.mjs` (§5) fails until the
+sign-up switch (d) is off.
 
 **a) Enable the access-token hook.** Authentication → Hooks → *Customize Access
 Token (JWT) Claims* → Postgres → schema `public`, function
@@ -69,7 +71,10 @@ it is off.
 This is the window a deactivated user keeps working. Deactivation kills their
 refresh tokens and bans the account immediately, but the access token already in
 their browser cannot be revoked — it simply expires. One hour of residual access
-for someone you have just removed is a long time; 15 minutes is not.
+for someone you have just removed is a long time; 15 minutes is not. (For the
+two administrator roles there is no such window: the application re-checks an
+administrator's role and status on every request, so a demoted or deactivated
+administrator loses admin access at once.)
 
 **c) Raise the Storage upload limit.** Storage → Settings → *Upload file size
 limit*. The default is 50 MB on every plan, and it binds before the 2 GB bucket
@@ -78,6 +83,20 @@ is refused at the resumable endpoint before a byte is sent, and the teacher sees
 a generic upload error. **Set it to 2 GB**, the application's own ceiling
 (`MAX_UPLOAD_BYTES` in `apps/web/src/lib/video/upload.ts`).
 `bash scripts/preflight.sh` checks it by declaring a 600 MB upload.
+
+**d) Turn off public sign-up.** Authentication → Sign In / Providers → turn
+**off** *Allow new users to sign up*. Accounts here are created by an
+administrator at `/admin/users`, which keeps working with this off.
+
+Supabase leaves it on. While it is on, anyone holding the publishable key (every
+signed-in user's browser receives it) can register any address: they can claim
+a staff member's address before you create the account (your create then fails
+with "already registered"), the claimed account shows in `/admin/users` as a
+deactivated teacher that one press of *Reactivate* hands to them, and the
+sign-up endpoint tells anyone which addresses already have accounts.
+`verify-auth.mjs` reports **FAIL public sign-up is disabled** until this is off.
+If an address is already squatted, delete that user in Authentication → Users
+and create the account again at `/admin/users`; do not reactivate it.
 
 ### 2.3 Optional: outbound email
 

@@ -18,6 +18,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import pg from "pg";
+import { checkAuthSettings } from "./auth-settings.mjs";
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ANON = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -142,7 +143,14 @@ leak[0]?.can
   ? bad("supabase_auth_admin has no direct table access", "it can SELECT public.users", "revoke it — the hook reads as its owner")
   : ok("supabase_auth_admin has no direct table access");
 
-// ── 4. The hook is actually ENABLED ──────────────────────────────────────────
+// ── 4. Auth settings with no SQL equivalent ─────────────────────────────────
+console.log("\nAuth settings\n");
+
+for (const r of await checkAuthSettings({ url: URL, anonKey: ANON })) {
+  r.ok ? ok(r.label, r.detail) : bad(r.label, r.detail, r.fix);
+}
+
+// ── 5. The hook is actually ENABLED ──────────────────────────────────────────
 console.log("\nEnd to end\n");
 
 const email = `verify.auth.${Date.now()}@example.invalid`;
