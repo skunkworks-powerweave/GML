@@ -192,6 +192,10 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
           // native semantics the divs imitated, and it scrolls sideways inside
           // its card when a phone is too narrow for it; the date links to the
           // result too, so the attempt can be opened from the row's left edge.
+          // That date is the row's one link for a keyboard and a screen reader,
+          // named for what it opens; "View result" beside it goes to the same
+          // place and is for a pointer only (out of the tab order and hidden),
+          // or every attempt would be two tab stops, one named by a timestamp.
           <div
             data-testid="quiz-history-table"
             className="card card-hi"
@@ -221,7 +225,11 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                             : "1px solid var(--line)",
                       }}
                     >
-                      <Link href={`/quizzes/${slug}/result/${r.id}`} style={{ color: "inherit" }}>
+                      <Link
+                        href={`/quizzes/${slug}/result/${r.id}`}
+                        aria-label={`Attempt of ${formatSubmittedAt(r.submittedAt)}: view result`}
+                        style={{ color: "inherit" }}
+                      >
                         {formatSubmittedAt(r.submittedAt)}
                       </Link>
                     </td>
@@ -280,6 +288,8 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                     >
                       <Link
                         href={`/quizzes/${slug}/result/${r.id}`}
+                        aria-hidden="true"
+                        tabIndex={-1}
                         className="btn btn-sm btn-ghost"
                         style={{
                           textDecoration: "none",

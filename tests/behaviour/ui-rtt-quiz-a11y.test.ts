@@ -19,16 +19,22 @@
 //   - No RTT or quiz page set a title, so every tab, bookmark and history
 //     entry read "Goldenmile RTT LMS" and Next's route announcer, which speaks
 //     only when document.title changes, said nothing on any navigation.
+//   - A timed quiz's countdown was role="timer" with aria-live="polite", so a
+//     screen reader read out every second of it over the question; the phone
+//     chip was a bare "08:42" with no label.
+//   - Each attempt in a quiz's history was two links to the same result, one
+//     named only by its timestamp: two tab stops per attempt.
 //
 // ── HOW ──────────────────────────────────────────────────────────────────────
 //
 // The runners are mounted with ./_ui.ts's `mount` and their REAL click
-// handlers are called; the pages are rendered for real against Postgres.
+// handlers are called (and, for the countdown, their real effects run on
+// node:test's mocked clock); the pages are rendered for real against Postgres.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, closeAppDb, type TestUser } from "./_server-actions.js";
-import { render, withAppRouter, mount, hostElements, textOf, renderSync, h, openingTags, attr } from "./_ui.js";
+import { render, withAppRouter, mount, hostElements, textOf, renderSync, h, openingTags, attr, elements } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { rttWorld } from "./_rtt-world.js";
 import { parseMarkup, walk, type El } from "./_phone-layout.js";
@@ -128,6 +134,86 @@ test("the phone runner's progress dots expose their labels, and the current one 
   // The current dot's size differs, not only its fill.
   const height = (t: string) => attr(t, "style")?.match(/(?:^|;)height:([^;]+)/)?.[1];
   assert.notEqual(height(dots[0]!), height(dots[1]!), "the current dot is taller than the others");
+});
+
+// ── the countdown, heard at its thresholds and not every second ──────────────
+
+/** A region a screen reader speaks on change: an explicit aria-live, or a role that is one. */
+const isLive = (el: AnyEl) =>
+  ["polite", "assertive"].includes(String(el.props["aria-live"])) || ["status", "alert", "log"].includes(String(el.props.role));
+
+test("the quiz countdown is not read out every second: the timer is not a live region, one polite region speaks at 5 minutes, 1 minute and time up, and the phone's chip says what it counts", async (t) => {
+  const { QuizRunner } = await import("../../apps/web/src/components/quiz/QuizRunner.tsx");
+  const { MobileQuizRunner } = await import("../../apps/web/src/components/quiz/MobileQuizRunner.tsx");
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+  for (const [name, Runner] of [["QuizRunner", QuizRunner], ["MobileQuizRunner", MobileQuizRunner]] as const) {
+    const LIMIT = 400;
+    let submits = 0;
+    const m = mount(
+      Runner as (p: unknown) => unknown,
+      { slug: "s", title: "T", questions: QUESTIONS, timeLimitSeconds: LIMIT, submitAction: async () => void submits++ },
+      { effects: true },
+    );
+    try {
+      const timer = () => {
+        const found = hostElements(m.tree).filter((el) => el.props.role === "timer");
+        assert.equal(found.length, 1, `${name}: one timer`);
+        return found[0]!;
+      };
+      // role="timer" is aria-live="off" by definition; the runners set
+      // aria-live="polite" on it, so the value, which changes every second,
+      // was queued for speech every second over the question being read.
+      assert.ok([undefined, "off"].includes(timer().props["aria-live"] as string | undefined), `${name}: the timer is not a live region (aria-live=${String(timer().props["aria-live"])})`);
+      // Its label is part of it: the phone's chip was a bare "06:40".
+      assert.match(textOf(timer()), /^Time remaining\s*06:40$/, `${name}: the timer says what it counts`);
+      const regions = () => hostElements(m.tree).filter(isLive);
+      for (const r of regions()) assert.doesNotMatch(textOf(r), /\d\d:\d\d/, `${name}: no live region holds the ticking value`);
+      assert.equal(regions().length, 1, `${name}: one live region for the countdown`);
+      assert.equal(textOf(regions()[0]!), "", `${name}: silent at the start`);
+
+      // Every second to 00:00: what the region says, and when it changes.
+      const said: Array<[number, string]> = [];
+      let last = "";
+      for (let s = 1; s <= LIMIT; s++) {
+        t.mock.timers.tick(1000);
+        m.rerender();
+        const now = regions().map(textOf).join("|");
+        if (now !== last) said.push([LIMIT - s, now]);
+        last = now;
+      }
+      assert.deepEqual(
+        said,
+        [
+          [300, "5 minutes remaining."],
+          [60, "1 minute remaining."],
+          [0, "Time is up. Your answers are being submitted."],
+        ],
+        `${name}: spoken at the thresholds only`,
+      );
+      assert.equal(submits, 1, `${name}: auto-submitted once`);
+    } finally {
+      m.unmount();
+    }
+  }
+
+  // A limit shorter than a threshold never announces it: an attempt that
+  // opens with 3 minutes left is not told "5 minutes remaining".
+  const m = mount(
+    QuizRunner as (p: unknown) => unknown,
+    { slug: "s", title: "T", questions: QUESTIONS, timeLimitSeconds: 180, submitAction: noop },
+    { effects: true },
+  );
+  try {
+    const said = new Set<string>();
+    for (let s = 1; s <= 180; s++) {
+      t.mock.timers.tick(1000);
+      m.rerender();
+      said.add(hostElements(m.tree).filter(isLive).map(textOf).join("|"));
+    }
+    assert.deepEqual([...said], ["", "1 minute remaining.", "Time is up. Your answers are being submitted."]);
+  } finally {
+    m.unmount();
+  }
 });
 
 // ── the filter that is on ────────────────────────────────────────────────────
@@ -235,6 +321,44 @@ test("the teach-back queue's tabs say which one is on (aria-current)", { skip },
   } finally {
     await w.c.query(`DELETE FROM video_submissions WHERE file_id = $1`, [fileId]);
     await w.c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+    await w.cleanup();
+  }
+});
+
+// ── one link per attempt ─────────────────────────────────────────────────────
+
+test("each attempt in a quiz's history is one link to a keyboard and a screen reader, named by its date and what it opens", { skip }, async () => {
+  const w = await rttWorld("a11yqhist");
+  try {
+    const subjectId = await w.subject();
+    const quiz = await w.quiz(subjectId, { title: `History ${w.T}`, maxAttempts: 3 });
+    const attempts = [await w.submission(quiz.id, w.teacher.id, 100, true), await w.submission(quiz.id, w.teacher.id, 50, false)];
+    const { default: History } = await import(`${APP}/quizzes/[slug]/history/page.tsx`);
+    const html = await page(w.teacher, () => History({ params: P({ slug: quiz.slug }), searchParams: P({}) }));
+    const links = elements(html, "a");
+    for (const id of attempts) {
+      const toResult = links.filter((a) => attr(a.open, "href") === `/quizzes/${quiz.slug}/result/${id}`);
+      assert.ok(toResult.length >= 1, "the attempt links to its result");
+      // The row has two links to the same result -- the date at its left edge,
+      // which a phone shows when the table has scrolled, and "View result" --
+      // and both were tab stops, one named only by a timestamp.
+      const reachable = toResult.filter((a) => attr(a.open, "tabindex") !== "-1" && attr(a.open, "aria-hidden") !== "true");
+      assert.equal(reachable.length, 1, `attempt ${id}: one tab stop and one link for a screen reader, not ${reachable.length}`);
+      // The other is for a pointer only: out of the tab order AND hidden, as
+      // a hidden element that can still take focus is announced as nothing.
+      for (const a of toResult.filter((x) => !reachable.includes(x))) {
+        assert.equal(attr(a.open, "tabindex"), "-1", `${a.text}: not a tab stop`);
+        assert.equal(attr(a.open, "aria-hidden"), "true", `${a.text}: hidden from a screen reader`);
+      }
+      const link = reachable[0]!;
+      const name = attr(link.open, "aria-label") ?? link.text;
+      assert.match(name, /view result/i, `"${name}" says what it opens`);
+      assert.match(name, /\d{4}/, `"${name}" says which attempt`);
+      // Label in name (WCAG 2.5.3): a speech user says what they see.
+      assert.ok(name.includes(link.text.trim()), `"${name}" contains the visible "${link.text.trim()}"`);
+    }
+  } finally {
+    await w.c.query(`DELETE FROM quiz_attempts WHERE user_id = $1`, [w.teacher.id]);
     await w.cleanup();
   }
 });

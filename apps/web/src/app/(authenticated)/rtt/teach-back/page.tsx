@@ -201,12 +201,17 @@ export default async function TeachBackQueuePage({
     return params.toString() ? `?${params.toString()}` : "/rtt/teach-back";
   };
 
+  // #review: opening a row scrolls to the pane. Next's Link keeps the scroll
+  // position otherwise, and on a phone the pane is under the whole list (up
+  // to PAGE_SIZE rows and the pager), so a tap changed nothing a mentor could
+  // see but the row's own border. On a desktop the pane sits at the top of
+  // the list, above a row scrolled down to.
   const rowHref = (id: string) => {
     const params = new URLSearchParams();
     if (filter) params.set("status", filter);
     if (page > 1) params.set("page", String(page));
     params.set("id", id);
-    return `?${params.toString()}`;
+    return `?${params.toString()}#review`;
   };
 
   return (
@@ -330,8 +335,12 @@ export default async function TeachBackQueuePage({
                 const isSelected = selectedId === r.id;
                 return (
                   <li key={r.id}>
+                    {/* aria-current: the open row was told only by its border
+                        and fill, which a phone user scrolling back up from
+                        the pane, or a screen reader, cannot go by. */}
                     <Link
                       href={rowHref(r.id)}
+                      aria-current={isSelected ? "true" : undefined}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -425,10 +434,15 @@ export default async function TeachBackQueuePage({
           ) : null}
         </div>
 
-        {/* Right: preview pane */}
+        {/* Right: preview pane. id="review" is what every row links to;
+            scroll-margin keeps its top clear of the sticky header (the
+            topbar, or MobileShell's) that the jump would otherwise put it
+            under. */}
         {selected ? (
           <article
+            id="review"
             style={{
+              scrollMarginTop: 80,
               background: "var(--card-hi)",
               border: "1px solid var(--line)",
               borderRadius: "var(--r-3)",

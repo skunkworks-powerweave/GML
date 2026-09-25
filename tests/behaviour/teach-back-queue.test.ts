@@ -127,8 +127,10 @@ async function queue(user: TestUser, sp: Record<string, string>): Promise<Render
   signIn(user);
   const { default: TeachBackQueuePage } = await import("../../apps/web/src/app/(authenticated)/rtt/teach-back/page.tsx");
   const html = await render(withAppRouter(await TeachBackQueuePage({ searchParams: Promise.resolve(sp) })));
+  // A row's href is "?...&id=<uuid>#review": the id is in the query, and the
+  // fragment is the review pane the link scrolls to.
   const rows = [...html.matchAll(/<li>(<a\b[^>]*>)([\s\S]*?)<\/a><\/li>/g)].map((m) => ({
-    id: new URLSearchParams((attr(m[1]!, "href") ?? "").replace(/^\?/, "")).get("id") ?? "",
+    id: new URL(attr(m[1]!, "href") ?? "", "http://queue.test/rtt/teach-back").searchParams.get("id") ?? "",
     inner: m[2]!,
   }));
   const text = decodeEntities(html.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ");

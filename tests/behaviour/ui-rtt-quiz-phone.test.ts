@@ -16,6 +16,12 @@
 // With no modules and no sessions (the seed) the page fitted, which is why
 // only a page WITH content shows it.
 //
+// Fitting is not enough where stacking moves what a user came for: on a phone
+// the subject page's readings and Start button follow the modules (not the
+// sessions table and the progress card), and a teach-back row opened under a
+// list of up to 80 rows scrolls to its review pane. The /rtt card grids fit
+// the smallest (320 px) phones as well.
+//
 // ── HOW ──────────────────────────────────────────────────────────────────────
 //
 // Each REAL page is rendered as a phone user (gml-device=mobile) against
@@ -29,7 +35,7 @@ import { signIn, closeAppDb, type TestUser } from "./_server-actions.js";
 import { render, withAppRouter, request, decodeEntities } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { rttWorld, type RttWorld } from "./_rtt-world.js";
-import { phoneLayoutIssues, templateAt, PHONE_WIDTH } from "./_phone-layout.js";
+import { phoneLayoutIssues, templateAt, parseMarkup, walk, PHONE_WIDTH, PHONE_CONTENT } from "./_phone-layout.js";
 
 const skip = needsDatabase();
 after(async () => {
@@ -39,15 +45,16 @@ after(async () => {
 const APP = "../../apps/web/src/app/(authenticated)";
 const DAY = 86_400_000;
 
-async function asPhone(user: TestUser, page: () => Promise<unknown>): Promise<string> {
+async function asDevice(device: "mobile" | "desktop", user: TestUser, page: () => Promise<unknown>): Promise<string> {
   signIn(user);
-  request.cookies = { "gml-device": "mobile" };
+  request.cookies = { "gml-device": device };
   try {
     return await render(withAppRouter(await page()));
   } finally {
     request.cookies = {};
   }
 }
+const asPhone = (user: TestUser, page: () => Promise<unknown>) => asDevice("mobile", user, page);
 
 function noIssues(issues: string[], where: string) {
   assert.deepEqual(issues, [], `${where} at ${PHONE_WIDTH}px:\n  ${issues.join("\n  ")}`);
@@ -80,6 +87,30 @@ function columns(template: string): number {
     n += rep ? Number(rep[1]) * columns(rep[2]!) : 1;
   }
   return n;
+}
+
+// The smallest phones still sold are 320 px wide, a column of 320 - 96 =
+// 224 px inside MobileShell and the page padding. _phone-layout.ts holds an
+// auto-fit grid to the 360 px phone's 264 px column; a 260 px minimum passes
+// that and still overflows here.
+const SMALLEST_PHONE = 320;
+const SMALLEST_CONTENT = SMALLEST_PHONE - (PHONE_WIDTH - PHONE_CONTENT);
+
+/**
+ * Every auto-fit / auto-fill template whose track minimum is wider than the
+ * smallest phone's column: min(100%, N) fits any column, a fixed N must be
+ * no wider than it.
+ */
+async function autoRepeatTooWide(html: string): Promise<string[]> {
+  const templates = await templateAt(html, SMALLEST_PHONE, () => true);
+  return templates
+    .filter((t) => /repeat\(\s*auto-(fit|fill)/.test(t))
+    .filter((t) => {
+      const lo = t.match(/minmax\(\s*([^,]+?)\s*,/)?.[1] ?? "";
+      if (/^min\(\s*100%/.test(lo)) return false;
+      const px = lo.match(/^([\d.]+)px$/);
+      return !px || Number(px[1]) > SMALLEST_CONTENT;
+    });
 }
 
 /**
@@ -117,25 +148,41 @@ async function fullSubject(w: RttWorld): Promise<string> {
 
 // ── /rtt/subject/[id] ────────────────────────────────────────────────────────
 
-test("an RTT subject page with content fits a phone: readings and the assessment are in the column, the sessions table scrolls in its card; the desktop keeps two columns", { skip }, async () => {
+/** The subject page's cards, by their titles, in document (= reading and focus) order. */
+const cardOrder = (html: string) =>
+  [...html.matchAll(/<div style="font-weight:600;font-size:13px">([^<]+)/g)].map((m) => m[1]!.replace(/\s*\($/, "").trim());
+
+test("an RTT subject page with content fits a phone: modules, then the readings and the assessment, then the sessions (their table scrolls in its card); the desktop keeps two columns", { skip }, async () => {
   const w = await rttWorld("phonesubj");
   try {
     const subjectId = await fullSubject(w);
     const { default: SubjectPage } = await import(`${APP}/rtt/subject/[id]/page.tsx`);
-    const html = await asPhone(w.teacher, () =>
-      SubjectPage({ params: Promise.resolve({ id: subjectId }), searchParams: Promise.resolve({}) }),
-    );
+    const open = () => SubjectPage({ params: Promise.resolve({ id: subjectId }), searchParams: Promise.resolve({}) });
+    const html = await asPhone(w.teacher, open);
     // The content that overflowed is on the page.
     const shown = text(html);
     assert.ok(shown.includes("Required readings (1)"), "the readings card is on the page");
     assert.ok(shown.includes(" Start "), "the unattempted quiz offers Start");
     assert.ok(shown.includes(" Join "), "the upcoming session offers Join");
     noIssues(await phoneLayoutIssues(html), "/rtt/subject/[id]");
+    // One column on a phone is read top to bottom, so the order is the DOM's.
+    // The readings and the quiz's Start button -- what a teacher opens a
+    // subject for -- come straight after the modules, not after the whole
+    // sessions table and the progress card, two screens down.
+    assert.deepEqual(
+      cardOrder(html),
+      ["Modules", "Required readings", "Assessment", "Cohort sessions", "Your progress"],
+      "the cards in a phone's reading order",
+    );
 
-    // The desktop layout is unchanged: modules and sessions beside readings
-    // and the assessment.
-    const desktop = await templateAt(html, 1280, (e) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? ""));
+    // The desktop layout is unchanged: modules and sessions beside progress,
+    // readings and the assessment.
+    const desk = await asDevice("desktop", w.teacher, open);
+    assert.deepEqual(cardOrder(desk), ["Modules", "Cohort sessions", "Your progress", "Required readings", "Assessment"]);
+    const desktop = await templateAt(desk, 1280, (e) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? ""));
     assert.ok(desktop.some((t) => columns(t) === 2), `two columns on a desktop: ${desktop.join(" | ")}`);
+    // A desktop browser in a narrow window still fits (the columns stack).
+    noIssues(await phoneLayoutIssues(desk), "/rtt/subject/[id] (desktop layout, narrow window)");
   } finally {
     await w.cleanup();
   }
@@ -174,6 +221,9 @@ test("/rtt, /rtt/progress and the online hub fit a phone, for a teacher and for 
       const html = await asPhone(user, run);
       rendered.set(route, html);
       for (const issue of await phoneLayoutIssues(html)) failures.push(`${route}: ${issue}`);
+      for (const t of await autoRepeatTooWide(html)) {
+        failures.push(`${route}: "${t}" auto-repeats tracks wider than a ${SMALLEST_CONTENT}px column (a ${SMALLEST_PHONE}px phone)`);
+      }
     }
     noIssues(failures, "RTT pages");
 
@@ -194,40 +244,71 @@ test("/rtt, /rtt/progress and the online hub fit a phone, for a teacher and for 
   }
 });
 
-test("the teach-back queue fits a phone, with a submission open beside the list", { skip }, async () => {
+test("the teach-back queue fits a phone: an opened submission's pane goes under the list, and opening a row takes the reader to it", { skip }, async () => {
   const w = await rttWorld("phonetb");
   const one = async (q: string, p: unknown[]) => (await w.c.query(q, p)).rows[0].id as string;
-  const fileId = await one(
-    `INSERT INTO files (bucket, object_key, mime_type, kind, status, owner_user_id)
-     VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored', $2) RETURNING id`,
-    [`test/${w.T}/original.mp4`, w.teacher.id],
-  );
+  const fileIds: string[] = [];
   try {
-    const clip = await one(
-      `INSERT INTO video_submissions
-         (file_id, source, status, context_type, submitted_by_user_id, caption_raw, hls_master_key, verified_at)
-       VALUES ($1, 'direct', 'ready', 'teach_back', $2, $3, 'hls/test/index.m3u8', now()) RETURNING id`,
-      [fileId, w.teacher.id, `Teach-back on place value ${w.T}`],
-    );
+    const clips: string[] = [];
+    for (const n of [1, 2]) {
+      const fileId = await one(
+        `INSERT INTO files (bucket, object_key, mime_type, kind, status, owner_user_id)
+         VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored', $2) RETURNING id`,
+        [`test/${w.T}/original-${n}.mp4`, w.teacher.id],
+      );
+      fileIds.push(fileId);
+      clips.push(
+        await one(
+          `INSERT INTO video_submissions
+             (file_id, source, status, context_type, submitted_by_user_id, caption_raw, hls_master_key, verified_at)
+           VALUES ($1, 'direct', 'ready', 'teach_back', $2, $3, 'hls/test/index.m3u8', now()) RETURNING id`,
+          [fileId, w.teacher.id, `Teach-back ${n} on place value ${w.T}`],
+        ),
+      );
+    }
+    const clip = clips[0]!;
     const { default: Queue } = await import(`${APP}/rtt/teach-back/page.tsx`);
     const failures: string[] = [];
     for (const sp of [{ status: "review_pending" }, { status: "review_pending", id: clip }]) {
       const html = await asPhone(w.mentor, () => Queue({ searchParams: P(sp) }));
-      assert.ok(html.includes(`id=${clip}`), "the clip is in the list");
+      const root = parseMarkup(html);
+      const rows = [...walk(root)].filter((e) => e.tag === "a" && /[?&]id=/.test(e.attrs.href ?? ""));
+      for (const c of clips) assert.ok(rows.some((a) => a.attrs.href!.includes(`id=${c}`)), "both clips are in the list");
       const route = `/rtt/teach-back${"id" in sp ? " (one open)" : ""}`;
       for (const issue of await phoneLayoutIssues(html)) failures.push(`${route}: ${issue}`);
-      if ("id" in sp) {
-        // Two shrinkable columns pass the rules above, but at 360 px they were
-        // a ~120 px list beside a ~180 px pane: the pane goes under the list.
-        const pick = (e: { tag: string; attrs: Record<string, string> }) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? "");
-        assert.deepEqual((await templateAt(html, PHONE_WIDTH, pick)).map(columns), [1], "one column on a phone");
-        assert.deepEqual((await templateAt(html, 1280, pick)).map(columns), [2], "list and pane side by side on a desktop");
+
+      // Opening a row must SHOW the pane. On a phone the pane is under the
+      // list -- up to a page of 80 rows and the pager -- and Next's Link keeps
+      // the scroll position, so a row whose link names only ?id= changed
+      // nothing a mentor could see but the row's own border. Every row links
+      // to the pane's id, which the browser and Next scroll to.
+      for (const a of rows) assert.match(a.attrs.href!, /#review$/, `row ${a.attrs.href} takes the reader to the pane`);
+      const panes = [...walk(root)].filter((e) => e.attrs.id === "review");
+      if (!("id" in sp)) {
+        assert.equal(panes.length, 0, "no pane with nothing open");
+        assert.ok(rows.every((a) => a.attrs["aria-current"] === undefined), "no row is current with nothing open");
+        continue;
       }
+      assert.deepEqual(panes.map((e) => e.tag), ["article"], "the open submission's pane carries the id the rows link to");
+      // Two shrinkable columns pass the rules above, but at 360 px they were
+      // a ~120 px list beside a ~180 px pane: the pane goes under the list.
+      const pick = (e: { tag: string; attrs: Record<string, string> }) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? "");
+      assert.deepEqual((await templateAt(html, PHONE_WIDTH, pick)).map(columns), [1], "one column on a phone");
+      assert.deepEqual((await templateAt(html, 1280, pick)).map(columns), [2], "list and pane side by side on a desktop");
+      // Scrolled back up, the open row is told by more than its border: it
+      // says it is the current one.
+      assert.deepEqual(
+        rows.map((a) => a.attrs["aria-current"] ?? null),
+        rows.map((a) => (a.attrs.href!.includes(`id=${clip}`) ? "true" : null)),
+        "only the open row is current",
+      );
     }
     noIssues(failures, "the teach-back queue");
   } finally {
-    await w.c.query(`DELETE FROM video_submissions WHERE file_id = $1`, [fileId]);
-    await w.c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+    for (const fileId of fileIds) {
+      await w.c.query(`DELETE FROM video_submissions WHERE file_id = $1`, [fileId]);
+      await w.c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+    }
     await w.cleanup();
   }
 });

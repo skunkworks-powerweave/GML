@@ -22,6 +22,7 @@ import { listSubjectAssessments } from "@/lib/rtt/assessments";
 import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
 import { rttScope } from "@/lib/rtt/scope";
 import { webLink } from "@/lib/rtt/links";
+import { getDeviceType } from "@/lib/device";
 import { markProgressAction } from "./actions";
 
 /** A one-button form that marks a lesson or reading done, or undoes it. */
@@ -169,6 +170,163 @@ export default async function RttSubjectPage({
     ? `/rtt/subject/${id}#module-${resume.sequence}`
     : `/rtt/subject/${id}#modules`;
 
+  // The readings and assessment cards, placed per device below.
+  const readingsCard = (
+    <article id="readings" className="card card-hi">
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
+      </div>
+      {readings.length === 0 ? (
+        <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+          No readings linked.
+          {viewerIsAdmin ? (
+            <div style={{ fontSize: 12, marginTop: 6 }}>
+              Add them at <Link href="/admin/data/rtt-readings">Admin → RTT Readings</Link>.
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div>
+          {readings.map((r, i) => (
+            <div
+              key={r.id}
+              style={{
+                display: "grid",
+                // As the module rows: the title column cannot be pushed
+                // wider than the card by a long title.
+                gridTemplateColumns: "30px minmax(0, 1fr) minmax(0, auto)",
+                gap: 10,
+                padding: 12,
+                alignItems: "center",
+                borderTop: i ? "1px solid var(--line)" : "none",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--rust)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 4,
+                  padding: "2px 4px",
+                  textAlign: "center",
+                }}
+              >
+                PDF
+              </span>
+              <div style={{ overflowWrap: "anywhere" }}>
+                <div style={{ fontWeight: 500, fontSize: 13 }}>
+                  {r.externalUrl ? (
+                    <a
+                      href={r.externalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: "var(--ink)" }}
+                    >
+                      {r.title}
+                    </a>
+                  ) : (
+                    r.title
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  {r.externalUrl ? "External link" : "Reading"}
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} />
+                </div>
+              </div>
+              {r.externalUrl ? (
+                <a
+                  href={r.externalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-sm"
+                >
+                  Open
+                </a>
+              ) : (
+                // NO "View" BUTTON for a fileKey-only reading. It sent an
+                // rtt_readings id to /repo/resource/[id]/view, which looks
+                // the id up in `resources` -- a different table -- so it
+                // 404'd by construction. The branch could not be reached
+                // honestly anyway: file_key is a MinIO object key and
+                // MinIO is out of the stack, so nothing can set or serve
+                // it. Readings are authored at /admin/data/rtt-readings
+                // as external links, which render "Open" above.
+                <span className="chip">—</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+
+  // Assessment card: one row per active quiz bound to this subject,
+  // with the learner's own best result. Release is the quiz's
+  // `active` flag at /admin/quizzes; there is no sequencing rule (an
+  // endline locked until a mid-unit is passed) because nothing in the
+  // programme defines one, so none is pretended here.
+  const assessmentCard = (
+    <article className="card card-hi">
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
+      </div>
+      {assessments.length === 0 ? (
+        <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+          No assessments published yet.
+          {viewerIsAdmin ? (
+            <div style={{ fontSize: 12, marginTop: 6 }}>
+              Create and activate one for this subject at <Link href="/admin/quizzes">Admin → Quizzes</Link>.
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+          {assessments.map((q, i) => (
+            <li
+              key={q.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                padding: "12px 0",
+                borderTop: i ? "1px solid var(--line)" : "none",
+              }}
+            >
+              <div>
+                <div>{q.title}</div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  {q.attempts === 0
+                    ? `Pass mark ${q.passThreshold}%`
+                    : `Best ${q.bestScore}% · ${q.attempts} ${q.attempts === 1 ? "attempt" : "attempts"}`}
+                  {q.maxAttempts !== null ? ` · ${q.maxAttempts} allowed` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {q.passed ? <span className="chip chip-lichen">Passed</span> : null}
+                <Link
+                  href={q.href}
+                  className={q.attempts === 0 ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                  style={{ textDecoration: "none" }}
+                >
+                  {q.spent ? "Results" : q.attempts === 0 ? "Start" : "Retake"}
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </article>
+  );
+
+  // A phone reads the page as one column, in DOM order; see the section.
+  const phone = (await getDeviceType()) === "mobile";
+
   return (
     <div>
       <header style={{ marginBottom: 22 }}>
@@ -215,10 +373,11 @@ export default async function RttSubjectPage({
           which holds at every width: on a 360 px phone the left column grew to
           the sessions table's width and Required readings and the Assessment
           card -- the quiz's Start button -- sat off the right edge of the
-          screen. Below 768 px the columns now stack (modules and sessions, then
-          progress, readings and the assessment, in reading order); from 768 px
-          they are the same 1.5fr / 1fr, as minmax(0, ...) so wide content
-          scrolls in its card instead of widening the page. */}
+          screen. Below 768 px the columns now stack in DOM order -- on a phone
+          modules, readings, the assessment, sessions, then progress; in a
+          narrow desktop window the desktop's order -- and from 768 px they are
+          the same 1.5fr / 1fr, as minmax(0, ...) so wide content scrolls in
+          its card instead of widening the page. */}
       <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
           <article id="modules" className="card card-hi">
@@ -351,6 +510,15 @@ export default async function RttSubjectPage({
               </div>
             )}
           </article>
+
+          {/* On a phone the readings and the assessment follow the modules
+              here, not the sessions table and the progress card in the
+              other column: one column is read, and tabbed, top to bottom,
+              and those two -- the quiz's Start button among them -- sat
+              about two screens down (F11). Placed in the DOM, not by CSS
+              order, so reading, focus and visual order stay the same. */}
+          {phone ? readingsCard : null}
+          {phone ? assessmentCard : null}
 
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
@@ -492,154 +660,8 @@ export default async function RttSubjectPage({
             </div>
           </article>
 
-          <article id="readings" className="card card-hi">
-            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
-            </div>
-            {readings.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No readings linked.
-                {viewerIsAdmin ? (
-                  <div style={{ fontSize: 12, marginTop: 6 }}>
-                    Add them at <Link href="/admin/data/rtt-readings">Admin → RTT Readings</Link>.
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div>
-                {readings.map((r, i) => (
-                  <div
-                    key={r.id}
-                    style={{
-                      display: "grid",
-                      // As the module rows: the title column cannot be pushed
-                      // wider than the card by a long title.
-                      gridTemplateColumns: "30px minmax(0, 1fr) minmax(0, auto)",
-                      gap: 10,
-                      padding: 12,
-                      alignItems: "center",
-                      borderTop: i ? "1px solid var(--line)" : "none",
-                    }}
-                  >
-                    <span
-                      aria-hidden
-                      style={{
-                        fontFamily: "var(--mono)",
-                        fontSize: 10,
-                        fontWeight: 600,
-                        color: "var(--rust)",
-                        border: "1px solid var(--line)",
-                        borderRadius: 4,
-                        padding: "2px 4px",
-                        textAlign: "center",
-                      }}
-                    >
-                      PDF
-                    </span>
-                    <div style={{ overflowWrap: "anywhere" }}>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>
-                        {r.externalUrl ? (
-                          <a
-                            href={r.externalUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: "var(--ink)" }}
-                          >
-                            {r.title}
-                          </a>
-                        ) : (
-                          r.title
-                        )}
-                      </div>
-                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                        {r.externalUrl ? "External link" : "Reading"}
-                      </div>
-                      <div style={{ marginTop: 6 }}>
-                        <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} />
-                      </div>
-                    </div>
-                    {r.externalUrl ? (
-                      <a
-                        href={r.externalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn btn-sm"
-                      >
-                        Open
-                      </a>
-                    ) : (
-                      // NO "View" BUTTON for a fileKey-only reading. It sent an
-                      // rtt_readings id to /repo/resource/[id]/view, which looks
-                      // the id up in `resources` -- a different table -- so it
-                      // 404'd by construction. The branch could not be reached
-                      // honestly anyway: file_key is a MinIO object key and
-                      // MinIO is out of the stack, so nothing can set or serve
-                      // it. Readings are authored at /admin/data/rtt-readings
-                      // as external links, which render "Open" above.
-                      <span className="chip">—</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </article>
-
-          {/* Assessment card: one row per active quiz bound to this subject,
-              with the learner's own best result. Release is the quiz's
-              `active` flag at /admin/quizzes; there is no sequencing rule (an
-              endline locked until a mid-unit is passed) because nothing in the
-              programme defines one, so none is pretended here. */}
-          <article className="card card-hi">
-            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
-            </div>
-            {assessments.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No assessments published yet.
-                {viewerIsAdmin ? (
-                  <div style={{ fontSize: 12, marginTop: 6 }}>
-                    Create and activate one for this subject at <Link href="/admin/quizzes">Admin → Quizzes</Link>.
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
-                {assessments.map((q, i) => (
-                  <li
-                    key={q.id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "12px 0",
-                      borderTop: i ? "1px solid var(--line)" : "none",
-                    }}
-                  >
-                    <div>
-                      <div>{q.title}</div>
-                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                        {q.attempts === 0
-                          ? `Pass mark ${q.passThreshold}%`
-                          : `Best ${q.bestScore}% · ${q.attempts} ${q.attempts === 1 ? "attempt" : "attempts"}`}
-                        {q.maxAttempts !== null ? ` · ${q.maxAttempts} allowed` : ""}
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      {q.passed ? <span className="chip chip-lichen">Passed</span> : null}
-                      <Link
-                        href={q.href}
-                        className={q.attempts === 0 ? "btn btn-sm btn-primary" : "btn btn-sm"}
-                        style={{ textDecoration: "none" }}
-                      >
-                        {q.spent ? "Results" : q.attempts === 0 ? "Start" : "Retake"}
-                      </Link>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </article>
+          {phone ? null : readingsCard}
+          {phone ? null : assessmentCard}
         </div>
       </section>
     </div>
