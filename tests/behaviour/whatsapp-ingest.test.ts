@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { needsDatabase } from "./_harness.js";
 import {
   acceptAndClaim,
+  bucketAllowlist,
   deferred,
   documentMessage,
   envelope,
@@ -30,9 +31,9 @@ import {
   route,
   runDeferred,
   SECRET,
-  settle,
   signed,
   videoMessage,
+  waitFor,
   withEnv,
   withWorld,
 } from "./_whatsapp.js";
@@ -83,8 +84,8 @@ test("a redelivered message is a replay, not a second submission or a second job
       const n = Number((await w.c.query(`SELECT count(*) AS n FROM video_submissions WHERE whatsapp_message_id = $1`, [id])).rows[0].n);
       assert.equal(n, 1);
       assert.equal((await w.jobs(id)).length, 1);
-      await settle();
-      assert.ok((await w.audits("whatsapp.message.replay_ignored", id)).length >= 1, "the replay is audited so ops can see Meta retrying");
+      const replays = await waitFor(() => w.audits("whatsapp.message.replay_ignored", id), (r) => r.length >= 1);
+      assert.ok(replays.length >= 1, "the replay is audited so ops can see Meta retrying");
     }),
   );
 });
@@ -124,13 +125,13 @@ test("a message that is not a video is audited as ignored, not dropped without t
       );
       assert.equal(res.status, 200);
       await runDeferred();
-      await settle();
       assert.equal(await w.submission(text), undefined);
       assert.equal(await w.submission(pdf), undefined, "a PDF is not a lesson video");
-      const [t] = await w.audits("whatsapp.message.ignored", text);
+      const [t] = await waitFor(() => w.audits("whatsapp.message.ignored", text), (r) => r.length >= 1);
       assert.ok(t, "an ignored message must leave a row saying what arrived");
       assert.equal((t.metadata as Record<string, unknown>).type, "text");
-      assert.ok((await w.audits("whatsapp.message.ignored", pdf)).length === 1);
+      const p = await waitFor(() => w.audits("whatsapp.message.ignored", pdf), (r) => r.length >= 1);
+      assert.equal(p.length, 1);
     }),
   );
 });
@@ -170,6 +171,42 @@ test("worker: a fetch stores the bytes, marks the file stored and queues the tra
         await w.c.query(`SELECT status FROM jobs WHERE queue = 'transcode' AND dedupe_key = $1`, [`submission:${sub!.id}`])
       ).rows;
       assert.equal(transcode.length, 1, "the transcode is queued once the bytes exist, not before");
+    }),
+  );
+});
+
+// A document's mime type is whatever the sender's phone declared. The
+// videos-original bucket lists eight types (_post/005), and Supabase refuses
+// any other -- deterministically, so ten retries over 42 minutes all failed the
+// same way, the submission was marked failed, and the teacher was told to send
+// a video again that would fail again. fakeStorage enforces that allowlist.
+test("worker: a document with a video type the bucket does not list is stored and queued for transcode", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fetchWhatsAppMedia } = await fetcher();
+      const allowed = bucketAllowlist("videos-original");
+      const { VIDEOS_ORIGINAL_TYPES } = await import("../../packages/shared/src/storage/buckets.ts");
+      assert.deepEqual([...VIDEOS_ORIGINAL_TYPES].sort(), [...allowed].sort(), "the worker's list is the bucket's list");
+      for (const mime of ["video/x-m4v", "video/mp2t", "video/x-flv"]) {
+        assert.ok(!allowed.has(mime), `${mime} is meant to be a type the bucket does not list`);
+        const { id, job } = await acceptAndClaim(w, { asDocument: true, mime });
+        const storage = fakeStorage();
+        await fetchWhatsAppMedia(job.payload as never, { attempt: 1, maxAttempts: job.maxAttempts }, {
+          fetch: fakeGraph().fetch,
+          put: storage.put,
+          env: { WHATSAPP_ACCESS_TOKEN: "test-token" },
+        });
+        assert.equal(storage.puts.length, 1, `a ${mime} lesson must reach Storage`);
+        assert.ok(allowed.has(storage.puts[0]!.type), `stored as ${storage.puts[0]!.type}, which the bucket accepts`);
+        const sub = await w.submission(id);
+        assert.equal(sub!.status, "queued");
+        assert.equal(sub!.file_status, "stored");
+        assert.equal(sub!.file_mime, mime, "the type the sender declared is kept on the file row");
+        const transcode = (
+          await w.c.query(`SELECT 1 FROM jobs WHERE queue = 'transcode' AND dedupe_key = $1`, [`submission:${sub!.id}`])
+        ).rows;
+        assert.equal(transcode.length, 1, "ffmpeg reads the container itself; the transcode is queued");
+      }
     }),
   );
 });

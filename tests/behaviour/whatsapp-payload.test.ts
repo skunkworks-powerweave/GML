@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDatabase, withClient } from "./_harness.js";
-import { envelope, route, SECRET, settle, signed, videoMessage, withEnv, withWorld } from "./_whatsapp.js";
+import { envelope, route, SECRET, signed, videoMessage, waitFor, withEnv, withWorld } from "./_whatsapp.js";
 
 const skip = needsDatabase();
 
@@ -35,12 +35,15 @@ test("F101: a signed payload of an unexpected shape is a recorded 200, not a 500
       const res = await POST(signed(b));
       assert.equal(res.status, 200, `${b} answered ${res.status}`);
     }
-    await settle();
-    const n = await withClient(async (c) =>
-      Number(
-        (await c.query(`SELECT count(*) AS n FROM audit_log WHERE action = 'whatsapp.payload.unrecognised' AND created_at >= $1`, [since]))
-          .rows[0].n,
-      ),
+    const n = await waitFor(
+      () =>
+        withClient(async (c) =>
+          Number(
+            (await c.query(`SELECT count(*) AS n FROM audit_log WHERE action = 'whatsapp.payload.unrecognised' AND created_at >= $1`, [since]))
+              .rows[0].n,
+          ),
+        ),
+      (count) => count >= bodies.length,
     );
     assert.ok(n >= bodies.length, `each unrecognised payload is recorded (${n} rows for ${bodies.length} bodies)`);
   });

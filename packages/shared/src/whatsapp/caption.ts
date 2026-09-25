@@ -24,7 +24,22 @@
  * intended; the regex had no `i` flag, so it was dead code.
  *
  * Still conservative where it matters: the tag must stand on its own -- not be
- * the tail of a word ("Jobs-2026", "COMMIT") -- and the first code wins.
+ * the tail of a word ("Jobs-2026", "COMMIT").
+ *
+ * ── THE FIRST WELL-FORMED CODE WINS, NOT THE FIRST TAG ───────────────────────
+ *
+ * "mm" is millimetres, "tb" is Hinglish for "then", and "TB session" is a
+ * phrase; all stand on their own. Taking the first tag read
+ * "45 mm ruler work OBS-2026-009" as meeting "ruler" and lost the cycle. So
+ * every tag is tried, and the first whose code has the right shape wins: an OBS
+ * code starting with a digit (OBS-<year>-<NNN>), a UUID after TB or MM. Only
+ * when none has, the first tag is returned as before, so a hand-entered code
+ * ("OBS-PILOT-1") is still looked up and a malformed id is still reported as
+ * one.
+ *
+ * Dashes are any of the dash family: phone keyboards substitute an en or em
+ * dash for "--" and after a space. "OBS 2026 009" -- spaces for both dashes --
+ * is read as 2026-009.
  *
  * ── BOTH FORMS OF THE CODE ───────────────────────────────────────────────────
  *
@@ -43,24 +58,44 @@ export type CaptionContext = {
   fullCode?: string;
 };
 
-// (start | a non-alphanumeric)  TAG  (separator | a digit straight after)  CODE
-//
-// The separator may be a dash, spaces, an underscore or a colon ("OBS: 2026-009").
-// With no separator the code must start with a digit, so "Observation" is not
-// read as OBS + "ervation".
-const CAPTION_CODE = /(?:^|[^A-Za-z0-9])(OBS|TB|MM)(?:[\s_:-]+|(?=\d))([A-Za-z0-9._-]+)/i;
+/** Hyphen, non-breaking hyphen, figure/en/em dash, horizontal bar, minus, and their small and full-width forms. */
+const DASHES = /[‐-―−﹘﹣－]/g;
+
+/** A tag that is not the tail of a word. */
+const TAG = /(?<![A-Za-z0-9])(OBS|TB|MM)/gi;
+
+// After the tag: a separator -- a dash, spaces, an underscore or a colon
+// ("OBS: 2026-009") -- then the code. With no separator the code must start
+// with a digit, so "Observation" is not read as OBS + "ervation".
+const CODE_AFTER_TAG = /^(?:[\s_:-]+|(?=\d))([A-Za-z0-9._-]+)/;
+
+/** "OBS 2026 009": the rest of the code after a bare year, across a space. */
+const NUMBER_AFTER_YEAR = /^[\s_:]+(\d{3,6})(?![A-Za-z0-9])/;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const TYPE_OF = { OBS: "observation_cycle", TB: "teach_back", MM: "mentor_meeting" } as const;
 
 export function parseCaption(caption: string): CaptionContext {
-  const m = caption.match(CAPTION_CODE);
-  if (!m) return { type: "generic" };
-  const tag = m[1]!.toUpperCase();
-  // "OBS-2026-009." / "OBS-2026-009-" -- punctuation that ends a sentence or a
-  // line is not part of any code the programme issues.
-  const bare = m[2]!.replace(/[._-]+$/, "");
-  if (!bare) return { type: "generic" };
-  const full = `${tag}-${bare}`;
-  if (tag === "OBS") return { type: "observation_cycle", code: bare, fullCode: full };
-  if (tag === "TB") return { type: "teach_back", code: bare, fullCode: full };
-  if (tag === "MM") return { type: "mentor_meeting", code: bare, fullCode: full };
-  return { type: "generic" };
+  // One character for one, so positions do not move.
+  const text = caption.replace(DASHES, "-");
+  let first: CaptionContext | null = null;
+  for (const t of text.matchAll(TAG)) {
+    const tag = t[1]!.toUpperCase() as keyof typeof TYPE_OF;
+    const after = text.slice(t.index + t[0].length);
+    const m = CODE_AFTER_TAG.exec(after);
+    if (!m) continue;
+    // "OBS-2026-009." / "OBS-2026-009-" -- punctuation that ends a sentence or
+    // a line is not part of any code the programme issues.
+    let code = m[1]!.replace(/[._-]+$/, "");
+    if (!code) continue;
+    if (tag === "OBS" && /^\d{4}$/.test(code)) {
+      const n = NUMBER_AFTER_YEAR.exec(after.slice(m[0].length));
+      if (n) code = `${code}-${n[1]}`;
+    }
+    const ctx: CaptionContext = { type: TYPE_OF[tag], code, fullCode: `${tag}-${code}` };
+    if (tag === "OBS" ? /^\d/.test(code) : UUID.test(code)) return ctx;
+    first ??= ctx;
+  }
+  return first ?? { type: "generic" };
 }

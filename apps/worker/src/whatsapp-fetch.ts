@@ -27,7 +27,7 @@ import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { auditLog, files, observationCycles, videoSubmissions } from "@gml/db/schema";
 import { enqueue } from "@gml/db/queue";
-import type { BucketName } from "@gml/shared/storage/buckets";
+import { storableVideoType, type BucketName } from "@gml/shared/storage/buckets";
 import { putObject } from "@gml/shared/storage/client";
 import { mediaMetadataUrl, sendWhatsAppText, type EnvLike } from "@gml/shared/whatsapp/graph";
 import type { WhatsAppFetchPayload, WhatsAppReplyPayload } from "@gml/shared/whatsapp/fetch-job";
@@ -264,7 +264,10 @@ export async function fetchWhatsAppMedia(
       await audit("whatsapp.media.checksum_mismatch", p.videoSubmissionId, { msgId: p.msgId, claimed: p.sha256, computed: sum.hex });
     }
 
-    await deps.put(p.bucket, p.objectKey, bytes, p.mimeType);
+    // Under a type the bucket accepts. The declared one came from the sender's
+    // phone, and Supabase refuses any type videos-original does not list --
+    // the same way on every retry.
+    await deps.put(p.bucket, p.objectKey, bytes, storableVideoType(p.mimeType));
 
     // Bytes are stored: move the submission on and queue the transcode
     // together, so a crash here cannot leave a stored video with no job.

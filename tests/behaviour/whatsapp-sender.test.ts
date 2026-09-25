@@ -20,7 +20,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { needsDatabase } from "./_harness.js";
-import { envelope, route, SECRET, settle, signed, videoMessage, withEnv, withWorld, type World } from "./_whatsapp.js";
+import { envelope, route, SECRET, signed, videoMessage, waitFor, withEnv, withWorld, type World } from "./_whatsapp.js";
 
 const skip = needsDatabase();
 
@@ -78,8 +78,7 @@ test("F138: a caption names a target; only someone who may write to it gets the 
           assert.equal(sub.context_type, "generic", `${from} must not be able to write into another teacher's cycle`);
           assert.equal(sub.context_id, null);
           assert.equal(sub.caption_raw, w.cycleCode, "the caption is kept so an admin can see what was attempted");
-          await settle();
-          const [row] = await w.audits("whatsapp.context.forbidden", id);
+          const [row] = await waitFor(() => w.audits("whatsapp.context.forbidden", id), (r) => r.length >= 1);
           assert.ok(row, "a refused attachment is a security event and must be audited");
         }
 

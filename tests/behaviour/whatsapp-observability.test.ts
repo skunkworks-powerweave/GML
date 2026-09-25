@@ -32,9 +32,9 @@ import {
   fakeStorage,
   route,
   SECRET,
-  settle,
   signed,
   videoMessage,
+  waitFor,
   withEnv,
   withWorld,
 } from "./_whatsapp.js";
@@ -147,10 +147,28 @@ test("F139: docs/audit-actions.md documents every whatsapp.* row the code writes
   const REPLIES = { WHATSAPP_ACCESS_TOKEN: "t", WHATSAPP_PHONE_NUMBER_ID: "PNID" };
   const ua = tag("wa-doc");
   const written = new Map<string, { entity_type: string; keys: Set<string> }>();
+  const EXPECTED = [
+    "whatsapp.signature_failed",
+    "whatsapp.message.received",
+    "whatsapp.message.replay_ignored",
+    "whatsapp.message.ignored",
+    "whatsapp.context.unmatched",
+    "whatsapp.context.forbidden",
+    "whatsapp.fetch.enqueued",
+    "whatsapp.media.fetched",
+    "whatsapp.media.fetch_failed",
+    "whatsapp.reply.sent",
+    "whatsapp.log.surface_viewed",
+    "whatsapp.fetch.retried",
+  ];
   const collect = async (c: import("pg").Client, where: string, params: unknown[]) => {
-    await settle();
-    const rows = (await c.query(`SELECT action, entity_type, metadata FROM audit_log WHERE action LIKE 'whatsapp.%' AND (${where})`, params))
-      .rows as Array<{ action: string; entity_type: string; metadata: Record<string, unknown> }>;
+    // The rows are written fire-and-forget; read until every expected one is in.
+    const rows = await waitFor(
+      async () =>
+        (await c.query(`SELECT action, entity_type, metadata FROM audit_log WHERE action LIKE 'whatsapp.%' AND (${where})`, params))
+          .rows as Array<{ action: string; entity_type: string; metadata: Record<string, unknown> }>,
+      (rs) => EXPECTED.every((a) => rs.some((r) => r.action === a)),
+    );
     for (const r of rows) {
       const e = written.get(r.action) ?? { entity_type: r.entity_type, keys: new Set<string>() };
       for (const k of Object.keys(r.metadata ?? {})) if (k !== "__dedupKey") e.keys.add(k);
@@ -210,20 +228,7 @@ test("F139: docs/audit-actions.md documents every whatsapp.* row the code writes
     .map((l) => /^\| `(whatsapp\.[a-z_.]+)` \|/.exec(l)?.[1])
     .filter((a): a is string => Boolean(a));
 
-  for (const expected of [
-    "whatsapp.signature_failed",
-    "whatsapp.message.received",
-    "whatsapp.message.replay_ignored",
-    "whatsapp.message.ignored",
-    "whatsapp.context.unmatched",
-    "whatsapp.context.forbidden",
-    "whatsapp.fetch.enqueued",
-    "whatsapp.media.fetched",
-    "whatsapp.media.fetch_failed",
-    "whatsapp.reply.sent",
-    "whatsapp.log.surface_viewed",
-    "whatsapp.fetch.retried",
-  ]) {
+  for (const expected of EXPECTED) {
     assert.ok(written.has(expected), `the scenario above should have written ${expected}`);
   }
   for (const [action, { entity_type, keys }] of written) {
@@ -245,4 +250,31 @@ test("F139: docs/audit-actions.md documents every whatsapp.* row the code writes
   for (const action of documented) {
     assert.ok(sources.includes(`"${action}"`), `docs/audit-actions.md documents ${action}, which nothing writes`);
   }
+});
+
+// A worker killed during a fetch's last attempt leaves the job 'running' with
+// an expired lease; the reaper dead-letters it. It did so without setting
+// completed_at, and the health count of fetches that gave up is "dead with
+// completed_at in the last 24 hours", so an exhausted fetch never showed as
+// dead (and pruneFinished, which also keys on completed_at, never removed it).
+test("F93: a fetch dead-lettered by the lease reaper counts as a fetch that gave up", { skip }, async () => {
+  await withEnv(PARTLY, () =>
+    withWorld(async (w) => {
+      const { job } = await acceptAndClaim(w);
+      // The worker died mid-attempt on the last try.
+      await w.c.query(`UPDATE jobs SET attempts = max_attempts, lease_expires_at = now() - interval '1 minute' WHERE id = $1`, [job.id]);
+      const dead = async () =>
+        Number(((await health()).details as Record<string, Record<string, unknown>>).whatsapp!.deadFetches24h);
+      const before = await dead();
+
+      const { reapExpiredLeases } = await import("../../packages/db/src/queue.ts");
+      const { db } = await import("../../packages/db/src/index.ts");
+      await reapExpiredLeases(db as never);
+
+      const [row] = (await w.c.query(`SELECT status, completed_at FROM jobs WHERE id = $1`, [job.id])).rows;
+      assert.equal(row.status, "dead");
+      assert.ok(row.completed_at, "a dead-lettered job has finished; completed_at is what health and pruning read");
+      assert.ok((await dead()) > before, "the exhausted fetch must be counted as one that gave up");
+    }),
+  );
 });

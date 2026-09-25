@@ -84,9 +84,13 @@ test("WhatsApp webhook parses OBS-/TB-/MM- caption prefixes", () => {
   // F129: the parser moved to packages/shared so it can be executed without
   // Next (tests/behaviour/whatsapp-caption.test.ts drives it, and the
   // webhook, with the captions teachers really type). The route must use it.
+  // The parser now tries every tag in the caption and keeps the first
+  // well-formed code, so the three tags are a table (tag -> context type)
+  // rather than three `tag === "..."` branches; each must still map to its
+  // context.
   const src = read("packages/shared/src/whatsapp/caption.ts");
-  for (const tag of ["OBS", "TB", "MM"]) {
-    assert.match(src, new RegExp(`tag === "${tag}"`));
+  for (const [tag, type] of [["OBS", "observation_cycle"], ["TB", "teach_back"], ["MM", "mentor_meeting"]]) {
+    assert.match(src, new RegExp(`\\b${tag}\\s*:\\s*"${type}"`), `${tag} must map to ${type}`);
   }
   const route = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
   assert.match(route, /import\s*\{\s*parseCaption\s*\}\s*from\s*"@gml\/shared\/whatsapp\/caption"/);

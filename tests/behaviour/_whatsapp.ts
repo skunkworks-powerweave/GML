@@ -10,6 +10,7 @@
 
 import { createRequire } from "node:module";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { Client } from "pg";
 import "./_ui.js"; // the @/ alias and framework stubs, for apps/web modules
 import { DATABASE_URL, tag } from "./_harness.js";
@@ -216,8 +217,54 @@ export async function withEnv(vars: Record<string, string | undefined>, body: ()
   }
 }
 
-/** recordAudit is fire-and-forget; give it a moment to land. */
-export const settle = () => new Promise((r) => setTimeout(r, 300));
+// ── Waiting for fire-and-forget writes ──────────────────────────────────────
+//
+// The webhook writes its audit rows with `void recordAudit(...)`, so they land
+// some time after POST returns. A fixed sleep was flaky: with the WhatsApp
+// files running in parallel against one database, 300 ms was sometimes not
+// enough (4 of 7 rows seen). These poll the database instead, bounded, and
+// hand back the last value read so the caller's assertion reports what was
+// actually there.
+
+/** Read until `done(value)` holds or `timeoutMs` passes; return the last value read. */
+export async function waitFor<T>(
+  read: () => Promise<T>,
+  done: (value: T) => boolean,
+  { timeoutMs = 5000, intervalMs = 50 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let value = await read();
+  while (!done(value) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    value = await read();
+  }
+  return value;
+}
+
+/**
+ * Read a count until it has stopped growing for `quietMs` (and is at least
+ * `atLeast`), so an upper bound is asserted on a settled number, not on a
+ * snapshot taken while rows are still arriving.
+ */
+export async function waitForStableCount(
+  read: () => Promise<number>,
+  { atLeast = 1, quietMs = 750, timeoutMs = 8000 }: { atLeast?: number; quietMs?: number; timeoutMs?: number } = {},
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let n = await read();
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+    const next = await read();
+    if (next !== n) {
+      n = next;
+      stableSince = Date.now();
+    } else if (n >= atLeast && Date.now() - stableSince >= quietMs) {
+      break;
+    }
+  }
+  return n;
+}
 
 // ── Graph, Meta's media CDN and Storage, for the worker's half ───────────────
 
@@ -250,9 +297,30 @@ export function fakeGraph(script: { meta?: Response; media?: Response; send?: Re
   return { calls, sent, fetch };
 }
 
+/**
+ * Each bucket's allowed_mime_types, read from the migration that creates the
+ * buckets (_post/005), so the fake refuses exactly what Supabase refuses.
+ */
+export function bucketAllowlist(bucket: string): ReadonlySet<string> {
+  const sql = readFileSync(
+    new URL("../../packages/db/src/migrations/_post/005_storage_buckets_and_policies.sql", import.meta.url),
+    "utf8",
+  );
+  const m = new RegExp(String.raw`\('${bucket}',\s*'${bucket}'[\s\S]*?ARRAY\[([^\]]*)\]`).exec(sql);
+  if (!m) throw new Error(`bucket ${bucket} not found in _post/005`);
+  return new Set([...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!));
+}
+
+/**
+ * Storage, answering the way Supabase does: an object whose content type the
+ * bucket does not list is refused, with Storage's own message. A fake that
+ * accepted everything hid that a sender-declared type such as video/x-m4v
+ * could never be stored.
+ */
 export function fakeStorage() {
   const puts: Array<{ bucket: string; key: string; bytes: number; type: string }> = [];
   const put = async (bucket: string, key: string, body: Uint8Array, type: string) => {
+    if (!bucketAllowlist(bucket).has(type)) throw new Error(`upload ${bucket}/${key}: mime type ${type} is not supported`);
     puts.push({ bucket, key, bytes: body.byteLength, type });
   };
   return { puts, put };
@@ -280,12 +348,14 @@ export async function claimJob(w: World, jobId: string): Promise<ClaimedJob> {
 }
 
 /** Accept a message through the real webhook and claim its fetch job. */
-export async function acceptAndClaim(w: World, opts: { caption?: string; from?: string } = {}) {
+export async function acceptAndClaim(
+  w: World,
+  opts: { caption?: string; from?: string; mime?: string; asDocument?: boolean } = {},
+) {
   const { POST } = await route();
   const id = w.wamid();
-  const res = await POST(
-    signed(envelope([videoMessage({ id, from: opts.from ?? w.teacher.phone, caption: opts.caption ?? w.cycleCode })])),
-  );
+  const m = { id, from: opts.from ?? w.teacher.phone, caption: opts.caption ?? w.cycleCode, mime: opts.mime };
+  const res = await POST(signed(envelope([opts.asDocument ? documentMessage(m) : videoMessage(m)])));
   if (res.status !== 200) throw new Error(`webhook answered ${res.status}`);
   const [ours] = (await w.jobs(id)).filter((j) => j.name === "whatsapp_fetch");
   if (!ours) throw new Error("the webhook queued no fetch");

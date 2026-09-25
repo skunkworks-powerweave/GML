@@ -32,7 +32,11 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 // "whatsapp" carries the webhook's media fetches (apps/worker/src/whatsapp-fetch.ts).
 // Its own queue, so a fetch is not stuck behind a 40-minute ffmpeg run on the
 // single transcode slot while the teacher waits to hear the video arrived.
-export type QueueName = "transcode" | "retention" | "whatsapp";
+//
+// A value as well as a type, so the worker can start a consumer for every
+// member (apps/worker/src/index.ts, consumerSlots) and a test can check it.
+export const QUEUE_NAMES = ["transcode", "retention", "whatsapp"] as const;
+export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export type ClaimedJob = {
   id: string;
@@ -208,6 +212,11 @@ export async function fail(
  *
  * Reaped jobs keep their incremented attempt count, so a job that reliably
  * kills its worker dead-letters instead of looping forever.
+ *
+ * A job dead-lettered here gets completed_at, as one dead-lettered by fail()
+ * does. It used to be left null, so the WhatsApp health count of fetches that
+ * gave up (dead, completed in the last 24 hours) never saw it, and
+ * pruneFinished() never removed it.
  */
 export async function reapExpiredLeases(
   db: NodePgDatabase<Record<string, unknown>>,
@@ -215,6 +224,7 @@ export async function reapExpiredLeases(
   const res = await db.execute(sql`
     UPDATE jobs
        SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
+           completed_at = CASE WHEN attempts >= max_attempts THEN now() ELSE completed_at END,
            last_error = COALESCE(last_error, '') || ' [lease expired: worker stopped responding]',
            lease_expires_at = NULL,
            locked_by = NULL,

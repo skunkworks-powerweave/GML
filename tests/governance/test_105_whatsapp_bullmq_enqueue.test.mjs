@@ -124,6 +124,23 @@ test("spec 105: the fetch is queued AFTER the insert, and the transcode only aft
   assert.ok(transcodeIdx > putIdx, "the transcode must be queued only once the bytes are in Storage");
 });
 
+// The queued fetch only helps if the worker claims it. Deleting the worker's
+// whatsapp consumer and its whatsapp_fetch case left every test green, and
+// every WhatsApp video would have waited for a fetch nothing ran.
+// tests/behaviour/whatsapp-worker-wiring.test.ts runs real jobs through
+// runJob() and checks consumerSlots() covers every queue; main() never
+// returns, so that it starts exactly those slots is pinned here.
+test("F93: the worker's main() starts a consumer for every slot consumerSlots() lists", () => {
+  const src = code(read("apps/worker/src/index.ts"));
+  const main = src.slice(src.search(/async function main\s*\(/));
+  assert.match(
+    main,
+    /consumerSlots\(\)\s*\.map\(\s*\(\s*\{\s*queue\s*,\s*slot\s*\}\s*\)\s*=>\s*consumer\(\s*queue\s*,\s*slot\s*\)\s*\)/,
+    "main() must start its consumers from consumerSlots(), which is built from QUEUE_NAMES",
+  );
+  assert.ok(!/consumer\(\s*["']/.test(main), "no consumer is started by hand, outside consumerSlots()");
+});
+
 test("spec 105: the transcode payload carries the four object coordinates and NOT source", () => {
   const src = read(FETCH_PATH);
   const call = src.match(/queue\s*:\s*["']transcode["'][\s\S]*?payload\s*:\s*\{([^}]*)\}/);

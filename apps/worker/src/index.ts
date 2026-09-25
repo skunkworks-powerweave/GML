@@ -46,6 +46,7 @@ import {
   succeed,
   HEARTBEAT_SECONDS,
   LEASE_SECONDS,
+  QUEUE_NAMES,
   type ClaimedJob,
   type QueueName,
 } from "@gml/db/queue";
@@ -91,8 +92,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Run one claimed job, holding its lease open for as long as it takes. */
-async function runJob(job: ClaimedJob): Promise<void> {
+/**
+ * Run one claimed job, holding its lease open for as long as it takes.
+ * Exported so tests/behaviour can run real claimed jobs through the dispatch.
+ */
+export async function runJob(job: ClaimedJob): Promise<void> {
   const hb = setInterval(() => {
     void heartbeat(db, job.id, LEASE_SECONDS).catch((err) =>
       log.warn("heartbeat failed", { job: job.id, err: String(err) }),
@@ -152,13 +156,35 @@ async function runJob(job: ClaimedJob): Promise<void> {
 }
 
 /**
+ * The consumer loops main() starts: CONCURRENCY for transcode, one for every
+ * other queue.
+ *
+ * Built from QUEUE_NAMES, not listed by hand. The WhatsApp consumer was one
+ * hand-written line, and deleting it left every test green while every
+ * WhatsApp video waited for a fetch nothing would claim. A queue added to
+ * QUEUE_NAMES now gets its consumer without anyone remembering to add it.
+ */
+export function consumerSlots(): Array<{ queue: QueueName; slot: number }> {
+  return QUEUE_NAMES.flatMap((queue): Array<{ queue: QueueName; slot: number }> =>
+    queue === "transcode"
+      ? // Transcode gets the configured concurrency.
+        Array.from({ length: CONCURRENCY }, (_, slot) => ({ queue, slot }))
+      : // Retention is housekeeping and needs exactly one runner. WhatsApp
+        // fetches are network-bound and short, and a teacher is waiting for
+        // the answer, so they have their own runner rather than queueing
+        // behind a transcode.
+        [{ queue, slot: 0 }],
+  );
+}
+
+/**
  * One consumer loop.
  *
  * `queue` is a parameter because the QueueName union once had two members and
  * only one had a consumer -- anything enqueued onto "retention" would have sat
  * there forever with nothing claiming it. A type that invites you to write a
  * job nobody will run is worse than no type, so every member of QueueName has a
- * consumer started in main().
+ * consumer started in main() (consumerSlots).
  */
 async function consumer(queue: QueueName, slot: number): Promise<void> {
   while (!shuttingDown) {
@@ -285,15 +311,7 @@ async function main(): Promise<void> {
     log.error("unhandled rejection", { reason: String(reason).slice(0, 500) });
   });
 
-  await Promise.all([
-    // Transcode gets the configured concurrency; retention is housekeeping and
-    // needs exactly one runner.
-    ...Array.from({ length: CONCURRENCY }, (_, i) => consumer("transcode", i)),
-    consumer("retention", 0),
-    // WhatsApp media fetches: network-bound, short, and a teacher is waiting
-    // for the answer, so they do not queue behind a transcode.
-    consumer("whatsapp", 0),
-  ]);
+  await Promise.all(consumerSlots().map(({ queue, slot }) => consumer(queue, slot)));
 }
 
 // Only start when this file IS the process entrypoint. apps/web no longer

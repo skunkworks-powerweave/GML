@@ -18,7 +18,8 @@ export type ReplyOutcome =
   | { kind: "unmatched" }
   | { kind: "unregistered" }
   | { kind: "fetch_failed" }
-  | { kind: "not_a_video" };
+  | { kind: "not_a_video" }
+  | { kind: "unsupported" };
 
 export function replyText(outcome: ReplyOutcome): string {
   switch (outcome.kind) {
@@ -42,5 +43,11 @@ export function replyText(outcome: ReplyOutcome): string {
       return "We could not download your video. Please send it again. If this keeps happening, contact the programme team.";
     case "not_a_video":
       return `This number accepts lesson videos. Send your video with your cycle code as the caption, for example ${EXAMPLE}.`;
+    // Meta's type 'unsupported': something was sent that did not arrive.
+    case "unsupported":
+      return (
+        "We could not receive that message. Send your lesson as a video, or as a document (up to 100 MB) if it is " +
+        `too long to send as a video, with your cycle code as the caption, for example ${EXAMPLE}.`
+      );
   }
 }

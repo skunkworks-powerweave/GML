@@ -167,3 +167,49 @@ test("F140: a message that is not a video is answered with what the number accep
     }),
   );
 });
+
+// Another automated number that answers every message -- a business's
+// auto-reply, a bot -- would answer "this number accepts lesson videos" with a
+// text, get the same answer back, and so on, for as long as both numbers stay
+// up: one reply job per message, deduped only per message id.
+test("F140: a sender who keeps sending texts gets one automatic answer, not one per message", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { POST } = await route();
+      const ids = [w.wamid(), w.wamid(), w.wamid(), w.wamid()];
+      for (const id of ids) {
+        const res = await POST(signed(envelope([{ from: w.teacher.phone, id, timestamp: "1", type: "text", text: { body: "Thank you for your message!" } }])));
+        assert.equal(res.status, 200);
+      }
+      const replies = [];
+      for (const id of ids) replies.push(...(await w.jobs(id)).filter((j) => j.name === "whatsapp_reply"));
+      assert.equal(replies.length, 1, `${ids.length} texts from one number queued ${replies.length} automatic replies`);
+    }),
+  );
+});
+
+// Meta delivers a message it could not hand over as type 'unsupported'. It was
+// audited and then nothing: the teacher, who did try to send something, heard
+// nothing at all.
+test("F140: a message WhatsApp could not deliver is answered with how to send the video", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { POST } = await route();
+      const id = w.wamid();
+      const unsupported = {
+        from: w.teacher.phone,
+        id,
+        timestamp: "1",
+        type: "unsupported",
+        errors: [{ code: 131051, title: "Message type unknown", message: "Message type unknown" }],
+      };
+      assert.equal((await POST(signed(envelope([unsupported])))).status, 200);
+      const [reply] = (await w.jobs(id)).filter((j) => j.name === "whatsapp_reply");
+      assert.ok(reply, "the sender must hear that the message did not arrive");
+      const body = String((reply!.payload as Record<string, unknown>).body);
+      assert.match(body, /could not/i);
+      assert.match(body, /document/i, "a lesson over 16 MB has to be sent as a document");
+      assert.match(body, /100 MB/);
+    }),
+  );
+});

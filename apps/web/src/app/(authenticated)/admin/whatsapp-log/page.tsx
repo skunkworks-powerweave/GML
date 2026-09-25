@@ -68,6 +68,22 @@ const RESENDABLE_STATUSES = new Set([
   "failed",
 ]);
 
+// What each ?error= the two actions (./actions.ts) redirect back with means.
+// The page used to read no `error` at all, so a refused Retry fetch -- on a row
+// from before the media id was kept, say -- reloaded the page unchanged.
+const ACTION_ERRORS: Record<string, string> = {
+  missing_submission_id: "No submission was given. Use the button on the row.",
+  submission_not_found: "That submission no longer exists.",
+  not_whatsapp_source: "That submission did not arrive through WhatsApp.",
+  cannot_resend_finalised: "That video has already been processed or reviewed, so it is not transcoded again.",
+  media_not_fetched:
+    "That video's media was never fetched from WhatsApp, so there is nothing to transcode. Use Retry fetch.",
+  no_media_id:
+    "That video arrived before the WhatsApp media id was recorded, so it cannot be fetched again. " +
+    "Ask the sender to send it again.",
+  already_fetched: "That video's media is already stored. Use Resend transcode instead.",
+};
+
 function chipForContext(contextType: string): string {
   if (contextType === "generic") return "chip chip-rust";
   return "chip chip-lichen";
@@ -80,7 +96,7 @@ function parsingLabel(contextType: string): "matched" | "unmatched" {
 export default async function WhatsappIngestLogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ parsing?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ parsing?: string; from?: string; to?: string; error?: string }>;
 }) {
   await requireRole(["programme_admin", "super_admin"]);
   const sp = await searchParams;
@@ -209,6 +225,16 @@ export default async function WhatsappIngestLogPage({
           ask the teacher to send it again with the cycle code as the caption.
         </p>
       </header>
+
+      {sp.error ? (
+        <p
+          className="rounded-lg border border-neutral-200 bg-white p-3 text-sm text-rust"
+          data-testid="action-error"
+          role="alert"
+        >
+          {ACTION_ERRORS[sp.error] ?? "That action could not be completed."}
+        </p>
+      ) : null}
 
       {health.state !== "on" ? (
         <section

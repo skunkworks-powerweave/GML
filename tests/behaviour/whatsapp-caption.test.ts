@@ -60,6 +60,10 @@ test("F129: the ways a teacher really writes the cycle code all link the video t
         `Lesson video ${code}`, // the code not first
         `#cycle- ${code}`, // the old "Open WhatsApp" pre-fill, code typed after it
         `${code} — fractions, grade 5`,
+        `Class 5 lesson, 45 mm ruler work ${code}`, // an earlier "mm" is not the code
+        `TB session recap ${code}`,
+        `OBS ${rest.replace("-", " ")}`, // spaces for both dashes
+        code.replace(/-/g, "–"), // en dashes
       ];
       const misses: string[] = [];
       for (const caption of captions) {
@@ -86,6 +90,32 @@ test("F129: the parser reads TB- and MM- ids the same tolerant way, and ignores 
   for (const miss of ["", "Observation of the fractions lesson", "COMMIT-2026", "jobs-2026-009", "#cycle-", "OBS-"]) {
     assert.equal(parseCaption(miss).type, "generic", JSON.stringify(miss));
   }
+});
+
+test("F129: an earlier word that looks like a tag does not hide the real code after it", async () => {
+  // The first standalone OBS / TB / MM used to win, well-formed or not: "mm"
+  // (millimetres), "tb" (Hinglish for "then", and "TB session"), a stray
+  // "obs". Each of these names the cycle and fell through to 'generic'.
+  const { parseCaption } = await import("../../packages/shared/src/whatsapp/caption.ts");
+  const cycle = { type: "observation_cycle", code: "2026-009", fullCode: "OBS-2026-009" };
+  for (const caption of [
+    "Class 5 lesson, 45 mm ruler work OBS-2026-009",
+    "TB session recap OBS-2026-009",
+    "lesson khatam hua tb bheja OBS-2026-009",
+    "obs notes attached, code OBS-2026-009",
+    "OBS 2026 009", // spaces for both dashes
+    "OBS–2026–009", // en dashes, which phone keyboards substitute
+    "OBS — 2026-009", // an em dash
+  ]) {
+    assert.deepEqual(parseCaption(caption), cycle, JSON.stringify(caption));
+  }
+  const id = "3f2c1a9e-8b7d-4c6e-9a1b-2c3d4e5f6a7b";
+  assert.deepEqual(parseCaption(`45 mm ruler, TB-${id}`), { type: "teach_back", code: id, fullCode: `TB-${id}` });
+  assert.deepEqual(parseCaption(`TB then MM–${id}`), { type: "mentor_meeting", code: id, fullCode: `MM-${id}` });
+  // With nothing well-formed anywhere, the first tag is still what the webhook
+  // reports (a hand-entered code, or the reason it could not be read).
+  assert.deepEqual(parseCaption("OBS-PILOT-1"), { type: "observation_cycle", code: "PILOT-1", fullCode: "OBS-PILOT-1" });
+  assert.equal(parseCaption("TB-not-a-uuid").type, "teach_back");
 });
 
 // ── The guidance, checked against the parser ────────────────────────────────

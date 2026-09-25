@@ -21,7 +21,7 @@
 // once and the media id is kept for a retry inside that window.
 
 import { NextResponse } from "next/server";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { db } from "@gml/db";
 import {
@@ -286,13 +286,42 @@ function inboundVideo(msg: WhatsAppMessage): InboundVideo | null {
 const ANSWERED_TYPES = new Set(["text", "image", "audio", "document", "sticker"]);
 
 /**
+ * One automatic answer per sender, per kind, in this window. Deduping per
+ * message id alone let another automated number -- a business auto-reply, a
+ * bot -- answer our reply with a text, get the same reply back, and so on for
+ * as long as both stayed up.
+ */
+const AUTO_REPLY_WINDOW_MS = 10 * 60_000;
+
+/**
  * Queue the reply that tells the sender this number takes videos (F140). The
  * sender used to hear nothing, ever. Queued, not sent here: the request stays
- * database-only, and the reply survives a restart. One per message id.
+ * database-only, and the reply survives a restart. One per message id, and at
+ * most one per sender per AUTO_REPLY_WINDOW_MS.
+ *
+ * Meta's type 'unsupported' is a message that did not reach us in a form the
+ * Cloud API delivers; the person did try to send something, so it is answered
+ * with how to send it.
  */
 async function answerIgnored(msg: WhatsAppMessage): Promise<void> {
-  if (!msg.from || !msg.id || !ANSWERED_TYPES.has(msg.type)) return;
-  const payload: WhatsAppReplyPayload = { msgId: msg.id, to: msg.from, body: replyText({ kind: "not_a_video" }) };
+  const kind = msg.type === "unsupported" ? "unsupported" : ANSWERED_TYPES.has(msg.type) ? "not_a_video" : null;
+  if (!msg.from || !msg.id || !kind) return;
+  try {
+    const slot = await rateLimit({
+      bucket: `wa-auto-reply-${kind}`,
+      // Hashed: rate_limits is not where a phone number should be kept.
+      id: createHash("sha256").update(msg.from.replace(/\D/g, "")).digest("hex").slice(0, 32),
+      limit: 1,
+      windowMs: AUTO_REPLY_WINDOW_MS,
+    });
+    if (!slot.ok) return;
+  } catch (err) {
+    // An answer is a courtesy; without the counter, not answering is the side
+    // that cannot loop.
+    console.error("[whatsapp] auto-reply counter unavailable; not answering", err);
+    return;
+  }
+  const payload: WhatsAppReplyPayload = { msgId: msg.id, to: msg.from, body: replyText({ kind }) };
   await enqueue(db as unknown as NodePgDatabase<Record<string, unknown>>, {
     queue: WHATSAPP_QUEUE,
     name: WHATSAPP_REPLY_JOB,
@@ -357,7 +386,9 @@ async function acceptVideoMessage(
   // prefix. Each branch falls through to 'generic' on lookup failure so a
   // typo never blocks the upload -- the raw caption is kept on the submission
   // (caption_raw) and the unmatched case is audited as
-  // whatsapp.context.unmatched, so an operator can find and re-link it.
+  // whatsapp.context.unmatched, so an operator can see on /admin/whatsapp-log
+  // what was sent and by whom. The app has no control yet for attaching a
+  // generic video to its cycle afterwards; the sender resends it with the code.
   let contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic" = ctx.type;
   let contextId: string | null = null;
 
@@ -453,7 +484,7 @@ async function acceptVideoMessage(
   // refused this (uploads/actions.ts, assertContextAllowed); this applies the
   // same visibility rules lib/authz.ts uses. A refused or unattributable clip
   // is still ingested, as 'generic' -- admin-and-sender only -- with the
-  // caption kept, so nothing is lost and an admin can attach it.
+  // caption and sender kept, so nothing is lost.
   if (contextType !== "generic") {
     const refusal = await refusalFor(sender, contextType, contextId);
     if (refusal) {
@@ -718,11 +749,41 @@ async function refusalFor(
 const SIGNATURE_FAILURE_AUDITS_PER_MINUTE = 5;
 
 /**
+ * And at most this many per minute in total, from all sources together. The
+ * per-source bound alone let anyone who can rotate prefixes -- a free /48 of
+ * IPv6 is 65,536 /64s, a botnet has more -- still write five rows per prefix
+ * per minute.
+ *
+ * Counted in this process's memory rather than in rate_limits: it is a ceiling
+ * on what this process writes, it needs no round trip, and it cannot be
+ * unavailable. The deployment runs one app container, so it is the ceiling for
+ * the deployment; a second replica would double it, which is still a bound
+ * that does not grow with the number of sources.
+ */
+const SIGNATURE_FAILURE_AUDITS_PER_MINUTE_TOTAL = 30;
+let signatureAuditWindow = { start: 0, count: 0 };
+
+/** Take one of this minute's audit slots for all sources; false once spent. */
+function takeTotalSignatureAuditSlot(): boolean {
+  const now = Date.now();
+  if (now - signatureAuditWindow.start >= 60_000) signatureAuditWindow = { start: now, count: 0 };
+  signatureAuditWindow.count += 1;
+  if (signatureAuditWindow.count === SIGNATURE_FAILURE_AUDITS_PER_MINUTE_TOTAL + 1) {
+    console.warn(
+      `[whatsapp] more than ${SIGNATURE_FAILURE_AUDITS_PER_MINUTE_TOTAL} signature failures this minute from many ` +
+        "sources; the rest of this minute's are refused without an audit row.",
+    );
+  }
+  return signatureAuditWindow.count <= SIGNATURE_FAILURE_AUDITS_PER_MINUTE_TOTAL;
+}
+
+/**
  * Record a failed signature -- a bounded number of times per masked source
  * (the /24, or the /64 for IPv6), counted atomically in rate_limits so a
- * concurrent burst cannot slip past the way a read-then-insert dedup would.
- * The rows now say where the failures came from and whether a signature was
- * even offered, which docs/audit-actions.md promised and nothing wrote.
+ * concurrent burst cannot slip past the way a read-then-insert dedup would,
+ * and a bounded number of times in total. The rows say where the failures
+ * came from and whether a signature was even offered, which
+ * docs/audit-actions.md promised and nothing wrote.
  */
 async function auditSignatureFailure(req: Request, signatureProvided: boolean): Promise<void> {
   const ip = clientIpFrom(req.headers);
@@ -741,6 +802,7 @@ async function auditSignatureFailure(req: Request, signatureProvided: boolean): 
     console.error("[whatsapp] signature-failure counter unavailable; not auditing this one", err);
     return;
   }
+  if (!takeTotalSignatureAuditSlot()) return;
   void recordAudit({
     action: "whatsapp.signature_failed",
     entityType: "webhook",

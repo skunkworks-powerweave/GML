@@ -10,6 +10,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { needsDatabase, DATABASE_URL } from "./_harness.js";
 import { render } from "./_ui.js";
 import { envelope, route, SECRET, signed, videoMessage, withEnv, withWorld } from "./_whatsapp.js";
@@ -170,3 +171,48 @@ test("F93: Resend transcode refuses a row whose media was never fetched", { skip
   );
 });
 
+
+// Both actions refuse by redirecting back with ?error=<code>, and the page read
+// no `error` at all: an admin who pressed Retry fetch on a row from before the
+// media id was kept saw the page reload, unchanged, with no explanation.
+test("F93: a refused Retry fetch or Resend is explained on the page it lands on", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const id = w.wamid();
+      const q = async (sql: string, p: unknown[]) => (await w.c.query(sql, p)).rows[0]?.id as string;
+      // A row from before migration 0036: no media id to fetch again.
+      const fileId = await q(
+        `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'failed') RETURNING id`,
+        [`whatsapp/${id}.mp4`],
+      );
+      const subId = await q(
+        `INSERT INTO video_submissions (file_id, source, status, context_type, caption_raw, whatsapp_message_id)
+         VALUES ($1, 'whatsapp', 'failed', 'generic', 'old', $2) RETURNING id`,
+        [fileId, id],
+      );
+      signIn("programme_admin");
+      const { retryWhatsAppFetchAction } = await actions();
+      const r = await outcome(() => retryWhatsAppFetchAction(form(subId)));
+      assert.equal(r.redirect, "/admin/whatsapp-log?error=no_media_id");
+
+      const { default: Page } = await page();
+      const alertOf = async (error: string) => {
+        const html = await render(await Page({ searchParams: Promise.resolve({ error }) }));
+        return /data-testid="action-error"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+      };
+      const landed = await alertOf(new URL(r.redirect!, "http://x").searchParams.get("error")!);
+      assert.ok(landed, "the refusal must be said on the page, not only in the URL");
+      assert.match(landed!, /send it again/i, "a row with no media id can only be recovered by the sender resending");
+
+      // Every code either action redirects with has its own explanation.
+      const src = readFileSync(new URL("../../apps/web/src/app/(authenticated)/admin/whatsapp-log/actions.ts", import.meta.url), "utf8");
+      const codes = [...new Set([...src.matchAll(/\?error=([a-z_]+)/g)].map((m) => m[1]!))];
+      assert.ok(codes.length >= 7, `found ${codes.length} error codes in actions.ts`);
+      const generic = await alertOf("some_unknown_code");
+      for (const code of codes) {
+        const text = await alertOf(code);
+        assert.ok(text && text !== generic && !text.includes(code), `?error=${code} is not explained: ${text}`);
+      }
+    }),
+  );
+});

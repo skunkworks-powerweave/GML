@@ -19,7 +19,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDatabase, withClient, tag } from "./_harness.js";
 import { request, resetRequest } from "./_ui.js";
-import { route, SECRET, settle, withEnv } from "./_whatsapp.js";
+import { route, SECRET, waitForStableCount, withEnv } from "./_whatsapp.js";
 
 const skip = needsDatabase();
 
@@ -53,17 +53,21 @@ test("F97: a flood of unsigned POSTs is refused every time but audited a bounded
     const statuses = (await Promise.all(flood)).map((r) => r.status);
     assert.deepEqual([...new Set(statuses)], [401], "every unsigned or wrongly signed POST is still refused");
 
-    await settle();
+    // The rows are written fire-and-forget. The upper bound is checked on a
+    // count that has stopped growing, not on whatever had landed after a sleep.
+    const rows = await withClient(async (c) => {
+      const read = async () =>
+        (
+          await c.query(
+            `SELECT metadata FROM audit_log
+              WHERE action = 'whatsapp.signature_failed' AND created_at >= $1 AND user_agent = $2`,
+            [since, ua],
+          )
+        ).rows;
+      await waitForStableCount(async () => (await read()).length);
+      return read();
+    });
     resetRequest();
-    const rows = await withClient(async (c) =>
-      (
-        await c.query(
-          `SELECT metadata FROM audit_log
-            WHERE action = 'whatsapp.signature_failed' AND created_at >= $1 AND user_agent = $2`,
-          [since, ua],
-        )
-      ).rows,
-    );
     assert.ok(rows.length >= 1, "a failed signature on a configured webhook is still a security event");
     assert.ok(rows.length <= 5, `25 POSTs from one source wrote ${rows.length} permanent audit rows`);
     const md = rows[0]!.metadata as Record<string, unknown>;
