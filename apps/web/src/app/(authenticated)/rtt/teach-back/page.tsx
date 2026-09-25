@@ -586,6 +586,14 @@ export default async function TeachBackQueuePage({
                 >
                   Already reviewed
                 </span>
+              ) : !isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) ? (
+                // Not playable yet (or failed). The button used to render for
+                // every unreviewed row, and a review recorded now would keep
+                // the clip out of "Pending review" once it became watchable;
+                // the review route refuses it too.
+                <span style={{ padding: "8px 0", color: "var(--ink-3)", fontSize: 12 }}>
+                  Review opens once the video is ready (status: {selected.status.replace("_", " ")}).
+                </span>
               ) : (
                 <form
                   method="POST"

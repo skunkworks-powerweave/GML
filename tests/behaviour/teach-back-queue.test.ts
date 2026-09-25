@@ -232,3 +232,107 @@ test("the row chip shows review state: pending saffron, reviewed lichen, still-p
     await w.cleanup();
   }
 });
+
+// ── F06: only a clip someone can watch can be marked reviewed ────────────────
+//
+// POST /api/teach-back/[id]/review set reviewed_at on any teach-back by id,
+// whatever its pipeline state, and the page rendered "Mark reviewed" for every
+// unreviewed row -- beside "HLS: waiting on transcode". Nothing ever clears
+// reviewed_at, so a clip reviewed while transcoding (or failed, then retried
+// from the DLQ) never entered "Pending review" once it became playable. A
+// malformed id reached Postgres and came back a 500.
+
+async function review(user: TestUser, id: string, accept = "application/json") {
+  signIn(user);
+  const { POST } = await import("../../apps/web/src/app/api/teach-back/[id]/review/route.ts");
+  const res = await POST(
+    new Request(`http://x/api/teach-back/${id}/review`, { method: "POST", headers: { accept } }),
+    { params: Promise.resolve({ id }) },
+  );
+  const body = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
+  return { status: res.status, body, location: res.headers.get("location") };
+}
+
+const reviewedAt = async (w: World, id: string) =>
+  (await w.c.query(`SELECT reviewed_at FROM video_submissions WHERE id = $1`, [id])).rows[0].reviewed_at as Date | null;
+
+test("a clip that is not playable yet cannot be marked reviewed, and is owed a review once it is", { skip }, async () => {
+  const w = await world("tbr");
+  try {
+    for (const status of ["received", "queued", "transcoding", "failed"]) {
+      const id = await w.clip({ status, createdAgo: "1 hour" });
+      const r = await review(w.mentor, id);
+      assert.equal(r.status, 409, `${status}: a review nobody could have watched must be refused`);
+      assert.deepEqual(r.body, { error: "not_playable" });
+      assert.equal(await reviewedAt(w, id), null, `${status}: reviewed_at stays unset`);
+    }
+
+    // The worker finishes one of them, as transcode.ts does.
+    const late = await w.clip({ status: "transcoding", createdAgo: "2 hours" });
+    await review(w.mentor, late);
+    await w.c.query(
+      `UPDATE video_submissions SET status = 'ready', hls_master_key = 'hls/test/index.m3u8', verified_at = now() WHERE id = $1`,
+      [late],
+    );
+    const pending = await queue(w.mentor, { status: "review_pending" });
+    assert.ok(pending.rowIds.includes(late), "the clip is owed a review now that it plays");
+  } finally {
+    await w.cleanup();
+  }
+});
+
+test("a ready clip is marked reviewed, by whom; a browser post returns to the queue", { skip }, async () => {
+  const w = await world("tbr");
+  try {
+    const ready = await w.clip({ createdAgo: "1 hour" });
+    const r = await review(w.mentor, ready);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { ok: true });
+    const row = (await w.c.query(`SELECT reviewed_at, reviewed_by_user_id FROM video_submissions WHERE id = $1`, [ready])).rows[0];
+    assert.ok(row.reviewed_at instanceof Date);
+    assert.equal(row.reviewed_by_user_id, w.mentor.id);
+
+    const other = await w.clip({ createdAgo: "1 hour" });
+    const html = await review(w.mentor, other, "text/html,application/xhtml+xml");
+    assert.equal(html.status, 303);
+    assert.match(html.location ?? "", /\/rtt\/teach-back\?reviewed=/);
+
+    // A browser post for a clip that is not playable goes back to that clip.
+    const processing = await w.clip({ status: "transcoding", createdAgo: "1 hour" });
+    const back = await review(w.mentor, processing, "text/html");
+    assert.equal(back.status, 303);
+    assert.match(back.location ?? "", new RegExp(`/rtt/teach-back\\?id=${processing}`));
+    assert.equal(await reviewedAt(w, processing), null);
+  } finally {
+    await w.cleanup();
+  }
+});
+
+test("a malformed id is a 400 and an unknown one a 404, not a 500", { skip }, async () => {
+  const w = await world("tbr");
+  try {
+    const bad = await review(w.mentor, "not-a-uuid");
+    assert.equal(bad.status, 400);
+    assert.deepEqual(bad.body, { error: "invalid_id" });
+    const unknown = await review(w.mentor, "00000000-0000-4000-8000-000000000000");
+    assert.equal(unknown.status, 404);
+    assert.deepEqual(unknown.body, { error: "not_found" });
+  } finally {
+    await w.cleanup();
+  }
+});
+
+test("the review pane offers 'Mark reviewed' only for a clip that plays", { skip }, async () => {
+  const w = await world("tbr");
+  try {
+    const processing = await w.clip({ status: "transcoding", createdAgo: "1 hour" });
+    const ready = await w.clip({ createdAgo: "2 hours" });
+    const onProcessing = await queue(w.mentor, { id: processing });
+    assert.ok(!reviewForm(onProcessing.html, processing), "no review button beside 'waiting on transcode'");
+    assert.match(onProcessing.text, /Review opens once the video is ready/);
+    const onReady = await queue(w.mentor, { id: ready });
+    assert.ok(reviewForm(onReady.html, ready));
+  } finally {
+    await w.cleanup();
+  }
+});
