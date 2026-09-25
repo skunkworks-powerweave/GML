@@ -329,43 +329,83 @@ test("completeUpload answers a Storage error as retryable, not as a missing file
   }
 });
 
+/** What the worker's logger writes (to stderr) while `body` runs. */
+async function workerLogLines(body: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const write = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: string | Uint8Array, ...rest: never[]) => {
+    const s = String(chunk);
+    if (s.startsWith("[worker]")) lines.push(s.trim());
+    return write(chunk, ...rest);
+  }) as typeof process.stderr.write;
+  try {
+    await body();
+  } finally {
+    process.stderr.write = write;
+  }
+  return lines;
+}
+
 // The reconciler asked the same question with `stat(...).catch(() => null)`, so
 // during a Storage outage a stored upload older than the abandon window was
 // failed as if its object were missing -- the same confusion, in the worker.
-test("the reconciler leaves an upload alone when Storage does not answer, rather than failing it as missing", { skip: needsDatabase() }, async () => {
-  mock.timers.reset();
-  const c = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5000 });
-  await c.connect();
-  const T = tag("cnf");
-  const userId = (
-    await c.query(`INSERT INTO users (id, email, name, role) VALUES (gen_random_uuid(), $1, $2, 'teacher') RETURNING id`, [`${T}@example.test`, T])
-  ).rows[0].id as string;
-  try {
-    await import("./_ui.js");
-    const { beginUpload } = await import("../../apps/web/src/lib/video/upload.ts");
-    const { UPLOAD_ABANDON_AFTER_HOURS } = await import("../../packages/db/src/uploads.ts");
-    const { reconcileStalledUploads } = await import("../../apps/worker/src/reconcile-uploads.ts");
-    const r = await beginUpload({ userId, filename: "a.mp4", sizeBytes: 1000, contentType: "video/mp4", contextType: "generic" });
-    assert.ok(!("error" in r));
-    await c.query(`UPDATE video_submissions SET created_at = now() - make_interval(hours => $2) WHERE id = $1`, [
-      r.submissionId,
-      UPLOAD_ABANDON_AFTER_HOURS + 1,
-    ]);
-    await reconcileStalledUploads({
-      stat: async () => {
-        throw new Error("upstream 503");
-      },
-    });
-    const row = (
-      await c.query(`SELECT v.status, f.status AS "fileStatus" FROM video_submissions v JOIN files f ON f.id = v.file_id WHERE v.id = $1`, [r.submissionId])
-    ).rows[0];
-    assert.deepEqual([row.status, row.fileStatus], ["received", "uploading"], "no answer this sweep; the next one decides");
-  } finally {
-    await c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [userId]);
-    await c.query(`DELETE FROM files WHERE owner_user_id = $1`, [userId]);
-    await c.query(`DELETE FROM users WHERE id = $1`, [userId]);
-    await c.end();
-    const { closeAppDb } = await import("./_server-actions.js");
-    await closeAppDb();
-  }
-});
+//
+// W3-60: and not failing it has no end. The abandon rule is reached only
+// through an answer, so an upload whose stat keeps throwing stays 'received'
+// for good -- which is only acceptable if somebody is told. It used to be a
+// count in an info line.
+const UNANSWERED = [
+  { ageHours: (h: number) => h + 1, level: /\]\[(warn|error)\]/, what: "and says so" },
+  { ageHours: (h: number) => 2 * h + 1, level: /\]\[error\]/, what: "and says so as an error once it has lasted past any outage" },
+];
+for (const c of UNANSWERED) {
+  test(`the reconciler leaves an upload alone when Storage does not answer, rather than failing it as missing -- ${c.what}`, { skip: needsDatabase() }, async () => {
+    mock.timers.reset();
+    const pg = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5000 });
+    await pg.connect();
+    const T = tag("cnf");
+    const userId = (
+      await pg.query(`INSERT INTO users (id, email, name, role) VALUES (gen_random_uuid(), $1, $2, 'teacher') RETURNING id`, [`${T}@example.test`, T])
+    ).rows[0].id as string;
+    try {
+      await import("./_ui.js");
+      const { beginUpload } = await import("../../apps/web/src/lib/video/upload.ts");
+      const { UPLOAD_ABANDON_AFTER_HOURS } = await import("../../packages/db/src/uploads.ts");
+      const { reconcileStalledUploads } = await import("../../apps/worker/src/reconcile-uploads.ts");
+      const r = await beginUpload({ userId, filename: "a.mp4", sizeBytes: 1000, contentType: "video/mp4", contextType: "generic" });
+      assert.ok(!("error" in r));
+      const age = c.ageHours(UPLOAD_ABANDON_AFTER_HOURS);
+      await pg.query(`UPDATE video_submissions SET created_at = now() - make_interval(hours => $2) WHERE id = $1`, [r.submissionId, age]);
+      const lines = await workerLogLines(() =>
+        reconcileStalledUploads({
+          stat: async () => {
+            throw new Error("upstream 503");
+          },
+        }),
+      );
+      const row = (
+        await pg.query(`SELECT v.status, f.status AS "fileStatus" FROM video_submissions v JOIN files f ON f.id = v.file_id WHERE v.id = $1`, [r.submissionId])
+      ).rows[0];
+      assert.deepEqual([row.status, row.fileStatus], ["received", "uploading"], "no answer this sweep; the next one decides");
+
+      const said = lines.find((l) => /Storage did not answer/.test(l));
+      assert.ok(said, `nothing said that uploads are stuck behind Storage:\n${lines.join("\n")}`);
+      assert.match(said, c.level);
+      const fields = JSON.parse(said.slice(said.indexOf("{"))) as { unanswered: number; oldestHours: number; err: string };
+      assert.ok(fields.unanswered >= 1);
+      // Other files' rows share this table; this one is at least this old.
+      assert.ok(fields.oldestHours >= age, `oldestHours ${fields.oldestHours} < ${age}`);
+      assert.match(fields.err, /upstream 503/);
+    } finally {
+      await pg.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [userId]);
+      await pg.query(`DELETE FROM files WHERE owner_user_id = $1`, [userId]);
+      await pg.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      await pg.end();
+      // The app's pool cannot be used again once ended: only after the last.
+      if (c === UNANSWERED[UNANSWERED.length - 1]) {
+        const { closeAppDb } = await import("./_server-actions.js");
+        await closeAppDb();
+      }
+    }
+  });
+}
