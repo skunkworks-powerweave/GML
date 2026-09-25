@@ -9,6 +9,12 @@ import type { RoleName } from "@gml/shared/auth/roles";
 export type NavItem = {
   id: string;
   label: string;
+  /**
+   * The nav.* translation key for `label`, where the id alone cannot say it:
+   * observation, mentorship, rtt and videos carry different labels for
+   * different roles, so Sidebar's id-keyed ITEM_KEY cannot hold them.
+   */
+  labelKey?: string;
   icon: string;
   href: string;
   /** Section-gate slug. Visiting this route prompts for the gate password if not unlocked. */
@@ -31,10 +37,10 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "Programme",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Classroom Observation", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "mentorship", label: "Mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "rtt", label: "RTT Phases", icon: "mountain", href: "/rtt" },
-        { id: "videos", label: "Video library", icon: "video", href: "/videos" },
+        { id: "observation", label: "Classroom Observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -80,10 +86,10 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "Programme",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Classroom Observation", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "mentorship", label: "Mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "rtt", label: "RTT Phases", icon: "mountain", href: "/rtt" },
-        { id: "videos", label: "Video library", icon: "video", href: "/videos" },
+        { id: "observation", label: "Classroom Observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -122,15 +128,15 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My work",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "mentorship", label: "My mentees", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "videos", label: "Pending review", icon: "video", href: "/videos" },
+        { id: "mentorship", label: "My mentees", labelKey: "myMentees", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "videos", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/videos" },
       ],
     },
     {
       section: "Programme",
       items: [
-        { id: "rtt", label: "RTT Phases", icon: "mountain", href: "/rtt" },
+        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
         { id: "forms", label: "Forms & quizzes", icon: "file", href: "/forms" },
       ],
     },
@@ -152,8 +158,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My work",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "videos", label: "Video library", icon: "video", href: "/videos" },
+        { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -174,8 +180,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My learning",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "rtt", label: "My phase", icon: "mountain", href: "/rtt" },
-        { id: "observation", label: "My observations", icon: "eye", href: "/observation" },
+        { id: "rtt", label: "My phase", labelKey: "myPhase", icon: "mountain", href: "/rtt" },
+        { id: "observation", label: "My observations", labelKey: "myObservations", icon: "eye", href: "/observation" },
         { id: "uploads", label: "My uploads", icon: "upload", href: "/uploads" },
       ],
     },

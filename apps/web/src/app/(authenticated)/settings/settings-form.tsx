@@ -1,12 +1,14 @@
 "use client";
 
 // Settings form — 4 sections (Display / Privacy / Language / Account) backed by
-// the locked `user_prefs` schema. Save-on-change with 400ms debounce; only the
-// *delta* (changed fields since initial load) is PUT to `/api/user-prefs`, which
-// keeps the audit log readable (the API records a `user_prefs.update` row with a
-// `keys` metadata array per spec 024).
+// the locked `user_prefs` schema. Save-on-change with 400ms debounce (the
+// language is saved on the tap; see pickLanguage); only the *delta* (changed
+// fields since initial load) is PUT to `/api/user-prefs`, which keeps the audit
+// log readable (the API records a `user_prefs.update` row with a `keys`
+// metadata array per spec 024).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { signOutAction } from "./actions";
 import { ChangePasswordForm } from "./ChangePasswordForm";
@@ -47,11 +49,19 @@ function computeDelta(baseline: SettingsFormValues, current: SettingsFormValues)
   return delta;
 }
 
+/** Preferences the layouts render (lang, strings, body classes): a save must re-render them. */
+const RENDERED_BY_LAYOUT: ReadonlyArray<keyof SettingsFormValues> = ["uiLanguage", "highContrast", "reducedMotion"];
+
 export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props) {
+  const router = useRouter();
   const [values, setValues] = useState<SettingsFormValues>(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const baselineRef = useRef<SettingsFormValues>(initial);
+  // The values most recently handed to flush(). The debounce compares against
+  // these rather than the saved baseline, so a save already on its way (the
+  // language, sent on the tap) is not sent a second time 400ms later.
+  const sentRef = useRef<SettingsFormValues>(initial);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef<AbortController | null>(null);
 
@@ -65,6 +75,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
     if (inFlightRef.current) inFlightRef.current.abort();
     const ctrl = new AbortController();
     inFlightRef.current = ctrl;
+    sentRef.current = next;
     setSaveState("saving");
     setErrorMsg(null);
     try {
@@ -80,22 +91,43 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       }
       baselineRef.current = next;
       setSaveState("saved");
+      // The menus, tabs and skip link are rendered by the shared
+      // (authenticated) layout, which the App Router never re-renders on a
+      // soft navigation. Without this the chrome kept the old language on
+      // every page until a hard reload, under a "Saved" badge. refresh()
+      // re-renders the server tree in place, root layout (<html lang>)
+      // included, and fetches no document. The same for the Display
+      // switches, whose body classes that root layout renders.
+      if (RENDERED_BY_LAYOUT.some((k) => k in delta)) router.refresh();
       // Auto-clear the "Saved" pill after 1.6s so the form looks idle again.
       setTimeout(() => {
         setSaveState((s) => (s === "saved" ? "idle" : s));
       }, 1600);
     } catch (err) {
       if ((err as Error).name === "AbortError") return; // superseded — silent
+      sentRef.current = baselineRef.current;
       setSaveState("error");
       setErrorMsg((err as Error).message || "Could not save");
     }
-  }, []);
+  }, [router]);
+
+  // The language is saved on the tap, not after the debounce. On a phone this
+  // is the only language control, and the next thing a user does is tap a tab
+  // to see the result: that unmounted the form inside the 400ms window, the
+  // effect cleanup cancelled the timer, and the choice was silently lost.
+  const pickLanguage = (code: UiLanguage) => {
+    const next = { ...values, uiLanguage: code };
+    setValues(next);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    void flush(next);
+  };
 
   // Debounced save effect — runs 400ms after the last change.
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    // Skip the no-op on first mount (values === initial).
-    const isDirty = Object.keys(computeDelta(baselineRef.current, values)).length > 0;
+    // Skip the no-op on first mount (values === initial), and anything
+    // already sent.
+    const isDirty = Object.keys(computeDelta(sentRef.current, values)).length > 0;
     if (!isDirty) return;
     timerRef.current = setTimeout(() => {
       void flush(values);
@@ -104,6 +136,27 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [values, flush]);
+
+  // That cleanup also runs on unmount, so a change made just before tapping a
+  // tab was cancelled with its timer and never saved. Send whatever is still
+  // unsent on the way out; keepalive lets the request outlive the page.
+  const latestRef = useRef(values);
+  useEffect(() => {
+    latestRef.current = values;
+  }, [values]);
+  useEffect(
+    () => () => {
+      const latest = latestRef.current;
+      if (Object.keys(computeDelta(sentRef.current, latest)).length === 0) return;
+      void fetch("/api/user-prefs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(computeDelta(baselineRef.current, latest)),
+        keepalive: true,
+      }).catch(() => undefined);
+    },
+    [],
+  );
 
   const set = useCallback(<K extends keyof SettingsFormValues>(key: K, value: SettingsFormValues[K]) => {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -137,26 +190,17 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
   return (
     <>
       <SectionCard title="Display" badge={saveBadge}>
-        <SegmentRow
-          label="Density"
-          value={values.density}
-          options={[
-            { v: "dense", label: "Dense" },
-            { v: "regular", label: "Regular" },
-            { v: "loose", label: "Loose" },
-          ]}
-          onChange={(v) => set("density", v as Density)}
-        />
-        <SegmentRow
-          label="Text size"
-          value={values.fontScale}
-          options={[
-            { v: "regular", label: "Regular" },
-            { v: "large", label: "Large" },
-            { v: "xlarge", label: "Extra large" },
-          ]}
-          onChange={(v) => set("fontScale", v as FontScale)}
-        />
+        {/* ONLY WHAT TAKES EFFECT. Density and Text size were here and saved
+            without changing anything: there are no density rules at all, and
+            nearly every size in the app is an inline px value a body
+            font-size cannot reach (CSS zoom can, but it also multiplies the
+            vw/vh sizes the help panel, QuickFind and the upload modal use,
+            pushing them off a phone's screen). The columns stay; the controls
+            come back when the sizes are rem-based. Until then, say what does
+            work. */}
+        <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 10, lineHeight: 1.5 }}>
+          For larger text, use your browser&apos;s zoom: Ctrl and + on a computer, or pinch on a phone.
+        </div>
         <ToggleRow
           label="High contrast"
           hint="Deepens ink + line tokens; easier in bright light."
@@ -172,12 +216,16 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       </SectionCard>
 
       <SectionCard title="Privacy">
-        <ToggleRow
-          label="Watermark videos with my name"
-          hint="Recommended. Renders at 30% opacity over every rendition; turning this off only affects YOUR playback overlay."
-          value={values.showWatermark}
-          onChange={(v) => set("showWatermark", v)}
-        />
+        {/* Was a "Watermark videos with my name" switch that the player never
+            read -- it always draws the overlay. Stated rather than offered:
+            honouring it would let a viewer remove the viewer-identifying
+            overlay (SM-4) just before recording the screen. */}
+        <div data-testid="watermark-always-on" style={{ padding: "10px 0" }}>
+          <div style={{ fontSize: 13, color: "var(--ink)" }}>Videos are watermarked with your name</div>
+          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2, lineHeight: 1.4 }}>
+            Always on, for every viewer. It identifies who was watching if a recording of the screen is shared.
+          </div>
+        </div>
         <div
           style={{
             marginTop: 14,
@@ -189,8 +237,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
             lineHeight: 1.5,
           }}
         >
-          All session footage is confidential and downloads are disabled at the player level. Your changes here do not
-          affect other viewers&apos; overlays.
+          All session footage is confidential and downloads are disabled at the player level.
         </div>
       </SectionCard>
 
@@ -199,13 +246,13 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
           Used for UI labels and notifications. Content (lesson titles, observation notes) is not auto-translated.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <LangPill active={values.uiLanguage === "en"} onClick={() => set("uiLanguage", "en")}>
+          <LangPill active={values.uiLanguage === "en"} onClick={() => pickLanguage("en")}>
             English
           </LangPill>
-          <LangPill active={values.uiLanguage === "hi"} onClick={() => set("uiLanguage", "hi")}>
+          <LangPill active={values.uiLanguage === "hi"} onClick={() => pickLanguage("hi")}>
             <span style={{ fontFamily: "var(--deva)" }} lang="hi">हिन्दी</span>
           </LangPill>
-          <LangPill active={values.uiLanguage === "bo"} onClick={() => set("uiLanguage", "bo")}>
+          <LangPill active={values.uiLanguage === "bo"} onClick={() => pickLanguage("bo")}>
             <span className="tib" lang="bo">བོད་ཡིག</span>
           </LangPill>
         </div>
@@ -329,60 +376,6 @@ function SectionCard({
       </header>
       <div style={{ padding: 16 }}>{children}</div>
     </article>
-  );
-}
-
-function SegmentRow({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { v: string; label: string }[];
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 6 }}>{label}</div>
-      <div
-        role="radiogroup"
-        aria-label={label}
-        style={{
-          display: "inline-flex",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-2)",
-          overflow: "hidden",
-          background: "var(--paper)",
-        }}
-      >
-        {options.map((o, i) => {
-          const active = value === o.v;
-          return (
-            <button
-              key={o.v}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => onChange(o.v)}
-              style={{
-                padding: "6px 12px",
-                fontSize: 12,
-                background: active ? "var(--ink)" : "transparent",
-                color: active ? "var(--paper)" : "var(--ink-2)",
-                border: "none",
-                borderLeft: i === 0 ? "none" : "1px solid var(--line)",
-                cursor: "pointer",
-                fontFamily: "var(--sans)",
-              }}
-            >
-              {o.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 

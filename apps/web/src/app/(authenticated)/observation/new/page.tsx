@@ -7,6 +7,7 @@
 // Plain server-rendered form, no client JavaScript: the pickers are <select>s
 // filled here, so it works on the same slow links the rest of the app targets.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { and, asc, eq, isNull, like } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -16,6 +17,8 @@ import { cycleCodePrefix, nextCycleCode } from "@/lib/observation/cycle-code";
 import { nominateCycleAction } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Nominate a cycle" };
 
 const field: React.CSSProperties = {
   padding: "8px 10px",

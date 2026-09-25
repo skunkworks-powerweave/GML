@@ -326,10 +326,16 @@ test("spec 135 — uploads/page.tsx still imports + renders UploadProgress for d
     /import\s*\{\s*UploadProgress\s*\}\s*from\s*"@\/components\/video\/UploadProgress"/,
     "uploads page must keep the UploadProgress import — desktop still uses it",
   );
+  // Bound to what the page resolved the video is FOR, not hard-wired to
+  // 'generic'. The old pin required contextType="generic" -- the defect (F18):
+  // every upload from /uploads, including the one the teacher's "Upload lesson
+  // video" to-do sends her to make, was linked to nothing and invisible to her
+  // observer and mentor. tests/behaviour/uploads-context-page.test.ts renders
+  // the page and reads the context the tray is bound to.
   assert.match(
     src,
-    /<UploadProgress\s+contextType="generic"/,
-    "uploads page must still render <UploadProgress contextType='generic' /> for desktop",
+    /<UploadProgress[\s\S]*?contextType=\{target\.contextType\}/,
+    "uploads page must bind the desktop tray to the resolved target's context",
   );
 });
 

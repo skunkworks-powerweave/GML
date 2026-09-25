@@ -9,7 +9,7 @@
   --ink: #1c1816;
   --ink-2: #3a342e;
   --ink-3: #6b6357;
-  --ink-4: #9b9080;
+  --ink-4: #6f665a; /* was #9b9080, 2.78:1 on --paper; text needs 4.5:1 (WCAG AA) */
   --line: #d6c9ac;
   --line-2: #c4b58f;
   --hairline: rgba(28, 24, 22, 0.08);

@@ -6,6 +6,7 @@
 // visit could file another copy. Behind the mentorship section gate via the
 // layout; who reads which responses is lib/forms/responses.ts.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
@@ -17,6 +18,8 @@ import { pairingResponses } from "@/lib/forms/responses";
 import { KIND_LABELS } from "@/lib/forms/quarterly";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Submitted feedback" };
 
 export default async function PairingResponsesPage({ params }: { params: Promise<{ pairingId: string }> }) {
   const { pairingId } = await params;

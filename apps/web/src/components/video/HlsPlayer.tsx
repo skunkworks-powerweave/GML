@@ -312,11 +312,14 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
         ) : null}
       </div>
 
-      {/* Player controls — speed + quality. JSX prototype lines 169-191. */}
+      {/* Player controls — speed + quality. JSX prototype lines 169-191.
+          Both rows wrap: speed and quality side by side are ~400 px, wider
+          than the player on a phone. */}
       <div
         className="player-controls"
         style={{
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
           gap: 8,
           marginTop: 10,
@@ -325,7 +328,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
         data-testid="player-controls"
       >
         <span style={{ color: "var(--ink-3)", fontSize: 11 }}>Speed</span>
-        <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Playback speed">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }} role="group" aria-label="Playback speed">
           {SPEED_PRESETS.map((rate) => {
             const isActive = playbackRate === rate;
             return (

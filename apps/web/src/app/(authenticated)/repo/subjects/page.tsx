@@ -7,6 +7,7 @@
 // grade-range filter (?grade=N) — the WHERE narrows to subjects whose
 // grades_min ≤ N ≤ grades_max. Defaults to "all" when the param is absent.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, asc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from "drizzle-orm";
@@ -24,6 +25,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Subjects" };
 
 // Hex → chip class. Subjects.color stores the design-system hex; we map it
 // to the closest semantic chip variant so the table picks up the new utility
@@ -145,10 +148,13 @@ export default async function RepoSubjectsIndexPage({
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
           </label>
-          <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
+          {/* A <label> for the select: this was a <span>, so the select had
+              no accessible name. */}
+          <label htmlFor="subjects-grade" className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
             Grade
-          </span>
+          </label>
           <select
+            id="subjects-grade"
             name="grade"
             defaultValue={gradeFilter === null ? "" : String(gradeFilter)}
             className="text"

@@ -49,25 +49,28 @@ test("Spec 071: 4 section cards exist (Display / Privacy / Language / Account)",
   }
 });
 
-test("Spec 071: density / fontScale / contrast / motion controls all wired", () => {
+// F127: this pinned that the Density and Text size options EXIST in the source
+// -- which they did, while saving them changed nothing anywhere (no density
+// CSS; text sizes are inline px a body font-size cannot reach). Both controls
+// were removed; the invariant is now that the two that do take effect are
+// there. Their effect is executed in tests/behaviour/ui-display-prefs.test.ts.
+test("Spec 071: contrast / motion controls wired; no Density or Text size control", () => {
   const src = read(FORM);
-  // Density options
-  for (const v of ["dense", "regular", "loose"]) {
-    assert.match(src, new RegExp(`v:\\s*"${v}"`), `density option ${v} must be present`);
-  }
-  // Font scale options
-  for (const v of ["large", "xlarge"]) {
-    assert.match(src, new RegExp(`v:\\s*"${v}"`), `font scale option ${v} must be present`);
-  }
-  assert.match(src, /highContrast/);
-  assert.match(src, /reducedMotion/);
+  assert.match(src, /set\("highContrast", v\)/);
+  assert.match(src, /set\("reducedMotion", v\)/);
+  assert.doesNotMatch(src, /label="Density"/, "Density has no effect; it must not be offered");
+  assert.doesNotMatch(src, /label="Text size"/, "Text size has no effect; it must not be offered");
 });
 
-test("Spec 071: watermark toggle present and on by default in DEFAULT_PREFS", () => {
+// F127: the "Watermark videos with my name" switch saved show_watermark and the
+// player ignored it (the overlay is always drawn, SM-4). It is now a statement,
+// not a control: honouring it would let a viewer drop the overlay before
+// recording the screen. The column and its default stay.
+test("Spec 071: watermark stated as always on (no switch); DEFAULT_PREFS keeps it true", () => {
   const formSrc = read(FORM);
   const pageSrc = read(PAGE);
-  assert.match(formSrc, /Watermark videos with my name/);
-  assert.match(formSrc, /showWatermark/);
+  assert.doesNotMatch(formSrc, /label="Watermark videos with my name"/);
+  assert.match(formSrc, /data-testid="watermark-always-on"/);
   assert.match(pageSrc, /showWatermark:\s*true/);
 });
 

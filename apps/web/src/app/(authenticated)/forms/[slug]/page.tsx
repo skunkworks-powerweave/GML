@@ -20,6 +20,7 @@
 // `mentor | mentee`; `mentee` maps to the `teacher` role because in this
 // codebase a mentee IS the classroom teacher being mentored.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -59,6 +60,8 @@ import { FormRenderer } from "@/components/forms/FormRenderer";
 import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Feedback form" };
 
 // ---------------------------------------------------------------------------
 // Slug parsing — `${kind}-${audience}-${version}`.

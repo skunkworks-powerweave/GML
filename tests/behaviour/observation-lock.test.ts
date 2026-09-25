@@ -73,16 +73,11 @@ test("a signed-off cycle's page offers no note form and no upload", { skip }, as
   }
 });
 
-// HANDED TO THE UPLOAD PACKAGE. The upload plumbing (uploads/actions.ts
-// assertContextAllowed, and finalizeUpload in packages/db/src/uploads.ts for an
-// upload reserved before sign-off and finished after it) is owned by another
-// work package; the observation package only stops OFFERING an upload on a
-// closed cycle. This test is the executable statement of what that package
-// owes: `todo` runs it and reports it without failing the suite.
-test("the upload path refuses evidence for a signed-off cycle before reserving anything", {
-  skip,
-  todo: skip ? undefined : "upload package: refuse observation_cycle context once the cycle is complete",
-}, async () => {
+// The upload plumbing's half. The page above stops OFFERING an upload on a
+// closed cycle; this is the reservation refusing one that arrives anyway
+// (uploads/context.ts, assertContextAllowed). It ran as a `todo` until the
+// upload package took it on.
+test("the upload path refuses evidence for a signed-off cycle before reserving anything", { skip }, async () => {
   const w = await observationWorld("lockup");
   // Local placeholders: beginUploadAction checks that uploads are configured
   // before it looks at the context. Nothing is contacted.

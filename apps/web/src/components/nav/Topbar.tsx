@@ -48,14 +48,6 @@ type TopbarProps = {
   locale?: Locale;
 };
 
-const ROLE_LABEL: Record<RoleName, string> = {
-  super_admin: "Super Admin",
-  programme_admin: "Programme Admin",
-  mentor: "Mentor",
-  observer: "Observer",
-  teacher: "Teacher",
-};
-
 function initials(name?: string | null, email?: string | null): string {
   const src = name ?? email ?? "?";
   const parts = src.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").trim().split(/\s+/);
@@ -71,6 +63,11 @@ export async function Topbar({
 }: TopbarProps) {
   const tAction = await getTranslations("action");
   const tLanguage = await getTranslations("language");
+  // The role and the trail's landmark name were English literals (an own
+  // ROLE_LABEL map; aria-label="Breadcrumb") in every locale.
+  const tRole = await getTranslations("role");
+  const tCrumb = await getTranslations("crumb");
+  const tStatus = await getTranslations("status");
   const bellBadge = formatBellBadge(unreadCount);
   const queueLabel = queueDepth ? formatQueueLabel(queueDepth) : null;
   return (
@@ -92,7 +89,7 @@ export async function Topbar({
           from the URL, because the layout that renders this cannot see the page
           below it and so never supplied any. See Breadcrumbs.tsx. */}
       <nav
-        aria-label="Breadcrumb"
+        aria-label={tCrumb("trail")}
         style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink-2)" }}
       >
         {breadcrumbs.length === 0 ? (
@@ -116,11 +113,12 @@ export async function Topbar({
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
         {/* Queue indicator — surfaces the job queue transcode queue depth (spec 128).
             Hidden when active/waiting/failed are all zero so the chrome stays
-            quiet on idle systems. */}
+            quiet on idle systems. The tooltip was an English literal in every
+            locale. */}
         {queueLabel ? (
           <span
             data-testid="topbar-queue-indicator"
-            title="Transcode queue depth"
+            title={tStatus("queueDepth")}
             style={{
               padding: "4px 8px",
               borderRadius: 999,
@@ -199,7 +197,50 @@ export async function Topbar({
             See `./LanguagePicker.tsx` for the implementation. */}
         <LanguagePicker current={locale} ariaLabel={tLanguage("pickerLabel")} />
 
-        {/* User pill */}
+        {/* User pill: a link to /settings. It WAS the sign-out submit
+            button, with no menu and no confirmation, so clicking your own
+            name -- how people look for their profile -- ended the session,
+            and its accessible name (the name itself) never said so. The
+            phone header already split the two; this matches it. */}
+        <Link
+          href="/settings"
+          data-testid="topbar-settings-link"
+          title={user.email ?? undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "4px 10px 4px 4px",
+            border: "1px solid var(--line)",
+            borderRadius: 999,
+            background: "var(--card-hi)",
+            color: "inherit",
+            textDecoration: "none",
+          }}
+        >
+          <span
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "var(--ink)",
+              color: "var(--paper)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              fontWeight: 600,
+              fontFamily: "var(--sans)",
+            }}
+          >
+            {initials(user.name, user.email)}
+          </span>
+          <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", fontSize: 11 }}>
+            <span style={{ color: "var(--ink)", fontWeight: 500 }}>{user.name ?? user.email}</span>
+            <span style={{ color: "var(--ink-3)" }}>{tRole(user.role)}</span>
+          </span>
+        </Link>
+
         {/* Spec 169 — the submit button is a 'use client' SignOutButton
             island so the device-local QuickFind recents (spec 121) are
             cleared from localStorage BEFORE the server-action signOut
@@ -213,37 +254,15 @@ export async function Topbar({
           <SignOutButton
             title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "4px 10px 4px 4px",
+              padding: "5px 10px",
               border: "1px solid var(--line)",
               borderRadius: 999,
               background: "var(--card-hi)",
+              fontSize: 11,
               cursor: "pointer",
             }}
           >
-            <span
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: "50%",
-                background: "var(--ink)",
-                color: "var(--paper)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 11,
-                fontWeight: 600,
-                fontFamily: "var(--sans)",
-              }}
-            >
-              {initials(user.name, user.email)}
-            </span>
-            <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", fontSize: 11 }}>
-              <span style={{ color: "var(--ink)", fontWeight: 500 }}>{user.name ?? user.email}</span>
-              <span style={{ color: "var(--ink-3)" }}>{ROLE_LABEL[user.role]}</span>
-            </span>
+            {tAction("signOut")}
           </SignOutButton>
         </form>
       </div>

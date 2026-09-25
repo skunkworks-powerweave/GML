@@ -10,6 +10,7 @@
 // var(--paper-2) header row, var(--line) bottom-border per cell, saffron
 // left-border hover). Chips use `.chip` utility for kind pills.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, desc, eq, ilike, sql, type SQL } from "drizzle-orm";
@@ -22,6 +23,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Reading material" };
 
 // Kept aligned with `resources_kind_check` CHECK constraint in
 // packages/db/src/schema/resources.ts. "Rubric" and "Other" intentionally omitted
@@ -315,10 +318,14 @@ function FilterPill({
   count: number;
 }) {
   return (
+    // The pill that is on said so by hue alone (chip-saffron vs chip, the same
+    // lightness): aria-current tells assistive technology, and bold tells
+    // everyone else.
     <Link
       href={href}
+      aria-current={active ? "page" : undefined}
       className={`chip ${active ? "chip-saffron" : ""}`}
-      style={{ textDecoration: "none", cursor: "pointer" }}
+      style={{ textDecoration: "none", cursor: "pointer", fontWeight: active ? 600 : undefined }}
     >
       {label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count}</span>
     </Link>

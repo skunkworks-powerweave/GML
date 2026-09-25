@@ -11,11 +11,16 @@
 //                       strings, identical for every pairing, with a toggle
 //                       that wrote an audit row and changed nothing.
 //   - "Complete"      → completePairingAction (super_admin + programme_admin).
+//   - Videos          → "Attach recording" on each past meeting, and the
+//                       Quarterly videos card, link /uploads bound to that
+//                       meeting, or to this pairing and the quarter (F50).
+//                       Each meeting lists every recording stored for it.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
-import { and, eq, desc, sql } from "drizzle-orm";
+import { and, asc, eq, desc, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   mentors,
@@ -24,7 +29,10 @@ import {
   feedbackForms,
   feedbackResponses,
   users,
+  videoSubmissions,
+  files,
 } from "@gml/db/schema";
+import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
@@ -40,6 +48,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "Pairing" };
+
 const QUARTERS = ["baseline", "progress_1", "progress_2", "final"] as const;
 const QUARTER_LABEL: Record<string, string> = {
   baseline: "Q1 · Baseline",
@@ -47,6 +57,11 @@ const QUARTER_LABEL: Record<string, string> = {
   progress_2: "Q3 · Progress",
   final: "Q4 · Final",
 };
+
+/** A meeting still to come is cancelled, not removed, and has nothing to record yet. */
+function isUpcoming(scheduledAt: Date): boolean {
+  return scheduledAt.getTime() > Date.now();
+}
 
 // THE FORM SLUG IS RESOLVED FROM THE DATABASE, NOT ASSEMBLED FROM CONSTANTS.
 //
@@ -177,6 +192,62 @@ export default async function PairingDetailPage({
     .orderBy(desc(mentorMeetings.scheduledAt))
     .limit(20);
 
+  // EVERY RECORDING OF EACH MEETING, not only recording_video_id. A meeting
+  // can have several: a long one sent over WhatsApp arrives in parts (a video
+  // message stops at 16 MB), and a first upload can be the wrong file or fail
+  // to transcode. recording_video_id holds the first, and while the page read
+  // only that column every later recording was accepted -- its sender told it
+  // would be on the meeting -- and then shown nowhere. A 'mentor_meeting'
+  // submission names its meeting; as for the quarterly videos below, only one
+  // whose bytes have arrived is listed.
+  const meetingIds = meetings.map((m) => m.id);
+  const recordingRows =
+    meetingIds.length === 0
+      ? []
+      : await db
+          .select({ id: videoSubmissions.id, meetingId: videoSubmissions.contextId, status: videoSubmissions.status })
+          .from(videoSubmissions)
+          .innerJoin(files, eq(files.id, videoSubmissions.fileId))
+          .where(
+            and(
+              eq(videoSubmissions.contextType, "mentor_meeting"),
+              inArray(videoSubmissions.contextId, meetingIds),
+              eq(files.status, "stored"),
+            ),
+          )
+          .orderBy(asc(videoSubmissions.createdAt));
+  const recordingsOf = (m: { id: string; recordingVideoId: string | null }): Array<{ id: string; status: string | null }> => {
+    const own = recordingRows.filter((r) => r.meetingId === m.id);
+    // A recording linked on the meeting row but not found above is still shown.
+    return m.recordingVideoId && !own.some((r) => r.id === m.recordingVideoId)
+      ? [{ id: m.recordingVideoId, status: null }, ...own]
+      : own;
+  };
+
+  // THE MENTEE'S QUARTERLY VIDEOS. The Mentorship surface is meeting
+  // recordings plus these, and the page showed neither: nothing could attach a
+  // quarterly video to a pairing (F50). A 'mentee_quarterly' submission names
+  // this pairing and its quarter (1 or 4). Only one whose bytes have arrived is
+  // a video; a reservation still uploading, or one given up on, is not listed.
+  const quarterlyVideos = await db
+    .select({
+      id: videoSubmissions.id,
+      quarter: videoSubmissions.contextQuarter,
+      status: videoSubmissions.status,
+      createdAt: videoSubmissions.createdAt,
+    })
+    .from(videoSubmissions)
+    .innerJoin(files, eq(files.id, videoSubmissions.fileId))
+    .where(
+      and(
+        eq(videoSubmissions.contextType, "mentee_quarterly"),
+        eq(videoSubmissions.contextId, pairingId),
+        eq(files.status, "stored"),
+      ),
+    )
+    .orderBy(desc(videoSubmissions.createdAt))
+    .limit(20);
+
   const feedback = await db.select().from(feedbackResponses).where(eq(feedbackResponses.pairingId, pairingId));
 
   // The quarterly forms THIS viewer has already sent for the pairing. Only the
@@ -238,8 +309,11 @@ export default async function PairingDetailPage({
         <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
           ← All pairings
         </Link>
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
-          <div>
+        {/* The row wraps, so a phone puts the buttons under the name. The name
+            breaks lines at 240 px and shrinks, so on a desktop a long name
+            wraps inside it and the buttons stay beside it. */}
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+          <div style={{ flex: "1 1 240px", minWidth: 0 }}>
             <div className="label">Pairing</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4, lineHeight: 1.15 }}>
               {mentor?.name ?? "—"}{" "}
@@ -321,7 +395,9 @@ export default async function PairingDetailPage({
             style={{ padding: 14, marginTop: 12, background: "var(--paper-2)", display: "grid", gap: 10 }}
           >
             <input type="hidden" name="pairingId" value={pairingId} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+            {/* "When" stacks above "Duration" below 640 px: beside a 120 px
+                column the date-and-time picker was ~75 px wide on a phone. */}
+            <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-[minmax(0,1fr)_120px]">
               <label style={{ fontSize: 12 }}>
                 <div className="label" style={{ marginBottom: 4 }}>When *</div>
                 <input
@@ -381,8 +457,15 @@ export default async function PairingDetailPage({
           </form>
         ) : null}
 
-        {/* Quarterly progress strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 18 }}>
+        {/* Quarterly progress strip. One quarter per row on a phone, two from
+            640 px, four from 768 px. It was an inline repeat(4, 1fr), which
+            holds at every width: ~80 px cards, with Q3 and Q4 -- and the
+            "Fill progress form" link -- off the right edge of a phone. */}
+        <div
+          data-testid="quarter-strip"
+          className="grid grid-cols-1 gap-[10px] sm:grid-cols-2 md:grid-cols-4"
+          style={{ marginTop: 18 }}
+        >
           {QUARTERS.map((q, i) => {
             const qNum = i + 1;
             const state = currentQuarter >= qNum ? (qNum < currentQuarter ? "done" : "current") : "future";
@@ -496,7 +579,10 @@ export default async function PairingDetailPage({
         </div>
       </div>
 
-      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
+      {/* Meetings above feedback and commitments below 768 px, beside them
+          above. This was an inline "1.5fr 1fr", which held on a phone: a
+          ~130 px right-hand column holding the whole commitment register. */}
+      <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div style={{ display: "grid", gap: 14 }}>
           <div className="card card-hi">
             <div
@@ -528,12 +614,17 @@ export default async function PairingDetailPage({
                   const d = new Date(m.scheduledAt);
                   const day = String(d.getDate()).padStart(2, "0");
                   const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getMonth()];
+                  const recordings = recordingsOf(m);
+                  const upcoming = isUpcoming(d);
+                  const when = d.toLocaleDateString("en-IN", { day: "numeric", month: "long" });
                   return (
                     <div
                       key={m.id}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "60px 1fr",
+                        // minmax(0, ...): a bare 1fr is at least as wide as its
+                        // content, so a pasted link in the notes widened the page.
+                        gridTemplateColumns: "60px minmax(0, 1fr)",
                         gap: 14,
                         padding: 16,
                         borderTop: i ? "1px solid var(--line)" : "none",
@@ -553,18 +644,39 @@ export default async function PairingDetailPage({
                           ) : null}
                         </div>
                         {m.notes ? (
-                          <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 6, lineHeight: 1.5 }}>
+                          <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 6, lineHeight: 1.5, overflowWrap: "anywhere" }}>
                             {m.notes}
                           </p>
                         ) : null}
-                        {m.recordingVideoId ? (
-                          <Link
-                            href={`/videos/${m.recordingVideoId}`}
-                            style={{ fontSize: 11, color: "var(--indigo)", marginTop: 4, display: "inline-block" }}
-                          >
-                            Open recording →
-                          </Link>
-                        ) : canLogMeeting ? (
+                        {recordings.length > 0 ? (
+                          <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
+                            {recordings.map((r, n) => (
+                              <li key={r.id}>
+                                <Link href={`/videos/${r.id}`} style={{ fontSize: 11, color: "var(--indigo)" }}>
+                                  {recordings.length === 1 ? "Open recording →" : `Open recording ${n + 1} →`}
+                                </Link>
+                                {r.status && r.status !== "ready" ? (
+                                  <span className="chip" style={{ marginLeft: 6 }}>{r.status.replace(/_/g, " ")}</span>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {!canLogMeeting ? null : recordings.length > 0 ? (
+                          // The next part of a long meeting, or a replacement
+                          // for a wrong file or a failed transcode. A meeting
+                          // with a recording is kept: no Cancel or Remove.
+                          upcoming ? null : (
+                            <Link
+                              href={uploadHref({ contextType: "mentor_meeting", contextId: m.id })}
+                              className="btn btn-sm"
+                              style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
+                              aria-label={`Attach another recording of the meeting of ${when}`}
+                            >
+                              Attach another recording →
+                            </Link>
+                          )
+                        ) : (
                           // A meeting logged by mistake, or called off, could
                           // never be removed. Kept when a recording is attached.
                           // An upcoming one is CANCELLED (the other party is
@@ -573,18 +685,34 @@ export default async function PairingDetailPage({
                           // button only asks: the delete is permanent, and it
                           // happens from the confirmation (?confirmCancel=).
                           (() => {
-                            const upcoming = d.getTime() > Date.now();
-                            const when = d.toLocaleDateString("en-IN", { day: "numeric", month: "long" });
                             if (sp.confirmCancel !== m.id) {
                               return (
-                                <Link
-                                  href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
-                                  className="btn btn-sm btn-ghost"
-                                  style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
-                                  aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
-                                >
-                                  {upcoming ? "Cancel meeting" : "Remove"}
-                                </Link>
+                                <>
+                                  {/* A meeting that has happened can have its
+                                      recording attached: /uploads, bound to
+                                      THIS meeting (and offering its MM- code
+                                      for WhatsApp). Nothing attached one
+                                      before, so "Open recording" never
+                                      appeared (F50). */}
+                                  {upcoming ? null : (
+                                    <Link
+                                      href={uploadHref({ contextType: "mentor_meeting", contextId: m.id })}
+                                      className="btn btn-sm"
+                                      style={{ fontSize: 11, marginTop: 4, marginRight: 6, display: "inline-flex" }}
+                                      aria-label={`Attach the recording of the meeting of ${when}`}
+                                    >
+                                      Attach recording →
+                                    </Link>
+                                  )}
+                                  <Link
+                                    href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
+                                    className="btn btn-sm btn-ghost"
+                                    style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
+                                    aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
+                                  >
+                                    {upcoming ? "Cancel meeting" : "Remove"}
+                                  </Link>
+                                </>
                               );
                             }
                             return (
@@ -612,7 +740,7 @@ export default async function PairingDetailPage({
                               </form>
                             );
                           })()
-                        ) : null}
+                        )}
                       </div>
                     </div>
                   );
@@ -623,6 +751,78 @@ export default async function PairingDetailPage({
         </div>
 
         <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+          {/* The mentee's Q1 (baseline) and Q4 (endline) videos, for both sides
+              of the pairing. Each quarter links /uploads bound to this pairing
+              and that quarter; Q4 opens with the pairing's last quarter, as the
+              upload itself does (uploads/context.ts). */}
+          <div className="card card-hi" data-testid="quarterly-videos">
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
+              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>Quarterly videos</h2>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                The mentee&apos;s lesson videos at the baseline (Q1) and the endline (Q4)
+              </div>
+            </div>
+            <div style={{ padding: 14, display: "grid", gap: 12, fontSize: 12 }}>
+              {([1, 4] as const).map((q) => {
+                const videos = quarterlyVideos.filter((v) => v.quarter === q);
+                const open = q === 1 || currentQuarter >= 4;
+                return (
+                  <div key={q}>
+                    <div style={{ fontWeight: 500 }}>{q === 1 ? "Q1 · Baseline" : "Q4 · Endline"}</div>
+                    {videos.length === 0 ? (
+                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>Not sent yet.</div>
+                    ) : (
+                      <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
+                        {videos.map((v) => (
+                          <li key={v.id}>
+                            <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                              Video of{" "}
+                              {new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
+                              →
+                            </Link>
+                            {v.status === "ready" ? null : (
+                              <span className="chip" style={{ marginLeft: 6 }}>{v.status.replace(/_/g, " ")}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {open ? (
+                      <Link
+                        href={uploadHref({ contextType: "mentee_quarterly", contextId: pairingId, quarter: q })}
+                        className="btn btn-sm"
+                        style={{ fontSize: 11, marginTop: 6, display: "inline-flex" }}
+                      >
+                        {videos.length === 0 ? `Upload the Q${q} video →` : `Upload another Q${q} video →`}
+                      </Link>
+                    ) : (
+                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>Opens in Q4.</div>
+                    )}
+                  </div>
+                );
+              })}
+              {quarterlyVideos.some((v) => v.quarter !== 1 && v.quarter !== 4) ? (
+                // Sent before the quarter was recorded (migration 0039).
+                <div>
+                  <div style={{ fontWeight: 500 }}>Quarter not recorded</div>
+                  <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
+                    {quarterlyVideos
+                      .filter((v) => v.quarter !== 1 && v.quarter !== 4)
+                      .map((v) => (
+                        <li key={v.id}>
+                          <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                            Video of{" "}
+                            {new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
+                            →
+                          </Link>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
           <div className="card card-hi">
             <div
               style={{
@@ -716,7 +916,9 @@ export default async function PairingDetailPage({
                     action={toggleCommitmentAction}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "20px 1fr 60px",
+                      // minmax(0, ...) and overflow-wrap below: as with the
+                      // meeting notes, one long word was as wide as the column.
+                      gridTemplateColumns: "20px minmax(0, 1fr) 60px",
                       gap: 10,
                       padding: "8px 12px",
                       borderTop: i ? "1px solid var(--line)" : "none",
@@ -742,7 +944,7 @@ export default async function PairingDetailPage({
                         padding: 0,
                       }}
                     />
-                    <div>
+                    <div style={{ overflowWrap: "anywhere" }}>
                       <div
                         style={{
                           color: c.done ? "var(--ink-3)" : "var(--ink)",
@@ -758,7 +960,7 @@ export default async function PairingDetailPage({
                     </div>
                     <span
                       className="mono"
-                      style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right" }}
+                      style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right", overflowWrap: "anywhere" }}
                     >
                       {c.done ? "done" : (c.due ?? "")}
                     </span>
@@ -767,24 +969,37 @@ export default async function PairingDetailPage({
               )}
             </div>
 
+            {/* The text on a row of its own, who / due / Add beneath it. This
+                was one "1fr 90px 70px auto" row: 90 + 70 px of fixed columns
+                and the button left the text box a few pixels on a phone, and
+                pushed the row past the right edge. Beneath it the Add button
+                keeps its label's width and the due box takes what is left: a
+                "90px 70px 1fr" track left the button 34 px on a 360 px phone.
+                One minmax(0, 1fr) column: an implicit one is as wide as the
+                row's content, which counts the due box at its default ~20
+                characters, and that pushed the page 16 px past the edge. */}
             <form
               action={addCommitmentAction}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 90px 70px auto",
+                gridTemplateColumns: "minmax(0, 1fr)",
                 gap: 6,
                 padding: "10px 12px",
                 borderTop: "1px solid var(--line)",
-                alignItems: "center",
               }}
             >
               <input type="hidden" name="pairingId" value={pairingId} />
+              {/* aria-labels: the row has no visible labels, and a placeholder
+                  names a box only until something is typed in it; the who
+                  select had no name at all. */}
               <input
                 name="text"
                 required
                 maxLength={500}
                 placeholder="Add a commitment…"
+                aria-label="New commitment"
                 style={{
+                  width: "100%",
                   padding: "6px 8px",
                   border: "1px solid var(--line-2)",
                   borderRadius: 6,
@@ -792,46 +1007,54 @@ export default async function PairingDetailPage({
                   background: "var(--card)",
                 }}
               />
-              <select
-                name="who"
-                defaultValue="mentee"
-                style={{
-                  padding: "6px 4px",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: 6,
-                  fontSize: 11,
-                  background: "var(--card)",
-                }}
-              >
-                <option value="mentee">mentee</option>
-                <option value="mentor">mentor</option>
-              </select>
-              <input
-                name="due"
-                maxLength={40}
-                placeholder="Wk 8"
-                style={{
-                  padding: "6px 6px",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: 6,
-                  fontSize: 11,
-                  background: "var(--card)",
-                }}
-              />
-              <button
-                type="submit"
-                style={{
-                  padding: "6px 12px",
-                  border: "none",
-                  borderRadius: 6,
-                  background: "var(--ink)",
-                  color: "var(--paper)",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
-              >
-                Add
-              </button>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <select
+                  name="who"
+                  defaultValue="mentee"
+                  aria-label="Whose commitment"
+                  style={{
+                    flex: "0 0 90px",
+                    padding: "6px 4px",
+                    border: "1px solid var(--line-2)",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    background: "var(--card)",
+                  }}
+                >
+                  <option value="mentee">mentee</option>
+                  <option value="mentor">mentor</option>
+                </select>
+                <input
+                  name="due"
+                  maxLength={40}
+                  placeholder="Wk 8"
+                  aria-label="Due"
+                  style={{
+                    flex: "1 1 0",
+                    minWidth: 0,
+                    padding: "6px 6px",
+                    border: "1px solid var(--line-2)",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    background: "var(--card)",
+                  }}
+                />
+                <button
+                  type="submit"
+                  style={{
+                    flex: "none",
+                    padding: "6px 12px",
+                    border: "none",
+                    borderRadius: 6,
+                    background: "var(--ink)",
+                    color: "var(--paper)",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  Add
+                </button>
+              </div>
             </form>
           </div>
         </div>

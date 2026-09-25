@@ -5,7 +5,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { h, render, request, resetRequest, withAppRouter, openingTags, elements, attr, SRC_DIR } from "./_ui.js";
+import { h, render, request, resetRequest, withAppRouter, withIntl, openingTags, elements, attr, SRC_DIR } from "./_ui.js";
 import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 beforeEach(() => resetRequest());
@@ -67,7 +67,7 @@ test("D7: each sidebar section is a distinctly named landmark and the active ite
 
 test("D7: the desktop shell's first focusable element skips to the main content", async () => {
   const { DesktopShell } = await import("../../apps/web/src/components/shells/DesktopShell.tsx");
-  const html = await render(withAppRouter(h(DesktopShell, { user: USER, locale: "en" }, h("p", null, "page body"))));
+  const html = await render(withAppRouter(await withIntl(h(DesktopShell, { user: USER, locale: "en" }, h("p", null, "page body")), "en")));
   const firstFocusable = html.match(/<(a|button|input|select|textarea)\b[^>]*>/)![0];
   assert.equal(attr(firstFocusable, "href"), "#main-content", "a keyboard user must be able to skip the sidebar's links");
   assert.match(attr(firstFocusable, "class") ?? "", /\bskip-link\b/);
@@ -85,4 +85,60 @@ test("D7: the mobile shell's main content is a skip target too", async () => {
   assert.equal(attr(main, "id"), "main-content");
   const firstFocusable = html.match(/<(a|button|input|select|textarea)\b[^>]*>/)![0];
   assert.equal(attr(firstFocusable, "href"), "#main-content");
+});
+
+// ── F136: the connection status on a phone ───────────────────────────────────
+//
+// NetworkStatus ("Offline — not saving") was mounted only in the desktop
+// Sidebar. A phone gets MobileShell, which had no indicator of any kind, so
+// the phone-heavy, 2G-bound audience it was built for never saw it: a teacher
+// filling a form learnt the server was unreachable only when a save failed.
+
+test("F136: the phone shell shows the connection status in its header, translated", async () => {
+  const { MobileShell } = await import("../../apps/web/src/components/shells/MobileShell.tsx");
+  request.locale = "hi";
+  const html = await render(withAppRouter(await withIntl(h(MobileShell, { user: USER }, h("p", null, "x")), "hi")));
+  const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+  const tags = openingTags(header, "div").filter((t) => attr(t, "data-testid") === "network-status");
+  assert.equal(tags.length, 1, "the sticky header carries the indicator, so it stays in view while scrolling");
+  const [tag] = tags;
+  assert.equal(attr(tag, "role"), "status");
+  assert.equal(attr(tag, "aria-live"), "polite");
+  assert.equal(attr(tag, "data-status"), "checking", "server-rendered as checking, as on desktop");
+  assert.equal(attr(tag, "title"), (loadMessages("hi").status as Record<string, string>).checkingHint);
+  assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1, "once per page");
+});
+
+test("F136: the desktop sidebar keeps exactly one indicator", async () => {
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const html = await render(h(Sidebar, { role: "teacher" }));
+  assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1);
+});
+
+// ── F137: the name in the topbar ─────────────────────────────────────────────
+//
+// On desktop the user pill -- initials, name, role -- WAS the sign-out submit
+// button, with no menu and no confirmation: clicking your own name, which is
+// how people look for their profile, ended the session (live: 303 to /login,
+// auth cookie cleared). Its accessible name was the name itself, so a
+// screen-reader user heard nothing about signing out either. The phone
+// header already split the two: the avatar links to /settings, and a
+// separate, labelled button signs out.
+
+test("F137: your name in the topbar links to your settings; signing out is its own labelled button", async () => {
+  const { Topbar } = await import("../../apps/web/src/components/nav/Topbar.tsx");
+  for (const locale of ["en", "hi", "bo"] as const) {
+    resetRequest();
+    request.locale = locale;
+    const html = await render(withAppRouter(await withIntl(h(Topbar, { user: USER, locale }), locale)));
+    const signOut = elements(html, "button").filter((b) => attr(b.open, "data-testid") === "signout-button");
+    assert.equal(signOut.length, 1);
+    const action = loadMessages(locale).action as Record<string, string>;
+    assert.equal(signOut[0].text.trim(), action.signOut, `${locale}: the sign-out button says what it does`);
+    assert.ok(!signOut[0].text.includes(USER.name), `${locale}: the name is not part of the sign-out button`);
+    const pill = elements(html, "a").find((a) => attr(a.open, "data-testid") === "topbar-settings-link");
+    assert.ok(pill, `${locale}: the user pill must be a link`);
+    assert.equal(attr(pill.open, "href"), "/settings");
+    assert.ok(pill.text.includes(USER.name), `${locale}: and it is the one that shows the name`);
+  }
 });

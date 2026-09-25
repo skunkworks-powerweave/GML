@@ -330,17 +330,22 @@ test("spec 127 — FieldMap renders real schools, gated to admin roles, links to
     /showFieldMap\s*=\s*role === "super_admin"\s*\|\|\s*role === "programme_admin"/,
     "FieldMap must be gated to super_admin + programme_admin only — teachers/observers/mentors don't get the field-ops view",
   );
+  // The map itself is dashboard/FieldMap.tsx since F133 (moved out of the page
+  // so it can be rendered on its own in tests/behaviour/ui-field-map.test.ts).
+  const map = read("apps/web/src/app/(authenticated)/dashboard/FieldMap.tsx");
   // Each dot deep-links to /repo/school/[id].
   assert.match(
-    src,
+    map,
     /\/repo\/school\/\$\{m\.id\}/,
     "FieldMap dots must link to /repo/school/<id> so admins can drill into a school",
   );
-  // SVG <title> tooltip per dot — gives the school name on hover.
+  // SVG <title> tooltip per dot — gives the school name on hover. As ONE
+  // string child: this pinned `<title>{m.name} ...`, four children, which
+  // React's server renderer writes as an empty <title> (hydration error #418).
   assert.match(
-    src,
-    /<title>\{m\.name\}/,
-    "FieldMap dots must carry an SVG <title> tooltip with the school name",
+    map,
+    /<title>\{`\$\{m\.name\} \(\$\{m\.code\}\)`\}<\/title>/,
+    "FieldMap dots must carry an SVG <title> tooltip with the school name, as a single string",
   );
 });
 

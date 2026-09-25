@@ -25,8 +25,9 @@
 //      first decoded frame of the video (drawn on a hidden canvas) — gives
 //      the teacher a recognisable thumbnail before they commit to upload.
 //   4. The caption textarea is the teacher's chance to say what the clip is.
-//      It is POSTED, on completion, through completeUploadAction, and lands on
-//      the observation_evidence row the cycle page renders.
+//      It is POSTED, on completion, through completeUploadAction, and is kept
+//      on the submission (and, for a cycle, on the observation_evidence row the
+//      cycle page renders).
 //
 //      It previously went nowhere at all. The comment here said so plainly --
 //      "We do NOT post the caption anywhere" -- and reasoned that the webhook
@@ -58,9 +59,26 @@ type MobileUploadRunnerProps = {
   /** Programme WhatsApp number (E.164, no +) for the fallback reminder.
    *  Same env-var contract as UploadModal (spec 132). */
   whatsappPhone?: string | null;
-  /** Optional active observation cycle code to prefill the caption
-   *  ("2026-004", captioned OBS-2026-004). When unset the caption starts blank. */
-  activeCycleCode?: string | null;
+  /**
+   * What the video is for, as the /uploads page resolved and authorised it.
+   * Unset means 'generic': linked to nothing, visible to the uploader and
+   * administrators only.
+   *
+   * This replaced `activeCycleCode`, which no page passed and which could not
+   * have worked: it sent the cycle's CODE where the server expects its id (a
+   * 404 at reservation), prefilled the caption as `OBS-${code}` --
+   * OBS-OBS-2026-004, since codes are stored with their prefix -- and WhatsApp
+   * with `#${code}`.
+   */
+  target?: ResolvedUploadTarget | null;
+};
+
+export type ResolvedUploadTarget = {
+  contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly" | "classroom_session" | "generic";
+  contextId: string | null;
+  quarter: 1 | 4 | null;
+  /** What WhatsApp should carry as the caption to reach the same place; null when it cannot. */
+  whatsappText: string | null;
 };
 
 type Step = "choose" | "preview" | "uploading" | "done" | "failed";
@@ -145,15 +163,15 @@ async function extractFirstFrame(file: File): Promise<string | null> {
 
 export function MobileUploadRunner({
   whatsappPhone,
-  activeCycleCode,
+  target,
 }: MobileUploadRunnerProps) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("choose");
   const [file, setFile] = useState<File | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
-  const [caption, setCaption] = useState<string>(
-    activeCycleCode ? `OBS-${activeCycleCode}` : "",
-  );
+  // A note for whoever reviews the video, not a routing code: `target` decides
+  // where a direct upload goes.
+  const [caption, setCaption] = useState<string>("");
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -214,8 +232,9 @@ export function MobileUploadRunner({
         filename: file.name,
         sizeBytes: file.size,
         contentType: file.type || "video/mp4",
-        contextType: activeCycleCode ? "observation_cycle" : "generic",
-        contextId: activeCycleCode ?? null,
+        contextType: target?.contextType ?? "generic",
+        contextId: target?.contextId ?? null,
+        quarter: target?.quarter ?? null,
       });
       if (!reservation.ok) {
         if (!mountedRef.current) return;
@@ -351,18 +370,23 @@ export function MobileUploadRunner({
   }, []);
 
   // wa.me takes the number as digits only; "+91..." is not a valid path there.
-  // The pre-fill is the caption the webhook reads: the cycle code, or its
-  // "OBS-" prefix for the teacher to finish. "#cycle-" was never recognised.
+  // The pre-fill is the caption the webhook reads: the target's own code
+  // (OBS-2026-009, MM-<meeting>), or the "OBS-" prefix for the teacher to
+  // finish. "#cycle-" was never recognised. No link at all for a target
+  // WhatsApp cannot reach: the video would arrive linked to nothing.
   const waDigits = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : "";
-  const waHref = waDigits
-    ? `https://wa.me/${waDigits}?text=${encodeURIComponent(
-        activeCycleCode ? `OBS-${activeCycleCode}` : "OBS-",
-      )}`
-    : null;
+  const waText = target ? target.whatsappText : "OBS-";
+  const waHref =
+    waDigits && waText !== null ? `https://wa.me/${waDigits}?text=${encodeURIComponent(waText)}` : null;
 
   return (
     <div
       data-testid="mobile-upload-runner"
+      // What a reservation from this flow is for, readable from the markup
+      // (as on UploadProgress).
+      data-upload-context={target?.contextType ?? "generic"}
+      data-upload-context-id={target?.contextId ?? ""}
+      data-upload-quarter={target?.quarter ?? ""}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -563,14 +587,17 @@ export function MobileUploadRunner({
               fontWeight: 500,
             }}
           >
-            Caption — use OBS-&lt;cycle&gt;, TB-&lt;uuid&gt; or MM-&lt;uuid&gt;
+            {/* This said "Caption — use OBS-<cycle>, TB-<uuid> or MM-<uuid>".
+                A direct upload is never routed by its caption -- the page's
+                target decides -- so following it achieved nothing. */}
+            Note for whoever reviews it (optional)
           </label>
           <textarea
             id="mobile-upload-caption"
             data-testid="caption-textarea"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="OBS-2026-004"
+            placeholder="What the lesson was about"
             rows={3}
             style={{
               width: "100%",
@@ -693,9 +720,8 @@ export function MobileUploadRunner({
               lineHeight: 1.6,
             }}
           >
-            Your video will be watermarked with the viewer&rsquo;s name + email when
-            it is played back — please do not redistribute outside the
-            programme.
+            Whoever plays your video back sees their own name and the time over
+            it — please do not redistribute outside the programme.
           </div>
 
           {waHref ? (
@@ -783,7 +809,9 @@ export function MobileUploadRunner({
             Uploaded
           </div>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
-            Transcoding now. We&rsquo;ll notify your mentor when it&rsquo;s ready (≈ 5 min).
+            {/* This promised "We'll notify your mentor when it's ready": nothing
+                notifies anyone when a transcode finishes. */}
+            Transcoding now. It can be played once that has finished.
             Taking you to My Uploads…
           </p>
         </div>

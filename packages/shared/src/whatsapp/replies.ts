@@ -15,6 +15,7 @@ export type ReplyOutcome =
   | { kind: "linked_cycle"; code: string }
   | { kind: "linked_teach_back" }
   | { kind: "linked_meeting" }
+  | { kind: "linked_quarterly"; quarter: 1 | 4 }
   | { kind: "unmatched" }
   | { kind: "unregistered" }
   | { kind: "fetch_failed" }
@@ -29,6 +30,8 @@ export function replyText(outcome: ReplyOutcome): string {
       return "Received your teach-back video. It will be in the teach-back queue once it has been processed.";
     case "linked_meeting":
       return "Received your meeting recording. It will be on the meeting once it has been processed.";
+    case "linked_quarterly":
+      return `Received your Q${outcome.quarter} video. It will be on your mentorship pairing's page once it has been processed.`;
     case "unmatched":
       return (
         "Received your video, but the caption did not name a cycle you can add it to, so it has been kept " +

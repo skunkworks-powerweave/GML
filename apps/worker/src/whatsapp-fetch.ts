@@ -1,5 +1,5 @@
-// Fetch one WhatsApp video from the Graph API into Storage, then queue its
-// transcode.
+// Fetch one WhatsApp video from the Graph API into Storage, then link it to the
+// cycle or meeting its caption named and queue its transcode.
 //
 // ── WHY THIS RUNS HERE ───────────────────────────────────────────────────────
 //
@@ -27,6 +27,7 @@ import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { auditLog, files, observationCycles, videoSubmissions } from "@gml/db/schema";
 import { enqueue } from "@gml/db/queue";
+import { linkSubmissionToContext } from "@gml/db/uploads";
 import { storableVideoType, type BucketName } from "@gml/shared/storage/buckets";
 import { putObject } from "@gml/shared/storage/client";
 import { mediaMetadataUrl, sendWhatsAppText, type EnvLike } from "@gml/shared/whatsapp/graph";
@@ -169,6 +170,7 @@ async function outcomeOf(videoSubmissionId: string): Promise<ReplyOutcome> {
   const [row] = await db
     .select({
       contextType: videoSubmissions.contextType,
+      contextQuarter: videoSubmissions.contextQuarter,
       submittedBy: videoSubmissions.submittedByUserId,
       cycleCode: observationCycles.code,
     })
@@ -183,6 +185,9 @@ async function outcomeOf(videoSubmissionId: string): Promise<ReplyOutcome> {
   if (row.contextType === "observation_cycle" && row.cycleCode) return { kind: "linked_cycle", code: row.cycleCode };
   if (row.contextType === "teach_back") return { kind: "linked_teach_back" };
   if (row.contextType === "mentor_meeting") return { kind: "linked_meeting" };
+  if (row.contextType === "mentee_quarterly" && (row.contextQuarter === 1 || row.contextQuarter === 4)) {
+    return { kind: "linked_quarterly", quarter: row.contextQuarter };
+  }
   // 'generic': either nobody answers to the number, or the caption named no
   // target this sender may use. The two need different next steps.
   return row.submittedBy ? { kind: "unmatched" } : { kind: "unregistered" };
@@ -269,19 +274,35 @@ export async function fetchWhatsAppMedia(
     // the same way on every retry.
     await deps.put(p.bucket, p.objectKey, bytes, storableVideoType(p.mimeType));
 
-    // Bytes are stored: move the submission on and queue the transcode
-    // together, so a crash here cannot leave a stored video with no job.
+    // Bytes are stored: move the submission on, link it to what its caption
+    // named, and queue the transcode together, so a crash here cannot leave a
+    // stored video with no job -- or a cycle's lesson video off its Evidence.
     const moved = await db.transaction(async (tx) => {
       const claimed = await tx
         .update(videoSubmissions)
         .set({ status: "queued" })
         .where(and(eq(videoSubmissions.id, p.videoSubmissionId), eq(videoSubmissions.status, "received")))
-        .returning({ id: videoSubmissions.id });
-      if (claimed.length === 0) return false;
+        .returning({
+          id: videoSubmissions.id,
+          contextType: videoSubmissions.contextType,
+          contextId: videoSubmissions.contextId,
+          captionRaw: videoSubmissions.captionRaw,
+        });
+      const sub = claimed[0];
+      if (!sub) return false;
       await tx
         .update(files)
         .set({ status: "stored", sizeBytes: bytes.byteLength, checksumSha256: sum.hex })
         .where(eq(files.id, p.fileId));
+      // The same link a direct upload gets when its bytes are verified
+      // (packages/db/src/uploads.ts). The webhook has already refused a target
+      // the sender may not write to, by making the submission 'generic'.
+      await linkSubmissionToContext(tx as never, {
+        submissionId: sub.id,
+        contextType: sub.contextType,
+        contextId: sub.contextId,
+        caption: sub.captionRaw,
+      });
       // Same dedupe key as every other transcode producer (apps/web/src/lib/queue.ts).
       await enqueue(tx as never, {
         queue: "transcode",
