@@ -310,6 +310,7 @@ one retention job a day, within the hour after 03:00 UTC (08:30 IST).
 |---|---|---|
 | `notifications` | 90 days (SM-8) | the nightly retention job |
 | `rate_limits` | 24 hours after the caller's last rate-limit window started | the same nightly job |
+| `section_gate_grants` | 24 hours after the grant expired (a grant lasts at most 8 hours) — each row holds the user, the section and the client IP | the same nightly job; rotating a gate also deletes its grants |
 | `audit_log` | **forever** — nothing in the running system can delete it (SM-1) | only the manual archive below |
 
 **`rate_limits` holds client IP addresses.** Its keys are the sign-in link

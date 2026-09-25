@@ -53,7 +53,7 @@ import {
   type ClaimedJob,
   type QueueName,
 } from "@gml/db/queue";
-import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
+import { deleteOldNotifications, pruneExpiredGateGrants, pruneRateLimits } from "@gml/db/scripts/retention";
 import { repairReapedTranscodes, repairStrandedTranscodes, sweepStaleScratch, transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
 import { fetchWhatsAppMedia, runWhatsAppReply } from "./whatsapp-fetch.js";
@@ -154,6 +154,10 @@ async function handle(job: ClaimedJob): Promise<void> {
       // after a failure here re-running the first is harmless.
       const r = await pruneRateLimits(undefined, db);
       log.info("retention: expired rate-limit counters purged", { count: r });
+      // Gate grants carry user, section and client IP, and nothing else ever
+      // removed an expired one unless the gate was rotated. Idempotent too.
+      const g = await pruneExpiredGateGrants(undefined, db);
+      log.info("retention: expired gate grants purged", { count: g });
       break;
     }
     default:

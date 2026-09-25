@@ -37,7 +37,9 @@ const WORKER_ENTRY = fileURLToPath(new URL("../../apps/worker/src/index.ts", imp
 const TSX_LOADER = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 
 /** Tables the worker writes outside `jobs`, shadowed so its sweeps touch nothing shared. */
-const SHADOWED = ["jobs", "files", "video_submissions", "transcode_jobs", "notifications", "rate_limits"];
+const SHADOWED = [
+  "jobs", "files", "video_submissions", "transcode_jobs", "notifications", "rate_limits", "section_gate_grants",
+];
 
 export type WorkerProcess = {
   child: ChildProcess;
