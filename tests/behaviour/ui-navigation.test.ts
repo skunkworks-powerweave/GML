@@ -5,7 +5,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { h, render, request, resetRequest, withAppRouter, openingTags, elements, attr, SRC_DIR } from "./_ui.js";
+import { h, render, request, resetRequest, withAppRouter, withIntl, openingTags, elements, attr, SRC_DIR } from "./_ui.js";
 import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 beforeEach(() => resetRequest());
@@ -67,7 +67,7 @@ test("D7: each sidebar section is a distinctly named landmark and the active ite
 
 test("D7: the desktop shell's first focusable element skips to the main content", async () => {
   const { DesktopShell } = await import("../../apps/web/src/components/shells/DesktopShell.tsx");
-  const html = await render(withAppRouter(h(DesktopShell, { user: USER, locale: "en" }, h("p", null, "page body"))));
+  const html = await render(withAppRouter(await withIntl(h(DesktopShell, { user: USER, locale: "en" }, h("p", null, "page body")), "en")));
   const firstFocusable = html.match(/<(a|button|input|select|textarea)\b[^>]*>/)![0];
   assert.equal(attr(firstFocusable, "href"), "#main-content", "a keyboard user must be able to skip the sidebar's links");
   assert.match(attr(firstFocusable, "class") ?? "", /\bskip-link\b/);

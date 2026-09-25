@@ -91,6 +91,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
   const tSection = await getTranslations("navSection");
   const tStatus = await getTranslations("status");
   const tBrand = await getTranslations("brand");
+  const tRole = await getTranslations("role");
 
   return (
     <aside
@@ -123,7 +124,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
           {tBrand("name")}
         </div>
         <div style={{ fontSize: 11, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-          {tBrand("subtitle")} · {role.replace("_", " ")}
+          {/* The role by name, in the user's language -- this printed the
+              raw slug ("teacher", "super admin") in every locale. */}
+          {tBrand("subtitle")} · {tRole(role)}
         </div>
       </div>
 

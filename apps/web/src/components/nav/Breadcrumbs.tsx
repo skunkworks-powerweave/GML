@@ -27,54 +27,70 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 /**
- * Segment → label. Covers every first- and second-level route in
- * app/(authenticated). A segment not listed here is title-cased, which is
- * usually right ("whatsapp-log" would be the exception, hence its entry).
+ * Segment → `crumb.*` key, for every static segment of a page under
+ * app/(authenticated) (tests/behaviour/ui-chrome-i18n.test.ts walks the tree).
+ * The labels live in the bundles: this was an English SEGMENT_LABEL map, so
+ * the trail stayed English in Hindi and Bhoti beside a translated sidebar. A
+ * segment not listed -- a [slug] or [entity] value, which is content -- is
+ * title-cased as before.
  */
-const SEGMENT_LABEL: Record<string, string> = {
-  dashboard: "Dashboard",
-  observation: "Classroom Observation",
-  mentorship: "Mentorship",
-  rtt: "RTT Phases",
-  videos: "Video library",
-  forms: "Forms",
-  quizzes: "Quizzes",
-  inbox: "Inbox",
-  uploads: "Uploads",
-  settings: "Settings",
-  repo: "Repository",
-  admin: "Admin",
+const CRUMB_KEY: Record<string, string> = {
+  dashboard: "dashboard",
+  observation: "observation",
+  mentorship: "mentorship",
+  rtt: "rtt",
+  videos: "videos",
+  forms: "forms",
+  quizzes: "quizzes",
+  inbox: "inbox",
+  uploads: "uploads",
+  settings: "settings",
+  repo: "repo",
+  admin: "admin",
 
   // admin/*
-  audit: "Audit log",
-  data: "Data tables",
-  gates: "Section gates",
-  users: "Users",
-  "system-settings": "System settings",
-  "transcode-jobs": "Transcode jobs",
-  "whatsapp-log": "WhatsApp log",
+  audit: "audit",
+  data: "data",
+  gates: "gates",
+  users: "users",
+  "system-settings": "systemSettings",
+  "transcode-jobs": "transcodeJobs",
+  "whatsapp-log": "whatsappLog",
 
   // repo/* and rtt/*
-  class: "Class",
-  mentor: "Mentor",
-  mentors: "Mentors",
-  outline: "Course outline",
-  outlines: "Course outlines",
-  resource: "Resource",
-  resources: "Resources",
-  school: "School",
-  schools: "Schools",
-  session: "Session",
-  sessions: "Sessions",
-  students: "Students",
-  subject: "Subject",
-  subjects: "Subjects",
-  teacher: "Teacher",
-  teachers: "Teachers",
-  online: "Online sessions",
-  "teach-back": "Teach-back",
+  class: "class",
+  mentor: "mentor",
+  mentors: "mentors",
+  outline: "outline",
+  outlines: "outlines",
+  resource: "resource",
+  resources: "resources",
+  school: "school",
+  schools: "schools",
+  session: "session",
+  sessions: "sessions",
+  students: "students",
+  subject: "subject",
+  subjects: "subjects",
+  teacher: "teacher",
+  teachers: "teachers",
+  online: "online",
+  synchronous: "synchronous",
+  asynchronous: "asynchronous",
+  progress: "progress",
+  "teach-back": "teachBack",
+
+  // the rest: forms, observation, quizzes, mentorship and repo sub-pages
+  new: "new",
+  history: "history",
+  result: "result",
+  thanks: "thanks",
+  responses: "responses",
+  learners: "learners",
+  view: "view",
 };
 
 /**
@@ -164,7 +180,11 @@ function titleCase(segment: string): string {
 
 type Crumb = { label: string; href: string | null };
 
-export function buildCrumbs(pathname: string): Crumb[] {
+/**
+ * The trail for `pathname`. `t` reads the `crumb` namespace -- the
+ * component's useTranslations("crumb") -- so the function itself stays pure.
+ */
+export function buildCrumbs(pathname: string, t: (key: string) => string): Crumb[] {
   const segments = pathname.split("/").filter(Boolean);
   const out: Crumb[] = [];
 
@@ -181,11 +201,12 @@ export function buildCrumbs(pathname: string): Crumb[] {
     // A plain "Details" crumb instead: never ungrammatical, whatever the parent
     // segment is ("Teacher > Details", "Quizzes > Details").
     if (UUID_RE.test(seg) || /^\d+$/.test(seg)) {
-      out.push({ label: "Details", href: link });
+      out.push({ label: t("details"), href: link });
       continue;
     }
 
-    out.push({ label: SEGMENT_LABEL[seg] ?? titleCase(seg), href: link });
+    const key = CRUMB_KEY[seg];
+    out.push({ label: key ? t(key) : titleCase(seg), href: link });
   }
 
   // The page you are already on is not somewhere to navigate to.
@@ -195,7 +216,10 @@ export function buildCrumbs(pathname: string): Crumb[] {
 
 export function Breadcrumbs() {
   const pathname = usePathname() ?? "";
-  const crumbs = buildCrumbs(pathname);
+  // Under the authenticated layout's NextIntlClientProvider, whose messages
+  // already include this namespace: no extra payload.
+  const t = useTranslations("crumb");
+  const crumbs = buildCrumbs(pathname, t);
 
   if (crumbs.length === 0) {
     return <span style={{ color: "var(--ink-3)" }}>—</span>;

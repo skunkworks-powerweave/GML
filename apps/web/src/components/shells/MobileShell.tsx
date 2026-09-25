@@ -1,13 +1,17 @@
 // Mobile shell: top app bar + content + bottom tabs. Used for viewport ≤ 768px.
 // Floating ? button + sheet overlay land in spec 032.
 //
-// Spec 125 — the BottomTabs subcomponent has become an async server component
-// (it calls `getTranslations()`). RSC handles awaiting async children at the
-// render boundary; this wrapper stays a plain sync function so the spec 026
-// "export function MobileShell" contract still matches.
+// Spec 125 — the BottomTabs subcomponent is an async server component (it
+// calls `getTranslations()`), and so is this shell now: its own header
+// controls -- "Sign out", the settings link's accessible name, the ? button's
+// -- were English literals in every locale, while the desktop topbar's
+// equivalents were translated. It used to stay sync for spec 026's
+// "export function MobileShell" source pin, which now accepts `async`; RSC
+// awaits async components at the render boundary.
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { signOut } from "@/auth";
 import { SignOutButton } from "@/components/nav/SignOutButton";
@@ -28,7 +32,7 @@ type MobileShellProps = {
   children: ReactNode;
 };
 
-export function MobileShell({
+export async function MobileShell({
   user,
   title,
   activeTab,
@@ -36,6 +40,8 @@ export function MobileShell({
   unreadCount,
   children,
 }: MobileShellProps) {
+  const tAction = await getTranslations("action");
+  const tNav = await getTranslations("nav");
   return (
     <div style={{ minHeight: "100dvh", background: "var(--paper)", paddingBottom: 80 }}>
       {/* Skips the header's account controls. A phone with a keyboard or a
@@ -74,7 +80,7 @@ export function MobileShell({
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Link
             href="/settings"
-            aria-label="Your settings"
+            aria-label={tNav("settings")}
             data-testid="mobile-settings-link"
             title={user.email ?? ""}
             style={{
@@ -100,7 +106,7 @@ export function MobileShell({
             }}
           >
             <SignOutButton
-              title={`Sign out ${user.email ?? ""}`.trim()}
+              title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
               style={{
                 padding: "5px 10px",
                 border: "1px solid var(--line)",
@@ -110,7 +116,7 @@ export function MobileShell({
                 cursor: "pointer",
               }}
             >
-              Sign out
+              {tAction("signOut")}
             </SignOutButton>
           </form>
         </div>
@@ -119,7 +125,7 @@ export function MobileShell({
         {children}
       </main>
       <ConfidentialityFooter user={{ name: user.name, email: user.email }} compact />
-      <MobileHelpFAB />
+      <MobileHelpFAB label={tAction("help")} />
       <BottomTabs
         role={user.role}
         activeTab={activeTab}

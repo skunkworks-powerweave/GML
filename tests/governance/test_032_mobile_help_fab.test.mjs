@@ -18,7 +18,10 @@ const read = (p) => readFileSync(resolve(root, p), "utf8");
 test("MobileHelpFAB is a client component with the ? glyph", () => {
   const src = read("apps/web/src/components/MobileHelpFAB.tsx");
   assert.match(src, /^"use client";/);
-  assert.match(src, /aria-label="Help"/);
+  // F134: this pinned the literal aria-label="Help", which was English in
+  // every locale. The name now comes from the shell's translated action.help
+  // (rendered in hi/bo in tests/behaviour/ui-chrome-i18n.test.ts).
+  assert.match(src, /aria-label=\{label\}/);
   assert.match(src, /position:\s*"fixed"/);
 });
 

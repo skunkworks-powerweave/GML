@@ -21,6 +21,10 @@ import assert from "node:assert/strict";
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { SRC_DIR } from "./_ui.js";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
+
+/** The English crumb.* strings, as the component's useTranslations gives them. */
+const crumbs_en = (key: string) => (loadMessages("en").crumb as unknown as Record<string, string>)[key];
 
 const APP = join(SRC_DIR, "app", "(authenticated)");
 
@@ -53,7 +57,7 @@ test("F131: every crumb links exactly when its path is a page, and the current p
   for (const route of ROUTES) {
     const path = fill(route);
     const segments = path.split("/").filter(Boolean);
-    const crumbs = buildCrumbs(path);
+    const crumbs = buildCrumbs(path, crumbs_en);
     assert.equal(crumbs.length, segments.length, `${path}: one crumb per segment`);
     crumbs.forEach((c, i) => {
       const at = "/" + segments.slice(0, i + 1).join("/");
@@ -67,12 +71,12 @@ test("F131: every crumb links exactly when its path is a page, and the current p
 
 test("F131: the cases the audit reported", async () => {
   const { buildCrumbs } = await import("../../apps/web/src/components/nav/Breadcrumbs.tsx");
-  assert.equal(buildCrumbs("/admin/data/teachers")[1].href, null, "/admin/data is not a page");
-  assert.equal(buildCrumbs("/admin/data/teachers")[0].href, "/admin");
-  assert.equal(buildCrumbs("/quizzes/audit-ux-quiz/history")[0].href, null, "/quizzes is not a page");
-  assert.equal(buildCrumbs("/quizzes/audit-ux-quiz/history")[1].href, "/quizzes/audit-ux-quiz");
-  assert.equal(buildCrumbs("/rtt/online/synchronous")[1].href, null, "/rtt/online is not a page");
-  assert.equal(buildCrumbs(`/videos/${UUID}`)[0].href, "/videos", "the Video library is a page");
-  assert.equal(buildCrumbs(`/repo/class/${UUID}/learners`)[2].href, `/repo/class/${UUID}`, "the class it belongs to is a page");
-  assert.equal(buildCrumbs(`/repo/class/${UUID}/learners`)[1].href, null, "/repo/class is not");
+  assert.equal(buildCrumbs("/admin/data/teachers", crumbs_en)[1].href, null, "/admin/data is not a page");
+  assert.equal(buildCrumbs("/admin/data/teachers", crumbs_en)[0].href, "/admin");
+  assert.equal(buildCrumbs("/quizzes/audit-ux-quiz/history", crumbs_en)[0].href, null, "/quizzes is not a page");
+  assert.equal(buildCrumbs("/quizzes/audit-ux-quiz/history", crumbs_en)[1].href, "/quizzes/audit-ux-quiz");
+  assert.equal(buildCrumbs("/rtt/online/synchronous", crumbs_en)[1].href, null, "/rtt/online is not a page");
+  assert.equal(buildCrumbs(`/videos/${UUID}`, crumbs_en)[0].href, "/videos", "the Video library is a page");
+  assert.equal(buildCrumbs(`/repo/class/${UUID}/learners`, crumbs_en)[2].href, `/repo/class/${UUID}`, "the class it belongs to is a page");
+  assert.equal(buildCrumbs(`/repo/class/${UUID}/learners`, crumbs_en)[1].href, null, "/repo/class is not");
 });

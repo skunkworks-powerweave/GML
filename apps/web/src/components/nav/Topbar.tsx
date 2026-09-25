@@ -48,14 +48,6 @@ type TopbarProps = {
   locale?: Locale;
 };
 
-const ROLE_LABEL: Record<RoleName, string> = {
-  super_admin: "Super Admin",
-  programme_admin: "Programme Admin",
-  mentor: "Mentor",
-  observer: "Observer",
-  teacher: "Teacher",
-};
-
 function initials(name?: string | null, email?: string | null): string {
   const src = name ?? email ?? "?";
   const parts = src.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").trim().split(/\s+/);
@@ -71,6 +63,10 @@ export async function Topbar({
 }: TopbarProps) {
   const tAction = await getTranslations("action");
   const tLanguage = await getTranslations("language");
+  // The role and the trail's landmark name were English literals (an own
+  // ROLE_LABEL map; aria-label="Breadcrumb") in every locale.
+  const tRole = await getTranslations("role");
+  const tCrumb = await getTranslations("crumb");
   const bellBadge = formatBellBadge(unreadCount);
   const queueLabel = queueDepth ? formatQueueLabel(queueDepth) : null;
   return (
@@ -92,7 +88,7 @@ export async function Topbar({
           from the URL, because the layout that renders this cannot see the page
           below it and so never supplied any. See Breadcrumbs.tsx. */}
       <nav
-        aria-label="Breadcrumb"
+        aria-label={tCrumb("trail")}
         style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--ink-2)" }}
       >
         {breadcrumbs.length === 0 ? (
@@ -242,7 +238,7 @@ export async function Topbar({
             </span>
             <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", fontSize: 11 }}>
               <span style={{ color: "var(--ink)", fontWeight: 500 }}>{user.name ?? user.email}</span>
-              <span style={{ color: "var(--ink-3)" }}>{ROLE_LABEL[user.role]}</span>
+              <span style={{ color: "var(--ink-3)" }}>{tRole(user.role)}</span>
             </span>
           </SignOutButton>
         </form>

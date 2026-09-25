@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { h, render, withAppRouter, openingTags, elements, attr, mount, hostElements, textOf, withFakeWindow, SRC_DIR } from "./_ui.js";
+import { h, render, withAppRouter, withIntl, openingTags, elements, attr, mount, hostElements, textOf, withFakeWindow, SRC_DIR } from "./_ui.js";
 import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const USER = { id: "u1", name: "Tsering Dolma", email: "t@example.org", role: "teacher" as const };
@@ -35,7 +35,7 @@ test("D5: tapping the mobile ? button opens the shared help panel", async () => 
 
 test("D5: the desktop top bar has a help button, and it — not the notifications bell — is the tour's help anchor", async () => {
   const { Topbar } = await import("../../apps/web/src/components/nav/Topbar.tsx");
-  const html = await render(withAppRouter(h(Topbar, { user: USER, locale: "en" })));
+  const html = await render(withAppRouter(await withIntl(h(Topbar, { user: USER, locale: "en" }), "en")));
   const anchors = [...html.matchAll(/<[a-z]+\b[^>]*data-help-anchor="topbar-help"[^>]*>/g)].map((m) => m[0]);
   assert.equal(anchors.length, 1, "exactly one element may carry the anchor, or the tour's querySelector picks whichever is first");
   const bell = openingTags(html, "a").find((t) => attr(t, "data-testid") === "topbar-bell")!;
