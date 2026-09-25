@@ -333,13 +333,13 @@ subjects at `/admin/data/rtt-subjects`. New districts are added at
 `/admin/data/districts`. A phase, term or district that still has anything
 under it cannot be deleted; the grid says what is still attached.
 
-**Quizzes are not seeded.** Every RTT subject page links a mid-unit and an
-endline assessment by the fixed slugs `mid-unit` and `endline`; until someone
-creates and activates quizzes with those slugs at `/admin/quizzes`, both read
-"not published yet" on every subject. Each quiz is bound to an RTT subject when
-it is created, so the RTT subjects must exist first. That is a task for the programme team
-before teachers reach the RTT subject pages. Neither the seed nor the purge
-touches the quiz tables.
+**Quizzes are not seeded.** Each RTT subject page lists the active quizzes
+bound to that subject; until someone creates and activates one at
+`/admin/quizzes`, the subject's Assessment card reads "No assessments published
+yet". Each quiz is bound to an RTT subject when it is created, so the RTT
+subjects must exist first, and its address (slug) is its own -- there are no
+fixed slugs. That is a task for the programme team before teachers reach the
+RTT subject pages. Neither the seed nor the purge touches the quiz tables.
 
 The **schools, teachers, mentors, pairings and observation cycles are
 invented**: ten schools with sequential contact numbers, ten teachers with

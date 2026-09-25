@@ -12,8 +12,8 @@
 //   5. /rtt/subject/[id]: each session row has a Join/Watch action button.
 //   6. /rtt/subject/[id]: readings NEVER link to /repo/resource/<reading.id>/view
 //      (INVERTED -- that href 404'd by construction; see the test).
-//   7. /rtt/subject/[id]: Assessment card links /quizzes/mid-unit; the endline
-//      "Locked" chip is inert (INVERTED -- it used to be a live link to a 404).
+//   7. /rtt/subject/[id]: Assessment card lists the quizzes bound to the
+//      subject, not the fixed slugs mid-unit/endline (INVERTED, F33).
 //   8. /rtt/subject/[id]: "expand its lessons" is only promised over real lessons.
 //
 // All five spec-kit files exist and the plan follows the CREATED/EDITED/MIGRATED contract.
@@ -187,29 +187,20 @@ test("spec 119 — /rtt/subject/[id] never sends a reading id to the resources v
   );
 });
 
-test("spec 119 — /rtt/subject/[id] Assessment card: mid-unit links, endline is inert", () => {
+// INVERTED (F33). This used to REQUIRE the link /quizzes/mid-unit?subjectId=${id}
+// -- it pinned the defect. quizzes.slug is unique programme-wide and each quiz
+// is bound to one RTT subject, so that link ran one subject's "mid-unit" quiz on
+// every subject, and the runner never read subjectId. The runtime proof that a
+// subject offers exactly its own quizzes is
+// tests/behaviour/rtt-assessments.test.ts; this only keeps the fixed slugs out.
+test("spec 119 — /rtt/subject/[id] Assessment card lists the subject's own quizzes, not fixed slugs", () => {
   const src = read(RTT_SUBJECT);
-  // Mid-unit Start link…
-  assert.match(
-    src,
-    /\/quizzes\/mid-unit\?subjectId=\$\{id\}/,
-    "Mid-unit Start CTA must link to /quizzes/mid-unit?subjectId=${id}",
-  );
-  // INVERTED. This used to require the endline "Locked" chip to be a link to
-  // /quizzes/endline. It carried only aria-disabled, which does not stop
-  // navigation, so a chip that looked inert dropped the teacher on a 404.
-  // Opening endline is a programme decision nothing implements; until then the
-  // chip must not navigate anywhere.
   assert.doesNotMatch(
     src,
-    /href=\{?\s*[`"']\/quizzes\/endline/,
-    "the Locked endline chip must not link to the quiz runner, which 404s an unpublished slug",
+    /\/quizzes\/(mid-unit|endline)/,
+    "no fixed quiz slug: a slug names one quiz bound to one subject",
   );
-  assert.match(
-    src,
-    /<span className="chip"[^>]*>\s*Locked\s*<\/span>/,
-    "the endline state must render as an inert 'Locked' chip",
-  );
+  assert.match(src, /listSubjectAssessments\(/, "the card must list the quizzes bound to this subject");
   // The card must render the literal section title.
   assert.match(
     src,

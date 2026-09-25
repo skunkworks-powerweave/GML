@@ -10,6 +10,8 @@ import { and, asc, eq, gte, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { rttSessions, rttSubjects, terms, phases } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { rttScope } from "@/lib/rtt/scope";
+import { webLink } from "@/lib/rtt/links";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +74,9 @@ function fmtMonthDay(d: Date): string {
 export default async function RttOnlineSynchronousPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  // Sessions of the subjects this viewer is shown (lib/rtt/scope.ts): a
+  // retired subject's webinars stayed on the calendar for everyone.
+  const scope = await rttScope(db, { id: session.user.id, role: session.user.role });
 
   const now = new Date();
   const weekStart = startOfWeekMonday(now);
@@ -104,6 +109,7 @@ export default async function RttOnlineSynchronousPage() {
         isNotNull(rttSessions.scheduledAt),
         inArray(rttSessions.type, SYNC_TYPES as unknown as string[]),
         gte(rttSessions.scheduledAt, weekStart),
+        scope.subjectWhere,
       ),
     )
     .orderBy(asc(rttSessions.scheduledAt))
@@ -291,9 +297,11 @@ export default async function RttOnlineSynchronousPage() {
                           Facilitator: <span style={{ color: "var(--ink-2)" }}>{u.notes}</span>
                         </div>
                       ) : null}
-                      {u.linkOrRecording ? (
+                      {/* A web link or nothing (lib/rtt/links.ts): a stored
+                          "meet.google.com/..." was a relative href into the app. */}
+                      {webLink(u.linkOrRecording) ? (
                         <a
-                          href={u.linkOrRecording}
+                          href={webLink(u.linkOrRecording)!}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ fontSize: 12, color: "var(--indigo)" }}

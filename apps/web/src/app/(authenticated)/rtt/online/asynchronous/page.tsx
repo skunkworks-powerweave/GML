@@ -14,6 +14,7 @@ import { and, asc, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources, rttSubjects, videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { rttScope } from "@/lib/rtt/scope";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,9 @@ export default async function RttOnlineAsynchronousPage({
   const sp = await searchParams;
   const selectedSubjectId = sp.subject?.trim() || null;
 
-  // Tab strip: every active RTT subject.
+  // Tab strip: every active RTT subject the viewer is shown -- for a teacher,
+  // those of her own district and zone (lib/rtt/scope.ts).
+  const scope = await rttScope(db, { id: session.user.id, role: session.user.role });
   const subjectRows = await db
     .select({
       id: rttSubjects.id,
@@ -60,7 +63,7 @@ export default async function RttOnlineAsynchronousPage({
       code: rttSubjects.code,
     })
     .from(rttSubjects)
-    .where(eq(rttSubjects.active, true))
+    .where(and(eq(rttSubjects.active, true), scope.subjectWhere))
     .orderBy(asc(rttSubjects.name));
 
   const selectedSubject =

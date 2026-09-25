@@ -171,11 +171,13 @@ test("README-deploy does not tell IT the seed ships a quiz catalogue", () => {
   assert.doesNotMatch(s, /quiz catalogues?/i, "nothing in packages/db/src/scripts inserts quizzes");
   assert.doesNotMatch(read("packages/db/src/scripts/purge_demo_data.ts"), /quiz catalogues?/i);
 
+  // This used to require 3.1 to name the fixed slugs the subject page looked
+  // for (mid-unit, endline). That lookup was the defect F33: a subject now
+  // lists the active quizzes bound to it, so there is no slug for IT to create
+  // and 3.1 must not send them looking for one.
   const page = read("apps/web/src/app/(authenticated)/rtt/subject/[id]/page.tsx");
-  const slugs = JSON.parse(page.match(/assessmentSlugs = (\[[^\]]*\])/)[1]);
-  for (const slug of slugs) {
-    assert.ok(s.includes(`\`${slug}\``), `3.1 must name the slug \`${slug}\` the RTT subject pages look for`);
-  }
+  assert.doesNotMatch(page, /assessmentSlugs/, "the subject page looks quizzes up by subject, not by slug");
+  assert.doesNotMatch(s, /`(mid-unit|endline)`/, "3.1 must not name fixed quiz slugs no page looks for");
   assert.match(s, /\/admin\/quizzes/);
 });
 

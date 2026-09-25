@@ -1,6 +1,6 @@
 // /rtt/subject/[id] — RTT subject drill-in: modules + sessions + readings.
 
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -13,17 +13,76 @@ import {
   rttReadings,
   terms,
   phases,
-  quizzes,
+  districts,
+  zones,
 } from "@gml/db/schema";
+import { uuidOrNotFound } from "@/lib/ids";
+import { listSubjectAssessments } from "@/lib/rtt/assessments";
+import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
+import { rttScope } from "@/lib/rtt/scope";
+import { webLink } from "@/lib/rtt/links";
+import { markProgressAction } from "./actions";
+
+/** A one-button form that marks a lesson or reading done, or undoes it. */
+function ProgressToggle({ kind, itemId, isDone }: { kind: "lesson" | "reading"; itemId: string; isDone: boolean }) {
+  return (
+    <form action={markProgressAction} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <input type="hidden" name="kind" value={kind} />
+      <input type="hidden" name="itemId" value={itemId} />
+      <input type="hidden" name="done" value={isDone ? "false" : "true"} />
+      {isDone ? <span className="chip chip-lichen">Done</span> : null}
+      <button type="submit" className={isDone ? "btn btn-sm btn-ghost" : "btn btn-sm"}>
+        {isDone ? "Undo" : kind === "lesson" ? "Mark done" : "Mark read"}
+      </button>
+    </form>
+  );
+}
+
+const ATTENDANCE_CHIP: Record<string, string> = {
+  present: "chip chip-lichen",
+  absent: "chip chip-rust",
+  excused: "chip",
+};
 
 export const dynamic = "force-dynamic";
 
-export default async function RttSubjectPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const [subject] = await db.select().from(rttSubjects).where(eq(rttSubjects.id, id)).limit(1);
+export default async function RttSubjectPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ open?: string }>;
+}) {
+  // A malformed id is a subject that does not exist, not a Postgres 500.
+  const id = uuidOrNotFound((await params).id);
+  // ?open=<module sequence>: the module a progress tick came from stays open
+  // after the form round-trip (actions.ts redirects here with it).
+  const openSeq = Number((await searchParams).open);
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const viewer = { id: session.user.id, role: session.user.role };
+  // Only a subject the viewer is shown (lib/rtt/scope.ts): a retired subject
+  // stayed reachable here for everyone, because this page never read `active`.
+  const scope = await rttScope(db, viewer);
+  const [subject] = await db
+    .select()
+    .from(rttSubjects)
+    .where(and(eq(rttSubjects.id, id), scope.subjectWhere))
+    .limit(1);
   if (!subject) notFound();
   const [term] = await db.select().from(terms).where(eq(terms.id, subject.termId)).limit(1);
   const [phase] = term ? await db.select().from(phases).where(eq(phases.id, term.phaseId)).limit(1) : [null];
+  // Where it is taught, when that is not the whole programme (F42).
+  const [taughtIn] = subject.zoneId
+    ? await db
+        .select({ name: sql<string>`${zones.name} || ', ' || ${districts.name}` })
+        .from(zones)
+        .innerJoin(districts, eq(districts.id, zones.districtId))
+        .where(eq(zones.id, subject.zoneId))
+        .limit(1)
+    : subject.districtId
+      ? await db.select({ name: districts.name }).from(districts).where(eq(districts.id, subject.districtId)).limit(1)
+      : [null];
 
   const modules = await db.select().from(rttModules).where(eq(rttModules.rttSubjectId, id)).orderBy(rttModules.sequence);
   // LESSONS. rtt_lessons existed in the schema and nothing read or wrote it,
@@ -68,37 +127,43 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
     .orderBy(rttSessions.sequence);
   const readings = await db.select().from(rttReadings).where(eq(rttReadings.rttSubjectId, id)).orderBy(rttReadings.sequence);
 
-  // DO THE ASSESSMENT QUIZZES EXIST?
-  //
-  // The two links below were hardcoded to /quizzes/mid-unit and
-  // /quizzes/endline. The runner calls notFound() for a slug with no active
-  // quiz, so on a programme that has not created them -- which is every new
-  // deployment, since nothing seeds quizzes -- "Start" was a 404 on every
-  // subject page in the product. A missing quiz is a normal state, not an
-  // error, so it now reads as "not published yet" instead of pretending to be
-  // a working link.
-  const assessmentSlugs = ["mid-unit", "endline"];
-  const publishedQuizzes = await db
-    .select({ slug: quizzes.slug })
-    .from(quizzes)
-    .where(and(inArray(quizzes.slug, assessmentSlugs), eq(quizzes.active, true)));
-  const hasQuiz = new Set(publishedQuizzes.map((q) => q.slug));
-
   // Where an empty card points an administrator. Modules, lessons and readings
   // had no write path anywhere in the product; they are admin grid tables now,
   // and an empty card that says where to fill it reads as "not loaded yet"
   // rather than "broken".
-  const session = await auth();
-  const viewerIsAdmin =
-    session?.user?.role === "programme_admin" || session?.user?.role === "super_admin";
+  const viewerIsAdmin = scope.isAdmin;
 
-  // Spec 119 — wire the JSX-prototype "Resume" CTA to the first module by
-  // sequence (anchor jump on this same page). When no modules exist, the
-  // anchor falls back to the modules card heading so the user still lands
-  // somewhere sensible instead of a dead button.
-  const firstModule = modules[0];
-  const resumeHref = firstModule
-    ? `/rtt/subject/${id}#module-${firstModule.sequence}`
+  // THIS SUBJECT'S ASSESSMENTS: the active quizzes bound to it. They were
+  // looked up by the fixed slugs "mid-unit" and "endline" with no subject
+  // predicate, so one programme-wide "mid-unit" quiz ran on every subject and
+  // a quiz under any other slug was offered nowhere (lib/rtt/assessments.ts).
+  const assessments = await listSubjectAssessments(db, id, session.user.id);
+
+  // THE LEARNER'S OWN PROGRESS (F36): the lessons and readings she has marked
+  // done (rtt_progress, written by ./actions.ts) and the attendance taken of
+  // her at this subject's sessions. None of it was recorded or shown before.
+  const [done, attendance] = await Promise.all([
+    doneItems(
+      db,
+      session.user.id,
+      lessons.map((l) => l.id),
+      readings.map((r) => r.id),
+    ),
+    attendanceOf(
+      db,
+      session.user.id,
+      sessions.map((s) => s.id),
+    ),
+  ]);
+  const presentCount = [...attendance.values()].filter((s) => s === "present").length;
+  const passedCount = assessments.filter((q) => q.passed).length;
+
+  // "Resume" (spec 119's in-page anchor) goes to the first module with a
+  // lesson she has not done. It always went to module 1, whatever she had
+  // done. No modules: the modules card, so the button is never dead.
+  const resume = resumeModule(modules, lessonsByModule, done.lessons);
+  const resumeHref = resume
+    ? `/rtt/subject/${id}#module-${resume.sequence}`
     : `/rtt/subject/${id}#modules`;
 
   return (
@@ -119,7 +184,14 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
             <div className="label" style={{ marginTop: 8 }}>
               {phase?.label ?? "Phase ?"} · {term?.name ?? "Term ?"}
               {subject.code ? ` · ${subject.code}` : ""}
+              {taughtIn ? ` · ${taughtIn.name} only` : ""}
             </div>
+            {!subject.active ? (
+              // Only an administrator reaches an inactive subject.
+              <span className="chip chip-rust" title="Hidden from teachers until re-activated at Admin → RTT Subjects">
+                Inactive
+              </span>
+            ) : null}
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
               {subject.name}
             </h1>
@@ -163,6 +235,7 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
               <div>
                 {modules.map((m, i) => {
                   const moduleLessons = lessonsByModule.get(m.id) ?? [];
+                  const moduleDone = moduleLessons.filter((l) => done.lessons.has(l.id)).length;
                   const header = (
                     <div
                       style={{
@@ -199,8 +272,11 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                         ) : null}
                       </div>
                       {moduleLessons.length > 0 ? (
-                        <span className="chip">
-                          {moduleLessons.length} {moduleLessons.length === 1 ? "lesson" : "lessons"}
+                        <span
+                          className={moduleDone === moduleLessons.length ? "chip chip-lichen" : "chip"}
+                          title="Lessons you have marked done"
+                        >
+                          {moduleDone}/{moduleLessons.length} {moduleLessons.length === 1 ? "lesson" : "lessons"}
                         </span>
                       ) : (
                         <span />
@@ -219,12 +295,22 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     );
                   }
                   return (
-                    <details key={m.id} id={`module-${m.sequence}`} style={rowStyle}>
+                    <details
+                      key={m.id}
+                      id={`module-${m.sequence}`}
+                      style={rowStyle}
+                      // Where she is (the Resume module), or where she just
+                      // ticked a lesson, opens without a tap.
+                      open={m.id === resume?.id || m.sequence === openSeq}
+                    >
                       <summary style={{ cursor: "pointer", listStyle: "none" }}>{header}</summary>
                       <ol style={{ margin: 0, padding: "0 14px 14px 64px", display: "grid", gap: 10 }}>
                         {moduleLessons.map((l) => (
                           <li key={l.id} style={{ fontSize: 13 }}>
-                            <div style={{ fontWeight: 500 }}>{l.title}</div>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                              <div style={{ fontWeight: 500 }}>{l.title}</div>
+                              <ProgressToggle kind="lesson" itemId={l.id} isDone={done.lessons.has(l.id)} />
+                            </div>
                             {l.bodyMd ? (
                               // Plain text with the author's line breaks kept.
                               // Never rendered as markup: this is typed into an
@@ -270,6 +356,7 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     <th>Session</th>
                     <th>Type</th>
                     <th>Duration</th>
+                    <th title="Your attendance, once it has been taken">You</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -286,6 +373,9 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     // rows 404'd. rtt_sessions has no detail page; the calendar
                     // at /rtt/online/synchronous is where these are listed.
                     const isUpcoming = s.isUpcoming;
+                    // A web link or nothing (lib/rtt/links.ts): a stored
+                    // "meet.google.com/..." was a relative href into the app.
+                    const link = webLink(s.linkOrRecording);
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>
@@ -312,9 +402,18 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                           {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
                         </td>
                         <td>
-                          {s.linkOrRecording ? (
+                          {attendance.has(s.id) ? (
+                            <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
+                              {attendance.get(s.id)!.charAt(0).toUpperCase() + attendance.get(s.id)!.slice(1)}
+                            </span>
+                          ) : (
+                            <em className="dash">—</em>
+                          )}
+                        </td>
+                        <td>
+                          {link ? (
                             <a
-                              href={s.linkOrRecording}
+                              href={link}
                               className="btn btn-sm"
                               target="_blank"
                               rel="noopener noreferrer"
@@ -339,6 +438,42 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
 
         <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
           <article className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Your progress</div>
+            </div>
+            <dl
+              style={{
+                margin: 0,
+                padding: 14,
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: "6px 12px",
+                fontSize: 13,
+              }}
+            >
+              <dt>Lessons</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {done.lessons.size} of {lessons.length}
+              </dd>
+              <dt>Readings</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {done.readings.size} of {readings.length}
+              </dd>
+              <dt>Assessments passed</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {passedCount} of {assessments.length}
+              </dd>
+              <dt>Sessions attended</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {attendance.size === 0 ? "not taken yet" : `${presentCount} of ${attendance.size}`}
+              </dd>
+            </dl>
+            <div style={{ padding: "0 14px 12px", fontSize: 11 }}>
+              <Link href="/rtt/progress">All my RTT progress →</Link>
+            </div>
+          </article>
+
+          <article id="readings" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
             </div>
@@ -398,6 +533,9 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                       <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                         {r.externalUrl ? "External link" : "Reading"}
                       </div>
+                      <div style={{ marginTop: 6 }}>
+                        <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} />
+                      </div>
                     </div>
                     {r.externalUrl ? (
                       <a
@@ -425,62 +563,61 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
             )}
           </article>
 
-          {/* Spec 119: Assessment card — Start/Locked CTAs port the JSX
-              prototype (rtt.jsx lines 236-251). Mid-unit links to
-              /quizzes/mid-unit?subjectId=... only when that quiz is published;
-              endline is an inert "Locked" chip (see the note on it below). */}
+          {/* Assessment card: one row per active quiz bound to this subject,
+              with the learner's own best result. Release is the quiz's
+              `active` flag at /admin/quizzes; there is no sequencing rule (an
+              endline locked until a mid-unit is passed) because nothing in the
+              programme defines one, so none is pretended here. */}
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
             </div>
-            <div style={{ padding: 14, fontSize: 13 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "12px 0",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <span>Mid-unit check</span>
-                {hasQuiz.has("mid-unit") ? (
-                  <Link
-                    href={`/quizzes/mid-unit?subjectId=${id}`}
-                    className="btn btn-sm btn-primary"
-                    style={{ textDecoration: "none" }}
+            {assessments.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No assessments published yet.
+                {viewerIsAdmin ? (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    Create and activate one for this subject at <Link href="/admin/quizzes">Admin → Quizzes</Link>.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+                {assessments.map((q, i) => (
+                  <li
+                    key={q.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "12px 0",
+                      borderTop: i ? "1px solid var(--line)" : "none",
+                    }}
                   >
-                    Start
-                  </Link>
-                ) : (
-                  <span className="chip" title="No active quiz with the address mid-unit">
-                    Not published yet
-                  </span>
-                )}
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  paddingTop: 12,
-                }}
-              >
-                <span style={{ color: "var(--ink-3)" }}>Endline assessment</span>
-                {/* NOT A LINK. This was a <Link> to the endline quiz runner with
-                    only aria-disabled="true", which is a hint to assistive
-                    technology and does not stop navigation; `.chip` sets no
-                    pointer-events guard. It looked inert and navigated, and the
-                    runner 404s a slug with no active quiz. A span says what
-                    aria-disabled was trying to, like the mid-unit fallback.
-                    Whether endline should open once published is a programme
-                    decision (a sequencing rule nothing implements yet), so the
-                    fetched "endline" slug above stays deliberately unread. */}
-                <span className="chip" title="Unlocks after the mid-unit check">
-                  Locked
-                </span>
-              </div>
-            </div>
+                    <div>
+                      <div>{q.title}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                        {q.attempts === 0
+                          ? `Pass mark ${q.passThreshold}%`
+                          : `Best ${q.bestScore}% · ${q.attempts} ${q.attempts === 1 ? "attempt" : "attempts"}`}
+                        {q.maxAttempts !== null ? ` · ${q.maxAttempts} allowed` : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {q.passed ? <span className="chip chip-lichen">Passed</span> : null}
+                      <Link
+                        href={q.href}
+                        className={q.attempts === 0 ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                        style={{ textDecoration: "none" }}
+                      >
+                        {q.spent ? "Results" : q.attempts === 0 ? "Start" : "Retake"}
+                      </Link>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </article>
         </div>
       </section>

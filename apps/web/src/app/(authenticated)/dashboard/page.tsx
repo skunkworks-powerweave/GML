@@ -50,8 +50,6 @@ import {
   mentors,
   feedbackForms,
   feedbackResponses,
-  quizzes,
-  quizSubmissions,
   users,
   auditLog,
   phases,
@@ -60,6 +58,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { recordAudit } from "@/lib/audit";
 import { getActiveGrant } from "@/lib/gates";
+import { countOpenAssessments } from "@/lib/rtt/assessments";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
@@ -230,22 +229,11 @@ const getTeacherChrome = cache(async (userId: string) => {
     // had no to-do at all, so a teacher whose cycle reached 'observed' was
     // prompted for nothing and the cycle stalled before sign-off.
     myCyclesAt("observed"),
-    // Open quizzes — active quizzes the teacher has not yet attempted /
-    // passed. A submission counts as "done" regardless of score (quiz
-    // surface re-attempts are tracked separately).
-    db
-      .select({ c: count() })
-      .from(quizzes)
-      .where(
-        and(
-          eq(quizzes.active, true),
-          sql`${quizzes.id} NOT IN (
-            SELECT ${quizSubmissions.quizId}
-            FROM ${quizSubmissions}
-            WHERE ${quizSubmissions.userId} = ${userId}
-          )`,
-        ),
-      ),
+    // Open quizzes — the RTT quizzes the teacher has not yet submitted, as
+    // /rtt lists them (the to-do below links there). It counted every active
+    // quiz, including ones no learner page offers, so the to-do promised
+    // quizzes /rtt could not show.
+    countOpenAssessments(db, { id: userId, role: "teacher" }),
   ]);
 
   return {
@@ -254,7 +242,7 @@ const getTeacherChrome = cache(async (userId: string) => {
     pendingPre,
     awaitingVideo,
     awaitingPost,
-    openQuizzes: openQuizzes[0]?.c ?? 0,
+    openQuizzes,
   };
 });
 

@@ -260,6 +260,20 @@
       "when": 1780738000000,
       "tag": "0036_whatsapp_media_id_and_sender",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1780739000000,
+      "tag": "0037_rtt_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1780740000000,
+      "tag": "0038_rtt_subject_place",
+      "breakpoints": true
     }
   ]
 }

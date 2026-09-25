@@ -14,9 +14,9 @@
 // and the detail page needs an id nobody could obtain. The only route was a
 // hand-written INSERT against production.
 //
-// It is not a cosmetic gap. /rtt/subject/[id] links every subject's assessments
-// to /quizzes/mid-unit and /quizzes/endline, so with no quizzes those links 404
-// for every subject in the programme.
+// It is not a cosmetic gap. /rtt/subject/[id] lists the active quizzes bound to
+// the subject (lib/rtt/assessments.ts), so with no way to create one every
+// subject in the programme had no assessment at all.
 //
 // A new quiz is created EMPTY and INACTIVE: the questions are then written on
 // the detail page's JSON editor, which already exists and works. Inactive
