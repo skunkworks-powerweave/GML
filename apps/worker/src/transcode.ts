@@ -50,6 +50,15 @@ import { db } from "@gml/db";
 import { files, transcodeJobs, videoSubmissions } from "@gml/db/schema";
 import { BUCKETS, hlsPrefix, hlsPlaylistKey, posterKey } from "@gml/shared/storage/buckets";
 import { putObject, getObjectStream } from "@gml/shared/storage/client";
+import {
+  hlsEncodeArgs,
+  parseProbe,
+  posterArgs,
+  probeArgs,
+  renditionProbeArgs,
+  renditionProblem,
+  type Probe,
+} from "./encode.js";
 import type { TranscodeJobInput } from "./index.js";
 
 function supabase() {
@@ -62,10 +71,6 @@ function supabase() {
   }
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
-
-/** What ffprobe tells us about the source. All fields optional: a probe that
- *  fails must not fail the transcode, it just costs us the metadata. */
-type Probe = { durationSec: number | null; width: number | null; height: number | null };
 
 export async function transcode480p(input: TranscodeJobInput): Promise<void> {
   const { videoSubmissionId, objectKey } = input;
@@ -106,32 +111,16 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
     const probe = await ffprobe(localInput);
 
     // ── 3. Transcode ─────────────────────────────────────────────────────────
-    //
-    // scale=-2:480 keeps the aspect ratio and forces an EVEN width, which
-    // libx264 requires; a bare -1 produces odd widths on some sources and
-    // ffmpeg then refuses the encode.
-    await runFfmpeg([
-      "-y",
-      "-i", localInput,
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "26",
-      "-maxrate", "800k",
-      "-bufsize", "1600k",
-      "-vf", "scale=-2:480",
-      "-c:a", "aac",
-      "-b:a", "64k",
-      "-ac", "1",
-      // Segment boundaries must be keyframe-aligned or players stall at each
-      // join. At 6s segments and 25fps that is a keyframe every 150 frames.
-      "-g", "150",
-      "-keyint_min", "150",
-      "-sc_threshold", "0",
-      "-hls_time", "6",
-      "-hls_playlist_type", "vod",
-      "-hls_segment_filename", join(localOut, "seg_%05d.ts"),
-      join(localOut, "index.m3u8"),
-    ]);
+    // The encoder settings are in encode.ts, where they can be tested.
+    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe));
+
+    // ffmpeg exiting 0 proves it wrote something, not that a phone can play
+    // it. Refuse an undecodable rendition here, before anything is uploaded or
+    // marked ready, so it takes the failure path with a reason attached.
+    const problem = renditionProblem(
+      await run("ffprobe", renditionProbeArgs(join(localOut, "seg_00000.ts"))),
+    );
+    if (problem) throw new Error(problem);
 
     // ── 4. Poster frame ──────────────────────────────────────────────────────
     // Best-effort: a video with no usable frame at the chosen timestamp should
@@ -140,15 +129,7 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
     let posterUploaded = false;
     try {
       const at = probe.durationSec && probe.durationSec > 2 ? probe.durationSec * 0.1 : 0;
-      await runFfmpeg([
-        "-y",
-        "-ss", at.toFixed(2),
-        "-i", localInput,
-        "-frames:v", "1",
-        "-vf", "scale=-2:360",
-        "-q:v", "6",
-        localPoster,
-      ]);
+      await runFfmpeg(posterArgs(localInput, localPoster, at));
       await putObject(
         sb,
         BUCKETS.posters,
@@ -249,25 +230,7 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
  */
 async function ffprobe(path: string): Promise<Probe> {
   try {
-    const out = await run("ffprobe", [
-      "-v", "error",
-      "-select_streams", "v:0",
-      "-show_entries", "stream=width,height",
-      "-show_entries", "format=duration",
-      "-of", "json",
-      path,
-    ]);
-    const parsed = JSON.parse(out) as {
-      streams?: { width?: number; height?: number }[];
-      format?: { duration?: string };
-    };
-    const s0 = parsed.streams?.[0];
-    const d = parsed.format?.duration ? Number.parseFloat(parsed.format.duration) : NaN;
-    return {
-      durationSec: Number.isFinite(d) && d > 0 ? Math.round(d) : null,
-      width: s0?.width ?? null,
-      height: s0?.height ?? null,
-    };
+    return parseProbe(await run("ffprobe", probeArgs(path)));
   } catch (err) {
     console.warn("[transcode] ffprobe failed:", String(err).slice(0, 200));
     return { durationSec: null, width: null, height: null };

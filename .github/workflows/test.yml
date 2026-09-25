@@ -116,8 +116,16 @@ jobs:
       - name: Apply migrations from empty
         run: pnpm --filter @gml/db exec tsx scripts/migrate.ts
 
+      # tests/behaviour/transcode-output.test.ts runs the worker's real encoder
+      # settings through a real ffmpeg and probes the output; without ffmpeg it
+      # skips, and GML_REQUIRE_FFMPEG turns that skip into a failure here.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Behavioural tests
         run: pnpm test:behaviour
+        env:
+          GML_REQUIRE_FFMPEG: "1"
 
   images:
     name: container images
@@ -197,6 +205,16 @@ jobs:
         run: |
           docker run --rm --entrypoint sh gml-worker:ci -c 'ffmpeg -version && ffprobe -version' >/dev/null \
           || { echo "::error::ffmpeg/ffprobe missing from worker image"; exit 1; }
+
+      # Having ffmpeg is not the same as producing video a phone can play. Run
+      # the encoder tests INSIDE the image, against the Debian ffmpeg that ships
+      # (its libx264 is 8- and 10-bit, and the HDR path needs its zscale), with
+      # the image's own copy of the worker source.
+      - name: Worker image encodes playable HLS
+        run: |
+          docker run --rm -e GML_REQUIRE_FFMPEG=1 -v "$PWD/tests:/repo/tests:ro" \
+            --workdir /repo --entrypoint node gml-worker:ci \
+            --import tsx --test tests/behaviour/transcode-output.test.ts
 
       # The compose file must remain parseable and must not reacquire the
       # services that were removed. A stray `redis:` block would come back as a

@@ -236,7 +236,12 @@ test("worker entry consumes the transcode queue from Postgres", () => {
 
 // Spec 040 — ffmpeg 480p transcode
 test("transcode.ts re-encodes EVERY source, including WhatsApp", () => {
-  const src = read("apps/worker/src/transcode.ts");
+  // The encoder settings moved to encode.ts, as pure functions, so that
+  // tests/behaviour/transcode-output.test.ts can run them through a real ffmpeg
+  // -- which is where the High 10 output (F02) was finally visible. The
+  // invariants pinned here followed them; transcode.ts must still USE them.
+  const src = read("apps/worker/src/transcode.ts") + read("apps/worker/src/encode.ts");
+  assert.match(read("apps/worker/src/transcode.ts"), /runFfmpeg\(hlsEncodeArgs\(/);
   assert.match(src, /libx264/);
   assert.match(src, /scale=-2:480/);
   assert.match(src, /800k/);
