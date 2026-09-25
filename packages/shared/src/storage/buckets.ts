@@ -14,7 +14,7 @@
 export const BUCKETS = {
   /** Source video as uploaded, from the browser or from WhatsApp. */
   videosOriginal: "videos-original",
-  /** Transcoder output: one media playlist plus its segments. */
+  /** Transcoder output: a master playlist, one media playlist per rendition, their segments. */
   videosHls: "videos-hls",
   /** Poster frames extracted during transcode. */
   posters: "posters",
@@ -33,24 +33,30 @@ export function isBucketName(value: unknown): value is BucketName {
 
 // ── HLS key layout ────────────────────────────────────────────────────────────
 //
-// The playlist is named `index.m3u8`, not `master.m3u8`. With a single ffmpeg
-// output and `-hls_playlist_type vod` there is exactly one rendition, so what
-// ffmpeg writes is a MEDIA playlist -- calling it a master playlist described a
-// variant-stream file that has never existed here and sent readers looking for
-// a level of indirection that is not there.
+// Two layouts exist, both flat under hls/<id>/, and both must keep playing:
 //
-// `video_submissions.hls_master_key` keeps its column name: renaming it would
-// be a migration across every read site for no behavioural gain, and the column
-// comment records the discrepancy.
+//   ladder (current)   master.m3u8 -> v0.m3u8, v1.m3u8, ... (240p, 360p, 480p)
+//                      segments v0_00000.ts, v1_00000.ts, ...
+//   single (before)    index.m3u8, a MEDIA playlist; segments seg_00000.ts ...
+//
+// `video_submissions.hls_master_key` names whichever playlist a video has. The
+// single-rendition videos were written with `index.m3u8` precisely because
+// there was no master then; the column kept its name, and now describes the
+// ladder's key literally.
 
 /** Directory that holds one submission's playlist and segments. */
 export function hlsPrefix(videoSubmissionId: string): string {
   return `hls/${videoSubmissionId}`;
 }
 
-/** Full key of the media playlist for a submission. */
+/** Full key of a SINGLE-rendition submission's media playlist (transcoded before the ladder). */
 export function hlsPlaylistKey(videoSubmissionId: string): string {
   return `${hlsPrefix(videoSubmissionId)}/index.m3u8`;
+}
+
+/** Full key of a submission's master playlist: the rendition ladder. */
+export function hlsMasterPlaylistKey(videoSubmissionId: string): string {
+  return `${hlsPrefix(videoSubmissionId)}/master.m3u8`;
 }
 
 /** Poster frame key for a submission. */

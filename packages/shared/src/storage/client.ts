@@ -131,11 +131,16 @@ export async function getObject(
  *
  * The signed URL is short-lived and never leaves this process -- it exists only
  * to turn a private object into something fetch() can open.
+ *
+ * `signal` aborts the download itself (the fetch below, headers and body). The
+ * signing goes through `supabase`, so only a client built with an abortable
+ * fetch can abort that part -- the worker's is.
  */
 export async function getObjectStream(
   supabase: SupabaseClient,
   bucket: BucketName,
   key: string,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; size: number }> {
   // Long enough for a large transfer on a slow link, short enough that a URL
   // captured from a log is not useful for long.
@@ -146,7 +151,7 @@ export async function getObjectStream(
     throw new Error(`sign ${bucket}/${key}: ${signError?.message ?? "no url"}`);
   }
 
-  const res = await fetch(signed.signedUrl);
+  const res = await fetch(signed.signedUrl, { signal: opts.signal });
   if (!res.ok || !res.body) {
     throw new Error(`download ${bucket}/${key}: HTTP ${res.status}`);
   }

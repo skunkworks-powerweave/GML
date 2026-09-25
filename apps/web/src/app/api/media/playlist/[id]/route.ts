@@ -30,12 +30,15 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
-import { buildSignedPlaylist } from "@/lib/video/storage";
+import { buildSignedPlaylist, hlsMasterPlaylistKey, hlsPrefix } from "@/lib/video/storage";
 
 export const dynamic = "force-dynamic";
 
+/** A rendition's playlist name as the transcoder writes it (apps/worker/src/encode.ts). */
+const VARIANT_NAME = /^v\d{1,2}\.m3u8$/;
+
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -55,7 +58,23 @@ export async function GET(
     return NextResponse.json({ error: "not_ready", status: video.status }, { status: 409 });
   }
 
-  const playlist = await buildSignedPlaylist(id, video.hlsMasterKey, video.durationSec ?? null);
+  // THE RENDITION LADDER. A video's master playlist lists its renditions, and
+  // each comes back through this same route as ?variant=<its playlist name>,
+  // authorised exactly as the master was. The name must be one the transcoder
+  // writes -- never a path -- and the video must HAVE a master: one transcoded
+  // before the ladder points at its single index.m3u8 and has no variants.
+  const variant = new URL(req.url).searchParams.get("variant");
+  let playlistKey = video.hlsMasterKey;
+  if (variant !== null) {
+    if (!VARIANT_NAME.test(variant) || video.hlsMasterKey !== hlsMasterPlaylistKey(id)) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
+    }
+    playlistKey = `${hlsPrefix(id)}/${variant}`;
+  }
+
+  const playlist = await buildSignedPlaylist(id, playlistKey, video.durationSec ?? null, {
+    variantUrl: (name) => `/api/media/playlist/${id}?variant=${encodeURIComponent(name)}`,
+  });
   if (!playlist) {
     // Marked ready, output missing. Real state, worth distinguishing from a
     // permission failure so an operator reading logs can tell them apart.

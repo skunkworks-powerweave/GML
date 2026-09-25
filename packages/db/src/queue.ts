@@ -65,28 +65,41 @@ export async function enqueue(
     dedupeKey?: string | null;
     maxAttempts?: number;
     runAt?: Date;
+    /**
+     * At most ONE job per dedupe key, whatever became of it -- not only while
+     * one is live. For schedule keys such as `retention:<date>`: the partial
+     * index covers queued/running only, so once the day's sweep had finished
+     * the next hourly tick (and every restart) enqueued and ran it again.
+     * NOT for transcodes, whose operator Retry depends on a finished job not
+     * blocking a new one. Two replicas racing still meet the partial index.
+     */
+    once?: boolean;
   },
 ): Promise<{ id: string; deduped: boolean }> {
+  const key = opts.dedupeKey ?? null;
   const rows = await db.execute<{ id: string }>(sql`
     INSERT INTO jobs (queue, name, payload, dedupe_key, max_attempts, run_at)
-    VALUES (
+    SELECT
       ${opts.queue}, ${opts.name}, ${JSON.stringify(opts.payload)}::jsonb,
-      ${opts.dedupeKey ?? null}, ${opts.maxAttempts ?? 3},
+      ${key}, ${opts.maxAttempts ?? 3},
       ${opts.runAt ? opts.runAt.toISOString() : sql`now()`}
-    )
+    WHERE ${opts.once === true && key !== null
+      ? sql`NOT EXISTS (SELECT 1 FROM jobs WHERE queue = ${opts.queue} AND dedupe_key = ${key})`
+      : sql`true`}
     ON CONFLICT DO NOTHING
     RETURNING id
   `);
   const inserted = (rows as unknown as { rows: { id: string }[] }).rows ?? [];
   if (inserted.length > 0) return { id: inserted[0]!.id, deduped: false };
 
-  // The insert was absorbed by jobs_dedupe_live_uq. Hand back the live job so
-  // the caller has an id to report.
+  // The insert was absorbed: by jobs_dedupe_live_uq, or (with `once`) by a
+  // job that already ran. Hand that job back so the caller has an id to report.
   const existing = await db.execute<{ id: string }>(sql`
     SELECT id FROM jobs
      WHERE queue = ${opts.queue}
-       AND dedupe_key = ${opts.dedupeKey ?? null}
-       AND status IN ('queued', 'running')
+       AND dedupe_key = ${key}
+       ${opts.once === true ? sql`` : sql`AND status IN ('queued', 'running')`}
+     ORDER BY created_at DESC
      LIMIT 1
   `);
   const found = (existing as unknown as { rows: { id: string }[] }).rows ?? [];
@@ -165,13 +178,44 @@ export async function succeed(
 }
 
 /**
+ * A failure no retry can fix -- a corrupt source, a file with no picture.
+ * Thrown by a handler so that fail() dead-letters the job at once instead of
+ * spending its remaining attempts (each one re-downloading the source over the
+ * Leh uplink) on the same result.
+ */
+export class PermanentJobError extends Error {
+  override name = "PermanentJobError";
+}
+
+/**
+ * An error bounded to `max` characters, keeping its first line AND its end.
+ *
+ * Errors here put the verdict LAST -- ffmpeg's final lines, the reaper's
+ * appended note -- and every column and log line used to keep the head, so a
+ * long ffmpeg failure lost exactly the lines that said why, and a short one
+ * kept 1800 characters of version banner.
+ */
+export function boundedError(error: string, max = 4000): string {
+  if (error.length <= max) return error;
+  const nl = error.indexOf("\n");
+  const head = nl > 0 && nl < max / 4 ? error.slice(0, nl) : error.slice(0, Math.floor(max / 8));
+  const gap = "\n…\n";
+  return head + gap + error.slice(-(max - head.length - gap.length));
+}
+
+/**
  * Record a failure, and either schedule a retry or dead-letter it.
  *
- * Exponential backoff from 5s, matching what BullMQ was configured to do, so
- * the retry cadence does not silently change with the transport. A job that has
+ * Exponential backoff from ONE MINUTE: 1 min, 10 min, then an hour. It was
+ * 5 s, 10 s -- carried over from the BullMQ config -- which spent a job's whole
+ * budget of three attempts inside about fifteen seconds, so a one-minute
+ * Storage or pooler blip dead-lettered every transcode that started during it
+ * and an operator had to retry each by hand. A retry is re-downloading a
+ * source over the Leh uplink; spacing them out is the point. A job that has
  * exhausted its attempts becomes 'dead' rather than 'failed' -- the two are
  * distinguished so the admin view can tell "will be retried" from "needs a
- * human", which the old DLQ page could not.
+ * human", which the old DLQ page could not. `retryable: false` (a
+ * PermanentJobError) dead-letters at once, whatever attempts remain.
  */
 export async function fail(
   db: NodePgDatabase<Record<string, unknown>>,
@@ -179,13 +223,14 @@ export async function fail(
   error: string,
   attempts: number,
   maxAttempts: number,
+  opts: { retryable?: boolean } = {},
 ): Promise<{ willRetry: boolean }> {
-  const willRetry = attempts < maxAttempts;
-  const backoffSeconds = Math.min(5 * 2 ** (attempts - 1), 3600);
+  const willRetry = opts.retryable !== false && attempts < maxAttempts;
+  const backoffSeconds = Math.min(60 * 10 ** (attempts - 1), 3600);
   await db.execute(sql`
     UPDATE jobs
        SET status = ${willRetry ? "queued" : "dead"},
-           last_error = ${error.slice(0, 4000)},
+           last_error = ${boundedError(error)},
            run_at = ${willRetry ? sql`now() + make_interval(secs => ${backoffSeconds})` : sql`run_at`},
            completed_at = ${willRetry ? null : sql`now()`},
            lease_expires_at = NULL,
@@ -197,6 +242,48 @@ export async function fail(
 }
 
 /**
+ * Hand a claimed job straight back to the queue, as though it had never been
+ * claimed: runnable now, lease cleared, and its attempt NOT counted.
+ *
+ * For a worker that is shutting down (a deploy, a restart, `docker compose
+ * stop`). Without it the job sat 'running' behind its lease for up to fifteen
+ * minutes and the next worker was charged one of its three attempts for an
+ * operator's restart. Fenced on `locked_by`, so it can never touch a job that
+ * has since been reaped and claimed by someone else. True when released.
+ */
+export async function release(
+  db: NodePgDatabase<Record<string, unknown>>,
+  jobId: string,
+  workerId: string,
+): Promise<boolean> {
+  const res = await db.execute(sql`
+    UPDATE jobs
+       SET status = 'queued', attempts = GREATEST(attempts - 1, 0), run_at = now(),
+           lease_expires_at = NULL, locked_by = NULL, updated_at = now()
+     WHERE id = ${jobId}::uuid AND status = 'running' AND locked_by = ${workerId}
+     RETURNING id
+  `);
+  return ((res as unknown as { rows: unknown[] }).rows ?? []).length > 0;
+}
+
+/** A job the reaper took back from a worker that stopped heartbeating. */
+export type ReapedJob = {
+  id: string;
+  queue: string;
+  name: string;
+  payload: Record<string, unknown>;
+  /** True when its attempts were exhausted, so it was dead-lettered, not requeued. */
+  dead: boolean;
+  /** Why `onReaped` failed for this job, if it did: its repair was rolled back, its reaping was not. */
+  repairError?: string;
+};
+
+/** The transaction handle reapExpiredLeases() gives its `onReaped` callback. */
+export type QueueTx = Parameters<
+  Parameters<NodePgDatabase<Record<string, unknown>>["transaction"]>[0]
+>[0];
+
+/**
  * Requeue jobs whose worker stopped heartbeating.
  *
  * The case this exists for is a hard kill -- SIGKILL, OOM, the instance going
@@ -204,22 +291,58 @@ export async function fail(
  * it those jobs sit 'running' forever and their videos never transcode.
  *
  * Reaped jobs keep their incremented attempt count, so a job that reliably
- * kills its worker dead-letters instead of looping forever.
+ * kills its worker dead-letters instead of looping forever. A dead-letter sets
+ * completed_at exactly as fail() does: pruneFinished() keys on it, and without
+ * it a reaper-dead job -- and the 'N failed' chip that counts it -- stayed
+ * forever.
+ *
+ * `onReaped` runs in the SAME transaction, once per reaped job. This module
+ * only knows the transport; the handler that was killed also left domain rows
+ * behind (a transcode's ledger row 'running', its video 'transcoding'), and
+ * nothing but this moment knows that its worker is gone. Repairing them here,
+ * atomically, means a job is never requeued or dead-lettered while its domain
+ * rows still claim it is running.
+ *
+ * Each job's repair runs in a SAVEPOINT of its own. They used to share the
+ * batch's transaction, so one repair that threw -- a payload id that is not a
+ * uuid fails its query with 22P02 -- rolled back the reaping of EVERY job in
+ * the batch, on every queue, and did so again on every housekeeping tick: no
+ * expired lease was ever reaped again. Now that job's repair is rolled back
+ * and reported in `repairError`, and it is reaped regardless, like the rest.
  */
 export async function reapExpiredLeases(
   db: NodePgDatabase<Record<string, unknown>>,
-): Promise<number> {
-  const res = await db.execute(sql`
-    UPDATE jobs
-       SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
-           last_error = COALESCE(last_error, '') || ' [lease expired: worker stopped responding]',
-           lease_expires_at = NULL,
-           locked_by = NULL,
-           updated_at = now()
-     WHERE status = 'running' AND lease_expires_at < now()
-     RETURNING id
-  `);
-  return ((res as unknown as { rows: unknown[] }).rows ?? []).length;
+  onReaped?: (tx: QueueTx, job: ReapedJob) => Promise<void>,
+): Promise<ReapedJob[]> {
+  return db.transaction(async (tx) => {
+    const res = await tx.execute(sql`
+      UPDATE jobs
+         SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
+             completed_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
+             last_error = COALESCE(last_error, '') || ' [lease expired: worker stopped responding]',
+             lease_expires_at = NULL,
+             locked_by = NULL,
+             updated_at = now()
+       WHERE status = 'running' AND lease_expires_at < now()
+       RETURNING id, queue, name, payload, status
+    `);
+    const reaped: ReapedJob[] = ((res as unknown as { rows: Record<string, unknown>[] }).rows ?? []).map((r) => ({
+      id: String(r.id),
+      queue: String(r.queue),
+      name: String(r.name),
+      payload: (r.payload ?? {}) as Record<string, unknown>,
+      dead: r.status === "dead",
+    }));
+    for (const job of onReaped ? reaped : []) {
+      try {
+        // A nested drizzle transaction is a SAVEPOINT, rolled back on a throw.
+        await tx.transaction((sp) => onReaped!(sp, job));
+      } catch (err) {
+        job.repairError = String(err);
+      }
+    }
+    return reaped;
+  });
 }
 
 /** Depth by status, for the topbar chip and the admin DLQ view. */

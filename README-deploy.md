@@ -406,8 +406,10 @@ figure in its header comment and here.
 
 A job that has exhausted its attempts is **dead**, not merely failed — the
 distinction is what tells you "will be retried automatically" from "needs a
-human". A worker killed mid-job has its work requeued by the lease reaper within
-about a minute.
+human". A worker killed mid-job has its work requeued by the lease reaper once
+its lease lapses: up to 15 minutes after its last heartbeat (see
+docs/operations.md). A worker merely stopped or redeployed hands its job back
+within seconds.
 
 ### Unattended security updates
 

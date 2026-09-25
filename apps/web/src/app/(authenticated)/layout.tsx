@@ -125,7 +125,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   const [navCounts, unreadCount, queueDepth] = await Promise.all([
     loadNavCounts(user.id, user.role),
     loadUnreadNotifications(user.id),
-    loadQueueDepth(),
+    loadQueueDepth(user.role),
   ]);
 
   // WHICH NAV ITEM IS CURRENT.

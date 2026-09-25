@@ -227,18 +227,36 @@ test("worker entry consumes the transcode queue from Postgres", () => {
     /setInterval\([\s\S]{0,120}?heartbeat\(db,\s*job\.id/,
     "a claimed job must have its lease heartbeated for as long as it runs",
   );
+  // With the transcode repair: reaping only the transport row left the killed
+  // attempt's ledger row 'running' and its video 'transcoding' forever (F04).
+  // tests/behaviour/transcode-lifecycle.test.ts executes this; this pins it.
   assert.match(
     src,
-    /reapExpiredLeases\(db\)/,
+    /reapExpiredLeases\(db,\s*repairReapedTranscodes\)/,
     "the worker must requeue jobs whose lease lapsed, or a SIGKILL strands them as 'running'",
   );
 });
 
 // Spec 040 — ffmpeg 480p transcode
 test("transcode.ts re-encodes EVERY source, including WhatsApp", () => {
-  const src = read("apps/worker/src/transcode.ts");
+  // The encoder settings moved to encode.ts, as pure functions, so that
+  // tests/behaviour/transcode-output.test.ts can run them through a real ffmpeg
+  // -- which is where the High 10 output (F02) was finally visible. The
+  // invariants pinned here followed them; transcode.ts must still USE them.
+  const src = read("apps/worker/src/transcode.ts") + read("apps/worker/src/encode.ts");
+  assert.match(read("apps/worker/src/transcode.ts"), /runFfmpeg\(hlsEncodeArgs\(/);
   assert.match(src, /libx264/);
-  assert.match(src, /scale=-2:480/);
+  // CORRECTED (F10). This pinned `scale=-2:480`, which fixes the HEIGHT: a
+  // portrait phone clip came out 270 px wide and a 320x180 forward was scaled
+  // up. The short side is capped at 480 instead, with no upscaling;
+  // tests/behaviour/transcode-output.test.ts executes it on real sources.
+  // Per rung since F144; the top rung is still 480p at 800k.
+  assert.match(src, /boundedScale\(r\.short\)/);
+  assert.match(src, /name: "480p", short: 480, maxrate: "800k"/);
+  assert.ok(
+    !/scale=-2:(480|360)/.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")),
+    "no filter may pin the output height again",
+  );
   assert.match(src, /800k/);
 
   // INVERTED. This used to require `source === "whatsapp"` to take a `-c copy`

@@ -123,8 +123,14 @@ test("spec 151 — the attempts: 3 budget survives as the jobs.max_attempts defa
 test("spec 151 — exponential-from-5s backoff survives as arithmetic in fail()", () => {
   // INVERTED. This required `backoff: { type: "exponential", delay: 5000 }`.
   // The reasoning in the original is still exactly right -- linear retries
-  // hammer a failing backend in lockstep, exponential spaces them 5s/10s/20s --
-  // so the same schedule is computed explicitly when a job fails.
+  // hammer a failing backend in lockstep, exponential spaces them out -- so
+  // the schedule is computed explicitly when a job fails.
+  //
+  // CORRECTED (F09): the base is ONE MINUTE (1 min, 10 min, 1 h), not 5 s.
+  // At 5 s / 10 s the default three attempts were all spent within about
+  // fifteen seconds, so a one-minute Storage or pooler blip dead-lettered every
+  // transcode that started during it. tests/behaviour/queue.test.ts executes
+  // the schedule; this pins its shape.
   //
   // Being arithmetic rather than configuration is a small improvement in its
   // own right: it is typechecked, and it is capped. An unbounded exponential
@@ -133,14 +139,16 @@ test("spec 151 — exponential-from-5s backoff survives as arithmetic in fail()"
   const src = read(QUEUE_LIB_PATH);
   assert.match(
     src,
-    /Math\.min\(\s*5\s*\*\s*2\s*\*\*\s*\(\s*attempts\s*-\s*1\s*\)\s*,\s*\d+\s*\)/,
-    "fail() must compute an exponential backoff starting at 5 seconds, with a ceiling",
+    /Math\.min\(\s*60\s*\*\s*10\s*\*\*\s*\(\s*attempts\s*-\s*1\s*\)\s*,\s*\d+\s*\)/,
+    "fail() must compute an exponential backoff starting at one minute, with a ceiling",
   );
   // The retry decision must be driven by the job's own budget, not a constant,
   // so a producer can widen or narrow it per job (the retention sweep uses 2).
+  // Since F15 a handler can also say a failure is permanent (a corrupt source),
+  // which dead-letters at once instead of spending the rest of the budget.
   assert.match(
     src,
-    /const\s+willRetry\s*=\s*attempts\s*<\s*maxAttempts/,
+    /const\s+willRetry\s*=\s*opts\.retryable\s*!==\s*false\s*&&\s*attempts\s*<\s*maxAttempts/,
     "fail() must compare attempts against the job's own maxAttempts",
   );
   // Exhausted != errored. BullMQ collapsed both into 'failed', which is why the
@@ -306,10 +314,11 @@ test("spec 151 — there is no retention cron left to document a timezone for", 
       "that survived that rename is the reason this scheduling moved into plain code",
   );
   // The positive half: scheduling is a named function on an interval, in code
-  // the typechecker reads.
+  // the typechecker reads. (Since F16 it takes the clock as an argument, so
+  // tests/behaviour/retention-schedule.test.ts can execute it.)
   assert.match(
     read(INDEX_PATH),
-    /async function scheduleDailyWork\(\)/,
+    /async function scheduleDailyWork\(now: Date = new Date\(\)\)/,
     "the daily sweep must be scheduled by an ordinary, typechecked function",
   );
 });

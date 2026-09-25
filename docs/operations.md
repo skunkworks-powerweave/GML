@@ -65,10 +65,20 @@ are not certain why they lost access.
 
 ## A video will not play
 
-1. `/admin/transcode-jobs` — is there a failed or dead job for it?
-2. **Dead** means attempts are exhausted and it needs a human. **Failed** means
-   it will be retried. The distinction is deliberate.
-3. Retry re-enqueues it. This works even for a submission that has been
+1. `/admin/transcode-jobs`. Two lists: **Dead jobs, every queue** at the top
+   is what the queue itself has given up on -- attempts exhausted, with the
+   last error it recorded, retention sweeps included -- and the table below
+   is every transcode ATTEMPT, one row each.
+2. **Dead** means attempts are exhausted and it needs a human. A **failed**
+   attempt whose video ("Video now") is still `queued` will be retried by
+   itself -- failures back off 1 minute, then 10 -- and the teacher sees
+   "Transcoding in progress" meanwhile. A failed attempt of a video that is
+   itself `failed` needs a human.
+3. Retry re-enqueues it. Each attempt is its own row, and only a video's
+   latest attempt offers Retry or Drop, only while the video itself is failed
+   and nothing is queued or running for it. An older failed attempt of a video
+   that a later attempt fixed says "superseded by a later attempt"; acting on
+   it used to break a playable video. Retry does work for a video that was
    transcoded before — the dedupe key is scoped to live jobs precisely so a
    deliberate retry is possible.
 4. If the job succeeded but playback fails, check `/api/health` for
@@ -86,18 +96,38 @@ is running but cannot claim looks identical to an idle one from the outside,
 which is why the check exists — previously the container had no healthcheck at
 all and a crash-loop was invisible.
 
-A job whose worker died is requeued by the lease reaper within about a minute.
-You do not need to do anything.
+A job whose worker died (killed, OOM, the box restarting) is taken back by the
+lease reaper once its lease lapses -- up to 15 minutes after the worker's last
+heartbeat, checked every minute. The reaper also closes that attempt's row in
+`/admin/transcode-jobs` as failed ("worker stopped responding"). With attempts
+left the job then runs again by itself; on its last attempt it is dead-lettered,
+the video is marked failed, and that failed row carries Retry. The worker log
+says which: "requeued jobs with expired leases" or "dead-lettered jobs with
+expired leases".
+
+Every minute the worker also fails any attempt row still 'running', and any
+video still 'transcoding', that no queued or running job belongs to any more --
+rows left by a worker killed before the reaper repaired them, which nothing
+else would ever touch. Each gets a failed row with Retry and Drop; the log
+line is "failed stranded transcode rows (no live job)". "could not repair the
+rows of a reaped job" means the reaper took a job back but could not fix its
+rows; the job's next attempt, or for a dead job that sweep, fixes them.
 
 ## Disk filling up
 
-`/var/lib/gml` holds ffmpeg scratch and local dumps. Scratch is cleaned up in a
-`finally` block after every transcode; dumps are pruned after 14 days by
-`scripts/backup.sh`.
+`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`.
+ffmpeg scratch is NOT there: it is the worker's `/tmp`, the `worker_scratch`
+named volume (under `/var/lib/docker`, on the root disk). Scratch is removed
+after every transcode, including one interrupted by a deploy or `docker
+compose stop` -- the worker hands its job back to the queue and exits within
+seconds of SIGTERM (its `stop_grace_period` is 30 s). A worker killed hard
+enough to skip that (OOM, SIGKILL, the box losing power) leaves its scratch
+behind, and the next worker to start removes any that has not changed for 15
+minutes.
 
-If scratch is growing anyway, a worker is being killed hard enough to skip its
-cleanup — check for OOM kills (`dmesg -T | grep -i oom`). The likely cause is
-`WORKER_CONCURRENCY` above 1.
+If scratch is growing anyway, a worker is being killed repeatedly — check for
+OOM kills (`dmesg -T | grep -i oom`). The likely cause is `WORKER_CONCURRENCY`
+above 1.
 
 ---
 
