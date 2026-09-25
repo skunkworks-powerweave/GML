@@ -19,6 +19,9 @@ import { acceptAndClaim, claimJob, envelope, route, SECRET, signed, withEnv, wit
 
 const skip = needsDatabase();
 const worker = () => import("../../apps/worker/src/index.ts");
+// The locked_by claimJob() writes. runJob() hands a job interrupted by
+// shutdown back with release(), which matches on it.
+const CLAIMED_BY = "test-worker";
 
 after(async () => {
   if (!DATABASE_URL) return;
@@ -49,7 +52,7 @@ test("F93: a claimed whatsapp_fetch job runs the fetch, and its failure is recor
       withWorld(async (w) => {
         const { runJob } = await worker();
         const { job } = await acceptAndClaim(w);
-        await runJob(job);
+        await runJob(job, CLAIMED_BY);
         const [row] = (await w.c.query(`SELECT status, last_error, attempts FROM jobs WHERE id = $1`, [job.id])).rows;
         assert.equal(row.status, "queued", "a failed first attempt is retried, not dead-lettered");
         assert.match(String(row.last_error), /WHATSAPP_ACCESS_TOKEN/, "the fetch handler ran (not 'unknown job name')");
@@ -70,7 +73,7 @@ test("F93: a claimed whatsapp_reply job is dispatched to the reply sender", { sk
       const warn = console.warn;
       console.warn = () => undefined;
       try {
-        await runJob(await claimJob(w, String(queued!.id)));
+        await runJob(await claimJob(w, String(queued!.id)), CLAIMED_BY);
       } finally {
         console.warn = warn;
       }
