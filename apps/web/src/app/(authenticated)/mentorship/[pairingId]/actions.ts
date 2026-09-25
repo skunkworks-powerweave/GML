@@ -203,12 +203,22 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
 // stayed on the pairing and in meetings_count -- the list page and the
 // dashboard's stale-pairing view read it -- for good. The mentor (or an
 // administrator) removes it here; the counters are recomputed from what is
-// left, and the other party is told (meeting.cancelled).
+// left.
+//
+// AN UPCOMING MEETING IS CANCELLED, and the other party is told
+// (meeting.cancelled). A meeting whose time has passed is REMOVED from the
+// record -- a mistaken entry -- and nobody is told it was "cancelled": it
+// either happened or never did.
+//
+// ONLY ONCE CONFIRMED. The delete is permanent, and the page offered it as a
+// single button on a touch-first product. Without `confirm=1` nothing changes
+// and the page is sent back asking (?confirmCancel=<id>); the page's own
+// buttons only link to that question.
 //
 // A meeting with a recording attached is kept: video_submissions points at it
 // by id with no foreign key, and removing the meeting would orphan the video.
 //
-// Form fields: pairingId, meetingId (both uuids).
+// Form fields: pairingId, meetingId (both uuids), confirm ("1").
 // ---------------------------------------------------------------------------
 
 export async function cancelMeetingAction(formData: FormData): Promise<void> {
@@ -246,6 +256,11 @@ export async function cancelMeetingAction(formData: FormData): Promise<void> {
     .limit(1);
   if (meeting.recordingVideoId || attached) redirect(`/mentorship/${pairingId}?error=meeting_has_recording`);
 
+  if (String(formData.get("confirm") ?? "") !== "1") {
+    redirect(`/mentorship/${pairingId}?confirmCancel=${encodeURIComponent(meetingId)}`);
+  }
+  const upcoming = new Date(meeting.scheduledAt).getTime() > Date.now();
+
   await db.transaction(async (tx) => {
     await tx.delete(mentorMeetings).where(eq(mentorMeetings.id, meetingId));
     // Recomputed from the meetings that remain, not decremented blind: the
@@ -260,11 +275,16 @@ export async function cancelMeetingAction(formData: FormData): Promise<void> {
   });
 
   void recordAudit({
-    action: "mentor.meeting.cancelled",
+    action: upcoming ? "mentor.meeting.cancelled" : "mentor.meeting.removed",
     entityType: "mentor_meeting",
     entityId: meetingId,
     metadata: { pairingId, scheduledAt: new Date(meeting.scheduledAt).toISOString() },
   });
+
+  if (!upcoming) {
+    revalidatePath(`/mentorship/${pairingId}`);
+    redirect(`/mentorship/${pairingId}`);
+  }
 
   const parties = await pairingParties(pairing);
   await notify(

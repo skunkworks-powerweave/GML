@@ -74,7 +74,7 @@ export default async function PairingDetailPage({
   searchParams,
 }: {
   params: Promise<{ pairingId: string }>;
-  searchParams?: Promise<{ logMeeting?: string; error?: string }>;
+  searchParams?: Promise<{ logMeeting?: string; error?: string; confirmCancel?: string }>;
 }) {
   const { pairingId } = await params;
   const sp = (await searchParams) ?? {};
@@ -567,18 +567,51 @@ export default async function PairingDetailPage({
                         ) : canLogMeeting ? (
                           // A meeting logged by mistake, or called off, could
                           // never be removed. Kept when a recording is attached.
-                          <form action={cancelMeetingAction} style={{ marginTop: 4 }}>
-                            <input type="hidden" name="pairingId" value={pairingId} />
-                            <input type="hidden" name="meetingId" value={m.id} />
-                            <button
-                              type="submit"
-                              className="btn btn-sm btn-ghost"
-                              style={{ fontSize: 11 }}
-                              aria-label={`Cancel the meeting on ${d.toLocaleDateString("en-IN", { day: "numeric", month: "long" })}`}
-                            >
-                              Cancel meeting
-                            </button>
-                          </form>
+                          // An upcoming one is CANCELLED (the other party is
+                          // told); one whose time has passed is REMOVED from the
+                          // record, and nobody is told it was cancelled. The
+                          // button only asks: the delete is permanent, and it
+                          // happens from the confirmation (?confirmCancel=).
+                          (() => {
+                            const upcoming = d.getTime() > Date.now();
+                            const when = d.toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+                            if (sp.confirmCancel !== m.id) {
+                              return (
+                                <Link
+                                  href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
+                                  className="btn btn-sm btn-ghost"
+                                  style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
+                                  aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
+                                >
+                                  {upcoming ? "Cancel meeting" : "Remove"}
+                                </Link>
+                              );
+                            }
+                            return (
+                              <form
+                                action={cancelMeetingAction}
+                                role="alert"
+                                style={{ marginTop: 6, padding: 10, border: "1px solid var(--rust)", borderRadius: "var(--r-2)", background: "var(--rust-soft)", fontSize: 12 }}
+                              >
+                                <input type="hidden" name="pairingId" value={pairingId} />
+                                <input type="hidden" name="meetingId" value={m.id} />
+                                <input type="hidden" name="confirm" value="1" />
+                                <p style={{ margin: 0, color: "var(--ink-2)" }}>
+                                  {upcoming
+                                    ? `Cancel the meeting on ${when}? The other people on this pairing will be told.`
+                                    : `Remove the meeting of ${when} from the record? It will stop counting towards this pairing's meetings. This cannot be undone.`}
+                                </p>
+                                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                                  <button type="submit" className="btn btn-sm" style={{ fontSize: 11 }}>
+                                    {upcoming ? "Yes, cancel it" : "Yes, remove it"}
+                                  </button>
+                                  <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost" style={{ fontSize: 11 }}>
+                                    Keep it
+                                  </Link>
+                                </div>
+                              </form>
+                            );
+                          })()
                         ) : null}
                       </div>
                     </div>
