@@ -36,7 +36,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { saveDraft, type DraftKey } from "@/lib/form-draft";
+import type { DraftKey } from "@/lib/form-draft";
 import { useSwipe } from "@/lib/use-swipe";
 import {
   HindiText,
@@ -46,9 +46,12 @@ import {
   optionText,
   validateAll,
   validateField,
+  useSubmittingUntilServerAnswers,
   type FormField,
   type FormSchema,
 } from "./FormRenderer";
+import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
+import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -79,6 +82,17 @@ export type MobileFormRunnerProps = {
   schema: FormSchema;
   initialResponses?: Record<string, unknown>;
   draftKey?: DraftKey;
+  /**
+   * The signed-in user. The copy of unsaved answers kept on this device is
+   * theirs alone (draft-resilience.ts); with no user, none is kept.
+   */
+  userId?: string;
+  /**
+   * When the server last wrote what `initialResponses` hold (ms since the
+   * epoch): the draft's updatedAt, or the prior answer's submittedAt; null
+   * when it holds neither. A device copy is restored only if it is newer.
+   */
+  serverSavedAt?: number | null;
   submitLabel?: string;
   action?: (formData: FormData) => Promise<void> | void;
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
@@ -161,6 +175,7 @@ function BigTextLike({
       placeholder={field.placeholder}
       min={field.min}
       max={field.max}
+      maxLength={type === "text" ? MAX_TEXT_LENGTH : undefined}
       inputMode={field.kind === "number" ? "numeric" : undefined}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -190,6 +205,7 @@ function BigTextArea({
       name={field.name}
       autoFocus={autoFocus}
       rows={field.rows ?? 5}
+      maxLength={MAX_TEXT_LENGTH}
       placeholder={field.placeholder}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -507,6 +523,8 @@ export function MobileFormRunner({
   schema,
   initialResponses,
   draftKey,
+  userId,
+  serverSavedAt,
   submitLabel,
   action,
   onSubmit,
@@ -532,11 +550,14 @@ export function MobileFormRunner({
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  // Ends when the server answers, not only on unmount: a rejected submission
+  // redirects back to this route and leaves the runner mounted
+  // (FormRenderer.tsx useSubmittingUntilServerAnswers).
+  const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
 
   // Autosave bookkeeping — mirrors FormRenderer exactly so a draft saved on
-  // mobile is byte-identical to one saved on desktop.
-  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  // mobile is byte-identical to one saved on desktop. saveState and flushSave
+  // come from useDraftAutosave below (the same hook FormRenderer uses).
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const valuesRef = useRef(values);
   // Assigned in an effect, never in the render body. Writing to a ref during
@@ -554,16 +575,9 @@ export function MobileFormRunner({
     [draftKey],
   );
 
-  const flushSave = useCallback(async () => {
-    if (!autosaveEnabled || !draftKey) return;
-    setSaveState("pending");
-    try {
-      await saveDraft({ ...draftKey, responses: valuesRef.current });
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-    }
-  }, [autosaveEnabled, draftKey]);
+  // A failed save is kept on the device and, when trying again can help,
+  // tried again -- it used to say "retrying" and do nothing (draft-resilience.ts).
+  const { saveState, failure: saveFailure, flushSave, cancelRetry } = useDraftAutosave(draftKey, autosaveEnabled, valuesRef, userId);
 
   const scheduleSave = useCallback(() => {
     if (!autosaveEnabled) return;
@@ -577,9 +591,30 @@ export function MobileFormRunner({
     };
   }, []);
 
+  // Answers this device kept because the server never got them come back on
+  // the next visit, if newer than the server's, and go to the server at once
+  // (see FormRenderer).
+  useEffect(() => {
+    if (!autosaveEnabled || !draftKey) return;
+    const kept = takeNewerLocalCopy(userId, draftKey, serverSavedAt ?? null);
+    if (!kept) return;
+    // From a timer, once hydration has painted the server's copy.
+    const t = setTimeout(async () => {
+      valuesRef.current = { ...valuesRef.current, ...kept };
+      setValues((prev) => ({ ...prev, ...kept }));
+      await flushSave();
+    }, 0);
+    return () => clearTimeout(t);
+    // Once, on mount: later changes are this component's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setField = useCallback(
     (name: string, raw: unknown) => {
       setValues((prev) => ({ ...prev, [name]: raw }));
+      // Onto the device at once (see FormRenderer.setField).
+      valuesRef.current = { ...valuesRef.current, [name]: raw };
+      if (autosaveEnabled && draftKey) keepLocalCopy(userId, draftKey, valuesRef.current);
       setErrors((prev) => {
         if (!prev[name]) return prev;
         const { [name]: _ignored, ...rest } = prev;
@@ -587,7 +622,7 @@ export function MobileFormRunner({
       });
       scheduleSave();
     },
-    [scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave, userId],
   );
 
   const totalSteps = fields.length + 1; // +1 for the review screen
@@ -675,6 +710,9 @@ export function MobileFormRunner({
       // desktop. await the flushSave so the draft row matches the FormData
       // about to be POSTed (spec 149 race fix).
       await flushSave();
+      // The POST carries the answers; a retried PUT after it would re-create
+      // the draft the submit deletes.
+      cancelRetry();
       formRef.current?.requestSubmit();
       return;
     }
@@ -686,12 +724,13 @@ export function MobileFormRunner({
     try {
       if (autosaveEnabled) await flushSave();
       await onSubmit(values);
+      cancelRetry();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }
-  }, [action, autosaveEnabled, fields, flushSave, onSubmit, submitting, values]);
+  }, [action, autosaveEnabled, cancelRetry, fields, flushSave, onSubmit, setSubmitting, submitting, values]);
 
   // ---- Progress dots ----
   // One pill per step (field screens + review). Active is a wide pill,
@@ -1005,7 +1044,7 @@ export function MobileFormRunner({
               ? "Saving…"
               : saveState === "saved"
                 ? "Saved"
-                : "Save failed — retrying…"}
+                : failureMessage(saveFailure ?? "error")}
           </div>
         ) : null}
       </div>

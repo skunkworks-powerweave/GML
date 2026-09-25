@@ -23,3 +23,5 @@ export function revalidatePath(path: string): void {
 export function revalidateTag(tag: string): void {
   record(`tag:${tag}`);
 }
+
+export function unstable_noStore(): void {}

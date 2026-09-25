@@ -13,7 +13,13 @@
 // --serif/--deva). No Tailwind classes; tokens-only.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { clearDraft, saveDraft, type DraftKey } from "@/lib/form-draft";
+import { clearDraft, type DraftKey } from "@/lib/form-draft";
+import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
+import {
+  MAX_TEXT_LENGTH,
+  validateResponses,
+  type FormField as ServerFormField,
+} from "@/lib/forms/validate";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -92,6 +98,17 @@ type FormRendererProps = {
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
   action?: (formData: FormData) => Promise<void> | void;
   draftKey?: DraftKey;
+  /**
+   * The signed-in user. The copy of unsaved answers kept on this device is
+   * theirs alone (draft-resilience.ts); with no user, none is kept.
+   */
+  userId?: string;
+  /**
+   * When the server last wrote what `initialResponses` hold (ms since the
+   * epoch): the draft's updatedAt, or the prior answer's submittedAt; null
+   * when it holds neither. A device copy is restored only if it is newer.
+   */
+  serverSavedAt?: number | null;
   submitLabel?: string;
   formId?: string;
   slug?: string;
@@ -116,6 +133,34 @@ const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 // ---------- Helpers ----------
 
+const NO_INITIAL_RESPONSES: Record<string, unknown> = {};
+
+/**
+ * `submitting`, ended by the server's answer.
+ *
+ * A server-action submission ends one of two ways: success redirects to
+ * /forms/[slug]/thanks and this component unmounts; a rejection
+ * (?error=invalid, missing_pairing, wrong_audience) redirects back to the SAME
+ * route. The code used to assume that second case remounted the form too. It
+ * does not: Next 16's layout router keys the page segment without its search
+ * params, so the runner stays mounted with its `submitting` still true -- a
+ * red banner above a disabled "Submitting…" button that only a reload cleared.
+ *
+ * What the rejection does bring is a fresh server render, and with it a NEW
+ * `initialResponses` object. So "submitting" is recorded against the props
+ * the submission was made from, and stops being true the moment different
+ * ones arrive. Derived during render rather than reset in an effect, so there
+ * is no frame in which a stale busy state shows.
+ */
+export function useSubmittingUntilServerAnswers(
+  initialResponses: Record<string, unknown> | undefined,
+): [boolean, (on: boolean) => void] {
+  const current = initialResponses ?? NO_INITIAL_RESPONSES;
+  const [submittedFrom, setSubmittedFrom] = useState<Record<string, unknown> | null>(null);
+  const setSubmitting = useCallback((on: boolean) => setSubmittedFrom(on ? current : null), [current]);
+  return [submittedFrom !== null && submittedFrom === current, setSubmitting];
+}
+
 // Spec 133 — MobileFormRunner reuses these helpers verbatim. They're exported
 // so the mobile renderer doesn't duplicate the validation contract (a drift
 // between the two would make a draft saved on mobile fail on desktop submit).
@@ -130,21 +175,17 @@ export function isHindiNameField(name: string): boolean {
   return /_(hi|hindi)$/i.test(name);
 }
 
+/**
+ * THE SERVER'S RULES, run in the browser. This checked only `required` and a
+ * number's min/max, while submitFormAction also refuses text over 5000
+ * characters, choices that are not options, too many selections and scale
+ * answers off the scale -- so an answer could pass here, travel over a slow
+ * link, and come back refused. lib/forms/validate.ts is dependency-free, so
+ * both sides now run the one validator.
+ */
 export function validateField(field: FormField, raw: unknown): string | null {
-  const empty =
-    raw === undefined ||
-    raw === null ||
-    (typeof raw === "string" && raw.trim() === "") ||
-    (Array.isArray(raw) && raw.length === 0);
-  if (field.required && empty) return "This field is required.";
-  if (empty) return null;
-  if (field.kind === "number") {
-    const n = typeof raw === "number" ? raw : Number(raw);
-    if (Number.isNaN(n)) return "Must be a number.";
-    if (typeof field.min === "number" && n < field.min) return `Must be ≥ ${field.min}.`;
-    if (typeof field.max === "number" && n > field.max) return `Must be ≤ ${field.max}.`;
-  }
-  return null;
+  const [first] = validateResponses([field as ServerFormField], { [field.name]: raw });
+  return first?.message ?? null;
 }
 
 /**
@@ -260,6 +301,7 @@ function TextLike({
       placeholder={field.placeholder}
       min={field.min}
       max={field.max}
+      maxLength={type === "text" ? MAX_TEXT_LENGTH : undefined}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
       onChange={(e) => onChange(e.target.value)}
@@ -285,6 +327,7 @@ function TextArea({
       id={field.name}
       name={field.name}
       rows={field.rows ?? 4}
+      maxLength={MAX_TEXT_LENGTH}
       placeholder={field.placeholder}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -594,6 +637,8 @@ export function FormRenderer({
   onSubmit,
   draftKey,
   submitLabel,
+  userId,
+  serverSavedAt,
   action,
   formId,
   slug,
@@ -626,12 +671,12 @@ export function FormRenderer({
 
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Autosave bookkeeping
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  // Autosave bookkeeping (saveState / lastSavedAt / flushSave come from
+  // useDraftAutosave below, shared with MobileFormRunner).
+  //
   // A live clock for the "Saved Ns ago" label. This used to be a discarded
   // tick counter (`const [, forceTick] = useState(0)`), which re-rendered this
   // 802-line form once a second while the label it existed to update never
@@ -659,17 +704,14 @@ export function FormRenderer({
     [draftKey],
   );
 
-  const flushSave = useCallback(async () => {
-    if (!autosaveEnabled || !draftKey) return;
-    setSaveState("pending");
-    try {
-      await saveDraft({ ...draftKey, responses: valuesRef.current });
-      setLastSavedAt(Date.now());
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-    }
-  }, [autosaveEnabled, draftKey]);
+  // A failed save is kept on the device and, when trying again can help,
+  // tried again -- it used to say "retrying" and do nothing (draft-resilience.ts).
+  const { saveState, failure: saveFailure, lastSavedAt, flushSave, cancelRetry } = useDraftAutosave(
+    draftKey,
+    autosaveEnabled,
+    valuesRef,
+    userId,
+  );
 
   const scheduleSave = useCallback(() => {
     if (!autosaveEnabled) return;
@@ -693,12 +735,37 @@ export function FormRenderer({
     };
   }, []);
 
+  // Answers this device kept because the server never got them (the tab was
+  // closed offline, the session expired) come back on the next visit -- if
+  // they are newer than what the server handed the page -- and go to the
+  // server at once. An older copy is dropped (takeNewerLocalCopy).
+  useEffect(() => {
+    if (!autosaveEnabled || !draftKey) return;
+    const kept = takeNewerLocalCopy(userId, draftKey, serverSavedAt ?? null);
+    if (!kept) return;
+    // From a timer, once hydration has painted the server's copy.
+    const t = setTimeout(async () => {
+      valuesRef.current = { ...valuesRef.current, ...kept };
+      setValues((prev) => ({ ...prev, ...kept }));
+      await flushSave();
+    }, 0);
+    return () => clearTimeout(t);
+    // Once, on mount: later changes are this component's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setField = useCallback(
     (name: string, raw: unknown) => {
       setValues((prev) => {
         const next = { ...prev, [name]: raw };
         return next;
       });
+      // Onto the device AT ONCE, before the debounced PUT: this copy is what
+      // survives a closed tab on a dead link. The ref is written here too (not
+      // only after commit) so the copy and the next save are never a keystroke
+      // behind.
+      valuesRef.current = { ...valuesRef.current, [name]: raw };
+      if (autosaveEnabled && draftKey) keepLocalCopy(userId, draftKey, valuesRef.current);
       // Clear any prior error on this field optimistically; full validation re-runs on submit.
       setErrors((prev) => {
         if (!prev[name]) return prev;
@@ -707,7 +774,7 @@ export function FormRenderer({
       });
       scheduleSave();
     },
-    [scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave, userId],
   );
 
   // Spec 142 — client-callback submit path (`onSubmit`).
@@ -765,6 +832,9 @@ export function FormRenderer({
         // flushSave never rejects: it records a failure in saveState, and the
         // answers travel in the POST either way.
         if (autosaveEnabled) await flushSave();
+        // The POST carries the answers; a retried PUT after it would re-create
+        // the draft the submit deletes.
+        cancelRetry();
         const form = formRef.current;
         if (!form) {
           setSubmitting(false);
@@ -783,6 +853,7 @@ export function FormRenderer({
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (autosaveEnabled) await flushSave();
         await onSubmit(values);
+        cancelRetry();
         if (autosaveEnabled && draftKey) {
           // Best-effort cleanup of the draft row. Failure is non-fatal — the
           // user's submission has already gone through.
@@ -798,7 +869,7 @@ export function FormRenderer({
         setSubmitting(false);
       }
     },
-    [action, autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, values],
+    [action, autosaveEnabled, cancelRetry, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, values],
   );
 
   // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
@@ -807,13 +878,13 @@ export function FormRenderer({
   // a 1 s ticker for free — no extra timer needed here.
   const savedIndicator = useMemo(() => {
     if (!autosaveEnabled) return null;
-    if (saveState === "error") return "Save failed — retrying…";
+    if (saveState === "error") return failureMessage(saveFailure ?? "error");
     if (saveState === "pending") return "Saving…";
     if (lastSavedAt === null) return "Not saved yet";
     const seconds = Math.max(0, Math.floor(((nowMs ?? lastSavedAt) - lastSavedAt) / 1000));
     if (seconds < 1) return "Saved just now";
     return `Saved ${seconds}s ago`;
-  }, [autosaveEnabled, lastSavedAt, saveState, nowMs]);
+  }, [autosaveEnabled, lastSavedAt, saveFailure, saveState, nowMs]);
 
   return (
     <form

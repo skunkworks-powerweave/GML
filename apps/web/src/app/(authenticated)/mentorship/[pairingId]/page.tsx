@@ -15,7 +15,7 @@
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   mentors,
@@ -23,13 +23,16 @@ import {
   mentorMeetings,
   feedbackForms,
   feedbackResponses,
+  users,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
+import { QUARTER_TO_KIND, quarterlyVersionByKind } from "@/lib/forms/quarterly";
 import { MobileDetailFrame } from "@/components/shells";
 import {
   logMeetingAction,
+  cancelMeetingAction,
   completePairingAction,
   toggleCommitmentAction,
   addCommitmentAction,
@@ -43,14 +46,6 @@ const QUARTER_LABEL: Record<string, string> = {
   progress_1: "Q2 · Progress",
   progress_2: "Q3 · Progress",
   final: "Q4 · Final",
-};
-
-// Quarter index (1..4) → feedback_forms.kind value used in the /forms/ slug.
-const QUARTER_TO_KIND: Record<number, (typeof QUARTERS)[number]> = {
-  1: "baseline",
-  2: "progress_1",
-  3: "progress_2",
-  4: "final",
 };
 
 // THE FORM SLUG IS RESOLVED FROM THE DATABASE, NOT ASSEMBLED FROM CONSTANTS.
@@ -79,7 +74,7 @@ export default async function PairingDetailPage({
   searchParams,
 }: {
   params: Promise<{ pairingId: string }>;
-  searchParams?: Promise<{ logMeeting?: string; error?: string }>;
+  searchParams?: Promise<{ logMeeting?: string; error?: string; confirmCancel?: string }>;
 }) {
   const { pairingId } = await params;
   const sp = (await searchParams) ?? {};
@@ -100,8 +95,14 @@ export default async function PairingDetailPage({
     pairing_not_found: "That pairing no longer exists.",
     invalid_commitment: "That commitment reference was not valid.",
     empty_commitment: "A commitment needs some text before it can be added.",
+    // The rule the action applies: 50 OPEN commitments (done ones do not
+    // count), within a record of at most 500.
     commitments_full:
-      "This pairing already has the maximum of 50 commitments. Mark some done before adding more.",
+      "This pairing already has 50 open commitments. Mark some done before adding more.",
+    meetings_mentor_only: "Meetings are logged by the mentor. Nothing was saved.",
+    invalid_duration: "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
+    meeting_not_found: "That meeting is not on this pairing any more.",
+    meeting_has_recording: "That meeting has a recording attached, so it was kept.",
   };
   const pairingError = sp.error
     ? (PAIRING_ERRORS[sp.error] ?? "That action could not be completed. Please try again.")
@@ -118,15 +119,29 @@ export default async function PairingDetailPage({
 
   // Which audience's forms does THIS viewer answer? A mentor answers the
   // mentor-audience form about their mentee; the mentee answers the
-  // mentee-audience one. Admins preview the mentor side.
+  // mentee-audience one. Admins preview the mentor side -- a real preview now:
+  // their links carry no pairingId, because a submission with one was filed
+  // as this pairing's feedback.
   const formAudience = session.user.role === "teacher" ? "mentee" : "mentor";
+  const viewerIsAdmin = hasAnyRole(session.user.role, ["programme_admin", "super_admin"]);
 
-  // Active form versions for that audience, keyed by kind. Resolved once.
+  // Active QUARTERLY form versions for that audience, keyed by kind.
+  //
+  // This was `new Map(activeForms.map(f => [f.kind, f.version]))` over rows
+  // with no ORDER BY, and the School visit checklist and Endline survey share
+  // a kind with a quarter's form (they differ only by schema.purpose), so the
+  // last row Postgres returned won: the mentor's Q1 opened the school-visit
+  // checklist. lib/forms/quarterly.ts skips forms with a purpose and picks the
+  // highest version, whatever the row order.
   const activeForms = await db
-    .select({ kind: feedbackForms.kind, version: feedbackForms.version })
+    .select({
+      kind: feedbackForms.kind,
+      version: feedbackForms.version,
+      purpose: sql<string | null>`${feedbackForms.schema}->>'purpose'`,
+    })
     .from(feedbackForms)
     .where(and(eq(feedbackForms.audience, formAudience), eq(feedbackForms.active, true)));
-  const versionByKind = new Map(activeForms.map((f) => [f.kind, f.version]));
+  const versionByKind = quarterlyVersionByKind(activeForms);
   const [mentor] = await db.select().from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
 
@@ -134,16 +149,26 @@ export default async function PairingDetailPage({
   // along with the ownership check rather than costing a second query.
   const commitments = Array.isArray(pairing.commitments) ? pairing.commitments : [];
 
-  // Pick a WhatsApp/Message target — the mentee (teacher) is the primary
-  // contact for a mentor-led pairing. Phone may be NULL.
-  const contactPhone = teacher?.phone ?? null;
-  const contactName = teacher?.fullName ?? "Mentee";
+  // THE OTHER PERSON ON THE PAIRING, from where the viewer stands. This was
+  // always the mentee, so a teacher opening her own pairing got a WhatsApp
+  // chat with her own number greeting herself, and no way to reach her
+  // mentor. The mentor's number is her user profile's (mentors has none).
+  // Phone may be NULL.
+  const viewerIsMentee = session.user.role === "teacher";
+  const [mentorUser] =
+    viewerIsMentee && mentor?.userId
+      ? await db.select({ phone: users.phone }).from(users).where(eq(users.id, mentor.userId)).limit(1)
+      : [];
+  const contactPhone = viewerIsMentee ? (mentorUser?.phone ?? null) : (teacher?.phone ?? null);
+  const contactName = viewerIsMentee ? (mentor?.name ?? "Mentor") : (teacher?.fullName ?? "Mentee");
   const waText = `Hi ${contactName}, checking in on our mentorship pairing.`;
   const waHref =
     contactPhone && contactPhone.replace(/[^0-9]/g, "").length >= 10
       ? `https://wa.me/${contactPhone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(waText)}`
       : null;
-  const messageHref = teacher?.userId ? `/inbox?to=${teacher.userId}` : `/inbox`;
+  // The mentee does not log meetings: "Mentor logs every contact", and a
+  // mistaken entry by her could not be removed by anyone.
+  const canLogMeeting = !viewerIsMentee;
 
   const meetings = await db
     .select()
@@ -153,6 +178,21 @@ export default async function PairingDetailPage({
     .limit(20);
 
   const feedback = await db.select().from(feedbackResponses).where(eq(feedbackResponses.pairingId, pairingId));
+
+  // The quarterly forms THIS viewer has already sent for the pairing. Only the
+  // mentor's form closes a quarter, so a mentee who has sent hers waits for
+  // the mentor -- and her card should say "submitted", not ask again.
+  const answeredByViewer = new Set(
+    (
+      await db
+        .select({ kind: feedbackForms.kind, purpose: sql<string | null>`${feedbackForms.schema}->>'purpose'` })
+        .from(feedbackResponses)
+        .innerJoin(feedbackForms, eq(feedbackForms.id, feedbackResponses.formId))
+        .where(and(eq(feedbackResponses.pairingId, pairingId), eq(feedbackResponses.respondentUserId, session.user.id)))
+    )
+      .filter((r) => !r.purpose)
+      .map((r) => r.kind as string),
+  );
   const feedbackByKind = new Set(
     feedback.map((f) => {
       // We have form_id but not kind here; query+join would be cleaner, but
@@ -225,9 +265,9 @@ export default async function PairingDetailPage({
 
           {/* Action buttons (spec 118) — Message / WhatsApp / Log meeting / Complete */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Link href={messageHref} className="btn btn-sm" aria-label="Open message thread">
-              Message
-            </Link>
+            {/* No "Message" button: it linked /inbox?to=<id>, and the inbox is a
+                notification feed that reads no `to` and has no messaging. It
+                landed everyone on an empty feed. WhatsApp is the channel. */}
             {waHref ? (
               <a
                 href={waHref}
@@ -242,19 +282,21 @@ export default async function PairingDetailPage({
               <span
                 className="btn btn-sm"
                 style={{ opacity: 0.45, cursor: "not-allowed" }}
-                title="No phone on file for mentee"
+                title={`No phone on file for ${viewerIsMentee ? "your mentor" : "the mentee"}`}
                 aria-disabled="true"
               >
                 WhatsApp
               </span>
             )}
-            <Link
-              href={`/mentorship/${pairingId}?logMeeting=1`}
-              className="btn btn-sm btn-primary"
-              aria-label="Log a new meeting"
-            >
-              + Log meeting
-            </Link>
+            {canLogMeeting ? (
+              <Link
+                href={`/mentorship/${pairingId}?logMeeting=1`}
+                className="btn btn-sm btn-primary"
+                aria-label="Log a new meeting"
+              >
+                + Log meeting
+              </Link>
+            ) : null}
             {canComplete && pairing.status !== "complete" ? (
               <form action={completePairingAction}>
                 <input type="hidden" name="pairingId" value={pairingId} />
@@ -272,7 +314,7 @@ export default async function PairingDetailPage({
         </div>
 
         {/* Inline "Log meeting" form — shown when ?logMeeting=1 */}
-        {showLogMeetingForm ? (
+        {showLogMeetingForm && canLogMeeting ? (
           <form
             action={logMeetingAction}
             className="card"
@@ -297,8 +339,12 @@ export default async function PairingDetailPage({
               <label style={{ fontSize: 12 }}>
                 <div className="label" style={{ marginBottom: 4 }}>Duration (min)</div>
                 <input
-                  type="text"
+                  type="number"
                   name="durationMin"
+                  min={1}
+                  max={600}
+                  step={1}
+                  inputMode="numeric"
                   placeholder="42"
                   style={{
                     width: "100%",
@@ -352,9 +398,11 @@ export default async function PairingDetailPage({
             // No active form for this quarter yet -> no link, rather than a
             // link to a "Form not found" shell.
             const formVersion = versionByKind.get(formKind);
-            const formHref = formVersion
-              ? `/forms/${formKind}-${formAudience}-${formVersion}?pairingId=${pairingId}&quarter=${qNum}`
-              : null;
+            const formHref = !formVersion
+              ? null
+              : viewerIsAdmin
+                ? `/forms/${formKind}-${formAudience}-${formVersion}`
+                : `/forms/${formKind}-${formAudience}-${formVersion}?pairingId=${pairingId}&quarter=${qNum}`;
             return (
               <div
                 key={q}
@@ -394,7 +442,19 @@ export default async function PairingDetailPage({
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
-                {!formHref ? (
+                {state === "done" ? (
+                  // The READ-ONLY record. This opened the live form, where
+                  // each visit could file another copy and nobody but the
+                  // respondent could see the answers at all.
+                  <Link
+                    href={`/mentorship/${pairingId}/responses`}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`View Q${qNum} responses`}
+                  >
+                    View responses →
+                  </Link>
+                ) : !formHref ? (
                   // No active form published for this quarter and audience.
                   // Saying so beats a link into a "Form not found" shell.
                   state === "future" ? null : (
@@ -402,7 +462,25 @@ export default async function PairingDetailPage({
                       No form published for this quarter yet.
                     </span>
                   )
-                ) : state === "current" ? (
+                ) : state !== "current" ? null : viewerIsAdmin ? (
+                  <Link
+                    href={formHref}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Preview Q${qNum} mentor form`}
+                  >
+                    Preview form →
+                  </Link>
+                ) : answeredByViewer.has(formKind) ? (
+                  <Link
+                    href={`/mentorship/${pairingId}/responses`}
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Q${qNum} form submitted: view responses`}
+                  >
+                    ✓ Submitted · view →
+                  </Link>
+                ) : (
                   <Link
                     href={formHref}
                     className="btn btn-sm"
@@ -410,15 +488,6 @@ export default async function PairingDetailPage({
                     aria-label={`Fill Q${qNum} progress form`}
                   >
                     Fill progress form →
-                  </Link>
-                ) : state === "future" ? null : (
-                  <Link
-                    href={formHref}
-                    className="btn btn-sm btn-ghost"
-                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`View Q${qNum} responses`}
-                  >
-                    View responses →
                   </Link>
                 )}
               </div>
@@ -495,6 +564,54 @@ export default async function PairingDetailPage({
                           >
                             Open recording →
                           </Link>
+                        ) : canLogMeeting ? (
+                          // A meeting logged by mistake, or called off, could
+                          // never be removed. Kept when a recording is attached.
+                          // An upcoming one is CANCELLED (the other party is
+                          // told); one whose time has passed is REMOVED from the
+                          // record, and nobody is told it was cancelled. The
+                          // button only asks: the delete is permanent, and it
+                          // happens from the confirmation (?confirmCancel=).
+                          (() => {
+                            const upcoming = d.getTime() > Date.now();
+                            const when = d.toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+                            if (sp.confirmCancel !== m.id) {
+                              return (
+                                <Link
+                                  href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
+                                  className="btn btn-sm btn-ghost"
+                                  style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
+                                  aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
+                                >
+                                  {upcoming ? "Cancel meeting" : "Remove"}
+                                </Link>
+                              );
+                            }
+                            return (
+                              <form
+                                action={cancelMeetingAction}
+                                role="alert"
+                                style={{ marginTop: 6, padding: 10, border: "1px solid var(--rust)", borderRadius: "var(--r-2)", background: "var(--rust-soft)", fontSize: 12 }}
+                              >
+                                <input type="hidden" name="pairingId" value={pairingId} />
+                                <input type="hidden" name="meetingId" value={m.id} />
+                                <input type="hidden" name="confirm" value="1" />
+                                <p style={{ margin: 0, color: "var(--ink-2)" }}>
+                                  {upcoming
+                                    ? `Cancel the meeting on ${when}? The other people on this pairing will be told.`
+                                    : `Remove the meeting of ${when} from the record? It will stop counting towards this pairing's meetings. This cannot be undone.`}
+                                </p>
+                                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                                  <button type="submit" className="btn btn-sm" style={{ fontSize: 11 }}>
+                                    {upcoming ? "Yes, cancel it" : "Yes, remove it"}
+                                  </button>
+                                  <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost" style={{ fontSize: 11 }}>
+                                    Keep it
+                                  </Link>
+                                </div>
+                              </form>
+                            );
+                          })()
                         ) : null}
                       </div>
                     </div>
@@ -545,6 +662,14 @@ export default async function PairingDetailPage({
               <div className="bar" style={{ marginTop: 6 }}>
                 <div style={{ width: `${feedbackPct}%` }} />
               </div>
+              {feedbackByKind.size > 0 ? (
+                <Link
+                  href={`/mentorship/${pairingId}/responses`}
+                  style={{ display: "inline-block", marginTop: 10, fontSize: 12, color: "var(--indigo)" }}
+                >
+                  Read the submitted feedback →
+                </Link>
+              ) : null}
             </div>
           </div>
 

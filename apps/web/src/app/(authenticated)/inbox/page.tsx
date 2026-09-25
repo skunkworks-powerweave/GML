@@ -9,6 +9,7 @@ import { db } from "@gml/db";
 import { notifications } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { notificationKindFilter } from "@/lib/notification-kinds";
+import { hrefForEntity, openHref } from "./links";
 
 export const dynamic = "force-dynamic";
 
@@ -17,27 +18,11 @@ const KIND_ICON: Record<string, string> = {
   "cycle.assigned": "📋",
   "video.transcoded": "🎥",
   "meeting.scheduled": "📅",
+  "meeting.cancelled": "🚫",
   "quiz.due": "❓",
 };
 
-// Entity type → canonical href (id is appended). Used when entityType + entityId are present.
-const ENTITY_HREF: Record<string, (id: string) => string> = {
-  cycle: (id) => `/observation/${id}`,
-  observation_cycle: (id) => `/observation/${id}`,
-  video: (id) => `/videos/${id}`,
-  video_submission: (id) => `/videos/${id}`,
-  meeting: (id) => `/mentorship/${id}`,
-  mentor_pairing: (id) => `/mentorship/${id}`,
-  pairing: (id) => `/mentorship/${id}`,
-  quiz: (id) => `/quizzes/${id}`,
-  session: (id) => `/repo/session/${id}`,
-};
-
-function hrefForEntity(entityType: string | null, entityId: string | null): string | null {
-  if (!entityType || !entityId) return null;
-  const fn = ENTITY_HREF[entityType];
-  return fn ? fn(entityId) : null;
-}
+// Where an item goes when opened: ./links.ts, shared with the open route.
 
 // Bucket a notification's createdAt against the request-time clock.
 // Local-time aware so "Today" follows the operator's wall clock, not UTC.
@@ -130,8 +115,17 @@ export default async function InboxPage({
     .limit(50);
 
   const now = new Date();
-  const unreadCount = rows.filter((r) => r.readAt === null).length;
-  const totalShown = rows.length;
+  // COUNTED, not read off the 50-row slice: past fifty the header said "50
+  // unread" while the bell -- which counts every row -- said more.
+  const [counts] = await db
+    .select({
+      unread: sql<number>`count(*) FILTER (WHERE ${notifications.readAt} IS NULL)::int`,
+      total: sql<number>`count(*)::int`,
+    })
+    .from(notifications)
+    .where(and(eq(notifications.userId, userId), kindFilter));
+  const unreadCount = counts?.unread ?? 0;
+  const totalShown = counts?.total ?? 0;
 
   // Partition into buckets, preserving the unread-first ordering inside each bucket.
   const buckets: Record<"today" | "yesterday" | "week" | "older", Row[]> = {
@@ -277,7 +271,11 @@ export default async function InboxPage({
 function NotificationRow({ row, now }: { row: Row; now: Date }) {
   const unread = row.readAt === null;
   const icon = KIND_ICON[row.kind] ?? "🔔";
-  const href = hrefForEntity(row.entityType, row.entityId);
+  // Every item opens through the route that marks it read, and lands on its
+  // entity (or back here when it has none). A plain <a>, not next/link: a
+  // viewport prefetch of that GET would mark items read unseen.
+  const href = openHref(row.id);
+  const destination = hrefForEntity(row.entityType, row.entityId);
 
   const rowStyle: React.CSSProperties = {
     display: "flex",
@@ -351,13 +349,13 @@ function NotificationRow({ row, now }: { row: Row; now: Date }) {
 
   return (
     <li>
-      {href ? (
-        <Link href={href} style={rowStyle}>
-          {content}
-        </Link>
-      ) : (
-        <div style={rowStyle}>{content}</div>
-      )}
+      <a
+        href={href}
+        style={rowStyle}
+        aria-label={unread ? `${row.subject} (unread${destination ? "" : ", mark read"})` : row.subject}
+      >
+        {content}
+      </a>
     </li>
   );
 }

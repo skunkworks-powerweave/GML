@@ -137,9 +137,27 @@ test("spec 140 — mentor seed's FieldKind union includes singular checkbox", ()
 
 // ---------- Runtime kind-validation guard is present ----------
 
+// The misc seed's list is no longer its own literal: it is the one list
+// PUT /api/admin/forms/[id] validates against too (packages/db/src/
+// formFieldKinds.ts), because the two disagreed -- the route accepted
+// "scale", the seed did not, and the seed "repaired" (overwrote) an edit the
+// route had accepted (F106). For that file the invariant is checked on the
+// shared list it is bound to; tests/behaviour/seed-forms-misc-repair.test.ts
+// executes the agreement.
+const SHARED_KINDS_PATH = "packages/db/src/formFieldKinds.ts";
+
 test("spec 140 — each seed file declares a CANONICAL_FIELD_KINDS allow-list", () => {
   for (const path of SEED_PATHS) {
-    const src = read(path);
+    let src = read(path);
+    if (path === MISC_PATH) {
+      assert.match(
+        src,
+        /const\s+CANONICAL_FIELD_KINDS\s*=\s*FORM_FIELD_KINDS\s*;/,
+        `${path} must bind CANONICAL_FIELD_KINDS to the shared FORM_FIELD_KINDS`,
+      );
+      assert.match(src, /from\s+"\.\.\/formFieldKinds\.js"/, `${path} must import the shared list`);
+      src = read(SHARED_KINDS_PATH).replace(/FORM_FIELD_KINDS/g, "CANONICAL_FIELD_KINDS");
+    }
     assert.match(
       src,
       /const\s+CANONICAL_FIELD_KINDS\s*=\s*\[/,

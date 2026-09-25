@@ -20,35 +20,52 @@
 // only records successful version bumps.
 
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { isUuid } from "@/lib/ids";
+import { FormSchemaSchema } from "@/lib/forms/schema";
 
 export const dynamic = "force-dynamic";
 
 const ALLOWED_ROLES = ["programme_admin", "super_admin"] as const;
 
 /**
- * Pure version-bump helper. Exported for the governance test.
+ * Pure version-bump helper. Exported for the governance and behaviour tests.
  *
  *   "1"   → "2"
  *   "2"   → "3"
  *   "1.0" → "1.1"
  *   "2.7" → "2.8"
- *   "draft-Q2" → "draft-Q2+1"  (non-numeric path)
+ *   "endline-1" → "endline-2"   (trailing number incremented)
+ *   "draft-Q2"  → "draft-Q3"
+ *   "draft"     → "draft-2"     (no trailing number)
+ *
+ * THE VERSION IS PART OF A URL. The runner's slug is
+ * `${kind}-${audience}-${version}`, and the non-numeric path used to return
+ * `${prev}+1`: editing the seeded "endline-1" or "schoolvisit-1" produced
+ * "endline-1+1", the runner received that segment percent-encoded, its lookup
+ * never matched, and the form vanished for every user with no way back short
+ * of SQL. The result is always drawn from [A-Za-z0-9._-]; any other character
+ * already in a stored version becomes "-".
  */
 export function bumpVersion(prev: string): string {
   const m = /^(\d+)(?:\.(\d+))?$/.exec(prev);
-  if (!m) return `${prev}+1`;
-  const major = Number(m[1]);
-  if (m[2] === undefined) {
-    return String(major + 1);
+  if (m) {
+    const major = Number(m[1]);
+    if (m[2] === undefined) {
+      return String(major + 1);
+    }
+    const minor = Number(m[2]);
+    return `${major}.${minor + 1}`;
   }
-  const minor = Number(m[2]);
-  return `${major}.${minor + 1}`;
+  const safe = prev.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "v";
+  const trailing = /^(.*?)(\d+)$/.exec(safe);
+  if (trailing) return `${trailing[1]}${Number(trailing[2]) + 1}`;
+  return `${safe}-2`;
 }
 
 export async function PUT(
@@ -64,7 +81,9 @@ export async function PUT(
   }
 
   const { id } = await ctx.params;
-  if (!id || typeof id !== "string") {
+  // A uuid, checked here: a malformed id reached the uuid column, Postgres
+  // raised 22P02, and the 500 below carried its message to the client.
+  if (!isUuid(id)) {
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 
@@ -86,6 +105,33 @@ export async function PUT(
     );
   }
 
+  // A SCHEMA THE RUNNERS CAN DRAW. Parsing was the only check, so
+  // `{"fields": {...}}` was stored and every open of the form was a 500 for
+  // every user, and `42` stored a form with no questions that still
+  // submitted. Refused before anything is locked or a version is used up.
+  // `message` names the first few wrong paths in a sentence: the editor
+  // (admin/forms/[id]/parts.tsx) shows body.message || body.error, so with
+  // `issues` alone the administrator read only "invalid_schema".
+  // lib/forms/schema.ts.
+  const checked = FormSchemaSchema.safeParse(parsed);
+  if (!checked.success) {
+    const issues = checked.error.issues;
+    const listed = issues
+      .slice(0, 3)
+      .map((i) => `${i.path.length > 0 ? i.path.join(".") : "(the whole definition)"}: ${i.message}`)
+      .join("; ");
+    const more = issues.length > 3 ? ` (and ${issues.length - 3} more)` : "";
+    return NextResponse.json(
+      {
+        error: "invalid_schema",
+        message: `The form definition was not saved: ${listed}${more}.`,
+        issues: issues.slice(0, 20),
+      },
+      { status: 400 },
+    );
+  }
+  const schema = checked.data;
+
   // Spec 152 — race-safe version bump. We wrap the SELECT + UPDATE pair in
   // `db.transaction(async (tx) => { ... })` and acquire a row-level lock on
   // the existing row via `.for("update")`. Postgres serialises every other
@@ -102,7 +148,12 @@ export async function PUT(
       // holds a row-level lock until commit. Drizzle's pg query builder
       // exposes this via `.for("update")` on the select chain.
       const locked = await tx
-        .select({ id: feedbackForms.id, version: feedbackForms.version })
+        .select({
+          id: feedbackForms.id,
+          version: feedbackForms.version,
+          kind: feedbackForms.kind,
+          audience: feedbackForms.audience,
+        })
         .from(feedbackForms)
         .where(eq(feedbackForms.id, id))
         .limit(1)
@@ -112,18 +163,37 @@ export async function PUT(
         notFound = true;
         return null;
       }
-      const nextVersion = bumpVersion(existing.version);
+      // Step past a version another row of this (kind, audience) already
+      // holds -- "endline-1" -> "endline-2" when an "endline-2" was published
+      // separately -- rather than hitting feedback_forms_kind_audience_version_uq
+      // and answering 500.
+      let nextVersion = bumpVersion(existing.version);
+      for (let i = 0; i < 20; i++) {
+        const [taken] = await tx
+          .select({ id: feedbackForms.id })
+          .from(feedbackForms)
+          .where(
+            and(
+              eq(feedbackForms.kind, existing.kind),
+              eq(feedbackForms.audience, existing.audience),
+              eq(feedbackForms.version, nextVersion),
+              ne(feedbackForms.id, id),
+            ),
+          )
+          .limit(1);
+        if (!taken) break;
+        nextVersion = bumpVersion(nextVersion);
+      }
       await tx
         .update(feedbackForms)
-        .set({ schema: parsed, version: nextVersion })
+        .set({ schema, version: nextVersion })
         .where(eq(feedbackForms.id, id));
       return { prevVersion: existing.version, nextVersion };
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: "transaction_failed", message: (e as Error).message },
-      { status: 500 },
-    );
+    // Logged here, not returned: the driver's message is not for the client.
+    console.error("[admin/forms] schema update failed", { id, err: e });
+    return NextResponse.json({ error: "transaction_failed" }, { status: 500 });
   }
 
   if (notFound || !txResult) {

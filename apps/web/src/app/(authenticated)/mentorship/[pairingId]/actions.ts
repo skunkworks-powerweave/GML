@@ -26,14 +26,40 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentorPairings, mentorMeetings } from "@gml/db/schema";
+import { notify } from "@gml/db/notify";
+import { mentorPairings, mentorMeetings, mentors, teachers, videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit } from "@/lib/audit";
+import { isUuid } from "@/lib/ids";
+
+/**
+ * The two people on a pairing, as users, for notify(). Either may be null: a
+ * mentor record need not have a login, nor a teacher's. Their user ids only:
+ * what a notification says must not name them (see logMeetingAction).
+ */
+async function pairingParties(pairing: { mentorId: string; teacherId: string }) {
+  const [m] = await db.select({ userId: mentors.userId }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+  const [t] = await db.select({ userId: teachers.userId }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+  return { mentor: m ?? null, mentee: t ?? null };
+}
+
+/** "Thu 2 Oct, 10:30 am", in the programme's timezone. */
+function meetingWhen(d: Date): string {
+  return d.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Log a meeting against a pairing.
@@ -66,6 +92,15 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
     redirect(`/mentorship/${pairingId}?error=invalid_meeting_time`);
   }
 
+  // A WHOLE NUMBER OF MINUTES. The field was free text, so "forty" was stored
+  // and rendered as "fortym". Optional; when given, 1..600.
+  if (durationMinRaw.length > 0) {
+    const minutes = Number(durationMinRaw);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 600) {
+      redirect(`/mentorship/${pairingId}?logMeeting=1&error=invalid_duration`);
+    }
+  }
+
   // OWNERSHIP GATE. What stood here was described as a "cheap guard against URL
   // tampering", but it only confirmed the pairing EXISTED -- not that the caller
   // had anything to do with it. With no role check either, any authenticated
@@ -73,6 +108,14 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // meetings_count / last_meeting_at counters.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // THE MENTOR LOGS MEETINGS (or an administrator). The page says "Mentor logs
+  // every contact", yet the mentee was offered the button and her posts were
+  // accepted -- and nothing could remove a meeting row, so a mistaken entry
+  // inflated meetings_count on the list and the dashboard for good. (The
+  // mentor can now remove one: cancelMeetingAction.)
+  if (!hasAnyRole(actor.role, ["mentor", "programme_admin", "super_admin"])) {
+    redirect(`/mentorship/${pairingId}?error=meetings_mentor_only`);
+  }
   // SECTION GATE. Asserted HERE and not left to the layout: Next runs a Server
   // Action to completion BEFORE it renders any layout, so observation/layout.tsx's
   // assertSectionGate never executes on a mutation. Every action in this file
@@ -82,7 +125,7 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
   await assertSectionGate(actor.id, "mentorship", "/mentorship");
-  await assertCanAccessPairing(actor, pairingId);
+  const pairing = await assertCanAccessPairing(actor, pairingId);
 
   let newMeetingId = "";
   await db.transaction(async (tx) => {
@@ -121,6 +164,142 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
     entityId: newMeetingId,
     metadata: { pairingId, scheduledAt: scheduledAt.toISOString() },
   });
+
+  // TELL THE OTHER PARTY. The settings page offers "Meeting scheduled --
+  // Mentor + teacher receive calendar entry", on by default, and nothing ever
+  // wrote it: the mentee's bell stayed at 0. Both parties, minus whoever
+  // logged it; the row opens the pairing. notify() never throws, so the
+  // meeting stands whatever happens to the bell.
+  //
+  // NOTHING THE SECTION PASSWORD GUARDS goes into the row: no notes, no names.
+  // /inbox has no gate, and a subject naming mentor and mentee with the notes
+  // as its body put the pairing roster and the meeting record in front of a
+  // borrowed session that never entered the password. The row opens the
+  // (gated) pairing page, which shows both.
+  const parties = await pairingParties(pairing);
+  await notify(
+    db,
+    [parties.mentor?.userId, parties.mentee?.userId]
+      .filter((u): u is string => Boolean(u))
+      .map((userId) => ({
+        userId,
+        kind: "meeting.scheduled",
+        subject: `A mentorship meeting was logged for ${meetingWhen(scheduledAt)}`,
+        body: null,
+        entityType: "mentor_pairing",
+        entityId: pairingId,
+      })),
+    { excludeUserId: actor.id },
+  );
+
+  revalidatePath(`/mentorship/${pairingId}`);
+  redirect(`/mentorship/${pairingId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Cancel (remove) a logged meeting.
+//
+// There was no way to remove a meeting at all: a mistaken or called-off entry
+// stayed on the pairing and in meetings_count -- the list page and the
+// dashboard's stale-pairing view read it -- for good. The mentor (or an
+// administrator) removes it here; the counters are recomputed from what is
+// left.
+//
+// AN UPCOMING MEETING IS CANCELLED, and the other party is told
+// (meeting.cancelled). A meeting whose time has passed is REMOVED from the
+// record -- a mistaken entry -- and nobody is told it was "cancelled": it
+// either happened or never did.
+//
+// ONLY ONCE CONFIRMED. The delete is permanent, and the page offered it as a
+// single button on a touch-first product. Without `confirm=1` nothing changes
+// and the page is sent back asking (?confirmCancel=<id>); the page's own
+// buttons only link to that question.
+//
+// A meeting with a recording attached is kept: video_submissions points at it
+// by id with no foreign key, and removing the meeting would orphan the video.
+//
+// Form fields: pairingId, meetingId (both uuids), confirm ("1").
+// ---------------------------------------------------------------------------
+
+export async function cancelMeetingAction(formData: FormData): Promise<void> {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+
+  const pairingId = String(formData.get("pairingId") ?? "").trim();
+  const meetingId = String(formData.get("meetingId") ?? "").trim();
+  if (!pairingId || !meetingId) redirect(`/mentorship/${pairingId || ""}?error=invalid_meeting`);
+  if (!hasAnyRole(actor.role, ["mentor", "programme_admin", "super_admin"])) {
+    redirect(`/mentorship/${pairingId}?error=meetings_mentor_only`);
+  }
+  // SECTION GATE, in the action for the reason every action in this file
+  // asserts it (see logMeetingAction).
+  await assertSectionGate(actor.id, "mentorship", "/mentorship");
+  const pairing = await assertCanAccessPairing(actor, pairingId);
+
+  // The meeting must be THIS pairing's: a meeting id from another pairing, or
+  // a malformed one (never sent to a uuid column), is treated as absent.
+  const [meeting] = isUuid(meetingId)
+    ? await db
+        .select({ id: mentorMeetings.id, scheduledAt: mentorMeetings.scheduledAt, recordingVideoId: mentorMeetings.recordingVideoId })
+        .from(mentorMeetings)
+        .where(and(eq(mentorMeetings.id, meetingId), eq(mentorMeetings.pairingId, pairingId)))
+        .limit(1)
+    : [];
+  if (!meeting) redirect(`/mentorship/${pairingId}?error=meeting_not_found`);
+
+  const [attached] = await db
+    .select({ id: videoSubmissions.id })
+    .from(videoSubmissions)
+    .where(and(eq(videoSubmissions.contextType, "mentor_meeting"), eq(videoSubmissions.contextId, meetingId)))
+    .limit(1);
+  if (meeting.recordingVideoId || attached) redirect(`/mentorship/${pairingId}?error=meeting_has_recording`);
+
+  if (String(formData.get("confirm") ?? "") !== "1") {
+    redirect(`/mentorship/${pairingId}?confirmCancel=${encodeURIComponent(meetingId)}`);
+  }
+  const upcoming = new Date(meeting.scheduledAt).getTime() > Date.now();
+
+  await db.transaction(async (tx) => {
+    await tx.delete(mentorMeetings).where(eq(mentorMeetings.id, meetingId));
+    // Recomputed from the meetings that remain, not decremented blind: the
+    // cached counters are what the list page and the dashboard read.
+    await tx
+      .update(mentorPairings)
+      .set({
+        meetingsCount: sql`(SELECT count(*)::int FROM ${mentorMeetings} WHERE ${mentorMeetings.pairingId} = ${pairingId})`,
+        lastMeetingAt: sql`(SELECT max(${mentorMeetings.scheduledAt}) FROM ${mentorMeetings} WHERE ${mentorMeetings.pairingId} = ${pairingId})`,
+      })
+      .where(eq(mentorPairings.id, pairingId));
+  });
+
+  void recordAudit({
+    action: upcoming ? "mentor.meeting.cancelled" : "mentor.meeting.removed",
+    entityType: "mentor_meeting",
+    entityId: meetingId,
+    metadata: { pairingId, scheduledAt: new Date(meeting.scheduledAt).toISOString() },
+  });
+
+  if (!upcoming) {
+    revalidatePath(`/mentorship/${pairingId}`);
+    redirect(`/mentorship/${pairingId}`);
+  }
+
+  const parties = await pairingParties(pairing);
+  await notify(
+    db,
+    [parties.mentor?.userId, parties.mentee?.userId]
+      .filter((u): u is string => Boolean(u))
+      .map((userId) => ({
+        userId,
+        kind: "meeting.cancelled",
+        subject: `Mentorship meeting ${meetingWhen(new Date(meeting.scheduledAt))} cancelled`,
+        entityType: "mentor_pairing",
+        entityId: pairingId,
+      })),
+    { excludeUserId: actor.id },
+  );
 
   revalidatePath(`/mentorship/${pairingId}`);
   redirect(`/mentorship/${pairingId}`);
@@ -309,20 +488,24 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   };
 
   // Append in SQL. A read-modify-write would lose a concurrent addition.
-  // Capped at 50 so the column cannot grow without bound on a row that is read
-  // on every visit to the pairing page.
   //
-  // THE CAP NOW REPORTS ITSELF. The CASE returns the array unchanged once the
-  // limit is reached, and the action then redirected as though it had
-  // succeeded -- so past 50 commitments the Add button silently did nothing,
-  // forever, with no message. Returning the resulting length lets the caller
-  // tell "appended" from "refused", which is the whole difference between a
-  // cap and a bug.
+  // THE CAP IS ON OPEN COMMITMENTS: at most 50 not yet done. It used to count
+  // every entry, done ones included, and nothing removes a commitment -- so
+  // "mark some done before adding more" could never free a place, and a
+  // weekly-meeting pairing filled up within the year for good. A hard ceiling
+  // of 500 entries still bounds a row read on every visit to the page.
+  //
+  // WHETHER IT WAS APPENDED is read back from the row -- is the new entry's id
+  // in the array? -- rather than inferred from its length: the old
+  // `length >= 50` check after the update reported the 50th commitment as
+  // refused while saving it.
+  const openCount = sql`(SELECT count(*) FROM jsonb_array_elements(${mentorPairings.commitments}) AS c(e)
+    WHERE NOT COALESCE((e->>'done')::boolean, false))`;
   const updated = await db
     .update(mentorPairings)
     .set({
       commitments: sql`CASE
-        WHEN jsonb_array_length(${mentorPairings.commitments}) >= 50
+        WHEN ${openCount} >= 50 OR jsonb_array_length(${mentorPairings.commitments}) >= 500
         THEN ${mentorPairings.commitments}
         ELSE ${mentorPairings.commitments} || ${JSON.stringify([entry])}::jsonb
       END`,
@@ -330,13 +513,13 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
     .where(eq(mentorPairings.id, pairingId))
     .returning({
       id: mentorPairings.id,
-      count: sql<number>`jsonb_array_length(${mentorPairings.commitments})`,
+      appended: sql<boolean>`EXISTS (SELECT 1 FROM jsonb_array_elements(${mentorPairings.commitments}) AS c(e) WHERE e->>'id' = ${entry.id})`,
     });
 
   if (updated.length === 0) {
     redirect(`/mentorship/${pairingId}?error=pairing_not_found`);
   }
-  if ((updated[0]?.count ?? 0) >= 50) {
+  if (!updated[0]?.appended) {
     redirect(`/mentorship/${pairingId}?error=commitments_full`);
   }
 

@@ -63,8 +63,12 @@ test("Spec 070: kind icon map covers all four documented kinds + bell fallback",
   assert.ok(src.includes("🔔"), "bell fallback glyph must exist");
 });
 
+// The map moved to inbox/links.ts, shared with /api/notifications/[id]/open,
+// which marks an item read before redirecting to it (the page links every item
+// through that route; tests/behaviour/inbox-open.test.ts executes both).
 test("Spec 070: entity href map covers cycle / video / meeting / quiz", () => {
-  const src = read(ROUTE);
+  assert.match(read(ROUTE), /from "\.\/links"/);
+  const src = read("apps/web/src/app/(authenticated)/inbox/links.ts");
   assert.match(src, /\/observation\//);
   assert.match(src, /\/videos\//);
   assert.match(src, /\/mentorship\//);

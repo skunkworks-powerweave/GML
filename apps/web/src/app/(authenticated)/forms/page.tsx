@@ -17,16 +17,11 @@ import { db } from "@gml/db";
 import { feedbackForms, feedbackResponses, mentorPairings, mentors, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { formCatalogueLinks, type PairingChoice } from "@/lib/forms/catalogue-links";
+import { formCatalogueLinks, UNLOCK_FORMS_HREF, type PairingChoice } from "@/lib/forms/catalogue-links";
+import { actorFrom, mentorshipAccess } from "@/lib/visibility";
+import { formTitle } from "@/lib/forms/quarterly";
 
 export const dynamic = "force-dynamic";
-
-const KIND_LABELS: Record<string, string> = {
-  baseline: "Baseline",
-  progress_1: "Progress check 1",
-  progress_2: "Progress check 2",
-  final: "Final reflection",
-};
 
 /**
  * Which audiences may this role fill in?
@@ -54,7 +49,19 @@ function audiencesFor(role: RoleName): ("mentor" | "mentee")[] {
   }
 }
 
-export default async function FormsIndexPage() {
+/** The submit action's own errors, which it used to send to /inbox (which ignored them). */
+const SUBMIT_ERRORS: Record<string, string> = {
+  form_not_found: "That form is no longer available, so your answers were not saved. Choose a current form below.",
+  invalid_form_submit: "That submission was incomplete and could not be saved. Please open the form again.",
+};
+
+export default async function FormsIndexPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ error?: string }>;
+} = {}) {
+  const sp = (await searchParams) ?? {};
+  const submitError = sp.error ? (SUBMIT_ERRORS[sp.error] ?? null) : null;
   const session = await auth();
   if (!session) redirect("/login?next=%2Fforms");
 
@@ -80,10 +87,11 @@ export default async function FormsIndexPage() {
       kind: feedbackForms.kind,
       audience: feedbackForms.audience,
       version: feedbackForms.version,
+      schema: feedbackForms.schema,
     })
     .from(feedbackForms)
     .where(and(eq(feedbackForms.active, true), inArray(feedbackForms.audience, audiences)))
-    .orderBy(feedbackForms.audience, feedbackForms.kind);
+    .orderBy(feedbackForms.audience, feedbackForms.kind, feedbackForms.version);
 
   // Which of these has this user already submitted, and for which pairing?
   // Answered forms stay listed rather than disappearing -- a teacher asking "did
@@ -114,8 +122,20 @@ export default async function FormsIndexPage() {
   // nothing to answer about, so say that plainly instead of linking to a page
   // that will reject the submission.
   const isAdmin = role === "programme_admin" || role === "super_admin";
-  const { pairings, lookupFailed } = await pairingsFor(session.user.id, role);
-  const pairingCount = isAdmin || lookupFailed ? null : pairings.length;
+
+  // THE MENTORSHIP PASSWORD. This page lists a mentor's mentees by name, one
+  // link per pairing, and each link opens what the mentor wrote about that
+  // mentee -- the data /mentorship keeps behind its section password. It sat
+  // outside that section and never asked, so a borrowed session read the
+  // roster without the password. Locked: no pairing is looked up at all, not
+  // even a count, and every row links to the password prompt. An administrator
+  // previews bare forms and is party to no pairing, so has nothing to lock.
+  const actor = actorFrom(session);
+  const locked = !isAdmin && (!actor || !(await mentorshipAccess(db, actor)).granted);
+  const { pairings, lookupFailed } = locked
+    ? { pairings: [], lookupFailed: false }
+    : await pairingsFor(session.user.id, role);
+  const pairingCount = isAdmin || lookupFailed || locked ? null : pairings.length;
 
   return (
     <main style={{ padding: "24px 28px", maxWidth: 820 }}>
@@ -126,6 +146,44 @@ export default async function FormsIndexPage() {
           Feedback forms for the mentorship cycle. Answers save as you type.
         </p>
       </header>
+
+      {submitError ? (
+        <p
+          role="alert"
+          data-testid="forms-error"
+          style={{
+            background: "var(--rust-soft)",
+            color: "var(--rust)",
+            border: "1px solid var(--rust)",
+            borderRadius: "var(--r-2, 8px)",
+            padding: "12px 14px",
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          {submitError}
+        </p>
+      ) : null}
+
+      {locked ? (
+        <p
+          role="status"
+          data-testid="forms-locked"
+          style={{
+            border: "1px solid var(--line-2)",
+            background: "var(--paper-2)",
+            borderRadius: "var(--r-2, 8px)",
+            padding: "12px 14px",
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 16,
+          }}
+        >
+          Mentorship feedback is behind the mentorship password.{" "}
+          <Link href={UNLOCK_FORMS_HREF}>Enter it</Link> to see who each form is for and to
+          answer it.
+        </p>
+      ) : null}
 
       {pairingCount === 0 ? (
         <p
@@ -169,11 +227,18 @@ export default async function FormsIndexPage() {
             // than one mentee. /inbox has no feedback-form card, so that was a
             // dead end. Now a row with several pairings lists one link per
             // pairing, named, and nobody is sent to /inbox.
-            const links = formCatalogueLinks(slug, { isAdmin, pairings, lookupFailed });
+            const links = formCatalogueLinks(slug, { isAdmin, pairings, lookupFailed, locked });
+            // Per pairing when there are several: "Answered" as soon as ONE of
+            // a mentor's five mentees was answered hid the other four.
+            const perPairing = links.filter((l) => l.pairingId);
+            const answeredHere = perPairing.filter((l) => answeredFor.has(`${f.id}:${l.pairingId}`)).length;
+            // BY THE FORM'S OWN TITLE. Labelled by kind alone, the School visit
+            // checklist (stored as kind 'baseline') and the mentor baseline were
+            // two rows both called "Baseline for mentors".
             const title = (
               <span>
                 <span style={{ fontWeight: 500, fontSize: 14 }}>
-                  {KIND_LABELS[f.kind] ?? f.kind}
+                  {formTitle(f.schema, f.kind, f.audience)}
                 </span>
                 <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>
                   for {f.audience === "mentor" ? "mentors" : "mentees"}
@@ -191,7 +256,13 @@ export default async function FormsIndexPage() {
                   whiteSpace: "nowrap",
                 }}
               >
-                {done ? "Answered" : links.length === 0 ? "Needs a pairing" : "Not started"}
+                {perPairing.length > 1
+                  ? `${answeredHere} of ${perPairing.length} answered`
+                  : done
+                    ? "Answered"
+                    : links.length === 0
+                      ? "Needs a pairing"
+                      : "Not started"}
               </span>
             );
             const card: React.CSSProperties = {

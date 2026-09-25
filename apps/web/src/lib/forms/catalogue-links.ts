@@ -35,17 +35,40 @@ export const MAX_PAIRING_LINKS = 6;
 /** The pairing list, where each pairing page links its own quarter's forms. */
 const PAIRING_LIST = "/mentorship";
 
+/** The mentorship password prompt, returning to the catalogue once unlocked. */
+export const UNLOCK_FORMS_HREF = `/gate/mentorship?next=${encodeURIComponent("/forms")}`;
+
+/**
+ * A /forms/[slug] path segment as Next hands it over -- still percent-encoded
+ * -- turned back into the `${kind}-${audience}-${version}` it names. Without
+ * this a version holding any character a URL encodes (the "endline-1+1" the
+ * old version bump produced) could never match its own row. A malformed
+ * escape is returned as-is, and simply matches nothing.
+ */
+export function decodeFormSlug(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export function formRunnerHref(slug: string, pairingId: string): string {
   return `/forms/${slug}?pairingId=${encodeURIComponent(pairingId)}`;
 }
 
 export function formCatalogueLinks(
   slug: string,
-  opts: { isAdmin: boolean; pairings: readonly PairingChoice[]; lookupFailed?: boolean },
+  opts: { isAdmin: boolean; pairings: readonly PairingChoice[]; lookupFailed?: boolean; locked?: boolean },
 ): CatalogueLink[] {
   // An administrator is party to no pairing; the bare form is a preview, and
   // the runner says plainly that it cannot be submitted without one.
   if (opts.isAdmin) return [{ href: `/forms/${slug}`, label: null }];
+
+  // The mentorship section is locked. Who the caller's mentees are is exactly
+  // what its password guards, so the page looks no pairing up and the one link
+  // is the password prompt.
+  if (opts.locked) return [{ href: UNLOCK_FORMS_HREF, label: "Enter the mentorship password to answer" }];
 
   // The lookup threw. Showing the forms is still the safer wrong answer; the
   // pairing list is a real choice, where the inbox was an unrelated feed.

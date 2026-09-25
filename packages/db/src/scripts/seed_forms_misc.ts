@@ -20,6 +20,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { and, eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { feedbackForms, feedbackResponses } from "../schema/mentorship.js";
+import { repairDecision } from "./seed_forms_misc_repair.js";
+import { FORM_FIELD_KINDS, OPTION_BEARING_FIELD_KINDS } from "../formFieldKinds.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -39,21 +41,14 @@ type FieldKind = "boolean" | "boolean-group" | "rating" | "textarea" | "single-c
 // kind; an unmappable kind would silently fall through to the text-input
 // fallback in any future generic-renderer path (same drift class as the
 // singular "checkbox" rename fixes elsewhere in this spec).
-const CANONICAL_FIELD_KINDS = [
-  "text",
-  "textarea",
-  "select",
-  "radio",
-  "checkbox",
-  "number",
-  "date",
-  "likert",
-  "rating",
-] as const;
+//
+// The same list PUT /api/admin/forms/[id] validates against (formFieldKinds.ts):
+// an edit the route accepts is never one this seed treats as broken.
+const CANONICAL_FIELD_KINDS = FORM_FIELD_KINDS;
 
 // Kinds whose renderer draws one control PER OPTION. A field of one of these
 // kinds with no options renders as literally nothing.
-const OPTION_BEARING_KINDS = new Set(["select", "radio", "checkbox"]);
+const OPTION_BEARING_KINDS: ReadonlySet<string> = OPTION_BEARING_FIELD_KINDS;
 
 const MISC_KIND_TO_CANONICAL: Record<FieldKind, (typeof CANONICAL_FIELD_KINDS)[number]> = {
   // A SINGLE yes/no is a radio pair, not a checkbox.
@@ -367,11 +362,14 @@ export async function main(): Promise<void> {
         // the mapping above does not help a row that is already in the
         // database, and nobody can repair a field they cannot see.
         //
-        // So: if the stored schema differs from what this file would seed
-        // today, and NOBODY HAS ANSWERED THE FORM, rewrite it. The
-        // no-responses guard is what keeps this safe -- a form in use is left
-        // alone and reported, because replacing its schema would orphan the
-        // answers already keyed against the old field names.
+        // So: if the stored schema is one NO RENDERER CAN DRAW -- the shapes
+        // this file once shipped -- and NOBODY HAS ANSWERED THE FORM, rewrite
+        // it. A schema that merely differs from today's seed is an
+        // administrator's edit (/admin/forms/[id]) and is kept: this used to
+        // rewrite any difference, so a customisation made before the first
+        // response vanished at the next deploy. The no-responses guard stays,
+        // because replacing a form in use would orphan the answers already
+        // keyed against its field names. seed_forms_misc_repair.ts decides.
         const id = existing[0].id;
         const [{ stored } = { stored: null }] = await db
           .select({ stored: feedbackForms.schema })
@@ -379,7 +377,20 @@ export async function main(): Promise<void> {
           .where(eq(feedbackForms.id, id))
           .limit(1);
 
-        if (JSON.stringify(stored) === JSON.stringify(row.schema)) {
+        const [{ answers } = { answers: 0 }] = await db
+          .select({ answers: sql<number>`count(*)::int` })
+          .from(feedbackResponses)
+          .where(eq(feedbackResponses.formId, id));
+
+        // Compared ignoring key order: jsonb does not keep the literal's, so
+        // a plain JSON.stringify comparison never matched and both rows were
+        // rewritten on every run.
+        const decision = repairDecision(stored, row.schema, answers, {
+          kinds: CANONICAL_FIELD_KINDS,
+          optionBearing: OPTION_BEARING_KINDS,
+        });
+
+        if (decision === "current") {
           console.log(
             `[seed-forms-misc] SKIP  ${row.label} — already present and current (id=${id}, version=${row.version})`,
           );
@@ -387,12 +398,15 @@ export async function main(): Promise<void> {
           continue;
         }
 
-        const [{ answers } = { answers: 0 }] = await db
-          .select({ answers: sql<number>`count(*)::int` })
-          .from(feedbackResponses)
-          .where(eq(feedbackResponses.formId, id));
+        if (decision === "edited") {
+          console.log(
+            `[seed-forms-misc] KEEP  ${row.label} — differs from this seed but is a valid form: treated as an administrator's edit (id=${id}).`,
+          );
+          skipped++;
+          continue;
+        }
 
-        if (answers > 0) {
+        if (decision === "answered") {
           console.warn(
             `[seed-forms-misc] KEEP  ${row.label} — stored schema differs from this seed, but ${answers} response(s) exist (id=${id}). Left untouched; migrate it by hand or publish a new version.`,
           );

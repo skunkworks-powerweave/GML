@@ -103,7 +103,13 @@ test("a mentor's quarterly form is owed after a meeting and cleared by submittin
       const r = await outcome(() =>
         submitFormAction(form({ __formId: id, __slug: slug, __pairingId: w.pairingId, summary: "Going well." })),
       );
-      assert.deepEqual(r, { kind: "redirect", location: `/forms/${slug}/thanks` }, `the ${kind} form was accepted`);
+      // The thank-you page carries the pairing, so it can link back to it and
+      // to its read-only responses (mentorship-forms, F54).
+      assert.deepEqual(
+        r,
+        { kind: "redirect", location: `/forms/${slug}/thanks?pairingId=${encodeURIComponent(w.pairingId)}` },
+        `the ${kind} form was accepted`,
+      );
     };
     // A meeting just after the latest submission, on the database's clock.
     const justAfterLastForm = async () =>
