@@ -43,7 +43,7 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
 // element below applies `minHeight: 44` via this const).
 const TOUCH_TARGET = 44; // minHeight: 44 — Apple HIG / Material Design floor
 
-export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
+export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
     loginAction,
     {},
@@ -262,7 +262,7 @@ export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
                 }}
               />
             </label>
-            <LoginError code={state?.error} fontSize={13} />
+            <LoginError code={state?.error ?? linkError} fontSize={13} />
             <button
               data-testid="mobile-signin-button"
               type="submit"

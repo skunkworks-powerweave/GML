@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { h, renderSync, withIntl, elements, attr, openingTags } from "./_ui.js";
+import { h, renderSync, withIntl, withAppRouter, elements, attr, openingTags, request, resetRequest } from "./_ui.js";
 import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const CODES = ["missing_fields", "invalid_credentials", "inactive", "email_not_confirmed", "rate_limited", "unavailable"] as const;
@@ -46,6 +46,36 @@ test("the login error renders in the picked language, as an alert", async () => 
       assert.notEqual(p!.text, en.login.error[code], `${locale}/${code} fell back to English`);
     }
   }
+});
+
+// ── F84: /login ignored ?error= ──────────────────────────────────────────────
+//
+// /auth/callback and /auth/confirm send a failed email link to
+// /login?error=link_expired or link_invalid. The page read only from/next, so
+// the person landed on a bare sign-in form with no idea why their link had
+// not worked.
+
+test("/login explains a failed email link, in the picked language, on both shells", async () => {
+  const { default: LoginPage } = await import("../../apps/web/src/app/login/page.tsx");
+  const hi = loadMessages("hi") as unknown as { login: { error: Record<string, string> } };
+  for (const device of ["desktop", "mobile"] as const) {
+    for (const code of ["link_expired", "link_invalid"] as const) {
+      request.cookies = { "gml-device": device };
+      try {
+        const el = await LoginPage({ searchParams: Promise.resolve({ error: code }) });
+        const html = renderSync(withAppRouter(await withIntl(el, "hi")));
+        const alerts = elements(html, "p").filter((p) => /role="alert"/.test(p.open));
+        assert.equal(alerts.length, 1, `${device}/${code}: expected one alert`);
+        assert.equal(alerts[0]!.text, hi.login.error[code]);
+      } finally {
+        resetRequest();
+      }
+    }
+  }
+  // Anything else in ?error= is not echoed.
+  const el = await LoginPage({ searchParams: Promise.resolve({ error: "<script>" }) });
+  const html = renderSync(withAppRouter(await withIntl(el, "en")));
+  assert.equal(elements(html, "p").filter((p) => /role="alert"/.test(p.open)).length, 0);
 });
 
 test("no error, no alert", async () => {

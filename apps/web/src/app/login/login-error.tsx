@@ -8,8 +8,9 @@
 
 import { useTranslations } from "next-intl";
 import type { LoginErrorCode } from "./actions";
+import type { LinkErrorCode } from "./shell-props";
 
-export function LoginError({ code, fontSize = 12 }: { code?: LoginErrorCode; fontSize?: number }) {
+export function LoginError({ code, fontSize = 12 }: { code?: LoginErrorCode | LinkErrorCode; fontSize?: number }) {
   const t = useTranslations("login");
   if (!code) return null;
   return (

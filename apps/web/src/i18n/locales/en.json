@@ -122,7 +122,9 @@
       "inactive": "This account is not active. Contact your programme administrator.",
       "email_not_confirmed": "This email address has not been confirmed yet. Ask your programme administrator to confirm it.",
       "rate_limited": "Too many sign-in attempts. Wait a few minutes and try again.",
-      "unavailable": "Sign-in is temporarily unavailable. Try again in a few minutes."
+      "unavailable": "Sign-in is temporarily unavailable. Try again in a few minutes.",
+      "link_expired": "That sign-in or reset link has expired or was already used. Request a new one, or sign in with your password.",
+      "link_invalid": "That link is not valid. Request a new one, or sign in with your password."
     }
   }
 }

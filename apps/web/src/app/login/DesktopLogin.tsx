@@ -26,7 +26,7 @@ import { EmailLinkForm } from "./email-link-form";
 import { LoginLanguagePicker } from "./language-picker";
 import { LoginError } from "./login-error";
 
-export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
+export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
     loginAction,
     {},
@@ -244,7 +244,8 @@ export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
                   }}
                 />
               </label>
-              <LoginError code={state?.error} />
+              {/* A failed sign-in attempt replaces the email-link notice. */}
+              <LoginError code={state?.error ?? linkError} />
 
               <button
                 type="submit"

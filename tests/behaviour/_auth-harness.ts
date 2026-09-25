@@ -99,8 +99,9 @@ export function renderSync(element: unknown): string {
   return ReactDOMServer.renderToStaticMarkup(element);
 }
 
-/** Close the app's pg pool(s) so the process exits promptly. */
+/** Close the app's pg pool(s) so the process exits promptly. A no-op without DATABASE_URL. */
 export async function closeAppDb(): Promise<void> {
+  if (!process.env.DATABASE_URL) return;
   const pools = new Set([
     (webRequire("@gml/db") as { getPool: () => { end: () => Promise<void> } }).getPool(),
     (await import("../../packages/db/src/client.ts")).getPool(),

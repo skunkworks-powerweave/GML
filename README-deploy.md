@@ -122,7 +122,28 @@ true, and better than accepting an address and promising a message that cannot
 be sent. Administrators create accounts with a password at `/admin/users` and
 hand it over directly.
 
-When you attach SMTP: set `AUTH_EMAIL_ENABLED=true` and redeploy. No code change.
+When you attach SMTP, do all four of these, then set `AUTH_EMAIL_ENABLED=true`
+and redeploy. No code change.
+
+1. **Site URL.** Authentication → URL Configuration → *Site URL*: your
+   `APP_URL` (e.g. `https://lms.example.org`). The default is
+   `http://localhost:3000`, and every emailed link is built on it.
+2. **Redirect URLs.** Same page → *Redirect URLs* → add `APP_URL/auth/**`
+   (e.g. `https://lms.example.org/auth/**`). GoTrue silently replaces any
+   redirect it does not allow-list with the bare Site URL, so without this the
+   link never reaches the application's callback at all.
+3. **Reset Password template.** Authentication → Emails → Templates → *Reset
+   Password*: make the link
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/login/reset`
+4. **Magic Link template.** Same place → *Magic Link*: make the link
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard`
+
+Steps 3 and 4 are what let a link work on a **different device** from the one
+that asked for it. The default templates use a code that can only be redeemed
+in the browser that made the request: a teacher who asks for a reset on a
+school computer and opens the email on her phone gets "This link has expired".
+The `/auth/confirm` links work anywhere. A reset link is good for one use, and
+the page it opens only accepts it for 15 minutes.
 
 ### 2.4 AWS
 
