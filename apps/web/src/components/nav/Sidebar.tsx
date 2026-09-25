@@ -91,6 +91,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
   const tSection = await getTranslations("navSection");
   const tBrand = await getTranslations("brand");
   const tRole = await getTranslations("role");
+  const tGate = await getTranslations("gate");
 
   return (
     <aside
@@ -178,8 +179,11 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                   <Icon name={item.icon} size={14} />
                   <span style={{ flex: 1 }}>{itemLabel}</span>
                   {item.gate ? (
+                    // The tooltip names the section as the gate page does
+                    // (gate.<slug>Title). It was English in every locale, and
+                    // gave the raw slug: "Section gate: mentorship".
                     <span
-                      title={`Section gate: ${item.gate}`}
+                      title={`${tGate("title")}: ${tGate(`${item.gate}Title`)}`}
                       style={{
                         fontSize: 9,
                         padding: "1px 5px",

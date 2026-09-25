@@ -143,7 +143,8 @@
     "checking": "Checking…",
     "onlineHint": "The server is reachable.",
     "offlineHint": "The server cannot be reached. Anything you save will fail until this clears.",
-    "checkingHint": "Checking whether the server is reachable…"
+    "checkingHint": "Checking whether the server is reachable…",
+    "queueDepth": "Transcode queue depth"
   },
   "gate": {
     "title": "Section gate",

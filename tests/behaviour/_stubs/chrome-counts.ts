@@ -14,8 +14,12 @@ export function formatBellBadge(count: number): string | null {
   return count > 99 ? "99+" : String(count);
 }
 
-export function formatQueueLabel(): string | null {
-  return null;
+// A label whenever anything is queued, as the real one, so a test can render
+// the topbar's queue pill. Its wording is the real formatter's business, not
+// something the chrome tests read.
+export function formatQueueLabel(counts?: QueueDepth): string | null {
+  if (!counts || (counts.active === 0 && counts.waiting === 0 && counts.failed === 0)) return null;
+  return `${counts.active} · ${counts.waiting} · ${counts.failed}`;
 }
 
 // The loaders the authenticated layout awaits. Empty, as the real ones are

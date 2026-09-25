@@ -128,3 +128,34 @@ test("F134: Tibetan tab labels are set larger than 10px", async () => {
   const en = await render(h(BottomTabs, { role: "teacher" }));
   assert.match(attr(openingTags(en, "a")[0], "style") ?? "", /font-size:10px/, "English keeps its size: six tabs have to fit");
 });
+
+test("F134: the queue pill's and the gate badge's tooltips are in the user's language", async () => {
+  // Both were English literals in every locale: the admin topbar's queue pill
+  // said "Transcode queue depth", and the sidebar's gate badge "Section gate:
+  // mentorship" -- the raw slug, too.
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const { Topbar } = await import("../../apps/web/src/components/nav/Topbar.tsx");
+  const admin = { ...USER, role: "programme_admin" as const };
+  for (const locale of ["en", "hi", "bo"] as const) {
+    resetRequest();
+    request.locale = locale;
+    const status = ns(locale, "status");
+    const gate = ns(locale, "gate");
+
+    const top = await render(
+      withAppRouter(await withIntl(h(Topbar, { user: admin, locale, queueDepth: { active: 2, waiting: 1, failed: 0 } }), locale)),
+    );
+    const pill = openingTags(top, "span").find((t) => attr(t, "data-testid") === "topbar-queue-indicator");
+    assert.ok(pill, "the queue pill renders while jobs are queued");
+    assert.equal(attr(pill, "title"), status.queueDepth, `${locale}: the queue pill's tooltip`);
+
+    const side = await render(h(Sidebar, { role: "mentor" }));
+    const badges = openingTags(side, "span").map((t) => attr(t, "title")).filter((t): t is string => t !== null);
+    assert.deepEqual(
+      badges.sort(),
+      [`${gate.title}: ${gate.mentorshipTitle}`, `${gate.title}: ${gate.observationTitle}`].sort(),
+      `${locale}: each gate badge names its section in the user's language`,
+    );
+  }
+  assert.notEqual(ns("hi", "status").queueDepth, ns("en", "status").queueDepth);
+});

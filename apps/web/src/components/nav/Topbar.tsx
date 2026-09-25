@@ -67,6 +67,7 @@ export async function Topbar({
   // ROLE_LABEL map; aria-label="Breadcrumb") in every locale.
   const tRole = await getTranslations("role");
   const tCrumb = await getTranslations("crumb");
+  const tStatus = await getTranslations("status");
   const bellBadge = formatBellBadge(unreadCount);
   const queueLabel = queueDepth ? formatQueueLabel(queueDepth) : null;
   return (
@@ -112,11 +113,12 @@ export async function Topbar({
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
         {/* Queue indicator — surfaces the job queue transcode queue depth (spec 128).
             Hidden when active/waiting/failed are all zero so the chrome stays
-            quiet on idle systems. */}
+            quiet on idle systems. The tooltip was an English literal in every
+            locale. */}
         {queueLabel ? (
           <span
             data-testid="topbar-queue-indicator"
-            title="Transcode queue depth"
+            title={tStatus("queueDepth")}
             style={{
               padding: "4px 8px",
               borderRadius: 999,
