@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Noto_Sans_Devanagari, Noto_Serif_Tibetan } from "next/font/google";
 import { LOCALE_HTML_LANG, type Locale } from "@/i18n/config";
-import { resolveUiLocale } from "@/i18n/resolve";
+import { resolveUiLocale, viewerPrefs } from "@/i18n/resolve";
+import type { UserPrefs } from "@gml/db/schema";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -52,6 +53,23 @@ function documentLocale(): Promise<Locale> {
   return resolveUiLocale();
 }
 
+/**
+ * The Display preferences that have a rule in globals.css, as body classes.
+ *
+ * Saved on /settings since spec 024 and applied nowhere: the body had a fixed
+ * className, so High contrast and Reduced motion answered "Saved" and changed
+ * nothing. On <body> rather than a wrapper so the portals mounted there
+ * (QuickFind, the anti-download toast) are covered, and server-rendered so a
+ * slow connection never paints the page first without them. The row is the
+ * one the locale came from, so this costs no query.
+ */
+function displayClasses(prefs: UserPrefs | null): string {
+  if (!prefs) return "";
+  return [prefs.highContrast && "a11y-high-contrast", prefs.reducedMotion && "a11y-reduced-motion"]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export const metadata: Metadata = {
   // Still the create-next-app default until now: every browser tab, every
   // bookmark and every screenshot a teacher sent to the helpdesk said
@@ -76,12 +94,13 @@ export default async function RootLayout({
   // reader as English, and the browser applied English line-breaking to
   // Tibetan, which does not break on spaces.
   const locale = await documentLocale();
+  const display = displayClasses((await viewerPrefs()).prefs);
   return (
     <html
       lang={LOCALE_HTML_LANG[locale]}
       className={`${geistSans.variable} ${geistMono.variable} ${notoDevanagari.variable} ${notoTibetan.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className={display ? `min-h-full flex flex-col ${display}` : "min-h-full flex flex-col"}>{children}</body>
     </html>
   );
 }

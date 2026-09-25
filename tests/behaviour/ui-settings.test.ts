@@ -18,7 +18,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mount, textOf, withAppRouter } from "./_ui.js";
+import { h, render, mount, textOf, withAppRouter, openingTags, attr } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 
 // Nothing here writes to Postgres, but the form's module graph imports
@@ -156,5 +156,48 @@ test("F125: picking the language already in use sends nothing and refreshes noth
     await settle();
     assert.equal(puts.length, 0);
     assert.deepEqual(router, []);
+  });
+});
+
+// ── F127: Display and Privacy controls that did nothing ─────────────────────
+//
+// Density, Text size and the watermark switch saved and had no effect
+// anywhere (see ui-display-prefs.test.ts for why each was removed rather than
+// wired). High contrast and Reduced motion now apply, as body classes the
+// root layout renders -- so their save must re-render the page, as the
+// language's does, or they too would wait for a hard reload.
+
+test("F127: Settings offers no control that does nothing", { skip }, async () => {
+  const { SettingsForm } = await import("../../apps/web/src/app/(authenticated)/settings/settings-form.tsx");
+  const html = await render(
+    withAppRouter(h(SettingsForm, { initial: DEFAULTS, email: "x@gml.local", roleLabel: "Observer", roleChipKind: "" })),
+  );
+  const groups = openingTags(html, "div").filter((t) => attr(t, "role") === "radiogroup").map((t) => attr(t, "aria-label"));
+  assert.ok(!groups.includes("Density"), "Density has no CSS behind it");
+  assert.ok(!groups.includes("Text size"), "Text size changed no rendered size");
+  const switches = openingTags(html, "button").filter((t) => attr(t, "role") === "switch").map((t) => attr(t, "aria-label"));
+  assert.deepEqual(switches.sort(), ["High contrast", "Reduced motion"], "only the switches that take effect");
+  assert.match(html, /data-testid="watermark-always-on"/, "the watermark is stated, not offered as a switch the player ignores");
+});
+
+test("F127: saving High contrast re-renders the page so it applies at once", { skip }, async () => {
+  await withSettingsForm(async ({ puts, router }) => {
+    const { SettingsForm } = await import("../../apps/web/src/app/(authenticated)/settings/settings-form.tsx");
+    const m = mount(
+      SettingsForm as (p: unknown) => unknown,
+      { initial: DEFAULTS, email: "x@gml.local", roleLabel: "Observer", roleChipKind: "" },
+      { effects: true },
+    );
+    try {
+      const toggle = allElements(m.tree).find((e) => e.props.label === "High contrast");
+      (toggle!.props.onChange as (v: boolean) => void)(true);
+      m.rerender();
+      await new Promise((r) => setTimeout(r, 450));
+      await settle();
+      assert.deepEqual(puts.map((p) => p.body), [{ highContrast: true }]);
+      assert.ok(router.includes("refresh"), "the body classes are rendered by the root layout: without a refresh, nothing changes until a reload");
+    } finally {
+      m.unmount();
+    }
   });
 });

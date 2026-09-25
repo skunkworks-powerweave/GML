@@ -76,8 +76,8 @@ export default async function SettingsPage() {
           Your preferences
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13, maxWidth: 640 }}>
-          Persisted to your account. Display + accessibility tweaks apply on the next page load;
-          watermark + language take effect immediately on new requests.
+          Saved to your account as you change them, and applied straight away on every device you
+          sign in on.
         </p>
       </div>
 

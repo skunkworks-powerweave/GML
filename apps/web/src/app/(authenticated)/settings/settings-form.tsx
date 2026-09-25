@@ -49,6 +49,9 @@ function computeDelta(baseline: SettingsFormValues, current: SettingsFormValues)
   return delta;
 }
 
+/** Preferences the layouts render (lang, strings, body classes): a save must re-render them. */
+const RENDERED_BY_LAYOUT: ReadonlyArray<keyof SettingsFormValues> = ["uiLanguage", "highContrast", "reducedMotion"];
+
 export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props) {
   const router = useRouter();
   const [values, setValues] = useState<SettingsFormValues>(initial);
@@ -93,8 +96,9 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       // soft navigation. Without this the chrome kept the old language on
       // every page until a hard reload, under a "Saved" badge. refresh()
       // re-renders the server tree in place, root layout (<html lang>)
-      // included, and fetches no document.
-      if ("uiLanguage" in delta) router.refresh();
+      // included, and fetches no document. The same for the Display
+      // switches, whose body classes that root layout renders.
+      if (RENDERED_BY_LAYOUT.some((k) => k in delta)) router.refresh();
       // Auto-clear the "Saved" pill after 1.6s so the form looks idle again.
       setTimeout(() => {
         setSaveState((s) => (s === "saved" ? "idle" : s));
@@ -186,26 +190,17 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
   return (
     <>
       <SectionCard title="Display" badge={saveBadge}>
-        <SegmentRow
-          label="Density"
-          value={values.density}
-          options={[
-            { v: "dense", label: "Dense" },
-            { v: "regular", label: "Regular" },
-            { v: "loose", label: "Loose" },
-          ]}
-          onChange={(v) => set("density", v as Density)}
-        />
-        <SegmentRow
-          label="Text size"
-          value={values.fontScale}
-          options={[
-            { v: "regular", label: "Regular" },
-            { v: "large", label: "Large" },
-            { v: "xlarge", label: "Extra large" },
-          ]}
-          onChange={(v) => set("fontScale", v as FontScale)}
-        />
+        {/* ONLY WHAT TAKES EFFECT. Density and Text size were here and saved
+            without changing anything: there are no density rules at all, and
+            nearly every size in the app is an inline px value a body
+            font-size cannot reach (CSS zoom can, but it also multiplies the
+            vw/vh sizes the help panel, QuickFind and the upload modal use,
+            pushing them off a phone's screen). The columns stay; the controls
+            come back when the sizes are rem-based. Until then, say what does
+            work. */}
+        <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 10, lineHeight: 1.5 }}>
+          For larger text, use your browser&apos;s zoom: Ctrl and + on a computer, or pinch on a phone.
+        </div>
         <ToggleRow
           label="High contrast"
           hint="Deepens ink + line tokens; easier in bright light."
@@ -221,12 +216,16 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       </SectionCard>
 
       <SectionCard title="Privacy">
-        <ToggleRow
-          label="Watermark videos with my name"
-          hint="Recommended. Renders at 30% opacity over every rendition; turning this off only affects YOUR playback overlay."
-          value={values.showWatermark}
-          onChange={(v) => set("showWatermark", v)}
-        />
+        {/* Was a "Watermark videos with my name" switch that the player never
+            read -- it always draws the overlay. Stated rather than offered:
+            honouring it would let a viewer remove the viewer-identifying
+            overlay (SM-4) just before recording the screen. */}
+        <div data-testid="watermark-always-on" style={{ padding: "10px 0" }}>
+          <div style={{ fontSize: 13, color: "var(--ink)" }}>Videos are watermarked with your name</div>
+          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2, lineHeight: 1.4 }}>
+            Always on, for every viewer. It identifies who was watching if a recording of the screen is shared.
+          </div>
+        </div>
         <div
           style={{
             marginTop: 14,
@@ -238,8 +237,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
             lineHeight: 1.5,
           }}
         >
-          All session footage is confidential and downloads are disabled at the player level. Your changes here do not
-          affect other viewers&apos; overlays.
+          All session footage is confidential and downloads are disabled at the player level.
         </div>
       </SectionCard>
 
@@ -378,60 +376,6 @@ function SectionCard({
       </header>
       <div style={{ padding: 16 }}>{children}</div>
     </article>
-  );
-}
-
-function SegmentRow({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { v: string; label: string }[];
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 6 }}>{label}</div>
-      <div
-        role="radiogroup"
-        aria-label={label}
-        style={{
-          display: "inline-flex",
-          border: "1px solid var(--line)",
-          borderRadius: "var(--r-2)",
-          overflow: "hidden",
-          background: "var(--paper)",
-        }}
-      >
-        {options.map((o, i) => {
-          const active = value === o.v;
-          return (
-            <button
-              key={o.v}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => onChange(o.v)}
-              style={{
-                padding: "6px 12px",
-                fontSize: 12,
-                background: active ? "var(--ink)" : "transparent",
-                color: active ? "var(--paper)" : "var(--ink-2)",
-                border: "none",
-                borderLeft: i === 0 ? "none" : "1px solid var(--line)",
-                cursor: "pointer",
-                fontFamily: "var(--sans)",
-              }}
-            >
-              {o.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 
