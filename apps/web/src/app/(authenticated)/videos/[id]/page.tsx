@@ -6,6 +6,7 @@ import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz"
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
 import { HlsPlayer } from "@/components/video/HlsPlayer";
+import { signPosterUrls } from "@/lib/video/storage";
 import { ExternalEmbed } from "@/components/video/ExternalEmbed";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,9 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   if (video.hlsMasterKey && video.status === "ready") {
     playerSrc = `/api/media/playlist/${id}`;
   }
+  // The frame the worker grabbed for this video, so the player does not open
+  // black. Signed only now, after the ownership and gate checks above.
+  const poster = playerSrc && video.posterKey ? (await signPosterUrls([video.posterKey])).get(video.posterKey) : undefined;
 
   const watermark = `${session.user.name ?? session.user.email ?? "viewer"} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
@@ -99,7 +103,7 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
             {video.source === "external_link" && video.externalUrl ? (
               <ExternalEmbed url={video.externalUrl} watermark={watermark} />
             ) : playerSrc ? (
-              <HlsPlayer src={playerSrc} watermark={watermark} videoId={id} />
+              <HlsPlayer src={playerSrc} watermark={watermark} videoId={id} poster={poster} />
             ) : (
               <div
                 style={{

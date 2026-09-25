@@ -31,6 +31,7 @@ import { hasAnyRole } from "@gml/shared/auth/roles";
 import { UploadModal } from "@/components/video/UploadModal";
 import { assertEnv } from "@/lib/env";
 import { getSystemSettings } from "@/lib/system-settings";
+import { signPosterUrls } from "@/lib/video/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -155,11 +156,17 @@ export default async function VideoLibraryPage({
       contextType: videoSubmissions.contextType,
       contextId: videoSubmissions.contextId,
       hlsKey: videoSubmissions.hlsMasterKey,
+      posterKey: videoSubmissions.posterKey,
     })
     .from(videoSubmissions)
     .where(conds.length === 0 ? undefined : and(...conds))
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(100);
+
+  // The poster frame the worker made for each video, signed in one batch --
+  // only for rows the scope above already allowed. Empty on a Storage error:
+  // the cards then show their placeholder, as they always did.
+  const posterUrls = await signPosterUrls(rows.map((r) => r.posterKey));
 
   // Per-status counts as a single GROUP BY, over the SAME visibility scope as
   // the rows above. Without `scopeConds` here this aggregate ran unfiltered, so
@@ -300,6 +307,19 @@ export default async function VideoLibraryPage({
                 }}
               >
                 <div style={{ position: "relative", aspectRatio: "16/9", background: "var(--paper-2)" }}>
+                  {v.posterKey && posterUrls.get(v.posterKey) ? (
+                    // lazy: about 13 KB each, fetched only when scrolled into
+                    // view -- a library of 100 on a 2G phone otherwise pays for
+                    // every one up front.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={posterUrls.get(v.posterKey)}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+                    />
+                  ) : null}
                   <span
                     style={{
                       position: "absolute",
