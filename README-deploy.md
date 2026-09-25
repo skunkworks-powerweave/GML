@@ -497,6 +497,10 @@ runs the migrations on their own (`docker compose run --rm --no-deps migrate`)
 before `docker compose up` touches anything, stops when they fail, and puts
 `:current` back on the running images. That is the intended posture: a bad
 schema change degrades to "no deploy happened" rather than "the site is down".
+An image build that fails part-way is handled the same way: nothing is
+migrated or restarted, and `:current` is put back on what was serving. On a
+first deploy nothing is serving yet, and `deploy.sh` says so rather than
+promising otherwise.
 (A bare `docker compose up -d` does NOT give you this: it recreates `app` before
 it waits for `migrate`.)
 
