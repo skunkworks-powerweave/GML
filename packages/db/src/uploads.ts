@@ -15,10 +15,19 @@
 // conditional UPDATE. The browser and the reconciler can therefore race
 // without double-inserting evidence or queueing two transcodes: whichever
 // commits first moves the row on, and the other claims nothing.
+//
+// Linking a verified video to what it is FOR (linkSubmissionToContext, below)
+// is shared with the WhatsApp path too: the worker's fetch
+// (apps/worker/src/whatsapp-fetch.ts) is where a WhatsApp video's bytes are
+// verified, and it runs the same function inside its own claim. The webhook
+// used to carry its own copy of "record a submission and queue its transcode"
+// with no link step at all, so a WhatsApp lesson video captioned with its cycle
+// code never reached the cycle's Evidence card -- the same drift this file
+// already describes for the reconciler.
 
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { files, observationEvidence, videoSubmissions } from "./schema";
+import { files, mentorMeetings, observationCycles, observationEvidence, videoSubmissions } from "./schema";
 import { enqueue } from "./queue";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -102,13 +111,64 @@ export type FinalizeUploadInput = {
   storedBytes: number;
   contextType: string;
   contextId: string | null;
-  /** The uploader's note for the evidence row, when the browser sent one. */
+  /** The uploader's note, when the browser sent one: kept on the submission and on a cycle's evidence row. */
+  caption?: string | null;
+};
+
+export type ContextLink = {
+  submissionId: string;
+  contextType: string;
+  contextId: string | null;
+  /** The uploader's note, or the WhatsApp caption, for the evidence row. */
   caption?: string | null;
 };
 
 /**
- * Move a verified upload to 'queued', link it to its observation cycle, and
- * queue the transcode -- atomically.
+ * Link a submission whose bytes are verified to the thing it is for. Run
+ * inside the caller's claim, so it happens once per submission, and in the
+ * same transaction as the transcode it queues.
+ *
+ *   observation_cycle  an observation_evidence row: the cycle page's Evidence
+ *                      card reads only that table. Not for a cycle that has
+ *                      been signed off (the locking transition) in the
+ *                      meantime -- the video is kept, the closed record is not
+ *                      reopened.
+ *   mentor_meeting     the meeting's recording_video_id, which the pairing
+ *                      page's "Open recording" reads and which nothing used to
+ *                      write. Only while it is empty: an attached recording is
+ *                      never silently swapped for a later one.
+ *   mentee_quarterly   nothing to write. The submission itself is the
+ *                      pairing's quarterly video (context_id = the pairing,
+ *                      context_quarter = 1 or 4).
+ *
+ * A parent that no longer exists links nothing rather than failing: context_id
+ * carries no foreign key, and a failure here would roll back the claim -- on
+ * the WhatsApp path, after the bytes were already stored.
+ */
+export async function linkSubmissionToContext(tx: AnyDb, link: ContextLink): Promise<void> {
+  if (!link.contextId) return;
+  if (link.contextType === "observation_cycle") {
+    const caption = link.caption?.trim() ? link.caption.trim().slice(0, 500) : null;
+    await tx.execute(sql`
+      INSERT INTO ${observationEvidence} (cycle_id, video_submission_id, caption)
+      SELECT ${observationCycles.id}, ${link.submissionId}::uuid, ${caption}
+        FROM ${observationCycles}
+       WHERE ${observationCycles.id} = ${link.contextId}::uuid
+         AND ${observationCycles.status} <> 'complete'
+         AND NOT EXISTS (SELECT 1 FROM ${observationEvidence} WHERE ${observationEvidence.videoSubmissionId} = ${link.submissionId}::uuid)`);
+    return;
+  }
+  if (link.contextType === "mentor_meeting") {
+    await tx
+      .update(mentorMeetings)
+      .set({ recordingVideoId: link.submissionId })
+      .where(and(eq(mentorMeetings.id, link.contextId), isNull(mentorMeetings.recordingVideoId)));
+  }
+}
+
+/**
+ * Move a verified upload to 'queued', link it to what it is for, and queue the
+ * transcode -- atomically.
  *
  * Claims only a submission that is still waiting for its bytes ('received'),
  * or one the reconciler gave up on ('failed' with its FILE also 'failed', which
@@ -145,18 +205,29 @@ export async function finalizeUpload(db: AnyDb, u: FinalizeUploadInput): Promise
 
     await tx.update(files).set({ status: "stored", sizeBytes: u.storedBytes }).where(eq(files.id, u.fileId));
 
-    // LINK THE VIDEO TO THE CYCLE'S EVIDENCE PANEL. Written here, when the
-    // bytes are known to exist, so an abandoned upload never leaves a row
-    // promising evidence that was never delivered. The claim above is what
-    // keeps this from double-inserting.
-    if (u.contextType === "observation_cycle" && u.contextId) {
-      const caption = u.caption?.trim() ? u.caption.trim().slice(0, 500) : null;
-      await tx.insert(observationEvidence).values({
-        cycleId: u.contextId,
-        videoSubmissionId: u.submissionId,
-        caption,
-      });
+    // The uploader's note, on the submission itself, whatever the video is
+    // for. It used to be written only onto a cycle's evidence row, so the
+    // caption the phone flow asks for ("so your mentor knows what this is")
+    // was discarded for a meeting recording, a quarterly video or anything
+    // else; /videos/[id] shows this column.
+    const note = u.caption?.trim() ? u.caption.trim().slice(0, 500) : null;
+    if (note) {
+      await tx
+        .update(videoSubmissions)
+        .set({ captionRaw: note })
+        .where(and(eq(videoSubmissions.id, u.submissionId), isNull(videoSubmissions.captionRaw)));
     }
+
+    // LINK THE VIDEO TO WHAT IT IS FOR. Written here, when the bytes are known
+    // to exist, so an abandoned upload never leaves a row promising evidence
+    // that was never delivered. The claim above is what keeps this from
+    // double-inserting.
+    await linkSubmissionToContext(tx as unknown as AnyDb, {
+      submissionId: u.submissionId,
+      contextType: u.contextType,
+      contextId: u.contextId,
+      caption: u.caption,
+    });
 
     // Same dedupe key as every other producer (apps/web/src/lib/queue.ts), so
     // a completion that also reaches the webhook or Retry paths cannot queue a

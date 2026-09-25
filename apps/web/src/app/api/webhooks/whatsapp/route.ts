@@ -11,7 +11,9 @@
 //      with the Graph media id and the sender) and a 'whatsapp_fetch' job on
 //      the Postgres queue. Only then is Meta told 200.
 //   4. The worker (apps/worker/src/whatsapp-fetch.ts) claims the job, fetches
-//      the media from the Graph API, stores it, and queues the transcode. A
+//      the media from the Graph API, stores it, links it to the cycle's
+//      Evidence or the meeting's recording (linkSubmissionToContext, the same
+//      step a direct upload gets), and queues the transcode. A
 //      failure there is retried with backoff and, if it never succeeds, marks
 //      the submission failed with the reason and shows on /admin/whatsapp-log.
 //   5. Once transcoded, the row moves to status='ready' and the teacher's
@@ -700,7 +702,8 @@ async function resolveSender(from: string): Promise<Actor | null> {
  * (lib/visibility.ts, which lib/authz.ts binds):
  *
  *   observation_cycle  the cycle's teacher or observer, a mentor actively
- *                      paired with its teacher, or an admin
+ *                      paired with its teacher, or an admin -- and not once
+ *                      the cycle is signed off
  *   mentor_meeting     a member of the meeting's pairing, or an admin
  *   teach_back         any registered sender. A teach-back is the uploader's
  *                      own work and has no owning row to check -- the upload
@@ -720,11 +723,15 @@ async function refusalFor(
   if (contextType === "teach_back") return null;
   if (contextType === "observation_cycle") {
     const [ok] = await db
-      .select({ id: observationCycles.id })
+      .select({ status: observationCycles.status })
       .from(observationCycles)
       .where(and(eq(observationCycles.id, contextId), await cycleVisibility(db, sender)))
       .limit(1);
-    return ok ? null : "observation_cycle.not_permitted";
+    if (!ok) return "observation_cycle.not_permitted";
+    // Sign-off closes the record: the direct upload refuses it at reservation
+    // (uploads/context.ts), and the cycle's evidence is not reopened for a
+    // video that arrives afterwards.
+    return ok.status === "complete" ? "observation_cycle.signed_off" : null;
   }
   const [ok] = await db
     .select({ id: mentorMeetings.id })

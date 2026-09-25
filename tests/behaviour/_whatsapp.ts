@@ -189,6 +189,9 @@ export async function withWorld(body: (w: World) => Promise<void>): Promise<void
     for (const s of subs) await c.query(`DELETE FROM jobs WHERE dedupe_key = $1`, [`submission:${s.id}`]);
     await c.query(`DELETE FROM video_submissions WHERE whatsapp_message_id LIKE $1`, [like]);
     await c.query(`DELETE FROM files WHERE object_key LIKE $1`, [`whatsapp/${like}`]);
+    // A fetched video captioned with a cycle code is linked to its Evidence
+    // panel, and that key is ON DELETE RESTRICT (migration 0031).
+    await c.query(`DELETE FROM observation_evidence WHERE cycle_id = ANY($1)`, [[cycleId, otherCycleId]]);
     await c.query(`DELETE FROM observation_cycles WHERE id = ANY($1)`, [[cycleId, otherCycleId]]);
     await c.query(`DELETE FROM teachers WHERE id = ANY($1)`, [[teacher.teacherId, otherTeacher.teacherId]]);
     await c.query(`DELETE FROM users WHERE id = ANY($1)`, [[teacher.userId, otherTeacher.userId]]);
