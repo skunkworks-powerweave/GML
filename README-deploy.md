@@ -100,7 +100,7 @@ When you attach SMTP: set `AUTH_EMAIL_ENABLED=true` and redeploy. No code change
 | Instance | `m7i-flex.large` (2 vCPU, 8 GiB) — or `t3.large` in **unlimited** credit mode |
 | AMI | Ubuntu Server 24.04 LTS (x86_64). §2.5's commands are written for it. |
 | Root volume | 30 GiB gp3 |
-| Data volume | 100 GiB gp3 mounted at `/var/lib/gml` (ffmpeg scratch + local dumps) |
+| Data volume | 100 GiB gp3 mounted at `/var/lib/gml`: Docker's data root (images, build cache, the worker's ffmpeg scratch — §2.5) and the local dumps |
 | Region | `ap-south-1` |
 | Security group in | 80, 443 from `0.0.0.0/0`; 22 from your admin range **only** |
 | Security group out | 443 (Supabase, Let's Encrypt, Meta) **and 80** — `docker/worker.Dockerfile` installs ffmpeg with apt, and `node:22-slim`'s Debian sources are `http://deb.debian.org` on port 80. With 443 only, the worker image fails to build on the first deploy. |
@@ -135,6 +135,19 @@ sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo usermod -aG docker "$USER"
 
+# Docker's data -- images, build cache and every volume, the worker's ffmpeg
+# scratch among them -- goes on the DATA volume, not the 30 GiB root (§2.4).
+# First make and mount the data volume at /var/lib/gml; `lsblk` names it
+# (usually nvme1n1 on this instance type):
+sudo mkfs.ext4 -L gmldata /dev/nvme1n1
+sudo mkdir -p /var/lib/gml
+echo 'LABEL=gmldata /var/lib/gml ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
+sudo mount /var/lib/gml
+# ...then point Docker at it before anything is built or pulled:
+sudo mkdir -p /var/lib/gml/docker
+echo '{ "data-root": "/var/lib/gml/docker" }' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
+
 # jq: the verification commands in §5 pipe /api/health through it
 sudo apt-get install -y jq
 
@@ -153,6 +166,7 @@ in a new login session; until then every `docker` command fails with
 
 ```bash
 docker compose version    # Docker Compose version v2.x
+docker info --format '{{.DockerRootDir}}'   # /var/lib/gml/docker
 node --version            # v22.x
 pnpm --version            # 10.33.4
 jq --version

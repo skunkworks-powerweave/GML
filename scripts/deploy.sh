@@ -411,6 +411,21 @@ mkdir -p workspace
 date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOYED_MARKER}"
 log "marked this host as deployed (${DEPLOYED_MARKER}); the next deploy requires a passing restore drill"
 
+# Reclaim what the builds leave behind. Every deploy builds, and nothing ever
+# removed the results: each release's old images went dangling at the next
+# deploy, and the build cache (pnpm install layers, the next build output) grew
+# without bound -- on the root volume unless README-deploy.md 2.5's data-root
+# step was done, where a full disk takes Docker, the next deploy and the next
+# backup down together. Only now, with the new release healthy and verified:
+#   image prune    DANGLING images only. :current and :previous are tagged and
+#                  survive, so the rollback target is never removed.
+#   builder prune  build cache nobody has used for a week; recent layers stay,
+#                  so the next build is still incremental.
+# Failure to prune is not a failed deploy.
+log "reclaiming disk: dangling images, and build cache unused for 7 days"
+docker image prune -f >/dev/null || log "WARNING: docker image prune failed -- continuing"
+docker builder prune -f --filter until=168h >/dev/null || log "WARNING: docker builder prune failed -- continuing"
+
 # ── 6. Smoke ─────────────────────────────────────────────────────────────────
 # Drives the deployment that was just made, over real HTTP, through Caddy. It
 # FAILS rather than skips when it cannot reach the target — this suite used to

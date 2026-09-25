@@ -115,9 +115,19 @@ rows; the job's next attempt, or for a dead job that sweep, fixes them.
 
 ## Disk filling up
 
-`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`.
-ffmpeg scratch is NOT there: it is the worker's `/tmp`, the `worker_scratch`
-named volume (under `/var/lib/docker`, on the root disk). Scratch is removed
+`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`,
+and -- once README-deploy.md 2.5's data-root step is done -- Docker's data root,
+`/var/lib/gml/docker`: images, build cache and the volumes, including the
+worker's `/tmp` (the `worker_scratch` volume, its ffmpeg scratch). Without that
+step all of it sits under `/var/lib/docker` on the 30 GiB root disk, and
+`bash scripts/preflight.sh` FAILs saying so. Check with
+`docker info --format '{{.DockerRootDir}}'` and `docker system df`.
+
+Each successful `deploy.sh` removes dangling images (never `:current` or
+`:previous`) and build cache unused for a week. Nothing else prunes them; after
+many failed deploys, `docker image prune -f` is safe to run by hand.
+
+Scratch is removed
 after every transcode, including one interrupted by a deploy or `docker
 compose stop` -- the worker hands its job back to the queue and exits within
 seconds of SIGTERM (its `stop_grace_period` is 30 s). A worker killed hard

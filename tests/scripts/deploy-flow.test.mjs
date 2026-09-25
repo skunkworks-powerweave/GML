@@ -485,3 +485,41 @@ test("a failing `docker compose up` is reported with the container state, not a 
     sb.cleanup();
   }
 });
+
+// ── Disk: what the builds leave behind ───────────────────────────────────────
+//
+// Every deploy builds, and nothing ever pruned: each release's images went
+// dangling at the next deploy and the build cache grew without bound, on the
+// small root volume. deploy.sh now prunes -- dangling images only, so :current
+// and :previous survive -- once the new release is healthy and verified.
+
+test("a completed deploy prunes dangling images and week-old build cache", () => {
+  const sb = deploySandbox();
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = sb.invocations();
+    assert.ok(calls.includes("docker image prune -f"), `dangling images were never pruned:\n${calls.join("\n")}`);
+    assert.ok(
+      calls.includes("docker builder prune -f --filter until=168h"),
+      `the build cache was never pruned:\n${calls.join("\n")}`,
+    );
+    assert.ok(
+      !calls.some((l) => /^docker (image|system) prune .*(-a|--all)/.test(l)),
+      "only DANGLING images may go: an --all prune would delete the tagged :previous rollback target",
+    );
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a deploy that fails prunes nothing", () => {
+  const sb = deploySandbox({ healthy: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { HEALTH_TIMEOUT_SECONDS: "0", HEALTH_INTERVAL_SECONDS: "1" } });
+    assert.notEqual(r.status, 0);
+    assert.ok(!sb.invocations().some((l) => /prune/.test(l)), "keep everything for diagnosis when the deploy failed");
+  } finally {
+    sb.cleanup();
+  }
+});

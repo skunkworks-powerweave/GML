@@ -268,3 +268,61 @@ test("WhatsApp: a configured integration passes", () => {
   const r = run();
   assert.ok(line(r.out, "PASS", /WHATSAPP_APP_SECRET/), `expected a PASS for the configured secret:\n${r.out}`);
 });
+
+// ── Disk: where Docker's data lives ──────────────────────────────────────────
+//
+// README-deploy.md 2.4 sizes a 30 GiB root and a 100 GiB data volume at
+// /var/lib/gml "for ffmpeg scratch". But the worker's scratch is a Docker
+// volume, and Docker keeps volumes, images and build cache under its data
+// root, /var/lib/docker -- on the root volume -- and no step moved it. The
+// disk check only looked at `.`.
+
+/** A df that places each path on the filesystem a test says it is on. */
+const dfFor = (mounts) => `
+last=""; for a in "$@"; do last="$a"; done
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
+case "$last" in
+${Object.entries(mounts)
+  .map(([path, [dev, gib, mnt]]) => `  ${path}) printf '%s %s 1 %s 1%% %s\\n' ${dev} ${gib * 1048576} ${gib * 943718} ${mnt} ;;`)
+  .join("\n")}
+  *) printf '/dev/root 31457280 1 20971520 1%% /\\n' ;;
+esac`;
+
+function preflightDocker(dockerRoot, mounts) {
+  const sb = preflightSandbox();
+  sb.stub(
+    "docker",
+    `case "$*" in
+  --version) echo "Docker version 27.3.1, build ce12230" ;;
+  "compose version --short") echo "2.29.7" ;;
+  "info --format {{.DockerRootDir}}") echo "${dockerRoot}" ;;
+esac
+exit 0`,
+  );
+  sb.stub("df", dfFor(mounts));
+  try {
+    const r = sb.run("scripts/preflight.sh");
+    return { ...r, out: `${r.stdout}${r.stderr}` };
+  } finally {
+    sb.cleanup();
+  }
+}
+
+test("Disk: Docker's data root on a 30 GiB root volume is a FAIL that points at the runbook", () => {
+  const r = preflightDocker("/var/lib/docker", {
+    "/": ["/dev/root", 30, "/"],
+    "/var/lib/docker": ["/dev/root", 30, "/"],
+  });
+  const l = line(r.out, "FAIL", /Docker data root/);
+  assert.ok(l, `images, build cache and transcode scratch would fill the root volume:\n${r.out}`);
+  assert.match(r.out, /README-deploy\.md 2\.5/);
+});
+
+test("Disk: Docker's data root on the data volume passes", () => {
+  const r = preflightDocker("/var/lib/gml/docker", {
+    "/": ["/dev/root", 30, "/"],
+    "/var/lib/gml/docker": ["/dev/data", 100, "/var/lib/gml"],
+  });
+  assert.ok(line(r.out, "PASS", /Docker data root \/var\/lib\/gml\/docker is on \/var\/lib\/gml/), r.out);
+  assert.ok(!line(r.out, "FAIL", /Docker data root/), r.out);
+});
