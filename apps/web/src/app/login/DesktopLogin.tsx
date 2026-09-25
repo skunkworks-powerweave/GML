@@ -119,7 +119,7 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
             A learning system designed for the long road from Leh to Drass.
           </div>
           <p style={{ marginTop: 18, fontSize: 14, lineHeight: 1.55, color: "oklch(0.85 0.03 60)", maxWidth: 420 }}>
-            Goldenmile RTT — Recruit, Train &amp; Transform — supports teachers and mentor pairings across Leh and
+            Goldenmile RTT — Refresher Teacher Training — supports teachers and mentor pairings across Leh and
             Kargil, with WhatsApp-first video review and a paperwork system that respects how schools actually run.
           </p>
           <div
@@ -167,8 +167,11 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
         <div style={{ width: "100%", maxWidth: 380 }}>
           <div className="label">{tAction("signIn")}</div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>{tAction("welcomeBack")}</h1>
+          {/* The email half only where the magic-link tab below is shown: it
+              said so unconditionally, also where email is off. */}
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, marginBottom: 24 }}>
-            Use the credentials your programme administrator gave you, or request a sign-in link by email.
+            Use the credentials your programme administrator gave you
+            {emailEnabled ? ", or request a sign-in link by email." : "."}
           </p>
 
           {/* The magic-link tab only exists when outbound email does. On a

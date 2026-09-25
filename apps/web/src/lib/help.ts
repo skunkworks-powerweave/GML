@@ -164,9 +164,11 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
 
   // ── RTT structure ──────────────────────────────────────────────────────────
   rtt: {
-    title: "RTT — Recruit, Train, Transform",
-    short: "Our three-phase programme to grow a teacher from new recruit to confident classroom leader.",
-    long: "RTT stands for Recruit, Train, Transform. It is the three-phase journey every teacher goes through over two years: Phase 1 (Foundational), Phase 2 (Application), Phase 3 (Mastery & Certification).",
+    // Refresher Teacher Training, as the page metadata and teach-back say; this
+    // entry and the sign-in page expanded it as "Recruit, Train, Transform".
+    title: "RTT — Refresher Teacher Training",
+    short: "Our three-phase programme that takes a teacher from refresher training to confident classroom leader.",
+    long: "RTT stands for Refresher Teacher Training. It is the three-phase journey every teacher goes through over two years: Phase 1 (Foundational), Phase 2 (Application), Phase 3 (Mastery & Certification).",
     related: ["phase", "phase_1", "phase_2", "phase_3"],
     seeAlso: ["/rtt"],
   },

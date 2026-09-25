@@ -669,7 +669,8 @@ export default async function DashboardPage() {
       base.push(
         { label: "Total users", value: chrome.totalUsers, hint: "active accounts" },
         { label: "Audit events (24h)", value: chrome.auditEvents24h, hint: "rolling window" },
-        { label: "Storage used (MB)", value: chrome.storageMb, hint: "SUM(files.size_bytes)" },
+        // The hint was the SQL behind the number, "SUM(files.size_bytes)".
+        { label: "Storage used (MB)", value: chrome.storageMb, hint: "all stored files" },
       );
     }
     stats = base;
@@ -824,9 +825,13 @@ export default async function DashboardPage() {
               </div>
             </header>
             <div style={{ padding: 14 }}>
+              {/* What is true. This said "downloads are disabled": playback
+                  links are bearer URLs that work until they expire, and the
+                  anti-download guard deters rather than prevents. */}
               <p style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
-                All resources here are confidential. Videos are watermarked with your name and timestamp; downloads are
-                disabled. Section passwords rotate periodically — ask your programme admin if a section appears locked.
+                All resources here are confidential. Your name and the time are shown over every video you watch, and
+                every view is logged; please do not download, share or re-record them. Section passwords rotate
+                periodically — ask your programme admin if a section appears locked.
               </p>
               <Link
                 href="/inbox"
