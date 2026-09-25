@@ -75,6 +75,31 @@ test("stand-in tools: a transcode that the tools report as good is published who
   });
 });
 
+// ── W3-55 ────────────────────────────────────────────────────────────────────
+
+test(
+  "W3-55: a rendition that is not 8-bit 4:2:0 H.264 fails the transcode before anything is uploaded or marked ready",
+  { skip, timeout: 120_000 },
+  async () => {
+    // ffmpeg exits 0 and writes every file, but what it wrote is High 10: the
+    // F02 fault, which only the worker's own check of each rung can catch.
+    const high10 = { codec_name: "h264", profile: "High 10", pix_fmt: "yuv420p10le" };
+    await transcodeWith(
+      { ffprobe: probeModule({ width: 1280, height: 720, rendition: high10 }), ffmpeg: FFMPEG_WRITES_OUTPUT },
+      async ({ w, sub, storage, tools, output }) => {
+        const v = await video(w, sub);
+        assert.equal(v.status, "failed", `an undecodable rendition was published:\n${output()}`);
+        assert.equal(v.hls_master_key, null);
+        const [row] = await ledger(w, sub);
+        assert.match(row?.error ?? "", /rendition 0: .*High 10 yuv420p10le/);
+        assert.deepEqual(storage.keys("videos-hls", `hls/${sub}/`), [], "segments were uploaded for a video that failed");
+        assert.deepEqual(storage.keys("posters"), [], "the check must come before the poster, too");
+        assert.equal(tools.calls("ffmpeg").length, 1, "only the encode may have run");
+      },
+    );
+  },
+);
+
 // ── W3-56 ────────────────────────────────────────────────────────────────────
 
 test(
