@@ -182,9 +182,10 @@ Every sign-in reaches Supabase from this server, so its per-IP limit (30 by
 default) is one bucket for the whole deployment: a training room of teachers
 signing in at once, or one person guessing passwords, would lock everyone out.
 The application does the real throttling itself, per account and per client
-address (10 attempts at one account from one address, 100 from one address,
-per 15 minutes). The Supabase limit only needs to sit above the whole
-deployment's legitimate peak.
+address (10 failed attempts at one account from one address, 100 failed
+attempts from one address, per 15 minutes; a successful sign-in does not
+count). The Supabase limit only needs to sit above the whole deployment's
+legitimate peak.
 
 ### 2.3 Optional: outbound email
 

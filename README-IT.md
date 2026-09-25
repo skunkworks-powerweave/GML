@@ -242,14 +242,20 @@ columns. It was a denial-of-service tool in both directions: anyone who knew an
 address could block it at will with wrong passwords, the counter never decayed
 so a single further guess after expiry re-blocked it indefinitely at one request
 an hour, and the distinctive error told a stranger which addresses had accounts.
-Sign-in is throttled by the application instead: 10 attempts at one account
-from one address, and 100 from one address across all accounts, per 15 minutes.
+Sign-in is throttled by the application instead: 10 failed attempts at one
+account from one address, and 100 failed attempts from one address across all
+accounts, per 15 minutes. A successful sign-in does not count, so a training
+venue whose whole cohort shares one public address can sign in at once.
 Supabase Auth rate-limits sign-in too, but per client IP, and every sign-in
 reaches it from the app server, so on its own it would be one bucket shared by
 the whole deployment. Neither is a flag a stranger can set on someone else's
 behalf: the per-account limit only binds the address that made the attempts.
 Someone who hits it waits up to 15 minutes. If a user genuinely cannot get in,
-set them a new password at `/admin/users`.
+set them a new password at `/admin/users`. If a whole venue is refused because
+100 wrong passwords were typed from its address, it clears within 15 minutes;
+to clear it at once, find the counter in the Supabase SQL editor with
+`select key, count from rate_limits where key like 'sign-in:address:%' order by count desc;`
+and delete that row.
 
 ### Logs and health
 

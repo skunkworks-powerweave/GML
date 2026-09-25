@@ -64,7 +64,7 @@ import { db } from "@gml/db";
 import { users } from "@gml/db/schema";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit, rateLimitRefund } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/request-ip";
 
 export type SessionUser = {
@@ -255,6 +255,7 @@ export async function signInWithPassword(
     const supabase = await createSupabaseServerClient();
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: signInErrorCode(error) };
+    await refundSignIn(allowed);
     return { error: null, userId: data.user?.id };
   } catch {
     return { error: "unavailable" };
@@ -301,7 +302,7 @@ function signInErrorCode(error: unknown): SignInError {
 // shared bucket means a single attacker exhausts sign-in for everyone.
 //
 // Two counters, both fixed 15-minute windows in Postgres (lib/rate-limit.ts),
-// both counting every attempt:
+// both counting FAILED attempts:
 //
 //   per account, per address   caps guessing at one person's password from one
 //                              source. Keyed on the address as well as the
@@ -314,32 +315,54 @@ function signInErrorCode(error: unknown): SignInError {
 //                              shares one public address behind NAT and a
 //                              whole cohort signs in at once.
 //
+// Every attempt is counted before the password is checked, so concurrent
+// attempts cannot all pass the check first, and a successful sign-in gives
+// its count back. It used to keep it: a venue behind one NAT address was
+// locked out after 100 CORRECT sign-ins, and onboarding costs each teacher two
+// (the sign-in, and /settings re-checking the current password through here).
+// Only a correct password earns a refund, and only of its own count, so
+// guesses stay capped.
+//
 // Distributed guessing from many addresses is beyond what an application
 // limiter can see; README-deploy §2.2 has the Supabase settings for that.
 const SIGN_IN_WINDOW_MS = 15 * 60 * 1000;
 const SIGN_IN_PER_ACCOUNT_PER_ADDRESS = 10;
 const SIGN_IN_PER_ADDRESS = 100;
 
+/** The counters one attempt was charged to. */
+type SignInCharges = Array<{ bucket: string; id: string; windowStart: string }>;
+
 /** Fails CLOSED: a limiter that cannot count answers "unavailable". */
-async function signInAllowed(email: string): Promise<"ok" | "limited" | "unavailable"> {
+async function signInAllowed(email: string): Promise<SignInCharges | "limited" | "unavailable"> {
   try {
     const ip = await clientIp();
-    const address = await rateLimit({
-      bucket: "sign-in:address",
-      id: ip,
-      limit: SIGN_IN_PER_ADDRESS,
-      windowMs: SIGN_IN_WINDOW_MS,
-    });
+    const addressKey = { bucket: "sign-in:address", id: ip };
+    const address = await rateLimit({ ...addressKey, limit: SIGN_IN_PER_ADDRESS, windowMs: SIGN_IN_WINDOW_MS });
     if (!address.ok) return "limited";
-    const account = await rateLimit({
-      bucket: "sign-in:account",
-      id: `${email.trim().toLowerCase()}|${ip}`,
-      limit: SIGN_IN_PER_ACCOUNT_PER_ADDRESS,
-      windowMs: SIGN_IN_WINDOW_MS,
-    });
-    return account.ok ? "ok" : "limited";
+    const accountKey = { bucket: "sign-in:account", id: `${email.trim().toLowerCase()}|${ip}` };
+    const account = await rateLimit({ ...accountKey, limit: SIGN_IN_PER_ACCOUNT_PER_ADDRESS, windowMs: SIGN_IN_WINDOW_MS });
+    if (!account.ok) return "limited";
+    return [
+      { ...addressKey, windowStart: address.windowStart },
+      { ...accountKey, windowStart: account.windowStart },
+    ];
   } catch {
     return "unavailable";
+  }
+}
+
+/**
+ * Give a successful sign-in's counts back. Best effort: a refund that fails
+ * leaves the count one high, which is the old behaviour, and must never turn
+ * a correct sign-in into a refusal.
+ */
+async function refundSignIn(charges: SignInCharges): Promise<void> {
+  for (const c of charges) {
+    try {
+      await rateLimitRefund(c);
+    } catch (err) {
+      console.error(`[auth] could not refund the ${c.bucket} sign-in count:`, err);
+    }
   }
 }
 
