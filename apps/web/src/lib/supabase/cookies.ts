@@ -1,11 +1,14 @@
 // The attributes the Supabase session cookie is written with.
 //
-// Used by BOTH places that write it: lib/supabase/server.ts (sign-in, sign-out
-// and recovery, in Server Actions and Route Handlers) and proxy.ts (the token
-// refresh on every request). If they disagreed, the first refresh would
-// silently rewrite whatever the sign-in set.
+// Used by ALL THREE places that write it: lib/supabase/server.ts (sign-in,
+// sign-out and recovery, in Server Actions and Route Handlers), proxy.ts (the
+// token refresh on every request), and lib/supabase/browser.ts (the browser
+// client, which refreshes the session itself during an upload). If they
+// disagreed, the first refresh would silently rewrite whatever the sign-in
+// set -- which is what the browser client did until it was given cookie
+// methods of its own.
 //
-// WHAT WAS WRONG. Neither passed cookie options, so @supabase/ssr's defaults
+// WHAT WAS WRONG. None passed cookie options, so @supabase/ssr's defaults
 // applied: no Secure attribute and Max-Age 400 days. The cookie carries the
 // refresh token, which does not expire on its own. A plain-HTTP request to the
 // domain -- typed without https, before HSTS is cached -- sent the session in
@@ -14,8 +17,9 @@
 // as her for up to 400 days.
 //
 //   Secure     whenever the site is served over https: APP_URL when it is set
-//              (compose always sets it), else the request's forwarded protocol.
-//              Plain-http local development keeps working.
+//              (compose always sets it), else the request's forwarded protocol;
+//              in the browser, the page's own protocol. Plain-http local
+//              development keeps working.
 //   Max-Age    at most SESSION_COOKIE_MAX_AGE_SECONDS. Every refresh rewrites
 //              the cookie, so for someone using the site this is "twelve hours
 //              after they stopped", i.e. an inactivity bound in the browser.
@@ -28,7 +32,8 @@
 // given, so the bound cannot be passed in; boundSessionCookie() applies it to
 // each write instead.
 //
-// No "server-only": proxy.ts imports this, and it is pure.
+// No "server-only": proxy.ts and the browser client import this, and it is
+// pure.
 
 import type { CookieOptions } from "@supabase/ssr";
 
