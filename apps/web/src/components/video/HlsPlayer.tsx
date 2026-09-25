@@ -1,8 +1,9 @@
 "use client";
 
 // HLS video player with watermark overlay (SM-4 deterrence) and signed-URL refresh.
-// Uses hls.js for browsers without native HLS support (most desktops, all Androids).
-// Safari uses native HLS via the <video> src attribute.
+// Uses hls.js for browsers without native HLS support (Firefox, most Androids).
+// Safari, iOS and current desktop Chrome (canPlayType answers "maybe") use
+// native HLS via the <video> src attribute.
 //
 // Spec 132 (Workflow Run 11 frontend-parity) — adds the speed + quality
 // control row that the JSX prototype (LMS GML Frontend/videos.jsx lines
@@ -26,6 +27,13 @@
 // needs to flip the disabled flag.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  attachHls,
+  attachNative,
+  createPlaybackRecovery,
+  type HlsLike,
+  type PlaybackRecovery,
+} from "@/lib/video/playback-recovery";
 
 type HlsPlayerProps = {
   /** Pre-signed master playlist URL — /api/media/<token>. Refresh from server before expiry. */
@@ -62,6 +70,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
   // Ladakh connection, than the error it replaced.
   const resumeAtRef = useRef<number>(0);
   const hlsRef = useRef<{ destroy: () => void; currentLevel?: number } | null>(null);
+  const recoveryRef = useRef<PlaybackRecovery>(createPlaybackRecovery());
   const [currentSrc, setCurrentSrc] = useState(src);
 
   // Re-request the same server route, past the HTTP cache. The route mints new
@@ -79,7 +88,8 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     const video = videoRef.current;
     if (!video) return;
 
-    let hlsInstance: { destroy: () => void; currentLevel?: number } | undefined;
+    let cancelled = false;
+    let detach: (() => void) | undefined;
 
     // Restore the position a refresh interrupted. Fires once per source load;
     // resumeAtRef is cleared so an ordinary replay is not hijacked.
@@ -92,33 +102,31 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     };
     video.addEventListener("loadedmetadata", onLoaded);
 
+    // What happens when playback dies is lib/video/playback-recovery.ts, on
+    // both branches: bounded re-signs with backoff, and a message saying why
+    // when a re-sign cannot help (signed out, no access, output missing). It
+    // used to re-sign on EVERY fatal error, forever, and show nothing. The
+    // policy lives in a ref, so its budget survives the effect re-run that
+    // each new source causes.
+    const hooks = {
+      src: currentSrc,
+      refreshSrc,
+      onSource: setCurrentSrc,
+      onFail: (message: string) => {
+        if (!cancelled) setError(message);
+      },
+      resumeAt: resumeAtRef,
+      policy: recoveryRef.current,
+    };
+
     const isNative = video.canPlayType("application/vnd.apple.mpegurl") !== "";
     if (isNative) {
-      // SAFARI AND iOS. This branch had no error handling and no cleanup at
-      // all: a failed or expired playlist left a silent black player with no
-      // message and no retry, while the hls.js branch beside it recovered. iOS
-      // is a primary target here -- field mentors watch on phones -- so the
-      // platform that plays HLS natively was the one with no recovery path.
-      const onNativeError = async () => {
-        try {
-          resumeAtRef.current = video.currentTime || resumeAtRef.current;
-          const next = await refreshSrc();
-          video.src = next;
-          video.load();
-        } catch {
-          setError("Playback failed. Refresh the page.");
-        }
-      };
-      video.addEventListener("error", onNativeError);
-      video.src = currentSrc;
-
-      return () => {
-        video.removeEventListener("error", onNativeError);
-        video.removeEventListener("loadedmetadata", onLoaded);
-      };
+      // SAFARI, iOS -- and desktop Chrome, which answers "maybe" here. This
+      // branch once had no error handling at all; iOS is a primary target
+      // (field mentors watch on phones).
+      detach = attachNative(video, hooks);
     } else {
       // Lazy-load hls.js so it doesn't bloat first paint.
-      let cancelled = false;
       // Spec 156 (Run 14 audit-closure MEDIUM): chain a .catch so a
       // bundle-load failure surfaces as a user-visible error instead of a
       // silent black <video> element. Otherwise the dynamic import rejects,
@@ -135,38 +143,20 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
             backBufferLength: 30,
             lowLatencyMode: false,
           });
-          hls.loadSource(currentSrc);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.ERROR, async (_e, data) => {
-            if (!data.fatal) return;
-            // A media error is recoverable in place and must NOT cost a
-            // re-sign round trip -- hls.js can rebuild its buffer itself.
-            if (data.type === "mediaError") {
-              hls.recoverMediaError();
-              return;
-            }
-            // Anything else fatal is most likely an expired segment URL.
-            try {
-              resumeAtRef.current = video.currentTime || resumeAtRef.current;
-              setCurrentSrc(await refreshSrc());
-            } catch {
-              setError("Playback failed. Refresh the page.");
-            }
-          });
-          hlsInstance = hls;
           hlsRef.current = hls;
+          detach = attachHls(video, hls as unknown as HlsLike, Hls.Events.ERROR, hooks);
         })
         .catch((err) => {
           if (!cancelled) setError("Failed to load HLS player: " + String(err));
         });
-
-      return () => {
-        cancelled = true;
-        video.removeEventListener("loadedmetadata", onLoaded);
-        hlsInstance?.destroy();
-        hlsRef.current = null;
-      };
     }
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener("loadedmetadata", onLoaded);
+      detach?.();
+      hlsRef.current = null;
+    };
   }, [currentSrc, refreshSrc]);
 
   // Apply playbackRate every time it changes. hls.js + native HLS both
