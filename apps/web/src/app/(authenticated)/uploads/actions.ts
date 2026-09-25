@@ -153,7 +153,8 @@ function browserSupabaseConfig(): SupabaseBrowserConfig | null {
   return url && anonKey ? { url, anonKey } : null;
 }
 
-export type CompleteUploadState = { ok: boolean; error?: string };
+/** `retryable`: the file is stored; asking again later can still confirm it. */
+export type CompleteUploadState = { ok: boolean; error?: string; retryable?: boolean };
 
 export async function completeUploadAction(
   submissionId: string,
@@ -172,12 +173,17 @@ export async function completeUploadAction(
   });
 
   if (!result.ok) {
+    if (result.error === "storage_unavailable") {
+      return { ok: false, error: "Storage did not answer. Your video is uploaded; try confirming it again.", retryable: true };
+    }
     const message =
       result.error === "object_missing"
         ? "We could not find the uploaded file. Please try again."
         : result.error === "object_truncated"
           ? "The upload finished early and is incomplete. Please try again."
-          : "That upload could not be found.";
+          : result.error === "object_too_large"
+            ? "That file is larger than it was declared and was refused."
+            : "That upload could not be found.";
     return { ok: false, error: message };
   }
 

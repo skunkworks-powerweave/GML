@@ -278,20 +278,20 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   // ── Video pipeline ─────────────────────────────────────────────────────────
   watermark: {
     title: "Watermark",
-    short: "Faint text across the video showing who is watching. Stops videos being shared outside.",
-    long: "Every classroom video has a watermark — your username and the current date — drawn faintly across every frame. This is so videos can't be copied and shared. If a video ever leaks, the watermark shows whose account it came from.",
+    short: "Your name and the time, shown over the player while you watch. A reminder that classroom videos stay inside the programme.",
+    long: "While you watch a classroom video, your name and the current date and time are shown over the player, and every view is logged. The watermark is on the player, not in the video file itself, so it is a reminder rather than a lock: please do not share, download or re-record classroom videos.",
     related: ["confidentiality", "audit"],
   },
   hls: {
     title: "HLS streaming",
-    short: "Smart streaming that adjusts video quality to your network — works even on 2G.",
-    long: "HLS is the technology that lets the video player automatically drop to 240p when your network is weak and come back up to 480p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
+    short: "Streaming in short pieces that adjusts quality to your connection, so a video starts quickly and keeps playing on a weak signal.",
+    long: "HLS sends a video in short pieces rather than as one large file, so playback starts before the whole video has arrived and a dropped connection only costs the piece in flight. Each video is streamed in up to three versions, 240p, 360p and 480p, and the player drops to 240p (about 250 kbps) when your network is weak and comes back up to 480p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
     related: ["video", "upload"],
   },
   transcoding: {
     title: "Transcoding",
-    short: "What happens to a video after upload — we re-make it in several sizes so it plays everywhere.",
-    long: "When a teacher uploads a video, our server processes it into three versions: 240p for a weak signal, 360p, and 480p, the sharpest. The player moves between them by itself as your signal changes. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
+    short: "What happens to a video after upload — we re-make it as a 240p, 360p and 480p stream that plays in the browser.",
+    long: "When a teacher uploads a video, our server converts it into three versions for streaming: 240p for a weak signal, 360p, and 480p, the sharpest (a video recorded smaller than that is never enlarged, so it gets only the versions that fit), plus a still frame for the video library. The player moves between them by itself as your signal changes. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
     related: ["video", "upload", "hls"],
   },
   whatsapp_ingest: {

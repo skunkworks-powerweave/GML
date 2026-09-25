@@ -2,7 +2,7 @@
 //
 // Caller: /rtt/teach-back queue (spec 066) renders a native <form method="POST"
 // action="/api/teach-back/<id>/review"> button labelled "Mark reviewed". This
-// endpoint closes that loop: validate role, flip status to 'reviewed' on the
+// endpoint closes that loop: validate role, set reviewed_at on the
 // matching video_submissions row (scoped to context_type='teach_back' so a
 // stray observation/mentor-meeting submission id can't be reviewed through
 // this surface), and audit the action under SM-1.
@@ -21,8 +21,19 @@
 //   POST (otherwise)          → 200 {ok:true}        success path
 //   POST (no session)    → 401 {error:"unauthenticated"}
 //   POST (wrong role)    → 403 {error:"forbidden"}
+//   POST (malformed id)  → 400 {error:"invalid_id"}
 //   POST (unknown id)    → 404 {error:"not_found"}  (zero rows updated)
+//   POST (not playable)  → 409 {error:"not_playable"}; a browser post gets a
+//                          303 back to /rtt/teach-back?id=<id>
 //   GET / PUT / DELETE   → 405 {error:"method_not_allowed"}
+//
+// ONLY A PLAYABLE CLIP CAN BE REVIEWED. The UPDATE used to match any
+// teach-back by id, so a clip still received/queued/transcoding (or failed)
+// could be marked reviewed before anyone could have watched it. Nothing ever
+// clears reviewed_at -- not the worker when the transcode finishes, not a DLQ
+// retry -- so such a clip never entered "Pending review" once it became
+// playable. "Reviewable" is the shared definition in lib/video/pending-review
+// (status 'ready'); the queue page renders the button on the same test.
 //
 // SM-1 (audit on every mutation): writes action="teach_back.reviewed" with
 // entityType="video_submission" and entityId=id. The audit_log.action column
@@ -39,6 +50,7 @@ import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { isUuid } from "@/lib/authz";
 import { publicUrl } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
@@ -69,13 +81,15 @@ export async function POST(
   }
 
   const { id } = await ctx.params;
-  if (!id || typeof id !== "string") {
+  // A malformed id cannot name a row; compared against the uuid column it made
+  // Postgres raise 22P02, which surfaced as a 500.
+  if (!isUuid(id)) {
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 
   // Scope the UPDATE to context_type='teach_back' so this endpoint can never
-  // mutate an observation_cycle / mentor_meeting / classroom_session row.
-  // `.returning({id})` lets us treat zero rows as 404 without a separate SELECT.
+  // mutate an observation_cycle / mentor_meeting / classroom_session row, and
+  // to status='ready' so it can never review a clip nobody can watch yet.
   const updated = await db
     .update(videoSubmissions)
     // Records the review WITHOUT touching `status`. This previously set
@@ -87,12 +101,29 @@ export async function POST(
       and(
         eq(videoSubmissions.id, id),
         eq(videoSubmissions.contextType, "teach_back"),
+        eq(videoSubmissions.status, "ready"),
       ),
     )
     .returning({ id: videoSubmissions.id });
 
   if (updated.length === 0) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    // Zero rows: either no such teach-back, or one that is not playable. Only
+    // the failure path pays for telling them apart.
+    const [exists] = await db
+      .select({ id: videoSubmissions.id })
+      .from(videoSubmissions)
+      .where(and(eq(videoSubmissions.id, id), eq(videoSubmissions.contextType, "teach_back")))
+      .limit(1);
+    if (!exists) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
+    }
+    if (wantsHtml(request)) {
+      // Back to the clip, whose pane says the review opens once it is ready.
+      return NextResponse.redirect(await publicUrl(`/rtt/teach-back?id=${encodeURIComponent(id)}`), {
+        status: 303,
+      });
+    }
+    return NextResponse.json({ error: "not_playable" }, { status: 409 });
   }
 
   void recordAudit({

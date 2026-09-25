@@ -29,7 +29,7 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
+import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
 import { buildSignedPlaylist, hlsMasterPlaylistKey, hlsPrefix } from "@/lib/video/storage";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +53,16 @@ export async function GET(
   // 403 on purpose: a 403 on /api/media/playlist/<uuid> confirms the uuid names
   // a real video, which is exactly the enumeration a guessed-uuid attack wants.
   const video = await assertCanAccessVideo(actor, id);
+
+  // Section gate, before anything is signed: without it a user who had not
+  // unlocked mentorship (or whose grant a password rotation had just deleted)
+  // was handed signed segment URLs for mentorship recordings. JSON rather than
+  // a redirect -- the player fetches this, it does not navigate to it -- and
+  // only after ownership passed, so it reveals nothing to a stranger.
+  const gate = await videoGateRequired(actor, video);
+  if (gate) {
+    return NextResponse.json({ error: "gate_required", gate }, { status: 403 });
+  }
 
   if (video.status !== "ready" || !video.hlsMasterKey) {
     return NextResponse.json({ error: "not_ready", status: video.status }, { status: 409 });

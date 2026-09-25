@@ -34,7 +34,7 @@ import { createRequire } from "node:module";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import "./_ui.js"; // installs the @/ alias and the @/lib/supabase/browser stub
-import { TEST_ACCESS_TOKEN } from "./_stubs/supabase-browser.ts";
+import { TEST_ACCESS_TOKEN, testTokens } from "./_stubs/supabase-browser.ts";
 
 // Imported inside the helper: test files compile to CommonJS, which has no top-level await.
 const tusUpload = () => import("../../apps/web/src/lib/video/tus-upload.ts");
@@ -61,10 +61,14 @@ function objectNameOf(s: Seen): string | null {
 
 /**
  * A stand-in for Storage's resumable endpoint. `refuse` may answer a creation
- * request itself; otherwise uploads are created, HEAD reports their offset,
- * and PATCH appends.
+ * request itself, and `gate` any request at all (Storage checks the bearer
+ * token's signature and exp on EVERY request, not only the first); otherwise
+ * uploads are created, HEAD reports their offset, and PATCH appends.
  */
-async function fakeStorage(refuse: (req: Seen) => Reply | null = () => null) {
+async function fakeStorage(
+  refuse: (req: Seen) => Reply | null = () => null,
+  gate: (req: Seen) => Reply | null = () => null,
+) {
   const seen: Seen[] = [];
   const uploads = new Map<string, { offset: number; length: number }>();
   let next = 0;
@@ -75,6 +79,12 @@ async function fakeStorage(refuse: (req: Seen) => Reply | null = () => null) {
       const s: Seen = { method: req.method ?? "", url: req.url ?? "", headers: req.headers, bytes };
       seen.push(s);
       const tusHeaders = { "tus-resumable": "1.0.0", "cache-control": "no-store" };
+      const denied = gate(s);
+      if (denied) {
+        res.writeHead(denied.status, { ...tusHeaders, "content-type": "application/json" });
+        res.end(denied.body);
+        return;
+      }
       if (s.method === "POST" && s.url === RESUMABLE) {
         const r = refuse(s);
         if (r) {
@@ -156,6 +166,7 @@ function resumeStore(entries: Array<Omit<Entry, "urlStorageKey" | "creationTime"
 function upload(
   storageUrl: string,
   store: unknown = resumeStore([]).store,
+  chunkBytes = 6 * 1024 * 1024,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   tus.defaultOptions.urlStorage = store;
   // tus-js-client's Node build reads a Buffer; `type` is what the File would carry.
@@ -166,7 +177,7 @@ function upload(
         file: file as unknown as File,
         bucket: "videos-original",
         objectKey: KEY,
-        chunkBytes: 6 * 1024 * 1024,
+        chunkBytes,
         supabase: { url: storageUrl, anonKey: "publishable-key" },
         onProgress: () => undefined,
         onError: (message) => resolve({ ok: false, message }),
@@ -296,6 +307,99 @@ test("an expired token is reported as an expired session", async () => {
     if (result.ok) return;
     assert.match(result.message, /session expired/i);
   } finally {
+    await storage.close();
+  }
+});
+
+// ── A token that expires while the bytes are still moving ───────────────────
+//
+// F80. The access token was read ONCE, before the transfer, and baked into the
+// tus options as a fixed Authorization header. Storage checks the JWT's exp on
+// every PATCH, so the first request after that token expired came back 400
+// '"exp" claim timestamp check failed', which tus does not retry (a 4xx), and
+// the teacher was told their session had expired -- during an upload that had
+// every right to continue. Nothing was wrong with the session: auth-js had
+// refreshed it, and getSession() would have handed back the new token. The
+// proxy mints tokens with as little as a few minutes left, and the deploy
+// README tells IT to cut the lifetime to 15 minutes, so on a Ladakh link this
+// was every phone video.
+
+// Storage's answer to an expired token (local stack, 2026-09-24).
+const EXPIRED = JSON.stringify({
+  statusCode: "403",
+  code: "AccessDenied",
+  error: "Unauthorized",
+  message: '"exp" claim timestamp check failed',
+});
+const CHUNK = 256; // BYTES is 1 KiB: the creation request carries one chunk, three PATCHes the rest
+
+function resetTokens(current = TEST_ACCESS_TOKEN): ReturnType<typeof testTokens> {
+  const t = testTokens();
+  t.current = current;
+  t.refreshed = undefined;
+  t.refreshCalls = 0;
+  return t;
+}
+
+test("every request carries the session's CURRENT token, so a refresh mid-upload is picked up", async () => {
+  const tokens = resetTokens("token-a");
+  const storage = await fakeStorage(undefined, (s) => {
+    if (s.method === "POST") {
+      // Token A is accepted for the creation request and expires right after
+      // it; the session has been refreshed, so getSession() now answers B.
+      tokens.current = "token-b";
+      return null;
+    }
+    return s.headers.authorization === "Bearer token-b" ? null : { status: 400, body: EXPIRED };
+  });
+  try {
+    const result = await upload(storage.url, resumeStore([]).store, CHUNK);
+    assert.deepEqual(result, { ok: true }, "the session is fine; the upload must not stop at the old token's exp");
+    const patches = storage.seen.filter((s) => s.method === "PATCH");
+    assert.ok(patches.length >= 3, "the rest of the file went up in PATCHes");
+    assert.ok(patches.every((p) => p.headers.authorization === "Bearer token-b"), "each PATCH asks the session for its token");
+  } finally {
+    resetTokens();
+    await storage.close();
+  }
+});
+
+test("a token Storage calls expired is refreshed once and the upload continues", async () => {
+  // The browser still believes token A is valid (its clock, or a refresh that
+  // has not run yet); Storage does not. One forced refresh mints B.
+  const tokens = resetTokens("token-a");
+  tokens.refreshed = "token-b";
+  let created = false;
+  const storage = await fakeStorage(undefined, (s) => {
+    if (s.method === "POST" && !created) {
+      created = true;
+      return null;
+    }
+    return s.headers.authorization === "Bearer token-b" ? null : { status: 400, body: EXPIRED };
+  });
+  try {
+    const result = await upload(storage.url, resumeStore([]).store, CHUNK);
+    assert.deepEqual(result, { ok: true });
+    assert.equal(tokens.refreshCalls, 1, "one refresh, not one per request");
+  } finally {
+    resetTokens();
+    await storage.close();
+  }
+});
+
+test("a token refused again after a refresh is reported as an expired session, without looping", async () => {
+  const tokens = resetTokens("token-a");
+  tokens.refreshed = "token-b";
+  const storage = await fakeStorage(undefined, () => ({ status: 400, body: EXPIRED }));
+  try {
+    const result = await upload(storage.url, resumeStore([]).store, CHUNK);
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.match(result.message, /session expired/i, "here the session really is gone, and signing in again is the fix");
+    assert.equal(tokens.refreshCalls, 1, "one forced refresh; a refusal of the fresh token is final");
+    assert.ok(storage.seen.length <= 2, `bounded: ${storage.seen.length} requests`);
+  } finally {
+    resetTokens();
     await storage.close();
   }
 });

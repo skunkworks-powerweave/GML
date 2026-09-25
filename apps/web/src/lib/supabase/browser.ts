@@ -58,13 +58,27 @@ export function supabaseBrowser(config: SupabaseBrowserConfig): SupabaseClient {
 /**
  * The current access token, or null.
  *
- * Used as the TUS Authorization header. Returns null rather than throwing when
- * there is no session, so the caller can say "please sign in again" instead of
- * surfacing an unhandled error from inside a file picker.
+ * Used as the TUS Authorization header, asked for again before EVERY request of
+ * an upload: getSession() refreshes the session when its token is close to
+ * expiry, so each call returns a token with time left on it. `refresh` forces
+ * a new token for the case where Storage has refused one the browser still
+ * believes valid (clock skew, or a refresh that has not run yet).
+ *
+ * Returns null rather than throwing when there is no session, so the caller
+ * can say "please sign in again" instead of surfacing an unhandled error from
+ * inside a file picker.
  */
-export async function accessToken(config: SupabaseBrowserConfig): Promise<string | null> {
+export async function accessToken(
+  config: SupabaseBrowserConfig,
+  opts: { refresh?: boolean } = {},
+): Promise<string | null> {
   try {
-    const { data } = await supabaseBrowser(config).auth.getSession();
+    const client = supabaseBrowser(config);
+    if (opts.refresh) {
+      const { data } = await client.auth.refreshSession();
+      if (data.session) return data.session.access_token;
+    }
+    const { data } = await client.auth.getSession();
     return data.session?.access_token ?? null;
   } catch {
     return null;

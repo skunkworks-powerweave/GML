@@ -7,25 +7,39 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions, teachers, users } from "@gml/db/schema";
 import { auth } from "@/auth";
-import { isPendingTeachBackReview } from "@/lib/video/pending-review";
+import { isUuid } from "@/lib/authz";
+import { parsePage } from "@/lib/observation/list";
+import { isPendingTeachBackReview, pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
 
 const READ_ROLES = new Set(["super_admin", "programme_admin", "mentor", "observer"]);
 
-const STATUS_CHIP: Record<string, { bg: string; ink: string }> = {
+const PAGE_SIZE = 80;
+
+// Keyed on REVIEW STATE, not on video_submissions.status. The keys used to be
+// looked up with the raw status, but review_pending / reviewed are statuses
+// nothing writes (review is reviewed_at since migration 0022), so every chip
+// fell through to neutral grey and a reviewed clip looked exactly like one
+// still owed a review -- on the All tab, where the dashboard to-do lands.
+const STATUS_CHIP: Record<"review_pending" | "reviewed", { bg: string; ink: string }> = {
   review_pending: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
   reviewed: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
 };
 
 const NEUTRAL_CHIP = { bg: "var(--paper-2)", ink: "var(--ink-3)" };
 
-function chipFor(status: string) {
-  return STATUS_CHIP[status] ?? NEUTRAL_CHIP;
+/** Reviewed, owed a review (the shared definition), or its pipeline status. */
+function chipFor(r: { status: string; reviewedAt: Date | null }) {
+  if (r.reviewedAt !== null) return { ...STATUS_CHIP.reviewed, label: "reviewed" };
+  if (isPendingTeachBackReview({ contextType: "teach_back", status: r.status, reviewedAt: r.reviewedAt })) {
+    return { ...STATUS_CHIP.review_pending, label: "pending review" };
+  }
+  return { ...NEUTRAL_CHIP, label: r.status.replace("_", " ") };
 }
 
 function fmtDate(d: Date | null | undefined) {
@@ -73,7 +87,7 @@ type Row = {
 export default async function TeachBackQueuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ id?: string; status?: string }>;
+  searchParams: Promise<{ id?: string; status?: string; page?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -81,27 +95,6 @@ export default async function TeachBackQueuePage({
 
   const sp = await searchParams;
   const filter = sp.status === "review_pending" || sp.status === "reviewed" ? sp.status : undefined;
-
-  const baseRows: Row[] = await db
-    .select({
-      id: videoSubmissions.id,
-      status: videoSubmissions.status,
-      createdAt: videoSubmissions.createdAt,
-      durationSec: videoSubmissions.durationSec,
-      source: videoSubmissions.source,
-      captionRaw: videoSubmissions.captionRaw,
-      hlsKey: videoSubmissions.hlsMasterKey,
-      reviewedAt: videoSubmissions.reviewedAt,
-      teacherName: teachers.fullName,
-      teacherHindi: teachers.hindiName,
-      teacherSubject: teachers.subjectSpecialism,
-    })
-    .from(videoSubmissions)
-    .leftJoin(users, eq(videoSubmissions.submittedByUserId, users.id))
-    .leftJoin(teachers, eq(teachers.userId, users.id))
-    .where(eq(videoSubmissions.contextType, "teach_back"))
-    .orderBy(desc(videoSubmissions.createdAt))
-    .limit(80);
 
   // Review state is now a timestamp, not a value of `status`. These counters
   // previously tested status === "review_pending", which NOTHING in the codebase
@@ -114,32 +107,101 @@ export default async function TeachBackQueuePage({
   // badge count. It used to be `reviewedAt === null` alone, which also counted
   // clips still uploading or transcoding -- clips nobody can review yet -- so
   // this tab disagreed with both of them. Those clips still appear under "All".
-  const isReviewed = (r: Row) => r.reviewedAt !== null;
-  const isPending = (r: Row) =>
-    isPendingTeachBackReview({ contextType: "teach_back", status: r.status, reviewedAt: r.reviewedAt });
-  const rows = filter
-    ? baseRows.filter((r) => (filter === "reviewed" ? isReviewed(r) : isPending(r)))
-    : baseRows;
+  //
+  // THE TAB IS A SQL PREDICATE, APPLIED BEFORE THE LIMIT. The page used to load
+  // the 80 newest teach-backs programme-wide and filter and count THOSE in
+  // memory. Reviewed clips never leave that set, so once 80 newer teach-backs
+  // existed an unreviewed clip older than them vanished from every tab while
+  // the dashboard card and the sidebar badge still counted it -- and this page
+  // holds the only "Mark reviewed" form. Now the tab's predicate is in the
+  // WHERE, the counts are aggregates over every teach-back, and the list pages.
+  const isTeachBack = eq(videoSubmissions.contextType, "teach_back");
+  const tabWhere =
+    filter === "review_pending"
+      ? pendingTeachBackReviewWhere()
+      : filter === "reviewed"
+        ? and(isTeachBack, isNotNull(videoSubmissions.reviewedAt))
+        : isTeachBack;
+  // Pending is oldest first: the review target is on age, so the overdue clips
+  // lead. id breaks ties, so the order is total and pages cannot overlap.
+  const order =
+    filter === "review_pending"
+      ? [asc(videoSubmissions.createdAt), asc(videoSubmissions.id)]
+      : [desc(videoSubmissions.createdAt), desc(videoSubmissions.id)];
+
+  const [countRow] = await db
+    .select({
+      all: count(),
+      reviewPending: sql<number>`count(*) filter (where ${pendingTeachBackReviewWhere()})`.mapWith(Number),
+      reviewed: sql<number>`count(*) filter (where ${videoSubmissions.reviewedAt} is not null)`.mapWith(Number),
+    })
+    .from(videoSubmissions)
+    .where(isTeachBack);
   const counts = {
-    all: baseRows.length,
-    review_pending: baseRows.filter(isPending).length,
-    reviewed: baseRows.filter(isReviewed).length,
+    all: countRow?.all ?? 0,
+    review_pending: countRow?.reviewPending ?? 0,
+    reviewed: countRow?.reviewed ?? 0,
   };
+  const total = filter ? counts[filter] : counts.all;
+  // Past the end is the last page (a stale ?page= kept across a review).
+  const page = Math.min(parsePage(sp.page), Math.max(1, Math.ceil(total / PAGE_SIZE)));
 
-  // Right-pane selection — clear ?id if it isn't in the current filtered view
-  // (e.g. the reviewer switched filter to "Reviewed" while having a pending row open).
-  const selectedId = sp.id && rows.some((r) => r.id === sp.id) ? sp.id : undefined;
-  const selected = selectedId ? rows.find((r) => r.id === selectedId) ?? null : null;
+  const select = () =>
+    db
+      .select({
+        id: videoSubmissions.id,
+        status: videoSubmissions.status,
+        createdAt: videoSubmissions.createdAt,
+        durationSec: videoSubmissions.durationSec,
+        source: videoSubmissions.source,
+        captionRaw: videoSubmissions.captionRaw,
+        hlsKey: videoSubmissions.hlsMasterKey,
+        reviewedAt: videoSubmissions.reviewedAt,
+        teacherName: teachers.fullName,
+        teacherHindi: teachers.hindiName,
+        teacherSubject: teachers.subjectSpecialism,
+      })
+      .from(videoSubmissions)
+      .leftJoin(users, eq(videoSubmissions.submittedByUserId, users.id))
+      .leftJoin(teachers, eq(teachers.userId, users.id));
 
+  // Right-pane selection is loaded BY ID, not looked up in the page shown: a
+  // deep link (the dashboard to-do, a notification) must open the review pane
+  // whatever page the clip is on. It still has to satisfy the active tab, so
+  // switching to "Reviewed" with a pending row open clears the selection.
+  // A malformed id cannot name a row (and would be a 22P02 from Postgres).
+  const [rows, selectedRows]: [Row[], Row[]] = await Promise.all([
+    select()
+      .where(tabWhere)
+      .orderBy(...order)
+      .limit(PAGE_SIZE)
+      .offset((page - 1) * PAGE_SIZE),
+    isUuid(sp.id) ? select().where(and(tabWhere, eq(videoSubmissions.id, sp.id))).limit(1) : Promise.resolve([]),
+  ]);
+  const selected = selectedRows[0] ?? null;
+  const selectedId = selected?.id;
+  const from = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const to = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + rows.length;
+  const hasNext = page * PAGE_SIZE < total;
+
+  // A filter link carries no page, so changing tab starts again at page 1.
   const filterHref = (next: string | undefined) => {
     const params = new URLSearchParams();
     if (next) params.set("status", next);
     return params.toString() ? `?${params.toString()}` : "/rtt/teach-back";
   };
 
+  const pageHref = (n: number) => {
+    const params = new URLSearchParams();
+    if (filter) params.set("status", filter);
+    if (n > 1) params.set("page", String(n));
+    return params.toString() ? `?${params.toString()}` : "/rtt/teach-back";
+  };
+
   const rowHref = (id: string) => {
     const params = new URLSearchParams();
     if (filter) params.set("status", filter);
+    if (page > 1) params.set("page", String(page));
     params.set("id", id);
     return `?${params.toString()}`;
   };
@@ -251,7 +313,7 @@ export default async function TeachBackQueuePage({
           ) : (
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {rows.map((r) => {
-                const chip = chipFor(r.status);
+                const chip = chipFor(r);
                 const isSelected = selectedId === r.id;
                 return (
                   <li key={r.id}>
@@ -313,7 +375,7 @@ export default async function TeachBackQueuePage({
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {r.status.replace("_", " ")}
+                        {chip.label}
                       </span>
                     </Link>
                   </li>
@@ -321,6 +383,33 @@ export default async function TeachBackQueuePage({
               })}
             </ul>
           )}
+          {total > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                fontSize: 12,
+                color: "var(--ink-3)",
+              }}
+            >
+              <span>{`Showing ${from}–${to} of ${total}`}</span>
+              <span style={{ display: "flex", gap: 8 }}>
+                {page > 1 ? (
+                  <Link href={pageHref(page - 1)} className="btn btn-sm">
+                    ← Previous
+                  </Link>
+                ) : null}
+                {hasNext ? (
+                  <Link href={pageHref(page + 1)} className="btn btn-sm">
+                    Next →
+                  </Link>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         {/* Right: preview pane */}
@@ -385,8 +474,8 @@ export default async function TeachBackQueuePage({
               <span
                 style={{
                   padding: "3px 10px",
-                  background: chipFor(selected.status).bg,
-                  color: chipFor(selected.status).ink,
+                  background: chipFor(selected).bg,
+                  color: chipFor(selected).ink,
                   borderRadius: 999,
                   fontSize: 10,
                   textTransform: "uppercase",
@@ -395,7 +484,7 @@ export default async function TeachBackQueuePage({
                   whiteSpace: "nowrap",
                 }}
               >
-                {selected.status.replace("_", " ")}
+                {chipFor(selected).label}
               </span>
             </header>
 
@@ -496,6 +585,14 @@ export default async function TeachBackQueuePage({
                   }}
                 >
                   Already reviewed
+                </span>
+              ) : !isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) ? (
+                // Not playable yet (or failed). The button used to render for
+                // every unreviewed row, and a review recorded now would keep
+                // the clip out of "Pending review" once it became watchable;
+                // the review route refuses it too.
+                <span style={{ padding: "8px 0", color: "var(--ink-3)", fontSize: 12 }}>
+                  Review opens once the video is ready (status: {selected.status.replace("_", " ")}).
                 </span>
               ) : (
                 <form

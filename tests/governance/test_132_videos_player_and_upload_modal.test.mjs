@@ -141,8 +141,8 @@ test("spec 132 — HlsPlayer.tsx exposes a quality select with auto / 480p / 720
     /data-testid="quality-select"/,
     "quality select must carry a data-testid for e2e coverage",
   );
-  // Auto, then the stream's own renditions, then 720p disabled with the
-  // spec 041 tooltip so a reader of the source sees why.
+  // Auto, then the stream's own renditions, then 720p disabled with a
+  // tooltip so a viewer, and a reader of the source, sees why.
   //
   // CORRECTED (F144). This pinned a static `<option value="480p">` and
   // `currentLevel = next === "auto" ? -1 : 0`: with one rendition, level 0
@@ -161,10 +161,14 @@ test("spec 132 — HlsPlayer.tsx exposes a quality select with auto / 480p / 720
     /<option value="720p"\s+disabled/,
     "quality select must offer the 720p option with the disabled attribute",
   );
+  // The tooltip used to be pinned as "720p disabled per programme settings".
+  // No programme setting turns 720p off -- the worker never encodes it -- so
+  // the pin is now the true reason (F13). tests/behaviour/video-copy.test.ts
+  // checks the rendered tooltip against the heights the worker encodes.
   assert.match(
     src,
-    /title="720p disabled per programme settings"/,
-    "the 720p option must carry the 'disabled per programme settings' tooltip",
+    /<option value="720p"\s+disabled\s+title="Not produced: videos stream at up to 480p"/,
+    "the 720p option must carry a tooltip saying why: it is not produced",
   );
   // The handler must flip hls.currentLevel (-1 for auto, else the chosen rendition).
   assert.match(

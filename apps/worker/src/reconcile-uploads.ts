@@ -16,6 +16,10 @@
 //                                               browser's call would have,
 //                                               cycle evidence included
 //   no complete object, past the window      -> failed
+//   more bytes than were declared            -> failed at once, and the object
+//                                               deleted (the declared size is
+//                                               what the upload cap checked)
+//   Storage did not answer                   -> leave it; the next sweep asks
 //   anything else                            -> leave it; it may be in flight
 //
 // This used to fail any reservation older than 30 minutes without an object.
@@ -31,22 +35,32 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { files, videoSubmissions } from "@gml/db/schema";
-import { finalizeUpload, reconcileDecision, UPLOAD_COMPLETE_GRACE_MINUTES } from "@gml/db/uploads";
+import { finalizeUpload, isOversize, reconcileDecision, UPLOAD_COMPLETE_GRACE_MINUTES } from "@gml/db/uploads";
 import { BUCKETS } from "@gml/shared/storage/buckets";
-import { statObject } from "@gml/shared/storage/client";
+import { removeObjects, statObject } from "@gml/shared/storage/client";
 import { log } from "./log.js";
 
 type Stat = (bucket: string, key: string) => Promise<{ size: number } | null>;
+type Remove = (bucket: string, keys: string[]) => Promise<unknown>;
 
-function storageStat(): Stat {
+function serviceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SECRET_KEY;
   if (!url || !key) throw new Error("Supabase env not set");
-  const sb = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+}
+
+function storageStat(): Stat {
+  const sb = serviceClient();
   return (bucket, objectKey) => statObject(sb, bucket as typeof BUCKETS.videosOriginal, objectKey);
 }
 
-export async function reconcileStalledUploads(opts: { stat?: Stat } = {}): Promise<void> {
+function storageRemove(): Remove {
+  const sb = serviceClient();
+  return (bucket, keys) => removeObjects(sb, bucket as typeof BUCKETS.videosOriginal, keys);
+}
+
+export async function reconcileStalledUploads(opts: { stat?: Stat; remove?: Remove } = {}): Promise<void> {
   const stat = opts.stat ?? storageStat();
 
   // Nothing younger than the grace period can be acted on, so it is not read.
@@ -80,9 +94,19 @@ export async function reconcileStalledUploads(opts: { stat?: Stat } = {}): Promi
   let completed = 0;
   let failed = 0;
   let inFlight = 0;
+  let unanswered = 0;
 
   for (const row of waiting) {
-    const found = await stat(BUCKETS.videosOriginal, row.objectKey).catch(() => null);
+    // statObject answers null for "not there" and throws when Storage errs.
+    // This used to be `.catch(() => null)`: during an outage, every stored
+    // upload past the abandon window was failed as if its object were missing.
+    let found: { size: number } | null;
+    try {
+      found = await stat(BUCKETS.videosOriginal, row.objectKey);
+    } catch {
+      unanswered += 1;
+      continue;
+    }
     const decision = reconcileDecision({
       ageSeconds: Number(row.ageSeconds),
       storedBytes: found ? found.size : null,
@@ -101,6 +125,7 @@ export async function reconcileStalledUploads(opts: { stat?: Stat } = {}): Promi
       });
       if (finalized) completed += 1;
     } else if (decision === "fail") {
+      const oversized = found !== null && isOversize(found.size, row.expectedBytes);
       // The submission is claimed first, so a completion that lands between
       // the stat above and this write cannot leave a queued submission
       // pointing at a file marked failed.
@@ -109,7 +134,9 @@ export async function reconcileStalledUploads(opts: { stat?: Stat } = {}): Promi
           .update(videoSubmissions)
           .set({
             status: "failed",
-            processingLog: sql`'upload abandoned or incomplete; reconciled ' || now()::text`,
+            processingLog: oversized
+              ? sql`'stored size exceeds the declared size; reconciled ' || now()::text`
+              : sql`'upload abandoned or incomplete; reconciled ' || now()::text`,
           })
           .where(and(eq(videoSubmissions.id, row.id), eq(videoSubmissions.status, "received")))
           .returning({ id: videoSubmissions.id });
@@ -117,10 +144,22 @@ export async function reconcileStalledUploads(opts: { stat?: Stat } = {}): Promi
         return rows.length > 0;
       });
       if (claimed) failed += 1;
+      // Bytes the cap never allowed, which nothing will ever transcode, are not
+      // kept: completeUpload deletes them, and a client that skips that call
+      // must not park them here instead. Only once claimed, so an object a live
+      // submission points at is never removed. Best effort, as there: the row
+      // is already failed.
+      if (claimed && oversized) {
+        try {
+          await (opts.remove ?? storageRemove())(BUCKETS.videosOriginal, [row.objectKey]);
+        } catch (err) {
+          log.warn("could not delete an oversized upload", { submissionId: row.id, err: String(err) });
+        }
+      }
     } else {
       inFlight += 1;
     }
   }
 
-  log.info("reconciled stalled uploads", { completed, failed, inFlight, examined: waiting.length });
+  log.info("reconciled stalled uploads", { completed, failed, inFlight, unanswered, examined: waiting.length });
 }

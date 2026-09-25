@@ -47,6 +47,36 @@ export function isMasterPlaylist(playlist: string): boolean {
   return /^#EXT-X-STREAM-INF:/m.test(playlist);
 }
 
+/** How long a signed poster URL lives: longer than anyone keeps a page open. */
+export const POSTER_TTL_SECONDS = 3600;
+
+/**
+ * Signed URLs for poster frames, keyed by poster key, in ONE round trip.
+ *
+ * The worker has always produced a poster per video (posters/<id>.jpg, in a
+ * PRIVATE bucket, so it needs a signed URL) and recorded poster_key -- and
+ * nothing in the web app read either, so every library card was a grey box and
+ * the player opened black. Callers pass only keys of rows they have already
+ * authorised (the visibility-scoped list, or a row assertCanAccessVideo
+ * returned); this makes no authorization decision.
+ *
+ * Never throws. signObjects throws on a Storage error, and a poster is
+ * decoration: an outage must degrade to the placeholder, not fail /videos.
+ */
+export async function signPosterUrls(
+  keys: Array<string | null | undefined>,
+  ttlSeconds = POSTER_TTL_SECONDS,
+): Promise<Map<string, string>> {
+  const unique = [...new Set(keys.filter((k): k is string => Boolean(k)))];
+  if (unique.length === 0) return new Map();
+  try {
+    const signed = await storage.signMany(BUCKETS.posters, unique, ttlSeconds);
+    return new Map([...signed].map(([key, s]) => [key, s.url]));
+  } catch {
+    return new Map();
+  }
+}
+
 /**
  * Fetch a submission's media playlist and return it with every segment line
  * replaced by an absolute, individually-signed Storage URL.

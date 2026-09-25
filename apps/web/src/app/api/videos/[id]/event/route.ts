@@ -24,7 +24,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
+import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 
 const BodySchema = z.object({
@@ -62,7 +62,10 @@ export async function POST(
   if (!parsed.success) return NextResponse.json({ error: "invalid_body" }, { status: 400 });
 
   // Throws notFound() when this viewer has no business with this video.
-  await assertCanAccessVideo(actor, id);
+  const video = await assertCanAccessVideo(actor, id);
+  // And the section gate, as on the page and the playlist (lib/authz.ts).
+  const gate = await videoGateRequired(actor, video);
+  if (gate) return NextResponse.json({ error: "gate_required", gate }, { status: 403 });
 
   // Awaited, not void-ed: this endpoint exists ONLY to write this row, so a
   // failure to write it is a failure of the request, not a background detail.

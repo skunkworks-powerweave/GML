@@ -176,6 +176,12 @@ export async function getObjectStream(
  * Implemented with a prefix `list` rather than a HEAD because Storage's list
  * returns metadata without transferring the object, and a HEAD on a private
  * object needs a signed URL we would have to mint first.
+ *
+ * null means "not there"; a Storage ERROR throws. Both used to be null, so a
+ * transient Storage 5xx at completion told the teacher "We could not find the
+ * uploaded file" and prompted a full re-upload of a file that was stored.
+ * completeUpload answers a throw as retryable (storage_unavailable), and the
+ * worker's reconcile-uploads skips the row until the next sweep.
  */
 export async function statObject(
   supabase: SupabaseClient,
@@ -190,8 +196,8 @@ export async function statObject(
     limit: 1,
     search: name,
   });
-  if (error || !data) return null;
-  const hit = data.find((o) => o.name === name);
+  if (error) throw new Error(`storage list failed: ${error.message}`);
+  const hit = (data ?? []).find((o) => o.name === name);
   if (!hit) return null;
 
   const meta = hit.metadata as { size?: number; mimetype?: string } | null;

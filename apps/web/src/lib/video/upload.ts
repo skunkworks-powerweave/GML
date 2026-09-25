@@ -34,10 +34,10 @@ import "server-only";
 // that claims to have finished having uploaded nothing.
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { files, videoSubmissions } from "@gml/db/schema";
-import { finalizeUpload, isCompleteSize, UPLOAD_ABANDON_AFTER_HOURS } from "@gml/db/uploads";
+import { finalizeUpload, isCompleteSize, isOversize, UPLOAD_ABANDON_AFTER_HOURS } from "@gml/db/uploads";
 import { BUCKETS, uploadKey } from "@gml/shared/storage/buckets";
 import { storage } from "@/lib/video/storage";
 import { getSystemSettings } from "@/lib/system-settings";
@@ -262,6 +262,8 @@ export async function completeUpload(opts: {
   caption?: string | null;
   /** What Storage holds at a key. Defaults to the service-role client. */
   stat?: (bucket: string, key: string) => Promise<{ size: number } | null>;
+  /** Delete objects. Defaults to the service-role client. */
+  remove?: (bucket: string, keys: string[]) => Promise<unknown>;
 }): Promise<CompleteUploadResult> {
   const [row] = await db
     .select({
@@ -294,15 +296,42 @@ export async function completeUpload(opts: {
     return { ok: true, submissionId: row.id };
   }
 
-  const stat = opts.stat
-    ? await opts.stat(BUCKETS.videosOriginal, row.objectKey)
-    : await storage.stat(BUCKETS.videosOriginal, row.objectKey);
+  // A Storage error is not a missing file: statObject throws for it, and the
+  // browser is told to retry the confirmation, not to upload again.
+  let stat: { size: number } | null;
+  try {
+    stat = opts.stat
+      ? await opts.stat(BUCKETS.videosOriginal, row.objectKey)
+      : await storage.stat(BUCKETS.videosOriginal, row.objectKey);
+  } catch {
+    return { ok: false, error: "storage_unavailable", status: 503 };
+  }
   if (!stat) {
     return { ok: false, error: "object_missing", status: 409 };
   }
-  // Allow the object to be no SMALLER than declared minus a tolerance, and
-  // reject a wildly different size. Storage reports the bytes it actually
-  // holds, so a truncated upload is caught here rather than in ffmpeg.
+  // NO LARGER THAN DECLARED. The declared size is what beginUpload checked
+  // against the configured cap, so this is where that cap holds against the
+  // bytes actually stored (see isOversize). Such an object can never become
+  // valid: it is failed and deleted here, not left for a retry to re-examine.
+  if (isOversize(stat.size, row.expectedBytes)) {
+    await db.transaction(async (tx) => {
+      const claimed = await tx
+        .update(videoSubmissions)
+        .set({ status: "failed", processingLog: sql`'stored size exceeds the declared size; refused ' || now()::text` })
+        .where(and(eq(videoSubmissions.id, row.id), inArray(videoSubmissions.status, ["received", "failed"])))
+        .returning({ id: videoSubmissions.id });
+      if (claimed.length > 0) await tx.update(files).set({ status: "failed" }).where(eq(files.id, row.fileId));
+    });
+    try {
+      await (opts.remove ?? storage.remove)(BUCKETS.videosOriginal, [row.objectKey]);
+    } catch {
+      // Best effort: the row is already failed, so nothing will transcode it.
+    }
+    return { ok: false, error: "object_too_large", status: 413 };
+  }
+  // Allow the object to be no SMALLER than declared minus a tolerance.
+  // Storage reports the bytes it actually holds, so a truncated upload is
+  // caught here rather than in ffmpeg.
   if (!isCompleteSize(stat.size, row.expectedBytes)) {
     return { ok: false, error: "object_truncated", status: 409 };
   }
