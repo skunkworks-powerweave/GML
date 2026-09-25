@@ -13,7 +13,7 @@
 // Method matrix:
 //   GET ?q=<2+ chars>          → 200 { ok:true, q, results: [...] }
 //   GET ?q=<<2 chars>          → 200 { ok:true, q, results: [] } (no-op, but still 200)
-//   GET ?q=<over 100 chars>    → 400 { error: "query_too_long" }
+//   GET ?q=<over 240 chars>    → 400 { error: "query_too_long" }
 //   GET (over the throttle)    → 429 { error: "rate_limited", retryAfterMs } + Retry-After
 //   GET (no session)           → 401 { error: "unauthenticated" }
 //   POST / PUT / DELETE        → 405 { error: "method_not_allowed" }
@@ -71,12 +71,21 @@ import { escapeIlike } from "@gml/shared/sql/ilike";
 export const dynamic = "force-dynamic";
 
 const MIN_QUERY = 2;
-// Longer than any name, code or topic this searches; a longer q can only be a
-// paste or a script, and would otherwise be stored whole in the audit log.
-const MAX_QUERY = 100;
-// Per user. QuickFind sends one request per debounced keystroke (180ms), so a
-// person typing stays well under this; a loop does not.
-const QUICKFIND_LIMIT = 60;
+// Neither bound may be reachable by a person using the palette: QuickFind
+// renders every non-200 as "No results for <q>", so a refusal there tells them
+// a teacher or school does not exist.
+//
+// In characters, as Postgres counts varchar. The widest column searched below
+// is sessions.topic, varchar(240) (outline names 200, person and school names
+// 160, codes shorter), and `%q%` cannot match a value shorter than q -- so a
+// longer q would find nothing, and is refused rather than stored whole.
+const MAX_QUERY = 240;
+// Per user, and above what one palette can send. QuickFind fetches whenever
+// typing pauses for its DEBOUNCE_MS (180 ms), and at phone typing speed (300-500
+// ms a character) that is after every character: up to ceil(60_000 / 180) = 334
+// searches a minute from one person. 400 clears that and still stops a loop.
+// audit-flood.test.ts reads the client's debounce and fails if it outruns this.
+const QUICKFIND_LIMIT = 400;
 const QUICKFIND_WINDOW_MS = 60_000;
 const MAX_PER_KIND = 4; // 8 kinds × 4 ≈ 20-row cap after the flat merge.
 const HARD_CAP = 20;
@@ -123,7 +132,10 @@ export async function GET(req: Request) {
       { status: 200 },
     );
   }
-  if (rawQ.length > MAX_QUERY) {
+  // Code points, not .length: an emoji is one character to varchar(240) and
+  // two UTF-16 units to JavaScript, so a full-length topic holding one would
+  // otherwise be refused.
+  if ([...rawQ].length > MAX_QUERY) {
     return NextResponse.json({ error: "query_too_long" }, { status: 400 });
   }
 

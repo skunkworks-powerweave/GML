@@ -80,6 +80,29 @@ async function teacher(f: Fixture): Promise<string> {
 }
 
 // ── /api/quickfind ───────────────────────────────────────────────────────────
+//
+// Both bounds are sized to the palette, because QuickFind (components/
+// quickfind/QuickFind.tsx) renders ANY non-200 as "No results for <q>". A
+// bound an honest user can reach tells them a teacher or school does not
+// exist -- and an admin checking a list may then create a duplicate. So:
+//
+//   - the length cap sits at the longest value the route searches, so a query
+//     it refuses is one that could not have matched anything;
+//   - the throttle sits above the most searches one palette can send in a
+//     window, so only something other than a person typing reaches it.
+
+/**
+ * QuickFind's debounce, read from the component. The palette is a separate
+ * program, and the fastest it can call this route is what sizes the limit;
+ * reading it here means shortening it cannot silently cross the throttle.
+ */
+async function clientDebounceMs(): Promise<number> {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../apps/web/src/components/quickfind/QuickFind.tsx", import.meta.url), "utf8");
+  const m = /\bconst DEBOUNCE_MS = (\d+);/.exec(src);
+  assert.ok(m, "QuickFind.tsx no longer declares `const DEBOUNCE_MS = <n>;` -- update clientDebounceMs()");
+  return Number(m[1]);
+}
 
 test("F97 quickfind: an over-long query is refused, and neither searched nor stored", { skip }, async () => {
   await withClient(async (c) => {
@@ -90,42 +113,123 @@ test("F97 quickfind: an over-long query is refused, and neither searched nor sto
       assert.equal(res.status, 400, "a 6,000-character query was searched");
       assert.equal(((await res.json()) as { error?: string }).error, "query_too_long");
       assert.equal((await auditRows(c, me, "quickfind.query")).length, 0, "the refused query reached the audit log");
-
-      // A query at the cap is an ordinary search, audited as typed.
-      const atCap = `zz${"y".repeat(98)}`;
-      const ok = await quickfind(atCap);
-      assert.equal(ok.status, 200);
-      const rows = await auditRows(c, me, "quickfind.query");
-      assert.deepEqual(rows.map((r) => r.metadata.q), [atCap]);
     } finally {
       await f.cleanup();
     }
   });
 });
 
-test("F97 quickfind: one user's searches are throttled, and every search served is audited", { skip, timeout: 120_000 }, async () => {
+test("F97 quickfind: the longest value it searches, pasted whole, is found; one character more is refused", { skip }, async () => {
+  await withClient(async (c) => {
+    const t = tag("qf-paste");
+    const f = fixture(c, t);
+    try {
+      // sessions.topic is varchar(240), the widest column quickfind searches.
+      // A full-length topic, with one character outside the BMP: Postgres
+      // counts it as one character and JavaScript's .length as two, and a
+      // topic typed on a phone can carry one.
+      const prefix = `${t} \u{1F4D8} fractions on a number line `;
+      const topic = prefix + "x".repeat(240 - [...prefix].length);
+      assert.equal([...topic].length, 240);
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const klass = await f.row("classes", { school_id: school, grade: 5, stage: "Primary" });
+      const subject = await f.row("subjects", { name: `Subject ${t}`, code: t.slice(-12) });
+      const tch = await f.row("teachers", { school_id: school, full_name: `T ${t}` });
+      const session = await f.row("sessions", {
+        school_id: school,
+        class_id: klass,
+        subject_id: subject,
+        teacher_id: tch,
+        scheduled_date: "2026-09-01",
+        topic,
+      });
+      const me = await teacher(f);
+
+      const res = await quickfind(topic);
+      assert.equal(
+        res.status,
+        200,
+        `a session's whole topic, pasted into Cmd+K, was refused with ${res.status} -- the palette shows that as "No results"`,
+      );
+      const body = (await res.json()) as { results: Array<{ kind: string; id: string }> };
+      assert.deepEqual(
+        body.results.filter((r) => r.kind === "session").map((r) => r.id),
+        [session],
+        "the session whose topic was searched for was not found",
+      );
+
+      // Longer than anything searched, so it could not have matched: refused.
+      const over = await quickfind(`${topic}x`);
+      assert.equal(over.status, 400, "a query longer than any searchable value was searched");
+
+      // PROVISIONAL: the row stores the raw q as typed. docs/audit-actions.md
+      // documents quickfind.query as length only, NOT raw text (privacy), and
+      // product has not yet decided which is right. This pin records current
+      // behaviour; change it with that decision, not around it.
+      const rows = await auditRows(c, me, "quickfind.query");
+      assert.deepEqual(
+        rows.map((r) => r.metadata.q),
+        [topic],
+        "the served search is audited once, the refused one not at all",
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("F97 quickfind: a person typing is never throttled, a loop is, and every search served is audited", { skip, timeout: 120_000 }, async () => {
+  const debounceMs = await clientDebounceMs();
   await withClient(async (c) => {
     const t = tag("qf-flood");
     const f = fixture(c, t);
     try {
       const me = await teacher(f);
-      const statuses: number[] = [];
-      for (let i = 0; i < 80; i++) statuses.push((await quickfind(`${t}-${i}`)).status);
+      // QuickFind searches whenever typing pauses for debounceMs, and at phone
+      // typing speed (300-500 ms a character) that is after every character:
+      // one palette can send a search every debounceMs for a whole window.
+      // Open this user's window as if they had done exactly that up to their
+      // last search, rather than make several hundred real calls. (The counter
+      // is keyed `<bucket>:<user id>` by lib/rate-limit.)
+      const human = Math.ceil(60_000 / debounceMs);
+      const seededAt = Date.now();
+      await c.query(`INSERT INTO rate_limits (key, window_start, count) VALUES ($1, now(), $2)`, [
+        `quickfind:${me}`,
+        human - 1,
+      ]);
 
-      const served = statuses.filter((s) => s === 200).length;
-      assert.ok(statuses.includes(429), `80 searches in a row were all served: ${statuses.join(",")}`);
-      assert.deepEqual(new Set(statuses), new Set([200, 429]), `unexpected statuses: ${statuses.join(",")}`);
-      // Once throttled, every later call in the window is throttled too.
-      assert.equal(statuses.indexOf(429), served, "a search was served after the throttle engaged");
-      // Far above what a person typing (debounced 180 ms) reaches in a minute.
-      assert.ok(served >= 40, `only ${served} searches were served before the throttle`);
+      const served: number[] = [];
+      let limited: Response | null = null;
+      for (let i = 0; i < 300 && !limited; i++) {
+        const res = await quickfind(`${t}-${i}`);
+        if (res.status === 429) limited = res;
+        else served.push(res.status);
+      }
+      assert.ok(
+        served.length > 0,
+        `search ${human} of one window was throttled, and QuickFind (debounce ${debounceMs} ms) sends that many ` +
+          `while a person types -- the palette shows the 429 as "No results"`,
+      );
+      assert.ok(limited, `${human - 1 + served.length} searches in one window were all served`);
+      assert.deepEqual(new Set(served), new Set([200]), `unexpected statuses: ${served.join(",")}`);
+
+      // The window, measured: time since it opened plus what the 429 says is
+      // left of it. One palette's worst case over that window fits the limit.
+      const { retryAfterMs } = (await limited.json()) as { retryAfterMs: number };
+      const windowMs = Date.now() - seededAt + retryAfterMs;
+      const limit = human - 1 + served.length;
+      assert.ok(
+        limit >= Math.ceil(windowMs / debounceMs),
+        `the limit (${limit} per ${windowMs} ms) is below what one QuickFind palette sends in that time`,
+      );
 
       // Every search that was answered is in the log; none that was refused is.
-      const rows = await auditRows(c, me, "quickfind.query");
-      assert.equal(rows.length, served);
-      const limited = await quickfind(`${t}-after`);
-      assert.equal(limited.status, 429);
-      assert.ok(Number(limited.headers.get("retry-after")) > 0, "a 429 says when to retry");
+      assert.equal((await auditRows(c, me, "quickfind.query")).length, served.length);
+      const again = await quickfind(`${t}-after`);
+      assert.equal(again.status, 429, "a search was served after the throttle engaged");
+      assert.ok(Number(again.headers.get("retry-after")) > 0, "a 429 says when to retry");
     } finally {
       await f.cleanup();
     }
