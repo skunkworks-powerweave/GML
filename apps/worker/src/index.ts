@@ -126,8 +126,8 @@ async function handle(job: ClaimedJob): Promise<void> {
       });
       break;
     // The nightly retention sweep. The name predates the second table; it is
-    // kept because scheduleDailyWork() enqueues it and its dedupe key is what
-    // makes the sweep once-per-day.
+    // kept because scheduleDailyWork() enqueues it, and its dedupe key --
+    // enqueued `once` -- is what makes the sweep once-per-day.
     case "deleteOldNotifications": {
       const n = await deleteOldNotifications();
       log.info("retention: notifications purged", { count: n });
@@ -311,10 +311,14 @@ const RETENTION_HOUR_UTC = 3;
  * The nightly retention sweep, enqueued rather than run inline.
  *
  * Going through the queue means it inherits leases, retries and the DLQ view,
- * and -- because the dedupe key is the calendar date -- every worker replica
- * can run this check without the job running more than once per day. (A fixed
- * jobId, which is what the job queue used, is unique FOREVER, so day two would collide
- * with day one; scoping to the date is what makes "once per day" actually hold.)
+ * and -- because the dedupe key is the calendar date and the enqueue is `once`
+ * per key -- every worker replica can run this check, every hour and after
+ * every restart, without the job running more than once per day. (A fixed
+ * jobId, which is what the job queue used, is unique FOREVER, so day two would
+ * collide with day one; scoping to the date is what makes "once per day"
+ * possible.) The date alone was NOT enough: the dedupe index covers only live
+ * jobs, so once the day's sweep had succeeded, the next hourly tick enqueued
+ * another -- about 21 a day from 03:00 UTC. `once` counts the finished job too.
  *
  * THE HOUR IS CHECKED, not just the date. Enqueuing on the first tick after
  * date rollover would silently move the sweep from the 03:00 UTC that spec 107
@@ -322,8 +326,7 @@ const RETENTION_HOUR_UTC = 3;
  * morning window when Ladakh mentors are actually checking their devices. The
  * whole point of 03:00 UTC (08:30 IST) was to sit behind that.
  */
-async function scheduleDailyWork(): Promise<void> {
-  const now = new Date();
+export async function scheduleDailyWork(now: Date = new Date()): Promise<void> {
   if (now.getUTCHours() < RETENTION_HOUR_UTC) return;
 
   const today = now.toISOString().slice(0, 10);
@@ -334,6 +337,7 @@ async function scheduleDailyWork(): Promise<void> {
       payload: {},
       dedupeKey: `retention:${today}`,
       maxAttempts: 2,
+      once: true,
     });
   } catch (err) {
     log.error("could not schedule retention", { err: String(err) });
@@ -349,8 +353,8 @@ async function main(): Promise<void> {
 
   const timers = [
     setInterval(() => void housekeeping(), 60_000),
-    // Checked hourly; the dedupe key makes it idempotent, so the exact tick
-    // does not matter and a restart cannot double-run it.
+    // Checked hourly; the date key, enqueued `once`, makes it idempotent, so
+    // the exact tick does not matter and a restart cannot double-run it.
     setInterval(() => void scheduleDailyWork(), 60 * 60_000),
   ];
   for (const t of timers) t.unref?.();

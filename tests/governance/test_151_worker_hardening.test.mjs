@@ -314,10 +314,11 @@ test("spec 151 — there is no retention cron left to document a timezone for", 
       "that survived that rename is the reason this scheduling moved into plain code",
   );
   // The positive half: scheduling is a named function on an interval, in code
-  // the typechecker reads.
+  // the typechecker reads. (Since F16 it takes the clock as an argument, so
+  // tests/behaviour/retention-schedule.test.ts can execute it.)
   assert.match(
     read(INDEX_PATH),
-    /async function scheduleDailyWork\(\)/,
+    /async function scheduleDailyWork\(now: Date = new Date\(\)\)/,
     "the daily sweep must be scheduled by an ordinary, typechecked function",
   );
 });

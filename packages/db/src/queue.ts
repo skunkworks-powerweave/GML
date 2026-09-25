@@ -65,28 +65,41 @@ export async function enqueue(
     dedupeKey?: string | null;
     maxAttempts?: number;
     runAt?: Date;
+    /**
+     * At most ONE job per dedupe key, whatever became of it -- not only while
+     * one is live. For schedule keys such as `retention:<date>`: the partial
+     * index covers queued/running only, so once the day's sweep had finished
+     * the next hourly tick (and every restart) enqueued and ran it again.
+     * NOT for transcodes, whose operator Retry depends on a finished job not
+     * blocking a new one. Two replicas racing still meet the partial index.
+     */
+    once?: boolean;
   },
 ): Promise<{ id: string; deduped: boolean }> {
+  const key = opts.dedupeKey ?? null;
   const rows = await db.execute<{ id: string }>(sql`
     INSERT INTO jobs (queue, name, payload, dedupe_key, max_attempts, run_at)
-    VALUES (
+    SELECT
       ${opts.queue}, ${opts.name}, ${JSON.stringify(opts.payload)}::jsonb,
-      ${opts.dedupeKey ?? null}, ${opts.maxAttempts ?? 3},
+      ${key}, ${opts.maxAttempts ?? 3},
       ${opts.runAt ? opts.runAt.toISOString() : sql`now()`}
-    )
+    WHERE ${opts.once === true && key !== null
+      ? sql`NOT EXISTS (SELECT 1 FROM jobs WHERE queue = ${opts.queue} AND dedupe_key = ${key})`
+      : sql`true`}
     ON CONFLICT DO NOTHING
     RETURNING id
   `);
   const inserted = (rows as unknown as { rows: { id: string }[] }).rows ?? [];
   if (inserted.length > 0) return { id: inserted[0]!.id, deduped: false };
 
-  // The insert was absorbed by jobs_dedupe_live_uq. Hand back the live job so
-  // the caller has an id to report.
+  // The insert was absorbed: by jobs_dedupe_live_uq, or (with `once`) by a
+  // job that already ran. Hand that job back so the caller has an id to report.
   const existing = await db.execute<{ id: string }>(sql`
     SELECT id FROM jobs
      WHERE queue = ${opts.queue}
-       AND dedupe_key = ${opts.dedupeKey ?? null}
-       AND status IN ('queued', 'running')
+       AND dedupe_key = ${key}
+       ${opts.once === true ? sql`` : sql`AND status IN ('queued', 'running')`}
+     ORDER BY created_at DESC
      LIMIT 1
   `);
   const found = (existing as unknown as { rows: { id: string }[] }).rows ?? [];

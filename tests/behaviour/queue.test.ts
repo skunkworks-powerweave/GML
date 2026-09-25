@@ -329,6 +329,32 @@ test("F15: a failure the handler knows is permanent is dead-lettered at once, no
   }
 });
 
+test("F16: a once-per-key job is not enqueued again after it has finished", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("once");
+  const key = `${name}:2099-01-01`;
+  try {
+    const enqueueWith = enqueue as unknown as (d: unknown, o: Record<string, unknown>) => Promise<{ id: string; deduped: boolean }>;
+    const first = await enqueueWith(db, { queue: "retention", name, payload: {}, dedupeKey: key, once: true });
+    // Done, the way the day's sweep finishes.
+    await db.execute(sql`UPDATE jobs SET status = 'succeeded', completed_at = now() WHERE id = ${first.id}::uuid`);
+
+    // jobs_dedupe_live_uq only covers queued/running, so a finished job used
+    // to let the next hourly tick insert and run the same day's sweep again.
+    const again = await enqueueWith(db, { queue: "retention", name, payload: {}, dedupeKey: key, once: true });
+    assert.equal(again.deduped, true, "the day's sweep was enqueued a second time");
+    assert.equal(again.id, first.id);
+    const n = ((await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM jobs WHERE dedupe_key = ${key}`)) as unknown as {
+      rows: { n: number }[];
+    }).rows[0]!.n;
+    assert.equal(n, 1);
+  } finally {
+    await cleanup(db, name);
+    await close();
+  }
+});
+
 test("queueDepth counts what the admin view renders", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("depth");
