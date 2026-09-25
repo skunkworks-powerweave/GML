@@ -79,7 +79,7 @@ function warnVerifyTokenUnsetOnce(): void {
   warnedVerifyToken = true;
   console.warn(
     "[whatsapp] refused Meta's webhook verification: WHATSAPP_VERIFY_TOKEN is not set. Set it to the " +
-      "verify token typed into the Meta dashboard (see README-IT.md, WhatsApp setup).",
+      "verify token typed into the Meta dashboard (see README-IT.md, \"WhatsApp Business setup\").",
   );
 }
 
