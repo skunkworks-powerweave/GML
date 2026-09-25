@@ -22,6 +22,14 @@ export type FakeStorage = {
    * 200 ms for as long as the client stays -- a source on a very slow link.
    */
   stall(bucket: string, key: string): void;
+  /**
+   * Make one kind of request for keys under `keyPrefix` never be answered at
+   * all, not even with headers -- a Storage that has stopped responding:
+   * "sign" (minting a signed URL), "download" (GET of a signed URL) or
+   * "upload". `hung()` counts the requests being held.
+   */
+  hang(kind: "sign" | "download" | "upload", bucket: string, keyPrefix: string): void;
+  hung(): number;
   get(bucket: string, key: string): StoredObject | undefined;
   /** Every key in a bucket under a prefix, sorted. */
   keys(bucket: string, prefix?: string): string[];
@@ -40,6 +48,8 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 export async function startFakeStorage(): Promise<FakeStorage> {
   const objects = new Map<string, StoredObject>();
   const stalled = new Set<string>();
+  const hangs: Array<{ kind: string; bucket: string; prefix: string }> = [];
+  let hungCount = 0;
   const id = (bucket: string, key: string) => `${bucket}/${key}`;
 
   const server = createServer(async (req, res) => {
@@ -51,6 +61,16 @@ export async function startFakeStorage(): Promise<FakeStorage> {
     const u = new URL(req.url ?? "/", "http://fake");
     const parts = u.pathname.replace(/^\/storage\/v1\//, "").split("/").map(decodeURIComponent);
     const body = await readBody(req);
+
+    const kind =
+      parts[0] === "object" && parts[1] === "sign"
+        ? req.method === "POST" ? "sign" : "download"
+        : parts[0] === "object" && (req.method === "POST" || req.method === "PUT") ? "upload" : null;
+    const [hBucket, ...hKey] = kind === "upload" ? parts.slice(1) : parts.slice(2);
+    if (kind && hangs.some((h) => h.kind === kind && h.bucket === hBucket && hKey.join("/").startsWith(h.prefix))) {
+      hungCount += 1;
+      return; // no response, ever; close() drops the connection
+    }
 
     // POST object/sign/<bucket>            sign many: { paths, expiresIn }
     // POST object/sign/<bucket>/<key...>   sign one
@@ -139,6 +159,10 @@ export async function startFakeStorage(): Promise<FakeStorage> {
       stalled.add(id(bucket, key));
       if (!objects.has(id(bucket, key))) objects.set(id(bucket, key), { body: Buffer.alloc(0), contentType: "video/mp4" });
     },
+    hang: (kind, bucket, prefix) => {
+      hangs.push({ kind, bucket, prefix });
+    },
+    hung: () => hungCount,
     get: (bucket, key) => objects.get(id(bucket, key)),
     keys: (bucket, prefix = "") =>
       [...objects.keys()]

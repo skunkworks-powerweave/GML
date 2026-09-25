@@ -69,7 +69,12 @@ import {
 } from "./encode.js";
 import type { TranscodeJobInput } from "./index.js";
 
-function supabase() {
+/**
+ * A Storage client. With `signal`, every request it makes -- signing, upload,
+ * listing -- is aborted when the signal is: a shutdown must not wait on a
+ * Storage that has stopped answering (see transcode480p).
+ */
+function supabase(signal?: AbortSignal) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SECRET_KEY;
   if (!url || !key) {
@@ -77,7 +82,13 @@ function supabase() {
       "NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY must be set for the worker to reach Storage.",
     );
   }
-  return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
+  const abortable: typeof fetch | undefined = signal
+    ? (input, init) => fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal })
+    : undefined;
+  return createClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false },
+    ...(abortable ? { global: { fetch: abortable } } : {}),
+  });
 }
 
 /** A handle that can write the domain rows: the shared `db`, or a transaction. */
@@ -185,10 +196,13 @@ export async function repairStrandedTranscodes(): Promise<{ attempts: number; vi
  * about to try again by itself. With a retry to come the video stays 'queued',
  * which the page shows as in progress.
  *
- * `signal` aborts the attempt when the worker is shutting down: the download,
- * ffmpeg and the uploads stop, the attempt is recorded 'cancelled' rather than
- * failed, the video goes back to 'queued', and scratch is removed -- the caller
- * then hands the job back to the queue (see runJob).
+ * `signal` aborts the attempt when the worker is shutting down: every Storage
+ * request (signing, the download, the uploads), ffprobe and ffmpeg stop, the
+ * attempt is recorded 'cancelled' rather than failed, the video goes back to
+ * 'queued', and scratch is removed -- the caller then hands the job back to the
+ * queue (see runJob). The Storage requests used to be out of its reach: one
+ * that never answered held the drain past its deadline, and the worker exited
+ * without handing the job back.
  */
 export async function transcode480p(
   input: TranscodeJobInput,
@@ -225,7 +239,7 @@ export async function transcode480p(
 
     // After the ledger row, so a worker with no Storage configuration records
     // WHY on a row the DLQ shows, rather than failing where nothing looks.
-    const sb = supabase();
+    const sb = supabase(signal);
 
     // Announce the transition. The UI has always had a 'transcoding' chip and it
     // has never once been shown, because nothing wrote the value.
@@ -240,7 +254,7 @@ export async function transcode480p(
     const localPoster = join(workDir, "poster.jpg");
 
     // ── 1. Source to disk, streamed ──────────────────────────────────────────
-    const src = await getObjectStream(sb, BUCKETS.videosOriginal, objectKey);
+    const src = await getObjectStream(sb, BUCKETS.videosOriginal, objectKey, { signal });
     await pipeline(Readable.fromWeb(src.body as never), createWriteStream(localInput), { signal });
     const srcStat = await stat(localInput);
     if (srcStat.size === 0) throw new Error("source object is empty");
@@ -248,7 +262,7 @@ export async function transcode480p(
     await mkdir(localOut, { recursive: true });
 
     // ── 2. Probe, for metadata and for the poster timestamp ──────────────────
-    const probe = await ffprobe(localInput);
+    const probe = await ffprobe(localInput, signal);
     // A source ffprobe cannot open, or one with no picture, fails the same way
     // on every attempt: say so in words a teacher can read, and do not spend
     // the other attempts re-downloading it. (An audio-only file used to be
@@ -270,7 +284,7 @@ export async function transcode480p(
     // failure path with a reason attached.
     for (let i = 0; i < ladderFor(probe).length; i += 1) {
       const problem = renditionProblem(
-        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i)))),
+        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i))), signal),
       );
       if (problem) throw new Error(`rendition ${i}: ${problem}`);
     }
@@ -417,10 +431,12 @@ export async function transcode480p(
  * says so in `unreadable` (the caller fails the job, permanently); any other
  * probe failure only costs the metadata, and ffmpeg's own diagnostics decide.
  */
-async function ffprobe(path: string): Promise<Probe & { unreadable?: string | null }> {
+async function ffprobe(path: string, signal?: AbortSignal): Promise<Probe & { unreadable?: string | null }> {
   try {
-    return parseProbe(await run("ffprobe", probeArgs(path)));
+    return parseProbe(await run("ffprobe", probeArgs(path), signal));
   } catch (err) {
+    // A shutdown is not a probe failure: let the attempt be handed back.
+    if (signal?.aborted) throw err;
     console.warn("[transcode] ffprobe failed:", boundedError(String(err), 300));
     return { durationSec: null, width: null, height: null, unreadable: unreadableSource(String(err)) };
   }
