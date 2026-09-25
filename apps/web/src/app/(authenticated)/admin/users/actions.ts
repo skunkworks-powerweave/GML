@@ -19,6 +19,7 @@ import { db } from "@gml/db";
 import { users, teachers, mentors } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { supabaseAdmin } from "@/lib/supabase/server";
+import { revokeAllSessions, type RevokeResult } from "@/lib/supabase/sessions";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 
@@ -235,25 +236,39 @@ export async function setRoleAction(
   // The role rides in the JWT, so the change takes effect when the target's
   // access token is next minted -- within one token lifetime, with no
   // per-request database read. A DEMOTION should not wait that long: ending
-  // their sessions forces an immediate re-mint through the hook.
+  // their sessions leaves no refresh token to re-mint with, and auth()
+  // confirms an administrative claim against public.users, so the access token
+  // they still hold stops carrying admin authority at once.
   const isDemotion =
     (permitted.targetRole === "super_admin" || permitted.targetRole === "programme_admin") &&
     role !== "super_admin" &&
     role !== "programme_admin";
-  if (isDemotion) {
-    await supabaseAdmin().auth.admin.signOut(targetId, "global").catch(() => undefined);
-  }
+  const revoked = isDemotion ? await revokeAllSessions(targetId) : null;
 
   const wrote = await recordAudit({
     action: "admin.user.role_change",
     entityType: "user",
     entityId: targetId,
-    metadata: { from: permitted.targetRole, to: role, sessionsEnded: isDemotion },
+    metadata: { from: permitted.targetRole, to: role, ...sessionsOutcome(revoked) },
   });
   if (!wrote) noteAuditDegraded("admin/users/setRoleAction");
 
   revalidatePath("/admin/users");
-  return { ok: `Role updated to ${role}.` };
+  return {
+    ok:
+      revoked && !revoked.ok
+        ? `Role updated to ${role}, but their existing sessions could not be ended. Try again, or ask them to sign out.`
+        : `Role updated to ${role}.`,
+  };
+}
+
+/**
+ * What an audit row says about sessions: only what actually happened. `null`
+ * means no revocation was attempted.
+ */
+function sessionsOutcome(r: RevokeResult | null): { sessionsEnded: boolean; sessionsEndedCount?: number } {
+  if (!r || !r.ok) return { sessionsEnded: false };
+  return { sessionsEnded: true, sessionsEndedCount: r.ended };
 }
 
 // ── activate / deactivate ─────────────────────────────────────────────────────
@@ -285,21 +300,23 @@ export async function setActiveAction(
   });
   if (result.error) return { error: result.error };
 
+  let revoked: RevokeResult | null = null;
   if (!active) {
     // THREE LAYERS, because the profile flag alone leaves the user signed in
     // until their current access token expires:
     //
     //   1. active=false above -- the access-token hook now refuses to mint.
-    //   2. signOut('global') -- kills the refresh tokens on every device, so
-    //      there is nothing left to refresh WITH.
+    //   2. revokeAllSessions -- deletes their sessions, and with them the
+    //      refresh tokens on every device, so there is nothing left to refresh
+    //      WITH -- and nothing to come back to life if they are reactivated.
     //   3. ban -- refuses a fresh sign-in even with the correct password,
     //      so they cannot simply log back in.
     //
     // Residual exposure is the access token already in their browser, which
-    // cannot be revoked and dies at its own expiry. That is the honest bound,
+    // cannot be recalled and dies at its own expiry. That is the honest bound,
     // and it is why the token lifetime matters.
     const admin = supabaseAdmin();
-    await admin.auth.admin.signOut(targetId, "global").catch(() => undefined);
+    revoked = await revokeAllSessions(targetId);
     await admin.auth.admin
       .updateUserById(targetId, { ban_duration: "876000h" /* ~100 years */ })
       .catch(() => undefined);
@@ -313,7 +330,7 @@ export async function setActiveAction(
     action: active ? "admin.user.activate" : "admin.user.deactivate",
     entityType: "user",
     entityId: targetId,
-    metadata: { role: permitted.targetRole },
+    metadata: active ? { role: permitted.targetRole } : { role: permitted.targetRole, ...sessionsOutcome(revoked) },
   });
   if (!wrote) noteAuditDegraded("admin/users/setActiveAction");
 
@@ -321,7 +338,9 @@ export async function setActiveAction(
   return {
     ok: active
       ? "Account reactivated."
-      : "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime.",
+      : revoked?.ok
+        ? "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime."
+        : "Account deactivated, but their existing sessions could not be ended; they stop working within one token lifetime. Deactivate again to retry.",
   };
 }
 
@@ -347,10 +366,12 @@ export async function setPasswordAction(
   const { error } = await admin.auth.admin.updateUserById(targetId, { password });
   if (error) return { error: error.message };
 
-  // End their other sessions. An administrator setting a password is either
+  // End their sessions. An administrator setting a password is either
   // onboarding someone or responding to a suspected compromise, and in the
   // second case leaving the existing sessions alive defeats the exercise.
-  await admin.auth.admin.signOut(targetId, "global").catch(() => undefined);
+  // GoTrue's own admin password update deletes them too; this does not depend
+  // on that, and the audit row records what was actually done.
+  const revoked = await revokeAllSessions(targetId);
 
   // The password itself is never audited, in any form -- not the plaintext, not
   // a hash, not a length. The audit log is readable by every administrator.
@@ -358,10 +379,14 @@ export async function setPasswordAction(
     action: "admin.user.password_set",
     entityType: "user",
     entityId: targetId,
-    metadata: { role: permitted.targetRole, sessionsEnded: true },
+    metadata: { role: permitted.targetRole, ...sessionsOutcome(revoked) },
   });
   if (!wrote) noteAuditDegraded("admin/users/setPasswordAction");
 
   revalidatePath("/admin/users");
-  return { ok: "Password set. Their other sessions have been signed out." };
+  return {
+    ok: revoked.ok
+      ? "Password set. Their other sessions have been signed out."
+      : "Password set, but their existing sessions could not be ended. Try again, or ask them to sign out.",
+  };
 }

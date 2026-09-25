@@ -27,7 +27,8 @@
 // `getClaims()` verifies the access token's signature LOCALLY against the
 // project's JWKS (this project signs ES256; the key set is fetched once and
 // cached), so reading a session costs no network call and no database query --
-// the same performance the old JWT had.
+// the same performance the old JWT had. The one exception is an administrative
+// role claim, which is confirmed against public.users (see auth()).
 //
 // The claims themselves are minted by `public.custom_access_token_hook`
 // (packages/db/src/migrations/_post/004). GoTrue calls it on sign-in AND on
@@ -42,7 +43,8 @@
 //                         time;
 //   * re-read per mint => role and active are re-checked every refresh, so the
 //                         stale window is one access-token lifetime rather than
-//                         eight hours;
+//                         eight hours -- and for the two ADMINISTRATIVE roles
+//                         there is no stale window at all (see auth() below);
 //   * lockout          => deleted outright. Supabase Auth rate-limits sign-in
 //                         attempts centrally, with no per-account flag an
 //                         attacker can set on someone else's behalf.
@@ -54,7 +56,11 @@
 // principals the hook was supposed to reject.
 
 import "server-only";
+import { cache } from "react";
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
+import { db } from "@gml/db";
+import { users } from "@gml/db/schema";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -101,16 +107,57 @@ export async function auth(): Promise<Session | null> {
   // enum change should fail closed rather than flow into a role comparison.
   if (!id || !isRoleName(role)) return null;
 
+  // An ADMINISTRATIVE claim is confirmed against the profile, every time.
+  //
+  // The token is verified locally and is honoured until it expires, and
+  // nothing can recall one already issued -- ending a user's sessions only
+  // stops the NEXT mint. For most roles that window is an acceptable cost of
+  // a zero-query session read. For these two it is not: a super_admin demoted
+  // at 10:00 kept /admin/users until their token expired, which was long
+  // enough to create a replacement super_admin account and make the demotion
+  // pointless. Administrators are a handful of people, so the price is one
+  // primary-key read per request for them and nothing for the teachers.
+  let effectiveRole: RoleName = role;
+  if (ADMIN_ROLES.has(role)) {
+    const current = await currentRole(id);
+    if (!current) return null;
+    effectiveRole = current;
+  }
+
   return {
     user: {
       id,
       email: orNull(claims.email),
       name: orNull(claims.user_name),
       image: orNull(claims.user_image),
-      role,
+      role: effectiveRole,
     },
   };
 }
+
+const ADMIN_ROLES: ReadonlySet<RoleName> = new Set<RoleName>(["programme_admin", "super_admin"]);
+
+/**
+ * The role public.users holds for `id` now, or null when the profile is
+ * missing, inactive or soft-deleted -- the same refusals the access-token hook
+ * applies at mint time. A failed read is also null: auth() fails closed.
+ *
+ * cache(): a page render calls auth() from the layout, the page and its guards;
+ * within one request this is read once.
+ */
+const currentRole = cache(async (id: string): Promise<RoleName | null> => {
+  try {
+    const [row] = await db
+      .select({ role: users.role, active: users.active, deletedAt: users.deletedAt })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    if (!row || !row.active || row.deletedAt || !isRoleName(row.role)) return null;
+    return row.role;
+  } catch {
+    return null;
+  }
+});
 
 /**
  * Sign in with email + password.
@@ -146,10 +193,10 @@ export async function signInWithPassword(
 /**
  * Sign out and redirect.
  *
- * scope 'local' clears this browser's session only. 'global' -- which kills the
- * user's sessions on every device -- is what the admin deactivate path uses,
- * and is not what someone clicking "sign out" on a shared school computer
- * expects to happen to their phone.
+ * scope 'local' clears this browser's session only. Ending the user's sessions
+ * on every device is what the admin deactivate path does (lib/supabase/
+ * sessions.ts), and is not what someone clicking "sign out" on a shared school
+ * computer expects to happen to their phone.
  */
 export async function signOut(opts?: { redirectTo?: string }): Promise<never> {
   try {
