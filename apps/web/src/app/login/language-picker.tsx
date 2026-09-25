@@ -1,11 +1,13 @@
 "use client";
 
 // Pre-auth language picker — sets a 365-day `gml-locale` cookie and reloads
-// the page. The login route's layout reads this cookie server-side (with
-// English as default) to render its labels through next-intl. After sign-in,
-// the language source of truth shifts to `user_prefs.uiLanguage` — this
-// cookie is informational and effectively ignored once the authenticated
-// layout takes over.
+// the page. The login route's layout resolves the locale server-side from
+// this cookie (i18n/resolve.ts, English as default) to render its labels
+// through next-intl. After sign-in the cookie keeps deciding until the user
+// has a saved user_prefs row, and that row's first write takes its language
+// from the cookie (PUT /api/user-prefs); from then on the saved row decides.
+// So for a signed-in user who already saved a language, this picker changes
+// only the cookie -- the topbar and Settings pickers change the saved one.
 //
 // 1:1 port of `LMS GML Frontend/login.jsx` line 165's 3-button picker.
 

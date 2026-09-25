@@ -14,6 +14,7 @@ import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { LOCALE_COOKIE } from "@/i18n/config";
+import { cookieLocale } from "@/i18n/resolve";
 
 const PrefsSchema = z.object({
   density: z.enum(["dense", "regular", "loose"]).optional(),
@@ -26,6 +27,8 @@ const PrefsSchema = z.object({
   ftuxSeenAt: z.string().datetime().optional().nullable(),
 });
 
+// No uiLanguage here: a user with no row is seeing the gml-locale cookie's
+// language (i18n/resolve.ts), so that is their default -- see PUT.
 const DEFAULT_PREFS = {
   density: "regular" as const,
   navStyle: "labelled" as const,
@@ -33,7 +36,6 @@ const DEFAULT_PREFS = {
   highContrast: false,
   reducedMotion: false,
   showWatermark: true,
-  uiLanguage: "en" as const,
 };
 
 export async function GET() {
@@ -44,7 +46,7 @@ export async function GET() {
   const [row] = await db.select().from(userPrefs).where(eq(userPrefs.userId, session.user.id)).limit(1);
   if (row) return NextResponse.json(row);
   // No row yet → return defaults
-  return NextResponse.json({ userId: session.user.id, ...DEFAULT_PREFS });
+  return NextResponse.json({ userId: session.user.id, ...DEFAULT_PREFS, uiLanguage: await cookieLocale() });
 }
 
 export async function PUT(req: Request) {
@@ -76,10 +78,25 @@ export async function PUT(req: Request) {
         ? null
         : new Date(patch.ftuxSeenAt);
 
-  // Upsert
+  // Upsert.
+  //
+  // THE FIRST ROW KEEPS THE LANGUAGE ON SCREEN. With no row, the UI is in the
+  // cookie's language (the login-page picker's); once a row exists, the row
+  // decides (i18n/resolve.ts). The insert used to take uiLanguage 'en' from
+  // the defaults whatever field was being saved, so the first-run tour's
+  // {ftuxSeenAt} -- sent on every first sign-in -- or a Settings toggle
+  // switched a user who had picked हिन्दी at sign-in to English. The cookie
+  // seeds the INSERT only: the conflict branch below sets just the patch, so
+  // a saved language is never overwritten by a device's cookie.
   await db
     .insert(userPrefs)
-    .values({ userId: session.user.id, ...DEFAULT_PREFS, ...patch, ftuxSeenAt })
+    .values({
+      userId: session.user.id,
+      ...DEFAULT_PREFS,
+      ...patch,
+      uiLanguage: patch.uiLanguage ?? (await cookieLocale()),
+      ftuxSeenAt,
+    })
     .onConflictDoUpdate({
       target: userPrefs.userId,
       set: { ...patch, ftuxSeenAt, updatedAt: new Date() },

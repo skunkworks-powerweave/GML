@@ -125,8 +125,10 @@ test("spec 125 — authenticated layout reads user_prefs.uiLanguage and provides
   // F124: the layout used to query user_prefs.uiLanguage itself while
   // i18n/request.ts read the cookie, and the two disagreed. The invariant is
   // now ONE resolver for both: the layout takes its locale from viewerPrefs(),
-  // and that resolver reads and normalises user_prefs.uiLanguage.
-  assert.match(src, /\{\s*locale,\s*prefs:\s*prefRow\s*\}\s*=\s*await viewerPrefs\(\)/, "authenticated layout must take its locale from the shared resolver");
+  // and that resolver reads and normalises user_prefs.uiLanguage. (The
+  // destructuring may take more than these two: the layout also reads the
+  // resolver's `failed` flag, so a failed read does not replay the tour.)
+  assert.match(src, /\{\s*locale,\s*prefs:\s*prefRow\b[^}]*\}\s*=\s*await viewerPrefs\(\)/, "authenticated layout must take its locale from the shared resolver");
   const resolver = read("apps/web/src/i18n/resolve.ts");
   assert.match(resolver, /userPrefs/, "the resolver must query user_prefs (the locale source of truth)");
   assert.match(resolver, /normalizeLocale\(row\.uiLanguage\)/, "the resolver must normalise user_prefs.uiLanguage");
@@ -201,7 +203,19 @@ test("spec 125 — gate/[slug] page is a server component that reads user_prefs 
 test("spec 125 — /login has a server-rendered NextIntlClientProvider layout and useTranslations() in page", () => {
   const layoutSrc = read(LOGIN_LAYOUT);
   assert.match(layoutSrc, /NextIntlClientProvider/, "login/layout.tsx must wrap with NextIntlClientProvider");
-  assert.match(layoutSrc, /gml-locale/, "login layout must read the pre-auth gml-locale cookie");
+  // The layout used to read the gml-locale cookie itself. It now resolves the
+  // locale through the shared per-request resolver (F124), so that on a
+  // signed-in login route (/login/reset) it agrees with <html lang>; signed
+  // out, the resolver answers the pre-auth cookie. The invariant is therefore
+  // both halves: the layout uses the resolver, and the resolver's fallback is
+  // the cookie. Rendered for real in tests/behaviour/ui-i18n.test.ts (D2) and
+  // ui-locale-source.test.ts.
+  assert.match(layoutSrc, /await resolveUiLocale\(\)/, "login layout must take its locale from the shared resolver");
+  assert.match(
+    read("apps/web/src/i18n/resolve.ts"),
+    /cookies\(\)\)\.get\(LOCALE_COOKIE\)/,
+    "the resolver must fall back to the pre-auth gml-locale cookie",
+  );
   const pageSrc = read(LOGIN_PAGE);
   assert.match(pageSrc, /from\s+["']next-intl["']/, "login page must import useTranslations from next-intl");
   assert.match(pageSrc, /useTranslations/, "login page must call useTranslations() for label copy");

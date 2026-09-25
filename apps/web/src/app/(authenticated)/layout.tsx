@@ -77,7 +77,14 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   // row only exists after the first pref change (spec 024); until then the
   // locale is the pre-auth cookie's and ftuxSeenAt is null, which is exactly
   // the signal the FTUXTour component mounts on (spec 123).
-  const { locale, prefs: prefRow } = await viewerPrefs();
+  //
+  // A read that FAILED is not that signal. The resolver fails soft (see its
+  // header): the shell renders in the cookie's language, like the chrome
+  // counts below, and the page's own error lands in (authenticated)/error.tsx
+  // inside it. But its null row is "unknown", not "never seen the tour", so
+  // the tour is not mounted -- or every user would get it over every page for
+  // the length of a database outage.
+  const { locale, prefs: prefRow, failed: prefsFailed } = await viewerPrefs();
   const messages = loadMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];
   const htmlLang = LOCALE_HTML_LANG[locale];
@@ -158,7 +165,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
           styles and cannot respond. Renders nothing. */}
       <DeviceSync initial={device} />
       <AntiDownloadGuard />
-      <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />
+      {prefsFailed ? null : <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />}
       <QuickFind userId={user.id} />
       {/* THE LANGUAGE IS DECLARED, NOT JUST RECORDED. This was
           data-html-lang={htmlLang}: a data attribute, invisible to the browser

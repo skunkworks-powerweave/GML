@@ -19,14 +19,21 @@
 // authenticated layout, for a signed-in user whose user_prefs row is in
 // Postgres. They must all name the same locale.
 
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import type { Client } from "pg";
 import { h, render, request, withAppRouter, openingTags, elements, attr } from "./_ui.js";
 import { needsDatabase, withClient, tag } from "./_harness.js";
 import { actAs, fixture } from "./_admin-fixture.js";
+import { closeAppPool } from "./_mentorship.js";
 import { LOCALE_COOKIE, loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const skip = needsDatabase();
+// Only when Postgres is here: without DATABASE_URL the app's pool cannot even
+// be constructed, and the signed-out test below still runs.
+after(async () => {
+  if (!skip) await closeAppPool();
+});
 
 type Locale = "en" | "hi" | "bo";
 
@@ -57,7 +64,7 @@ async function declared(): Promise<{ html: string | null; wrapper: string | null
 
 async function withUser(
   saved: Locale | null,
-  body: (id: string) => Promise<void>,
+  body: (id: string, c: Client) => Promise<void>,
 ): Promise<void> {
   await withClient(async (c) => {
     const f = fixture(c, tag("locale-src"));
@@ -66,7 +73,7 @@ async function withUser(
       // user_prefs cascades from users, so the fixture's cleanup removes it.
       if (saved) await c.query(`INSERT INTO user_prefs (user_id, ui_language) VALUES ($1, $2)`, [id, saved]);
       actAs(id, "teacher");
-      await body(id);
+      await body(id, c);
     } finally {
       await f.cleanup();
     }
@@ -154,4 +161,105 @@ test("F124: signed out, the cookie still decides (the pre-auth login picker)", a
   }
   request.cookies = { [LOCALE_COOKIE]: "<script>" };
   assert.equal(await stringsLocale(), "en", "a forged cookie falls back to English");
+});
+
+// ── The first saved preference ───────────────────────────────────────────────
+//
+// Signed in with no row, the cookie decides (above). But the row did not stay
+// absent: PUT /api/user-prefs creates it on the first write of ANY field, and
+// created it from its defaults, uiLanguage 'en' included. The first-run tour's
+// Skip / Got it PUTs {ftuxSeenAt} on every first sign-in, and every Settings
+// toggle PUTs its one field -- so a teacher who picked हिन्दी on the login page
+// was switched to English by dismissing the tour, and a Settings toggle
+// redrew the chrome in English under a form still showing हिन्दी (whose pill
+// then computed an empty delta and sent nothing).
+
+/** Call the real PUT /api/user-prefs handler as the signed-in test user. */
+async function putPrefs(patch: Record<string, unknown>): Promise<number> {
+  const { PUT } = await import("../../apps/web/src/app/api/user-prefs/route.ts");
+  const res = await PUT(
+    new Request("http://x/api/user-prefs", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+  // The handler voids its audit write; let it land before the fixture deletes
+  // the user it names.
+  await new Promise((r) => setTimeout(r, 300));
+  return res.status;
+}
+
+async function savedLanguage(c: Client, id: string): Promise<string[]> {
+  const { rows } = await c.query<{ ui_language: string }>(`SELECT ui_language FROM user_prefs WHERE user_id = $1`, [id]);
+  return rows.map((r) => r.ui_language);
+}
+
+test("F124: the first saved preference keeps the language picked on the login page (the tour's PUT, a Settings toggle)", { skip }, async () => {
+  const cases: Array<[Locale, Record<string, unknown>, string]> = [
+    ["hi", { ftuxSeenAt: new Date().toISOString() }, "the first-run tour's Skip / Got it"],
+    ["hi", { highContrast: true }, "a Settings toggle"],
+    ["bo", { ftuxSeenAt: new Date().toISOString() }, "the first-run tour's Skip / Got it"],
+  ];
+  for (const [cookie, patch, what] of cases) {
+    await withUser(null, async (id, c) => {
+      request.cookies[LOCALE_COOKIE] = cookie;
+      assert.equal(await stringsLocale(), cookie, "before: the login-page choice");
+      assert.equal(await putPrefs(patch), 200);
+      assert.deepEqual(await savedLanguage(c, id), [cookie], `${what} must save the language on screen, not the default 'en'`);
+      assert.equal(await stringsLocale(), cookie, `after ${what} the chrome must still be ${cookie}`);
+      assert.deepEqual(await declared(), { html: cookie, wrapper: cookie, picker: cookie });
+      assert.equal(await settingsPill(), cookie, "and the Settings pill agrees, so tapping another language really switches");
+    });
+  }
+});
+
+test("F124: an explicit language in the first write wins, and a later write never touches a saved language", { skip }, async () => {
+  // The first write names a language: that one, not the cookie's.
+  await withUser(null, async (id, c) => {
+    request.cookies[LOCALE_COOKIE] = "hi";
+    assert.equal(await putPrefs({ uiLanguage: "bo" }), 200);
+    assert.deepEqual(await savedLanguage(c, id), ["bo"]);
+  });
+  // A saved row is the user's choice: a stale device cookie (a previous user's
+  // login-page pick on a shared phone) must not leak into it on an unrelated
+  // write.
+  await withUser("en", async (id, c) => {
+    request.cookies[LOCALE_COOKIE] = "hi";
+    assert.equal(await putPrefs({ highContrast: true }), 200);
+    assert.deepEqual(await savedLanguage(c, id), ["en"]);
+    assert.equal(await stringsLocale(), "en");
+  });
+  // No cookie, nothing saved: English, as before.
+  await withUser(null, async (id, c) => {
+    assert.equal(await putPrefs({ ftuxSeenAt: new Date().toISOString() }), 200);
+    assert.deepEqual(await savedLanguage(c, id), ["en"]);
+  });
+});
+
+test("F124: GET /api/user-prefs with nothing saved reports the language on screen", { skip }, async () => {
+  // It answered the defaults, 'en' included, while the page around it was in
+  // the login page's Hindi -- a different answer from every other reader.
+  await withUser(null, async () => {
+    request.cookies[LOCALE_COOKIE] = "hi";
+    const { GET } = await import("../../apps/web/src/app/api/user-prefs/route.ts");
+    const body = (await (await GET()).json()) as { uiLanguage: string };
+    assert.equal(body.uiLanguage, "hi");
+  });
+});
+
+test("F124: the login segment, signed in (/login/reset after a recovery link), uses the locale <html lang> declares", { skip }, async () => {
+  // login/layout.tsx read the cookie on its own, so on a signed-in login route
+  // <html lang> came from the saved row and the segment's wrapper, font and
+  // strings from the cookie.
+  const { default: LoginLayout } = await import("../../apps/web/src/app/login/layout.tsx");
+  const { default: RootLayout } = await import("../../apps/web/src/app/layout.tsx");
+  await withUser("bo", async () => {
+    request.cookies[LOCALE_COOKIE] = "hi";
+    const root = await render(h(RootLayout, null, h("p", null, "x")));
+    const html = await render(await LoginLayout({ children: h("p", null, "x") }));
+    const wrapper = openingTags(html, "div").find((t) => attr(t, "data-locale") !== null) ?? "";
+    assert.equal(attr(openingTags(root, "html")[0] ?? "", "lang"), "bo");
+    assert.deepEqual([attr(wrapper, "data-locale"), attr(wrapper, "lang")], ["bo", "bo"], "the login segment must not contradict <html lang>");
+  });
 });
