@@ -148,9 +148,15 @@ async function fullSubject(w: RttWorld): Promise<string> {
 
 // ── /rtt/subject/[id] ────────────────────────────────────────────────────────
 
-/** The subject page's cards, by their titles, in document (= reading and focus) order. */
+/**
+ * The subject page's cards, by their titles, in document (= reading and focus)
+ * order. A title's count is dropped: most render as "Title (" + a separate
+ * text node, the SCORM card's as the one string "SCORM modules (N)".
+ */
 const cardOrder = (html: string) =>
-  [...html.matchAll(/<div style="font-weight:600;font-size:13px">([^<]+)/g)].map((m) => m[1]!.replace(/\s*\($/, "").trim());
+  [...html.matchAll(/<div style="font-weight:600;font-size:13px">([^<]+)/g)].map((m) =>
+    m[1]!.replace(/\s*\((\d+\))?$/, "").trim(),
+  );
 
 test("an RTT subject page with content fits a phone: modules, then the readings and the assessment, then the sessions (their table scrolls in its card); the desktop keeps two columns", { skip }, async () => {
   const w = await rttWorld("phonesubj");
@@ -171,7 +177,10 @@ test("an RTT subject page with content fits a phone: modules, then the readings 
     // sessions table and the progress card, two screens down.
     assert.deepEqual(
       cardOrder(html),
-      ["Modules", "Required readings", "Assessment", "Cohort sessions", "Your progress"],
+      // The SCORM card (F41) is the subject's other module list; it follows
+      // the readings and the Start button rather than parting them from the
+      // modules.
+      ["Modules", "Required readings", "Assessment", "SCORM modules", "Cohort sessions", "Your progress"],
       "the cards in a phone's reading order",
     );
     // That arrangement is one column at any width. The device cookie says
@@ -186,7 +195,14 @@ test("an RTT subject page with content fits a phone: modules, then the readings 
     // The desktop layout is unchanged: modules and sessions beside progress,
     // readings and the assessment.
     const desk = await asDevice("desktop", w.teacher, open);
-    assert.deepEqual(cardOrder(desk), ["Modules", "Cohort sessions", "Your progress", "Required readings", "Assessment"]);
+    assert.deepEqual(cardOrder(desk), [
+      "Modules",
+      "SCORM modules",
+      "Cohort sessions",
+      "Your progress",
+      "Required readings",
+      "Assessment",
+    ]);
     const desktop = await templateAt(desk, 1280, (e) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? ""));
     assert.ok(desktop.some((t) => columns(t) === 2), `two columns on a desktop: ${desktop.join(" | ")}`);
     // A desktop browser in a narrow window still fits (the columns stack).
