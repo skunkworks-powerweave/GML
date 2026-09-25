@@ -51,12 +51,12 @@ import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
-import { assertSectionGate } from "@/lib/gates";
+import { assertSectionGate, getActiveGrant } from "@/lib/gates";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
-import { referenceLabels, referenceOptions } from "@/admin/references";
+import { referenceLabels, referenceOptions, withCurrentValues, type RefContext } from "@/admin/references";
 import { exportRolesFor } from "@/admin/access";
 import { istDayRange, toIstDate, toIstDateTime } from "@/admin/dates";
 import { dateInputType, enumOptions } from "@/admin/zod-shape";
@@ -411,7 +411,10 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // carries the referenced row's label in place of the id for rendering only;
   // `rows` keeps the ids for edit links, selection and delete.
   // (admin/references.ts derives the FK fields from the table itself.)
-  const refLabels = await referenceLabels(db, entity, rows);
+  // Links into a gated table are named only for a viewer holding its
+  // password (admin/references.ts).
+  const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
+  const refLabels = await referenceLabels(db, entity, rows, refCtx);
   const displayRows = rows.map((r) => {
     const out: Record<string, unknown> = { ...r };
     for (const [field, labels] of Object.entries(refLabels)) {
@@ -430,7 +433,11 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     return out;
   });
   // The form's pickers: every row each FK field may point at, by name.
-  const refOptions = await referenceOptions(db, entity);
+  const refOptions = await referenceOptions(db, entity, refCtx);
+  // ...and the edit form offers each link it already has, even one the
+  // picker would not list (an account since given another role), so the
+  // select never falls back to "— none —" and unlinks it on save.
+  const editOptions = editRow ? await withCurrentValues(db, entity, refOptions, editRow) : refOptions;
 
   const fmt = (col: { key: string; format?: (v: unknown) => string }, row: Record<string, unknown>) => {
     const v = row[col.key];
@@ -568,7 +575,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             mode="edit"
             rowId={editRowId}
             initialValues={editRow}
-            options={refOptions}
+            options={editOptions}
           />
         </section>
       ) : (

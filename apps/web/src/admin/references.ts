@@ -19,6 +19,10 @@
 // UUID, so validation, CSV import and export are unchanged. The grid replaces
 // each FK cell with the referenced row's label.
 //
+// Only the FK fields the page shows or edits are looked up, and a table whose
+// rows a section password guards (observation cycles) is named only for a
+// viewer holding that password -- see RefContext.
+//
 // Takes the database as a parameter so tests/behaviour can run it on a
 // rolled-back transaction.
 
@@ -27,11 +31,19 @@ import { and, asc, eq, getTableColumns, getTableName, inArray, isNull, sql, type
 import { getTableConfig, type AnyPgTable, type PgColumn } from "drizzle-orm/pg-core";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as s from "@gml/db/schema";
+import type { GateSlug } from "@/lib/gates";
+import { ADMIN_ENTITIES } from "./registry";
 import type { AdminEntity } from "./types";
 
 type Db = NodePgDatabase<Record<string, unknown>>;
 
 export type RefOption = { id: string; label: string };
+
+/** What the viewer may see named. */
+export type RefContext = {
+  /** Whether the viewer holds an active grant for `gate` (lib/gates.ts getActiveGrant). */
+  gateOpen: (gate: GateSlug) => Promise<boolean>;
+};
 
 /**
  * A select stays usable up to about this many options on a phone on a slow
@@ -125,17 +137,52 @@ function labelQuery(db: Db, src: LabelSource) {
   return src.join ? q.innerJoin(src.join.table as never, src.join.on) : q;
 }
 
+/** The section gate guarding a table's rows: the gate of the entity that administers it. */
+function gateOfTable(target: string): GateSlug | undefined {
+  return Object.values(ADMIN_ENTITIES).find((e) => e.gate && getTableName(e.table) === target)?.gate;
+}
+
 /**
- * The picker options for each FK field of `entity`: every referenceable row,
- * named, in name order. A field whose target has more than REF_OPTION_LIMIT
- * rows maps to null, and the form keeps a UUID box for it.
+ * The FK fields this page may name: those it shows or edits, and among them
+ * only links into a gated table the viewer holds the password for.
+ *
+ * Every FK was looked up. rtt-attendance.markedByUserId is neither a column
+ * nor a form field, and its picker -- up to 1,000 accounts' names and
+ * addresses -- was queried and handed to the client form on every page load
+ * for nothing. And observation cycles are named by code, so the UNgated
+ * sessions grid listed every cycle's code, in its picker and its cells, to a
+ * programme_admin who had never unlocked Observation. Such a field keeps its
+ * id box and its cells their ids.
+ */
+async function visibleReferenceFields(entity: AdminEntity, ctx: RefContext): Promise<Record<string, string>> {
+  const shown = new Set([...entity.formFields, ...entity.displayColumns.map((c) => c.key)]);
+  const open = new Map<GateSlug, boolean>();
+  const out: Record<string, string> = {};
+  for (const [field, target] of Object.entries(referenceFields(entity))) {
+    if (!shown.has(field)) continue;
+    const gate = gateOfTable(target);
+    // A grid behind the same gate has already required it (page.tsx).
+    if (gate && gate !== entity.gate) {
+      if (!open.has(gate)) open.set(gate, await ctx.gateOpen(gate));
+      if (!open.get(gate)) continue;
+    }
+    out[field] = target;
+  }
+  return out;
+}
+
+/**
+ * The picker options for each FK field of `entity` the page may name: every
+ * referenceable row, named, in name order. A field whose target has more than
+ * REF_OPTION_LIMIT rows maps to null, and the form keeps a UUID box for it.
  */
 export async function referenceOptions(
   db: Db,
   entity: AdminEntity,
+  ctx: RefContext,
 ): Promise<Record<string, RefOption[] | null>> {
   const out: Record<string, RefOption[] | null> = {};
-  for (const [field, target] of Object.entries(referenceFields(entity))) {
+  for (const [field, target] of Object.entries(await visibleReferenceFields(entity, ctx))) {
     const src = LABELS[target]!;
     // An account picker can be narrowed to the roles that make sense for the
     // link (an observation cycle's observer is an observer account).
@@ -156,15 +203,59 @@ export async function referenceOptions(
 }
 
 /**
- * The label of every FK value in `rows`, per field: `{ schoolId: { <uuid>: "GPS Chuchot (GPS-CHU)" } }`.
- * One query per referenced table, for the ids on this page only.
+ * The edit form's pickers, with each field's CURRENT value among the options.
+ *
+ * An account picker lists only the roles the link is for and hides deleted
+ * accounts, so a teacher record whose login had since been made a mentor (or
+ * deleted) rendered its select with nothing selected. A browser then submits
+ * the first option, "— none —", and the edit turned it into NULL: correcting
+ * the teacher's phone number silently unlinked her login, and her cycles and
+ * pairings with it. The current value is always offered, and says why it
+ * would not otherwise be.
+ */
+export async function withCurrentValues(
+  db: Db,
+  entity: AdminEntity,
+  options: Record<string, RefOption[] | null>,
+  row: Record<string, unknown>,
+): Promise<Record<string, RefOption[] | null>> {
+  const fields = referenceFields(entity);
+  const out = { ...options };
+  for (const [field, list] of Object.entries(options)) {
+    const id = row[field];
+    if (!Array.isArray(list) || typeof id !== "string" || !id || list.some((o) => o.id === id)) continue;
+    const src = LABELS[fields[field]!]!;
+    const [named] = (await labelQuery(db, src).where(eq(src.id, id)).limit(1)) as Array<{ label: unknown }>;
+    let why = "current value";
+    if (fields[field] === "users") {
+      const [account] = await db
+        .select({ role: s.users.role, deletedAt: s.users.deletedAt })
+        .from(s.users)
+        .where(eq(s.users.id, id))
+        .limit(1);
+      const roles = entity.fields?.[field]?.userRoles;
+      if (account?.deletedAt) why = "deleted account";
+      else if (account && roles?.length && !roles.includes(account.role as never)) {
+        why = `not a ${roles.join(" or ")} account`;
+      }
+    }
+    out[field] = [{ id, label: `${String(named?.label ?? id)} (${why})` }, ...list];
+  }
+  return out;
+}
+
+/**
+ * The label of every FK value in `rows` the page may name, per field:
+ * `{ schoolId: { <uuid>: "GPS Chuchot (GPS-CHU)" } }`. One query per
+ * referenced table, for the ids on this page only.
  */
 export async function referenceLabels(
   db: Db,
   entity: AdminEntity,
   rows: Array<Record<string, unknown>>,
+  ctx: RefContext,
 ): Promise<Record<string, Record<string, string>>> {
-  const fields = referenceFields(entity);
+  const fields = await visibleReferenceFields(entity, ctx);
   const out: Record<string, Record<string, string>> = {};
   const idsByTarget = new Map<string, Set<string>>();
   for (const [field, target] of Object.entries(fields)) {
