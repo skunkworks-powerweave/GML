@@ -2,8 +2,10 @@
 # SM-5 restore drill: prove the backups are restorable.
 #
 # Restores the newest dump into a THROWAWAY database, checks the schema and the
-# row counts look sane, drops it, and stamps the result. It never touches the
-# live database.
+# row counts look sane, drops it, and stamps the result. Of the live database
+# it changes nothing but one appended audit_log row, restore.complete or
+# restore.failed, which is what /admin/system-settings shows as the last drill
+# (scripts/lib/audit-host-job.sh; skipped with a warning without DATABASE_URL).
 #
 #   bash scripts/restore.sh            # weekly, from cron -- README-deploy.md 7
 #
@@ -97,6 +99,9 @@ JSON
 # Records the first unexpected failure, so the stamp can name it.
 trap 'DRILL_ERROR="${DRILL_ERROR:-line ${LINENO}: ${BASH_COMMAND}}"' ERR
 
+# shellcheck source=lib/audit-host-job.sh
+. scripts/lib/audit-host-job.sh
+
 on_exit() {
   local rc=$?
   if [ -n "${DRILL_CONTAINER}" ]; then
@@ -105,6 +110,8 @@ on_exit() {
   fi
   if [ "${rc}" -ne 0 ] && [ -z "${STAMP_WRITTEN}" ]; then
     write_failure_stamp "${DRILL_ERROR:-exited ${rc}}"
+    audit_host_job restore.failed \
+      "{\"source\":\"$(json_text "${DRILL_SOURCE}")\",\"error\":\"$(json_text "${DRILL_ERROR:-exited ${rc}}")\"}"
   fi
 }
 trap on_exit EXIT
@@ -253,6 +260,8 @@ cat > "${STAMP_FILE}" <<JSON
 }
 JSON
 STAMP_WRITTEN=1
+audit_host_job restore.complete \
+  "{\"source\":\"$(json_text "${DRILL_SOURCE}")\",\"backup_age_days\":${age_days},\"tables\":${tables},\"users\":${users},\"storage_verified\":false}"
 log "drill passed; stamped ${STAMP_FILE}"
 echo
 echo "  NOTE: this drill covers the DATABASE only. The Storage mirror"

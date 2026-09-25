@@ -239,18 +239,31 @@ component via the audit-fanout endpoint, NOT directly through
 | `anti_download.attempt.printscreen` | The user pressed `PrintScreen` (or the F12 dev-tools combo); not reliably blocked by browsers but the audit row captures the intent | `key`, `surfaceKey` |
 | `anti_download.devtools.detected` | The dev-tools open/close heuristic fired (window outerHeight - innerHeight crossed a threshold) | `widthDelta`, `heightDelta`, `surfaceKey` |
 
+## backup.* / restore.* — host jobs
+
+Written by `scripts/backup.sh` (nightly) and `scripts/restore.sh` (the weekly
+drill), not by the application: each appends one row to the live database per
+run through `scripts/lib/audit-host-job.sh`. `user_id` and `entity_id` are
+null (no account acts), `entity_type` is `host_job`. Best effort: a run that
+cannot reach the database writes no row and says so in its own log, and never
+fails because of it. `/admin/system-settings` shows the latest
+`backup.complete` and `restore.complete`.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `backup.complete` | A backup finished: dump written and checked, mirror and off-site copy done or skipped, local retention applied | `dump` (file name), `bytes`, `storage_mirrored`, `shipped_offsite` |
+| `backup.failed` | A backup exited non-zero | `error` (the failing check or line) |
+| `restore.complete` | A restore drill passed and stamped `workspace/last_restore_drill.json` | `source` (dump file name), `backup_age_days`, `tables`, `users`, `storage_verified` (false: the drill covers the database only) |
+| `restore.failed` | A restore drill failed and stamped the failure | `source`, `error` |
+
 ## Deferred prefixes (reserved but not yet wired)
 
 These prefixes have docs / specs but no live `recordAudit` call sites
 in the shipped codebase. Documenting them so the namespace stays
-reserved. The wildcard form (`backup.*`, `restore.*`, etc.) is the
+reserved. The wildcard form (`pairing.*`, `cycle.*`) is the
 canonical reservation; the concrete sub-action names below are the
 expected leaves once the surface ships.
 
-- `backup.*` — `backup.complete`, `backup.failed`. Nightly backup
-  script audit emission (deferred to spec 091 / 109).
-- `restore.*` — `restore.complete`, `restore.failed`. Restore-drill
-  audit emission (deferred to the same).
 - `pairing.*` — `pairing.created`, `pairing.advanced_to_quarter_2`,
   `pairing.ended`. Formal pairing lifecycle markers (currently the
   `mentor.*` family covers the active surface).

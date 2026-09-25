@@ -133,11 +133,13 @@ export default async function SystemSettingsPage({
     .limit(1);
 
   // Status display — the latest backup.complete / restore.complete audit row,
-  // one index probe each (admin/audit-lookups.ts). Neither backup.sh nor
-  // restore.sh writes those rows yet: each records its last run on the host
-  // (last-backup.txt, workspace/last_restore_drill.json). Until they report
-  // here, the panel says so and points there -- it used to say "never", which
-  // reads as "no backup has ever run" on a box whose nightly backups pass.
+  // one index probe each (admin/audit-lookups.ts), which backup.sh and
+  // restore.sh append after each successful run. Where there is none yet (the
+  // jobs have not run since they began writing it, or could not reach the
+  // database) the panel says so and points at the host's own record
+  // (last-backup.txt, workspace/last_restore_drill.json) -- it used to say
+  // "never", which reads as "no backup has ever run" on a box whose nightly
+  // backups pass.
   const lastBackupAt = await lastAuditAt("backup");
   const lastRestoreAt = await lastAuditAt("restore");
 
@@ -350,12 +352,13 @@ export default async function SystemSettingsPage({
         </dl>
         <p className="text-xs text-neutral-500">
           Sources: the latest <code className="font-mono">backup.complete</code> and{" "}
-          <code className="font-mono">restore.complete</code> rows in audit_log.
-          scripts/backup.sh and scripts/restore.sh do not write them yet; each
-          records its last run on the host instead, in{" "}
+          <code className="font-mono">restore.complete</code> rows in audit_log,
+          which scripts/backup.sh and scripts/restore.sh write after each
+          successful run. Each also records its last run on the host, in{" "}
           <code className="font-mono">/var/lib/gml/backups/last-backup.txt</code> and{" "}
           <code className="font-mono">workspace/last_restore_drill.json</code> (the
-          stamp deploy.sh&rsquo;s restore-drill gate reads).
+          stamp deploy.sh&rsquo;s restore-drill gate reads); look there when a
+          time is not reported here.
         </p>
       </section>
     </main>

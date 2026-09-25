@@ -49,12 +49,13 @@ export async function recentAuditActions(days = 90, db: Db = appDb): Promise<str
 }
 
 /**
- * The audit action a successful run of each host job is to write, as
- * docs/audit-actions.md reserves them.
+ * The audit action a successful run of each host job writes
+ * (docs/audit-actions.md, backup.* / restore.*).
  *
- * Neither scripts/backup.sh nor scripts/restore.sh writes it yet, so on a live
- * box this finds nothing and the page says where the host records the last run
- * instead.
+ * scripts/backup.sh and scripts/restore.sh append it at the end of each
+ * successful run (scripts/lib/audit-host-job.sh), best effort: a box whose
+ * jobs have not run since they started to, or could not reach the database,
+ * has none, and the page then says where the host records the last run.
  */
 export const HOST_JOB_SUCCESS_ACTION = {
   backup: "backup.complete",

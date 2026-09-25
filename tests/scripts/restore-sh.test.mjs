@@ -23,7 +23,12 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { makeSandbox, posixish, root } from "./_sandbox.mjs";
 
-const FILES = ["scripts/restore.sh", "scripts/lib/pg-major.sh", "scripts/check-restore-drill.mjs"];
+const FILES = [
+  "scripts/restore.sh",
+  "scripts/lib/pg-major.sh",
+  "scripts/lib/audit-host-job.sh",
+  "scripts/check-restore-drill.mjs",
+];
 
 const DOCKER = `
 case "$1" in
@@ -34,6 +39,11 @@ exit 0
 
 const PSQL = `
 case "$*" in
+  *"-v action="*)
+    # An audit write (scripts/lib/audit-host-job.sh): the SQL is on stdin.
+    printf 'audit-pgpassword=%s\\n' "\${PGPASSWORD:-}" >> "$SANDBOX_LOG"
+    cat >> "$SANDBOX_DIR/audit.sql"
+    exit 0 ;;
   *"select 1"*) exit 0 ;;
   *"CREATE DATABASE"*) [ -n "\${FAKE_CREATE_FAIL:-}" ] && { echo "psql: error: could not create" >&2; exit 1; }; exit 0 ;;
   *"DROP DATABASE"*) exit 0 ;;
@@ -216,6 +226,84 @@ test("a DRILL_HOST pointing at Supabase is refused", () => {
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /never production/);
     assert.ok(!sb.invocations().some((l) => /^(psql|pg_restore) /.test(l) && !/ -l/.test(l)));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── The audit row /admin/system-settings reads ──────────────────────────────
+//
+// W3-51. The panel shows the latest restore.complete row, and the drill
+// recorded its result only in workspace/last_restore_drill.json. It now also
+// appends one row to the LIVE database's audit_log -- the one thing it writes
+// there -- and every other statement still goes to the throwaway server.
+
+const LIVE = "postgres://live:secret@db.abcdefgh.supabase.co:5432/postgres";
+
+function auditWrites(sb) {
+  return sb
+    .invocations()
+    .filter((l) => /^psql .*-v action=/.test(l))
+    .map((l) => ({
+      action: /-v action=(\S+)/.exec(l)?.[1],
+      meta: JSON.parse(/-v meta=(\{.*\})$/.exec(l)?.[1] ?? "null"),
+      url: l.split(" ")[1],
+    }));
+}
+
+test("a passing drill records restore.complete in the live audit log, and nothing else there", () => {
+  const sb = drillSandbox();
+  try {
+    const r = sb.run("scripts/restore.sh", { env: env(sb, { DATABASE_URL: LIVE }) });
+    assert.equal(r.status, 0, r.stderr);
+    const writes = auditWrites(sb);
+    assert.deepEqual(
+      writes.map((w) => [w.action, w.url]),
+      [["restore.complete", LIVE]],
+      `the drill must leave one restore.complete row where /admin/system-settings reads it:\n${sb.invocations().join("\n")}`,
+    );
+    assert.deepEqual(writes[0].meta, {
+      source: "gml-20260920T020000Z.dump.gz",
+      backup_age_days: writes[0].meta.backup_age_days,
+      tables: 45,
+      users: 3,
+      storage_verified: false,
+    });
+    assert.ok(Number.isInteger(writes[0].meta.backup_age_days));
+    const live = sb.invocations().filter((l) => l.includes("supabase.co"));
+    assert.equal(live.length, 1, `the audit row is the only thing the drill sends to the live database:\n${live.join("\n")}`);
+    assert.ok(
+      sb.invocations().includes("audit-pgpassword="),
+      "the throwaway server's PGPASSWORD must not be offered to the live database",
+    );
+    assert.match(sb.read("audit.sql"), /^INSERT INTO audit_log \(user_id, action, entity_type, entity_id, metadata\)/m);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failed drill records restore.failed, with the reason", () => {
+  const sb = drillSandbox();
+  try {
+    const r = sb.run("scripts/restore.sh", { env: env(sb, { DATABASE_URL: LIVE, FAKE_CREATE_FAIL: "1" }) });
+    assert.notEqual(r.status, 0);
+    const writes = auditWrites(sb);
+    assert.deepEqual(writes.map((w) => w.action), ["restore.failed"], sb.invocations().join("\n"));
+    assert.equal(writes[0].meta.source, "gml-20260920T020000Z.dump.gz");
+    assert.match(writes[0].meta.error, /CREATE DATABASE/, "the row carries what failed");
+    assert.equal(stamp(sb).result, "failed", "the stamp the SM-5 gate reads is written as before");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("without DATABASE_URL the drill still runs, and says the panel will not show it", () => {
+  const sb = drillSandbox();
+  try {
+    const r = sb.run("scripts/restore.sh", { env: env(sb) });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(auditWrites(sb), []);
+    assert.match(r.stderr, /DATABASE_URL is not set -- restore\.complete not recorded/);
   } finally {
     sb.cleanup();
   }

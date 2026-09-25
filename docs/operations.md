@@ -17,7 +17,10 @@ Check that the restore drill passed:
 cat workspace/last_restore_drill.json
 ```
 
-`"result": "ok"` and a `ranAt` within the last seven days. A drill that failed
+`"result": "ok"` and a `ranAt` within the last seven days. The same time is on
+`/admin/system-settings` under Backup & restore status, with the last backup's:
+both jobs append a `backup.*` / `restore.*` row to the audit log after each run
+(docs/audit-actions.md), and warn in their own log when they could not. A drill that failed
 says so, `"result": "failed"` with an `error`, instead of leaving no file. If it
 is failed, or stale past 30 days, `scripts/deploy.sh` will refuse to deploy —
 that refusal is the point, not an obstacle to work around. Fix the cause and
