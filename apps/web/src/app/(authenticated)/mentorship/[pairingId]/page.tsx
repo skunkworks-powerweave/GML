@@ -11,6 +11,9 @@
 //                       strings, identical for every pairing, with a toggle
 //                       that wrote an audit row and changed nothing.
 //   - "Complete"      → completePairingAction (super_admin + programme_admin).
+//   - Videos          → "Attach recording" on each past meeting, and the
+//                       Quarterly videos card, link /uploads bound to that
+//                       meeting, or to this pairing and the quarter (F50).
 
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
@@ -24,7 +27,10 @@ import {
   feedbackForms,
   feedbackResponses,
   users,
+  videoSubmissions,
+  files,
 } from "@gml/db/schema";
+import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
@@ -175,6 +181,30 @@ export default async function PairingDetailPage({
     .from(mentorMeetings)
     .where(eq(mentorMeetings.pairingId, pairingId))
     .orderBy(desc(mentorMeetings.scheduledAt))
+    .limit(20);
+
+  // THE MENTEE'S QUARTERLY VIDEOS. The Mentorship surface is meeting
+  // recordings plus these, and the page showed neither: nothing could attach a
+  // quarterly video to a pairing (F50). A 'mentee_quarterly' submission names
+  // this pairing and its quarter (1 or 4). Only one whose bytes have arrived is
+  // a video; a reservation still uploading, or one given up on, is not listed.
+  const quarterlyVideos = await db
+    .select({
+      id: videoSubmissions.id,
+      quarter: videoSubmissions.contextQuarter,
+      status: videoSubmissions.status,
+      createdAt: videoSubmissions.createdAt,
+    })
+    .from(videoSubmissions)
+    .innerJoin(files, eq(files.id, videoSubmissions.fileId))
+    .where(
+      and(
+        eq(videoSubmissions.contextType, "mentee_quarterly"),
+        eq(videoSubmissions.contextId, pairingId),
+        eq(files.status, "stored"),
+      ),
+    )
+    .orderBy(desc(videoSubmissions.createdAt))
     .limit(20);
 
   const feedback = await db.select().from(feedbackResponses).where(eq(feedbackResponses.pairingId, pairingId));
@@ -577,14 +607,32 @@ export default async function PairingDetailPage({
                             const when = d.toLocaleDateString("en-IN", { day: "numeric", month: "long" });
                             if (sp.confirmCancel !== m.id) {
                               return (
-                                <Link
-                                  href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
-                                  className="btn btn-sm btn-ghost"
-                                  style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
-                                  aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
-                                >
-                                  {upcoming ? "Cancel meeting" : "Remove"}
-                                </Link>
+                                <>
+                                  {/* A meeting that has happened can have its
+                                      recording attached: /uploads, bound to
+                                      THIS meeting (and offering its MM- code
+                                      for WhatsApp). Nothing attached one
+                                      before, so "Open recording" never
+                                      appeared (F50). */}
+                                  {upcoming ? null : (
+                                    <Link
+                                      href={uploadHref({ contextType: "mentor_meeting", contextId: m.id })}
+                                      className="btn btn-sm"
+                                      style={{ fontSize: 11, marginTop: 4, marginRight: 6, display: "inline-flex" }}
+                                      aria-label={`Attach the recording of the meeting of ${when}`}
+                                    >
+                                      Attach recording →
+                                    </Link>
+                                  )}
+                                  <Link
+                                    href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
+                                    className="btn btn-sm btn-ghost"
+                                    style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
+                                    aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
+                                  >
+                                    {upcoming ? "Cancel meeting" : "Remove"}
+                                  </Link>
+                                </>
                               );
                             }
                             return (
@@ -623,6 +671,78 @@ export default async function PairingDetailPage({
         </div>
 
         <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+          {/* The mentee's Q1 (baseline) and Q4 (endline) videos, for both sides
+              of the pairing. Each quarter links /uploads bound to this pairing
+              and that quarter; Q4 opens with the pairing's last quarter, as the
+              upload itself does (uploads/context.ts). */}
+          <div className="card card-hi" data-testid="quarterly-videos">
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
+              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>Quarterly videos</h2>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                The mentee&apos;s lesson videos at the baseline (Q1) and the endline (Q4)
+              </div>
+            </div>
+            <div style={{ padding: 14, display: "grid", gap: 12, fontSize: 12 }}>
+              {([1, 4] as const).map((q) => {
+                const videos = quarterlyVideos.filter((v) => v.quarter === q);
+                const open = q === 1 || currentQuarter >= 4;
+                return (
+                  <div key={q}>
+                    <div style={{ fontWeight: 500 }}>{q === 1 ? "Q1 · Baseline" : "Q4 · Endline"}</div>
+                    {videos.length === 0 ? (
+                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>Not sent yet.</div>
+                    ) : (
+                      <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
+                        {videos.map((v) => (
+                          <li key={v.id}>
+                            <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                              Video of{" "}
+                              {new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
+                              →
+                            </Link>
+                            {v.status === "ready" ? null : (
+                              <span className="chip" style={{ marginLeft: 6 }}>{v.status.replace(/_/g, " ")}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {open ? (
+                      <Link
+                        href={uploadHref({ contextType: "mentee_quarterly", contextId: pairingId, quarter: q })}
+                        className="btn btn-sm"
+                        style={{ fontSize: 11, marginTop: 6, display: "inline-flex" }}
+                      >
+                        {videos.length === 0 ? `Upload the Q${q} video →` : `Upload another Q${q} video →`}
+                      </Link>
+                    ) : (
+                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>Opens in Q4.</div>
+                    )}
+                  </div>
+                );
+              })}
+              {quarterlyVideos.some((v) => v.quarter !== 1 && v.quarter !== 4) ? (
+                // Sent before the quarter was recorded (migration 0039).
+                <div>
+                  <div style={{ fontWeight: 500 }}>Quarter not recorded</div>
+                  <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
+                    {quarterlyVideos
+                      .filter((v) => v.quarter !== 1 && v.quarter !== 4)
+                      .map((v) => (
+                        <li key={v.id}>
+                          <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                            Video of{" "}
+                            {new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
+                            →
+                          </Link>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
           <div className="card card-hi">
             <div
               style={{
