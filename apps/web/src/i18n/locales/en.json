@@ -34,6 +34,8 @@
     "settings": "Settings",
     "inbox": "Inbox",
     "data": "Data",
+    "allTables": "All tables",
+    "users": "Users",
     "primary": "Main navigation"
   },
   "navSection": {
@@ -43,7 +45,8 @@
     "repository": "Repository",
     "data": "Data",
     "system": "System",
-    "resources": "Resources"
+    "resources": "Resources",
+    "yourAccount": "Your account"
   },
   "action": {
     "save": "Save",

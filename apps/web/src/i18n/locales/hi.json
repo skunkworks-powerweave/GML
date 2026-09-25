@@ -34,6 +34,8 @@
     "settings": "सेटिंग्स",
     "inbox": "इनबॉक्स",
     "data": "डेटा",
+    "allTables": "सभी तालिकाएँ",
+    "users": "उपयोगकर्ता",
     "primary": "मुख्य नेविगेशन"
   },
   "navSection": {
@@ -43,7 +45,8 @@
     "repository": "रिपॉज़िटरी",
     "data": "डेटा",
     "system": "सिस्टम",
-    "resources": "संसाधन"
+    "resources": "संसाधन",
+    "yourAccount": "आपका खाता"
   },
   "action": {
     "save": "सहेजें",

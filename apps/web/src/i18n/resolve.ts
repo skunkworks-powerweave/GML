@@ -25,7 +25,6 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { eq } from "drizzle-orm";
-import { db } from "@gml/db";
 import { userPrefs, type UserPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { DEFAULT_LOCALE, LOCALE_COOKIE, normalizeLocale, type Locale } from "./config";
@@ -50,6 +49,10 @@ export const viewerPrefs = cache(async (): Promise<ViewerPrefs> => {
   const session = await auth();
   const userId = session?.user?.id;
   if (userId) {
+    // Loaded on use: the root layout and request config run for signed-out
+    // pages too, and those must not need the database client, which refuses
+    // to load without DATABASE_URL.
+    const { db } = await import("@gml/db");
     // Not caught: this is the read the authenticated layout has always made,
     // and a database outage fails the page exactly as it did before.
     const [row] = await db.select().from(userPrefs).where(eq(userPrefs.userId, userId)).limit(1);
