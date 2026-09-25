@@ -2,7 +2,7 @@
 
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auth } from "@/auth";
 import {
@@ -14,8 +14,10 @@ import {
   terms,
   phases,
 } from "@gml/db/schema";
+import { uuidOrNotFound } from "@/lib/ids";
 import { listSubjectAssessments } from "@/lib/rtt/assessments";
 import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
+import { rttScope } from "@/lib/rtt/scope";
 import { markProgressAction } from "./actions";
 
 /** A one-button form that marks a lesson or reading done, or undoes it. */
@@ -48,11 +50,22 @@ export default async function RttSubjectPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ open?: string }>;
 }) {
-  const { id } = await params;
+  // A malformed id is a subject that does not exist, not a Postgres 500.
+  const id = uuidOrNotFound((await params).id);
   // ?open=<module sequence>: the module a progress tick came from stays open
   // after the form round-trip (actions.ts redirects here with it).
   const openSeq = Number((await searchParams).open);
-  const [subject] = await db.select().from(rttSubjects).where(eq(rttSubjects.id, id)).limit(1);
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const viewer = { id: session.user.id, role: session.user.role };
+  // Only a subject the viewer is shown (lib/rtt/scope.ts): a retired subject
+  // stayed reachable here for everyone, because this page never read `active`.
+  const scope = await rttScope(db, viewer);
+  const [subject] = await db
+    .select()
+    .from(rttSubjects)
+    .where(and(eq(rttSubjects.id, id), scope.subjectWhere))
+    .limit(1);
   if (!subject) notFound();
   const [term] = await db.select().from(terms).where(eq(terms.id, subject.termId)).limit(1);
   const [phase] = term ? await db.select().from(phases).where(eq(phases.id, term.phaseId)).limit(1) : [null];
@@ -104,10 +117,7 @@ export default async function RttSubjectPage({
   // had no write path anywhere in the product; they are admin grid tables now,
   // and an empty card that says where to fill it reads as "not loaded yet"
   // rather than "broken".
-  const session = await auth();
-  if (!session?.user?.id) redirect("/login");
-  const viewerIsAdmin =
-    session?.user?.role === "programme_admin" || session?.user?.role === "super_admin";
+  const viewerIsAdmin = scope.isAdmin;
 
   // THIS SUBJECT'S ASSESSMENTS: the active quizzes bound to it. They were
   // looked up by the fixed slugs "mid-unit" and "endline" with no subject
@@ -161,6 +171,12 @@ export default async function RttSubjectPage({
               {phase?.label ?? "Phase ?"} · {term?.name ?? "Term ?"}
               {subject.code ? ` · ${subject.code}` : ""}
             </div>
+            {!subject.active ? (
+              // Only an administrator reaches an inactive subject.
+              <span className="chip chip-rust" title="Hidden from teachers until re-activated at Admin → RTT Subjects">
+                Inactive
+              </span>
+            ) : null}
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
               {subject.name}
             </h1>

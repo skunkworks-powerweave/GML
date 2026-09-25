@@ -19,6 +19,7 @@ import { and, asc, count, eq, isNotNull, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { quizSubmissions, quizzes, rttSubjects } from "@gml/db/schema";
 import type { Actor } from "@/lib/visibility";
+import { rttScope } from "./scope";
 
 type Db = NodePgDatabase<Record<string, unknown>>;
 
@@ -92,13 +93,16 @@ export async function listSubjectAssessments(
 export type OpenAssessment = { id: string; slug: string; title: string; subjectId: string; subjectName: string };
 
 /**
- * Active RTT quizzes `actor` has not yet submitted. The dashboard counts
- * exactly these and links to /rtt, which lists them, so the to-do's number is
- * the list it leads to. A quiz bound to a curriculum subject (subject_id) is
- * not here: no learner page offers one.
+ * Active RTT quizzes `actor` has not yet submitted, on the subjects she is
+ * shown (lib/rtt/scope.ts: a retired subject's quiz is not open). The
+ * dashboard counts exactly these and links to /rtt, which lists them, so the
+ * to-do's number is the list it leads to. A quiz bound to a curriculum
+ * subject (subject_id) is not here: no learner page offers one.
  */
-function openWhere(actor: Actor) {
+async function openWhere(db: Db, actor: Actor) {
+  const scope = await rttScope(db, actor);
   return and(
+    scope.subjectWhere,
     eq(quizzes.active, true),
     isNotNull(quizzes.rttSubjectId),
     sql`NOT EXISTS (
@@ -119,7 +123,7 @@ export async function listOpenAssessments(db: Db, actor: Actor): Promise<OpenAss
     })
     .from(quizzes)
     .innerJoin(rttSubjects, eq(rttSubjects.id, quizzes.rttSubjectId))
-    .where(openWhere(actor))
+    .where(await openWhere(db, actor))
     .orderBy(asc(rttSubjects.name), asc(quizzes.createdAt), asc(quizzes.title));
   return rows;
 }
@@ -129,6 +133,6 @@ export async function countOpenAssessments(db: Db, actor: Actor): Promise<number
     .select({ c: count() })
     .from(quizzes)
     .innerJoin(rttSubjects, eq(rttSubjects.id, quizzes.rttSubjectId))
-    .where(openWhere(actor));
+    .where(await openWhere(db, actor));
   return row?.c ?? 0;
 }

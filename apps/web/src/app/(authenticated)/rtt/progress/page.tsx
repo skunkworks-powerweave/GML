@@ -26,6 +26,7 @@ import { auth } from "@/auth";
 import { getActiveGrant } from "@/lib/gates";
 import { isUuid } from "@/lib/ids";
 import { menteeTeacherIds, mentorIdFor } from "@/lib/visibility";
+import { rttScope } from "@/lib/rtt/scope";
 import {
   attendanceRows,
   progressBySubject,
@@ -62,7 +63,8 @@ export default async function RttProgressPage({
   const isMentor = actor.role === "mentor";
 
   if (!isAdmin && !isMentor) {
-    const mine = await progressBySubject(db, actor.id);
+    const scope = await rttScope(db, actor);
+    const mine = await progressBySubject(db, actor.id, scope.subjectWhere);
     return (
       <div>
         <Header title="My RTT progress" />

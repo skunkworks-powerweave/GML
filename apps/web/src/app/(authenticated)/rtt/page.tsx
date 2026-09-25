@@ -6,6 +6,7 @@ import { db } from "@gml/db";
 import { phases, terms, rttSubjects } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { listOpenAssessments } from "@/lib/rtt/assessments";
+import { rttScope } from "@/lib/rtt/scope";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,10 @@ export default async function RttIndexPage() {
 
   const phaseRows = await db.select().from(phases).orderBy(phases.sequence);
   const termRows = await db.select().from(terms);
-  const subjectRows = await db.select().from(rttSubjects);
+  // Only the subjects this viewer is shown (lib/rtt/scope.ts). Every row was
+  // listed, counted and linked, so retiring a subject changed nothing here.
+  const scope = await rttScope(db, viewer);
+  const subjectRows = await db.select().from(rttSubjects).where(scope.subjectWhere);
   // The dashboard's "N open quizzes" to-do links here and counts exactly this
   // list (lib/rtt/assessments.ts). /rtt used to list no quizzes at all, so the
   // to-do led nowhere.
@@ -172,7 +176,12 @@ export default async function RttIndexPage() {
                                       <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
                                         {s.code ?? `${p.label}/${t.name}`}
                                       </span>
-                                      <span className={`chip ${palette.chip}`}>EN</span>
+                                      {s.active ? (
+                                        <span className={`chip ${palette.chip}`}>EN</span>
+                                      ) : (
+                                        // Only an administrator is shown one.
+                                        <span className="chip chip-rust">Inactive</span>
+                                      )}
                                     </div>
                                     <div style={{ fontFamily: "var(--serif)", fontSize: 20, marginTop: 8, letterSpacing: "-0.01em", lineHeight: 1.2 }}>
                                       {s.name}

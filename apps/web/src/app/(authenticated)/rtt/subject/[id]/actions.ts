@@ -13,9 +13,10 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { rttLessons, rttModules, rttProgress, rttReadings } from "@gml/db/schema";
+import { rttLessons, rttModules, rttProgress, rttReadings, rttSubjects } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { isUuid } from "@/lib/ids";
+import { rttScope } from "@/lib/rtt/scope";
 
 export async function markProgressAction(formData: FormData): Promise<void> {
   const session = await auth();
@@ -51,6 +52,15 @@ export async function markProgressAction(formData: FormData): Promise<void> {
     subjectId = row.subjectId;
     back = `/rtt/subject/${subjectId}#readings`;
   }
+
+  // Only on a subject she is shown (lib/rtt/scope.ts), as the page is.
+  const scope = await rttScope(db, { id: userId, role: session.user.role });
+  const [shown] = await db
+    .select({ id: rttSubjects.id })
+    .from(rttSubjects)
+    .where(and(eq(rttSubjects.id, subjectId), scope.subjectWhere))
+    .limit(1);
+  if (!shown) notFound();
 
   const item = kind === "lesson" ? { rttLessonId: itemId } : { rttReadingId: itemId };
   const column = kind === "lesson" ? rttProgress.rttLessonId : rttProgress.rttReadingId;
