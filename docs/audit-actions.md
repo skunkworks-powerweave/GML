@@ -64,6 +64,8 @@ applied or lifted the sign-in ban.
 | `admin.user.deactivate` | An account was deactivated: profile inactive, sessions ended, sign-in banned | `role`, `sessionsEnded`, `sessionsEndedCount`, `banApplied` |
 | `admin.user.activate` | An account was reactivated (its old sessions stay ended) | `role`, `banLifted` |
 | `admin.user.password_set` | An administrator set an account's password (the holder must replace it) | `role`, `sessionsEnded`, `sessionsEndedCount` |
+| `admin.user.phone_set` | An administrator recorded or changed an account's WhatsApp number (the list `/admin/gates` shares a rotated section password with). The only `admin.user.*` action an administrator may take on their own account, so `user_id` can equal `entity_id` | none: the number itself is not recorded |
+| `admin.user.phone_cleared` | An administrator removed an account's WhatsApp number | none |
 | `admin.user.surface_viewed` | `/admin/users`, which lists every account's email address, was rendered (SM-9 visibility) | none |
 
 ## gate.* — section password flow
