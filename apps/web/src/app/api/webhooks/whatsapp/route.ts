@@ -22,6 +22,7 @@
 
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
 import { db } from "@gml/db";
 import {
   files,
@@ -103,12 +104,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "signature_failed" }, { status: 401 });
   }
 
-  let body: WhatsAppPayload;
+  let json: unknown;
   try {
-    body = JSON.parse(raw) as WhatsAppPayload;
+    json = JSON.parse(raw);
   } catch {
     return NextResponse.json({ error: "bad_json" }, { status: 400 });
   }
+  // CHECKED, not cast. `JSON.parse(raw) as WhatsAppPayload` let a signed body
+  // of `null`, `entry: 5` or `messages: {}` throw a TypeError into a 500, and
+  // Meta retries a 5xx indefinitely. Only Meta can sign, so an unexpected
+  // shape means its schema moved: record it and answer 200, because a retry
+  // cannot make this code understand it.
+  const parsed = PayloadSchema.safeParse(json);
+  if (!parsed.success) {
+    recordUnrecognised(raw.length, "payload", parsed.error.issues[0]?.path ?? []);
+    return NextResponse.json({ ok: true, unrecognised: true });
+  }
+  const body = parsed.data;
 
   // Meta sends a batch of "entry" -> "changes" -> "value" -> "messages".
   //
@@ -131,7 +143,15 @@ export async function POST(req: Request) {
   try {
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
-        for (const msg of change.value?.messages ?? []) {
+        for (const [index, candidate] of (change.value?.messages ?? []).entries()) {
+          // Per message, so one malformed entry does not take the valid videos
+          // in the same batch down with it.
+          const checked = MessageSchema.safeParse(candidate);
+          if (!checked.success) {
+            recordUnrecognised(raw.length, `message[${index}]`, checked.error.issues[0]?.path ?? []);
+            continue;
+          }
+          const msg = checked.data;
           const phone = change.value?.metadata?.display_phone_number;
           const media = inboundVideo(msg);
           if (!media) {
@@ -163,27 +183,70 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: true });
 }
 
-type MediaObject = { id: string; mime_type?: string; caption?: string; sha256?: string; filename?: string };
+// The parts of Meta's payload this route reads, and nothing more. Permissive by
+// design (.passthrough(), everything optional that Meta does not always send):
+// a new field from Meta must not make a delivery unreadable. `messages` is
+// checked one element at a time in POST.
+const MediaSchema = z
+  .object({
+    id: z.string().min(1),
+    mime_type: z.string().optional(),
+    caption: z.string().optional(),
+    sha256: z.string().optional(),
+    filename: z.string().optional(),
+  })
+  .passthrough();
 
-type WhatsAppMessage = {
-  type: string;
-  from: string;
-  id: string;
-  timestamp: string;
-  video?: MediaObject;
-  document?: MediaObject;
-};
+const MessageSchema = z
+  .object({
+    type: z.string(),
+    from: z.string(),
+    id: z.string().min(1),
+    timestamp: z.string().optional(),
+    video: MediaSchema.optional(),
+    document: MediaSchema.optional(),
+  })
+  .passthrough();
 
-type WhatsAppPayload = {
-  entry?: Array<{
-    changes?: Array<{
-      value?: {
-        metadata?: { display_phone_number?: string };
-        messages?: WhatsAppMessage[];
-      };
-    }>;
-  }>;
-};
+const PayloadSchema = z
+  .object({
+    entry: z
+      .array(
+        z
+          .object({
+            changes: z
+              .array(
+                z
+                  .object({
+                    value: z
+                      .object({
+                        metadata: z.object({ display_phone_number: z.string().optional() }).passthrough().optional(),
+                        messages: z.array(z.unknown()).optional(),
+                      })
+                      .passthrough()
+                      .optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+type WhatsAppMessage = z.infer<typeof MessageSchema>;
+
+/** A signed delivery, or one message in it, that this code cannot read. */
+function recordUnrecognised(bytes: number, where: string, path: Array<string | number>): void {
+  console.warn(`[whatsapp] unrecognised ${where} in a signed delivery (at ${path.join(".") || "root"}); answered 200`);
+  void recordAudit({
+    action: "whatsapp.payload.unrecognised",
+    entityType: "webhook",
+    metadata: { bytes, where, path: path.join(".") },
+  });
+}
 
 /** The media a message carries, when that media is a video. */
 type InboundVideo = { mediaId: string; mimeType: string; caption: string; sha256: string | null };
