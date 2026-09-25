@@ -1,6 +1,7 @@
 // Geography hierarchy: districts → zones → schools → teachers.
 // Seeded with Leh + Kargil (districts) and the 6 Kargil zones in spec 086.
 
+import { sql } from "drizzle-orm";
 import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { phases } from "./rtt";
 import { users } from "./identity";
@@ -16,7 +17,7 @@ export const zones = pgTable(
   "zones",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    districtId: uuid("district_id").notNull().references(() => districts.id, { onDelete: "cascade" }),
+    districtId: uuid("district_id").notNull().references(() => districts.id, { onDelete: "restrict" }), // 0031: was cascade
     name: varchar("name", { length: 80 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -27,7 +28,7 @@ export const schools = pgTable(
   "schools",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    zoneId: uuid("zone_id").notNull().references(() => zones.id, { onDelete: "cascade" }),
+    zoneId: uuid("zone_id").notNull().references(() => zones.id, { onDelete: "restrict" }), // 0031: was cascade
     code: varchar("code", { length: 16 }).notNull().unique(), // v2 (spec 020): e.g. "GPS-CHU", "GMS-KHA"
     name: varchar("name", { length: 160 }).notNull(),
     address: text("address"),
@@ -60,6 +61,9 @@ export const teachers = pgTable(
     index("teachers_school_idx").on(t.schoolId),
     // Resolved whenever a signed-in user is mapped to their teacher record.
     index("teachers_user_idx").on(t.userId),
+    // One teacher record per login (migration 0033): teacherIdFor() resolves
+    // a signed-in teacher by user_id, and two records made that arbitrary.
+    uniqueIndex("teachers_user_id_uq").on(t.userId).where(sql`${t.userId} IS NOT NULL`),
   ],
 );
 

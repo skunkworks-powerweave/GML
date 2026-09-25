@@ -215,6 +215,32 @@ test(
         `INSERT INTO observation_evidence (cycle_id, caption) VALUES ($1, 'real work')`,
         [ck.rows[0].id],
       );
+      // The removed teacher also has a pairing with a meeting and an RTT
+      // attendance mark. Those used to cascade; since migration 0031 they are
+      // RESTRICT, so the purge has to remove them itself or roll back.
+      const m = await c.query(`INSERT INTO mentors (name) VALUES ($1) RETURNING id`, [`Purge mentor ${id}`]);
+      const p = await c.query(
+        `INSERT INTO mentor_pairings (mentor_id, teacher_id) VALUES ($1, $2) RETURNING id`,
+        [m.rows[0].id, tg.rows[0].id],
+      );
+      await c.query(`INSERT INTO mentor_meetings (pairing_id, scheduled_at) VALUES ($1, now())`, [p.rows[0].id]);
+      const ph = await c.query(`INSERT INTO phases (label, sequence) VALUES ($1, 901) RETURNING id`, [`PP ${id}`]);
+      const tm = await c.query(
+        `INSERT INTO terms (phase_id, name, sequence) VALUES ($1, 'Purge term', 1) RETURNING id`,
+        [ph.rows[0].id],
+      );
+      const rs = await c.query(
+        `INSERT INTO rtt_subjects (term_id, name) VALUES ($1, 'Purge subject') RETURNING id`,
+        [tm.rows[0].id],
+      );
+      const se = await c.query(
+        `INSERT INTO rtt_sessions (rtt_subject_id, sequence, title) VALUES ($1, 1, 'Purge webinar') RETURNING id`,
+        [rs.rows[0].id],
+      );
+      await c.query(`INSERT INTO rtt_attendance (rtt_session_id, teacher_id) VALUES ($1, $2)`, [
+        se.rows[0].id,
+        tg.rows[0].id,
+      ]);
     });
 
     try {
@@ -249,10 +275,32 @@ test(
         );
       });
     } finally {
+      // Children first: since migration 0031 evidence -> cycle and zone ->
+      // district are ON DELETE RESTRICT, so nothing here cascades any more.
       await withClient(async (c) => {
+        await c.query(
+          `DELETE FROM observation_evidence WHERE cycle_id IN (SELECT id FROM observation_cycles WHERE code IN ($1, $2))`,
+          [cycleKeep, cycleGone],
+        );
         await c.query(`DELETE FROM observation_cycles WHERE code IN ($1, $2)`, [cycleKeep, cycleGone]);
+        const mine = `(SELECT id FROM teachers WHERE phone IN ($1, $2))`;
+        await c.query(`DELETE FROM rtt_attendance WHERE teacher_id IN ${mine}`, [phoneKeep, phoneGone]);
+        await c.query(
+          `DELETE FROM mentor_meetings WHERE pairing_id IN (SELECT id FROM mentor_pairings WHERE teacher_id IN ${mine})`,
+          [phoneKeep, phoneGone],
+        );
+        await c.query(`DELETE FROM mentor_pairings WHERE teacher_id IN ${mine}`, [phoneKeep, phoneGone]);
+        await c.query(`DELETE FROM mentors WHERE name = $1`, [`Purge mentor ${id}`]);
+        await c.query(`DELETE FROM rtt_sessions WHERE title = 'Purge webinar' AND rtt_subject_id IN (SELECT s.id FROM rtt_subjects s JOIN terms t ON t.id = s.term_id JOIN phases p ON p.id = t.phase_id WHERE p.label = $1)`, [`PP ${id}`]);
+        await c.query(`DELETE FROM rtt_subjects WHERE term_id IN (SELECT t.id FROM terms t JOIN phases p ON p.id = t.phase_id WHERE p.label = $1)`, [`PP ${id}`]);
+        await c.query(`DELETE FROM terms WHERE phase_id IN (SELECT id FROM phases WHERE label = $1)`, [`PP ${id}`]);
+        await c.query(`DELETE FROM phases WHERE label = $1`, [`PP ${id}`]);
         await c.query(`DELETE FROM teachers WHERE phone IN ($1, $2)`, [phoneKeep, phoneGone]);
         await c.query(`DELETE FROM schools WHERE code = $1`, [schoolCode]);
+        await c.query(
+          `DELETE FROM zones WHERE district_id IN (SELECT id FROM districts WHERE code = $1)`,
+          [districtCode],
+        );
         await c.query(`DELETE FROM districts WHERE code = $1`, [districtCode]);
       });
     }

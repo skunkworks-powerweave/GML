@@ -220,6 +220,14 @@ stored on the demo cycle `OBS-2026-001`, so they go when it goes. Nothing in
 the application reads them, and on every later deploy the seed step prints a
 warning that `OBS-2026-001` is gone and carries on — that warning is expected.)
 
+**The seeded phases are dated 2025-04-01 to 2026-09-30.** The dashboard names
+the phase whose dates contain today, so extend the programme before the last
+one ends: add the next phase and its terms at `/admin/data/phases` and
+`/admin/data/terms` (and correct any date there), then attach its RTT
+subjects at `/admin/data/rtt-subjects`. New districts are added at
+`/admin/data/districts`. A phase, term or district that still has anything
+under it cannot be deleted; the grid says what is still attached.
+
 **Quizzes are not seeded.** Every RTT subject page links a mid-unit and an
 endline assessment by the fixed slugs `mid-unit` and `endline`; until someone
 creates and activates quizzes with those slugs at `/admin/quizzes`, both read

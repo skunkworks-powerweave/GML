@@ -13,12 +13,17 @@
 
 import { revalidatePath } from "next/cache";
 import type { z } from "zod";
-import { unwrapShape, fieldKind, coerceFieldValue } from "@/admin/zod-shape";
+import { unwrapShape, coerceFormValues } from "@/admin/zod-shape";
 import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import { entityRowProblems } from "@/admin/access";
+import { auditRowLabel, deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
+import { describeWriteError } from "@/admin/db-errors";
+import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
+import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
 
 export type AdminActionState = {
@@ -35,8 +40,61 @@ function getEntityOrThrow(slug: string) {
   return entity;
 }
 
+const BULK_BEFORE_IMAGE_CAP = 200;
+
 function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
   return entity.mutateRoles ?? entity.readRoles;
+}
+
+/**
+ * The section gate, after the role check. A server action runs before any
+ * layout or page, so the grid page's own gate check never sees these
+ * requests: each action has to make it. Redirects to the unlock page when the
+ * grant is missing (admin/access.ts explains which entities are gated).
+ */
+async function requireEntityGate(entity: ReturnType<typeof getEntityOrThrow>, userId: string) {
+  if (entity.gate) {
+    await assertSectionGate(userId, entity.gate, `/admin/data/${entity.slug}`);
+  }
+}
+
+/**
+ * A database refusal as an action state: one sentence naming the field
+ * (admin/db-errors.ts), never the driver's text. Create and update returned
+ * `Insert failed: ${String(err)}` -- constraint and table names, to a page
+ * programme_admin can reach -- which describeDbError below already refused
+ * to do for deletes.
+ */
+function writeErrorState(
+  entity: ReturnType<typeof getEntityOrThrow>,
+  raw: Record<string, unknown>,
+  err: unknown,
+): AdminActionState {
+  const message = describeWriteError(entity, err);
+  const field = message.split(":")[0]!;
+  return {
+    ok: false,
+    error: message,
+    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    ...(entity.formFields.includes(field) ? { fieldErrors: { [field]: message.slice(field.length + 2) } } : {}),
+  };
+}
+
+/** Field errors from the entity's database-backed rules, as an action state. */
+async function rowProblemsState(
+  entity: ReturnType<typeof getEntityOrThrow>,
+  raw: Record<string, unknown>,
+  data: Record<string, unknown>,
+): Promise<AdminActionState | null> {
+  const problems = await entityRowProblems(entity, data);
+  if (!problems) return null;
+  const [field, message] = Object.entries(problems)[0]!;
+  return {
+    ok: false,
+    error: `${field}: ${message}`,
+    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    fieldErrors: problems,
+  };
 }
 
 /**
@@ -60,34 +118,22 @@ function coerceFormData(
   // press Save" silently kept the old value while the UI reported "Row
   // updated." -- the operator was told the write succeeded and shown the stale
   // value, with no way to tell the difference from a display bug.
+  //
+  // ...but only where the column takes null. A REQUIRED field emptied on
+  // update is left out, so zod reports it; sending null to z.coerce.date()
+  // produced new Date(0) and saved 1970-01-01 with "Row updated."
   opts: { emptyMeansNull?: boolean } = {},
 ): Record<string, unknown> {
-  const raw: Record<string, unknown> = {};
-  for (const field of fields) {
-    const value = formData.get(field);
-    if (value === null) continue;
-    if (typeof value === "string") {
-      const kind = fieldKind(shape[field]);
-      if (value === "") {
-        // An empty ARRAY box means an empty list, which is a real value -- not
-        // "leave this column alone" and not null. `.default([])` cannot cover
-        // this: a default only fires on undefined.
-        if (kind === "array") raw[field] = [];
-        else if (opts.emptyMeansNull) raw[field] = null;
-        continue;
-      }
-      if (kind === "array" || kind === "number") {
-        raw[field] = coerceFieldValue(kind, value);
-        continue;
-      }
-      if (value === "true") raw[field] = true;
-      else if (value === "false") raw[field] = false;
-      else raw[field] = value;
-    } else {
-      raw[field] = value;
-    }
-  }
-  return raw;
+  // The shared implementation (admin/zod-shape.ts), also used by CSV import.
+  return coerceFormValues(
+    fields,
+    shape,
+    (field) => {
+      const value = formData.get(field);
+      return typeof value === "string" ? value : null;
+    },
+    opts,
+  );
 }
 
 /**
@@ -125,13 +171,16 @@ export async function createRowAction(
 ): Promise<AdminActionState> {
   const slug = String(formData.get("entitySlug") ?? "");
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema));
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
   }
+  const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
+  if (refused) return refused;
 
   const audited = withAudit(
     async () => {
@@ -146,14 +195,15 @@ export async function createRowAction(
       action: "admin.row.create",
       entityType: entity.slug,
       entityIdFrom: (id) => id,
-      metadata: { op: "create", row: entity.describeRow?.(parse.data as Record<string, unknown>) },
+      metadata: { op: "create", row: auditRowLabel(entity, parse.data as Record<string, unknown>) },
     },
   );
 
   try {
     await audited();
   } catch (err) {
-    return { ok: false, error: `Insert failed: ${String(err)}` };
+    console.error("[admin.row.create] failed", err);
+    return writeErrorState(entity, raw, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
@@ -178,7 +228,8 @@ export async function updateRowAction(
     return { ok: false, error: "Missing rowId" };
   }
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema), {
     emptyMeansNull: true,
@@ -187,30 +238,56 @@ export async function updateRowAction(
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
   }
+  const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
+  if (refused) return refused;
 
+  // READ, GUARD, WRITE, in one transaction. This used to be a blind UPDATE by
+  // id: it could not enforce a rule that depends on the row's current state
+  // (a signed-off observation cycle keeping its teacher -- see the entity's
+  // guardMutation) and had no previous value to audit, so after an edit the
+  // append-only log could not say what the record had been. The row is locked
+  // FOR UPDATE so the guard judges the state the write actually replaces.
+  const next = parse.data as Record<string, unknown>;
   const audited = withAudit(
-    async () => {
-      const idCol = (entity.table as unknown as { id: unknown }).id;
-      await db
-        .update(entity.table as never)
-        .set(parse.data as never)
-        .where(eq(idCol as never, rowId));
-    },
+    async () =>
+      db.transaction(async (tx) => {
+        const idCol = (entity.table as unknown as { id: unknown }).id;
+        const [before] = (await tx
+          .select()
+          .from(entity.table as never)
+          .where(eq(idCol as never, rowId))
+          .for("update")) as Record<string, unknown>[];
+        if (!before) throw new MutationRefused("That row no longer exists.");
+        // A timestamp the minute-precision form posted back unchanged keeps
+        // its seconds (admin/dates.ts keepStoredPrecision).
+        const write = keepStoredPrecision(before, next);
+        const reason = entity.guardMutation?.("update", before, { ...before, ...write });
+        if (reason) throw new MutationRefused(reason);
+        await tx
+          .update(entity.table as never)
+          .set(write as never)
+          .where(eq(idCol as never, rowId));
+        return updateAudit(entity, before, write);
+      }),
     {
       action: "admin.row.update",
       entityType: entity.slug,
       entityId: rowId,
       metadata: {
         op: "update",
-        row: entity.describeRow?.(parse.data as Record<string, unknown>),
+        row: auditRowLabel(entity, next),
       },
+      // `changes: { field: { from, to } }` -- field names only for PII.
+      metadataFrom: (diff) => diff,
     },
   );
 
   try {
     await audited();
   } catch (err) {
-    return { ok: false, error: `Update failed: ${String(err)}` };
+    if (err instanceof MutationRefused) return { ok: false, error: err.message };
+    console.error("[admin.row.update] failed", err);
+    return writeErrorState(entity, raw, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
@@ -230,20 +307,37 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
   if (!slug || !rowId) return;
 
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
+  // Read, guard, delete -- the same shape as updateRowAction, and for the same
+  // two reasons: a state-dependent rule (a signed-off cycle is not deletable)
+  // and a before-image, since the audit row used to be literally
+  // {"op":"delete"} and could not say what was removed or whom it was about.
   const audited = withAudit(
-    async () => {
-      // Drizzle's loose `eq(table.id, value)` needs the `id` column to exist.
-      // All admin-editable tables in v2 do (uuid pk).
-      const idCol = (entity.table as unknown as { id: unknown }).id;
-      await db.delete(entity.table as never).where(eq(idCol as never, rowId));
-    },
+    async () =>
+      db.transaction(async (tx) => {
+        // Drizzle's loose `eq(table.id, value)` needs the `id` column to exist.
+        // All admin-editable tables in v2 do (uuid pk).
+        const idCol = (entity.table as unknown as { id: unknown }).id;
+        const [before] = (await tx
+          .select()
+          .from(entity.table as never)
+          .where(eq(idCol as never, rowId))
+          .for("update")) as Record<string, unknown>[];
+        if (!before) return null;
+        const reason = entity.guardMutation?.("delete", before);
+        if (reason) throw new MutationRefused(reason, rowId);
+        await tx.delete(entity.table as never).where(eq(idCol as never, rowId));
+        return before;
+      }),
     {
       action: "admin.row.delete",
       entityType: entity.slug,
       entityId: rowId,
       metadata: { op: "delete" },
+      metadataFrom: (before) =>
+        before ? { row: auditRowLabel(entity, before), before: deleteImage(entity, before) } : { missing: true },
     },
   );
 
@@ -259,11 +353,11 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
     await audited();
   } catch (err) {
     console.error("[admin.row.delete] failed", err);
-    deleteError = describeDbError(err);
+    deleteError = gridErrorQuery(err);
   }
   revalidatePath(`/admin/data/${slug}`);
   if (deleteError) {
-    redirect(`/admin/data/${slug}?error=${encodeURIComponent(deleteError)}`);
+    redirect(`/admin/data/${slug}?${deleteError}`);
   }
 }
 
@@ -284,6 +378,32 @@ function describeDbError(err: unknown): string {
     return "duplicate";
   }
   return "delete_failed";
+}
+
+/**
+ * The grid's `?error=` query for a failed delete, plus `&ref=<table>` naming
+ * WHAT still references the row when the database says so.
+ *
+ * Since migration 0031 a delete that used to cascade into learners, attendance,
+ * meetings or submitted forms is refused instead, so "still referenced" is now
+ * a common answer -- and "other records" gives the operator nothing to go and
+ * look for. Postgres reports the referencing table on a 23503; only a bare
+ * identifier is passed on, and the page shows the matching entity's label.
+ */
+function gridErrorQuery(err: unknown): string {
+  // A guard's refusal: the ROW, not its sentence. The page used to print
+  // `detail` from the URL as its red banner, so any link could put
+  // attacker-chosen text ("Session expired, re-enter your password at ...")
+  // on a trusted admin page. The page asks the entity's guard again instead.
+  if (err instanceof MutationRefused) {
+    const params = new URLSearchParams({ error: "locked" });
+    if (err.rowId) params.set("row", err.rowId);
+    return params.toString();
+  }
+  const params = new URLSearchParams({ error: describeDbError(err) });
+  const { code, table } = (err ?? {}) as { code?: string; table?: string };
+  if (code === "23503" && table && /^[a-z_]+$/.test(table)) params.set("ref", table);
+  return params.toString();
 }
 
 /**
@@ -312,19 +432,33 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
   if (!slug || rowIds.length === 0) return;
 
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
+  await requireEntityGate(entity, session.user.id);
 
   const idCol = (entity.table as unknown as { id: unknown }).id;
   let deletedCount = 0;
+  let befores: Record<string, unknown>[] = [];
 
   try {
     await db.transaction(async (tx) => {
+      // The same guard as the single-row delete, for EVERY selected row, and
+      // the whole batch is refused if any one is refused -- otherwise the bulk
+      // toolbar would be the way round it.
+      befores = (await tx
+        .select()
+        .from(entity.table as never)
+        .where(inArray(idCol as never, rowIds as never[]))
+        .for("update")) as Record<string, unknown>[];
+      for (const before of befores) {
+        const reason = entity.guardMutation?.("delete", before);
+        if (reason) throw new MutationRefused(reason, String(before.id));
+      }
       // Single DELETE ... WHERE id IN (...) — atomic, one round-trip.
       // Drizzle's `inArray` builds the correct parameterised SQL list.
       await tx
         .delete(entity.table as never)
         .where(inArray(idCol as never, rowIds as never[]));
-      deletedCount = rowIds.length;
+      deletedCount = befores.length;
     });
   } catch (err) {
     // Same reasoning as deleteRowAction: an atomic bulk delete that rolls back
@@ -332,7 +466,7 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
     // successful one, except that all N rows were still on screen afterwards.
     console.error("[admin.row.bulk_delete] transaction failed", err);
     revalidatePath(`/admin/data/${slug}`);
-    redirect(`/admin/data/${slug}?error=${encodeURIComponent(describeDbError(err))}`);
+    redirect(`/admin/data/${slug}?${gridErrorQuery(err)}`);
   }
 
   // Commit-then-audit. The audit row lands only on a successful commit —
@@ -346,6 +480,10 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
       // First 5 ids for traceability. A full N-id dump can blow the metadata
       // JSON column on big selections; 5 is enough to spot-check.
       ids: rowIds.slice(0, 5),
+      // What was removed, as for a single delete. A grid page selects at most
+      // 50 rows; the cap only guards a hand-built request.
+      before: befores.slice(0, BULK_BEFORE_IMAGE_CAP).map((b) => deleteImage(entity, b)),
+      ...(befores.length > BULK_BEFORE_IMAGE_CAP ? { beforeTruncated: true } : {}),
     },
   });
 

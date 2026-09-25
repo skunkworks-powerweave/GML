@@ -218,6 +218,34 @@
       "when": 1780732000000,
       "tag": "0030_quiz_submission_question_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780733000000,
+      "tag": "0031_admin_deletes_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780734000000,
+      "tag": "0032_phase_term_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780735000000,
+      "tag": "0033_one_record_per_login",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780736000000,
+      "tag": "0034_gate_version_unique",
+      "breakpoints": true
     }
   ]
 }

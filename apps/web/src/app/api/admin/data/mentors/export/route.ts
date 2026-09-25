@@ -33,6 +33,7 @@
 
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
+import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings } from "@gml/db/schema";
@@ -110,7 +111,8 @@ export async function GET(_req: Request) {
   }));
 
   const headers = ["id", "name", "hindiName", "baseLocation", "expertiseAreas", "pairingsActive"];
-  const csv = Papa.unparse({ fields: headers, data });
+  // Escaped: a spreadsheet evaluates a cell starting with = + - @ (admin/csv-safety.ts).
+  const csv = Papa.unparse({ fields: headers, data }, CSV_EXPORT_OPTIONS);
 
   // YYYY-MM-DD filename — mirrors the generic export at csv.ts line 55.
   const filename = `mentors-${new Date().toISOString().slice(0, 10)}.csv`;

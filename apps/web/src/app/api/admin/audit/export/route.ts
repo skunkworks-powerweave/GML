@@ -47,6 +47,8 @@
 
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
+import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
+import { AUDIT_EXPORT_ROW_CAP } from "@/admin/audit-export";
 import { and, desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
@@ -61,7 +63,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const dynamic = "force-dynamic";
 
 const ALLOWED_ROLES: RoleName[] = ["super_admin", "programme_admin"];
-const ROW_CAP = 10000;
+// 10000, shared with /admin/audit, which warns before offering an export
+// that this route would refuse.
+const ROW_CAP = AUDIT_EXPORT_ROW_CAP;
 
 export async function GET(req: Request) {
   // Auth gate — API route returns JSON 401 rather than redirecting.
@@ -220,7 +224,11 @@ export async function GET(req: Request) {
     "user_agent",
     "metadata",
   ];
-  const csv = Papa.unparse({ fields, data });
+  // ESCAPED. user_agent is whatever any caller sent -- the unsigned WhatsApp
+  // webhook audits anonymous internet requests -- and entity_id carries
+  // helpdesk topics; a cell starting with = + - @ is evaluated by the
+  // spreadsheet this file is opened in, during an incident (admin/csv-safety.ts).
+  const csv = Papa.unparse({ fields, data }, CSV_EXPORT_OPTIONS);
 
   // YYYYMMDD in UTC — strip dashes from the ISO date prefix.
   const filename = `audit-log-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;

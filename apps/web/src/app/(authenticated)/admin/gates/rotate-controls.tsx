@@ -181,7 +181,8 @@ export function RotateControls({ slug, label, recipients }: Props) {
             </div>
           ) : (
             <div className="mt-3 text-xs text-neutral-500">
-              No staff with a phone number on file — share manually.
+              No staff with a phone number on file — share manually. WhatsApp
+              numbers are added per account at /admin/users.
             </div>
           )}
           <p className="mt-3 text-xs text-neutral-600">

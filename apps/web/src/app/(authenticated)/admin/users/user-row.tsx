@@ -5,6 +5,7 @@ import {
   setRoleAction,
   setActiveAction,
   setPasswordAction,
+  setPhoneAction,
   type UserActionState,
 } from "./actions";
 import type { RoleName } from "@gml/shared/auth/roles";
@@ -16,6 +17,8 @@ type Props = {
     name: string | null;
     role: RoleName;
     active: boolean;
+    /** WhatsApp number (E.164), used to offer a rotated gate password. */
+    phone: string | null;
     deleted: boolean;
     lastSeenAt: string | null;
   };
@@ -77,7 +80,11 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
    * confirmations: their ERRORS. A failed password change displayed the stale
    * "Role updated" message from earlier, which reads as success.
    */
-  const [lastSubmitted, setLastSubmitted] = useState<"role" | "active" | "pw" | null>(null);
+  const [lastSubmitted, setLastSubmitted] = useState<"role" | "active" | "pw" | "phone" | null>(null);
+  const [phoneState, phoneForm, phonePending] = useActionState<UserActionState | undefined, FormData>(
+    setPhoneAction,
+    undefined,
+  );
 
   const [pwState, pwForm, pwPending] = useActionState<UserActionState | undefined, FormData>(
     setPasswordAction,
@@ -216,6 +223,37 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
         </form>
       ) : null}
 
+      {/* The WhatsApp number /admin/gates offers a rotated section password
+          to, and the one the WhatsApp webhook matches an incoming video's
+          sender against -- so changing it changes whose uploads are whose.
+          Nothing else writes users.phone. Your own may be set here too. */}
+      {canManage || isSelf ? (
+        <form
+          action={(fd: FormData) => {
+            setLastSubmitted("phone");
+            phoneForm(fd);
+          }}
+          style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}
+          data-testid="admin-user-phone-form"
+        >
+          <input type="hidden" name="userId" value={user.id} />
+          <input
+            name="phone"
+            type="tel"
+            defaultValue={user.phone ?? ""}
+            placeholder="WhatsApp number"
+            autoComplete="off"
+            style={{ ...control, minWidth: 180 }}
+          />
+          <button type="submit" disabled={phonePending} style={{ ...control, cursor: "pointer" }}>
+            {phonePending ? "Saving…" : "Save number"}
+          </button>
+          <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+            Gate passwords are shared to it, and videos sent from it on WhatsApp are filed under this person.
+          </span>
+        </form>
+      ) : null}
+
       {/* The state of the form the user ACTUALLY last submitted -- see
           lastSubmitted above for why `??` was wrong here. */}
       <Feedback
@@ -226,7 +264,9 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
               ? activeState
               : lastSubmitted === "pw"
                 ? pwState
-                : undefined
+                : lastSubmitted === "phone"
+                  ? phoneState
+                  : undefined
         }
       />
     </div>

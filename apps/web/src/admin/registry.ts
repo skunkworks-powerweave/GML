@@ -29,8 +29,17 @@ import { sessionsEntity } from "./entities/sessions";
 import { resourcesEntity } from "./entities/resources";
 import { resourceSubjectsEntity } from "./entities/resource-subjects";
 import { learnersEntity } from "./entities/learners";
+import { districtsEntity } from "./entities/districts";
+import { phasesEntity } from "./entities/phases";
+import { termsEntity } from "./entities/terms";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
+  // The tops of both hierarchies. Only the seed ever wrote them, so the
+  // programme could not outlive the seed's Phase 3 (ends 2026-09-30); see
+  // entities/phases.ts. Test: tests/behaviour/admin-rtt-structure.test.ts.
+  districts: districtsEntity,
+  phases: phasesEntity,
+  terms: termsEntity,
   schools: schoolsEntity,
   zones: zonesEntity,
   teachers: teachersEntity,

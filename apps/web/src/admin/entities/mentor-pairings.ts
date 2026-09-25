@@ -8,6 +8,10 @@ export const mentorPairingsEntity: AdminEntity = {
   table: mentorPairings,
   readRoles: ["programme_admin", "super_admin", "mentor"],
   mutateRoles: ["programme_admin", "super_admin"],
+  // The roster /mentorship and /repo/mentor/[id] keep behind the mentorship
+  // password ("it names mentees"); the grid and its CSV export are gated the
+  // same way. Test: tests/behaviour/admin-section-gate.test.ts.
+  gate: "mentorship",
   displayColumns: [
     { key: "mentorId", label: "Mentor" },
     { key: "teacherId", label: "Mentee teacher" },

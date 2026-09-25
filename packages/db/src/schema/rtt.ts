@@ -8,35 +8,51 @@
 // Existing FK references within this file are internal — all use the same module's
 // renamed exports.
 
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, check, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { attendanceStatusEnum } from "./enums";
 import { teachers } from "./geography";
 import { users } from "./identity";
 
-export const phases = pgTable("phases", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  label: varchar("label", { length: 24 }).notNull().unique(), // "Phase 1" / "Phase 2" / "Phase 3"
-  sequence: integer("sequence").notNull(),
-  startDate: timestamp("start_date", { withTimezone: true, mode: "date" }),
-  endDate: timestamp("end_date", { withTimezone: true, mode: "date" }),
-});
+// Admin-editable since the grid registered phases and terms; migration 0032
+// adds the date check and the sequence uniques that a write path needs.
+export const phases = pgTable(
+  "phases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    label: varchar("label", { length: 24 }).notNull().unique(), // "Phase 1" / "Phase 2" / "Phase 3"
+    sequence: integer("sequence").notNull(),
+    startDate: timestamp("start_date", { withTimezone: true, mode: "date" }),
+    endDate: timestamp("end_date", { withTimezone: true, mode: "date" }),
+  },
+  (t) => [
+    uniqueIndex("phases_sequence_uq").on(t.sequence),
+    check(
+      "phases_dates_check",
+      sql`${t.startDate} IS NULL OR ${t.endDate} IS NULL OR ${t.endDate} >= ${t.startDate}`,
+    ),
+  ],
+);
 
 export const terms = pgTable(
   "terms",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    phaseId: uuid("phase_id").notNull().references(() => phases.id, { onDelete: "cascade" }),
+    phaseId: uuid("phase_id").notNull().references(() => phases.id, { onDelete: "restrict" }), // 0031: was cascade
     name: varchar("name", { length: 80 }).notNull(),
     sequence: integer("sequence").notNull(),
   },
-  (t) => [uniqueIndex("terms_phase_name_uq").on(t.phaseId, t.name)],
+  (t) => [
+    uniqueIndex("terms_phase_name_uq").on(t.phaseId, t.name),
+    uniqueIndex("terms_phase_sequence_uq").on(t.phaseId, t.sequence),
+  ],
 );
 
 export const rttSubjects = pgTable(
   "rtt_subjects",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    termId: uuid("term_id").notNull().references(() => terms.id, { onDelete: "cascade" }),
+    termId: uuid("term_id").notNull().references(() => terms.id, { onDelete: "restrict" }), // 0031: was cascade
     name: varchar("name", { length: 160 }).notNull(),
     code: varchar("code", { length: 32 }),
     active: boolean("active").notNull().default(true),
@@ -48,7 +64,7 @@ export const rttModules = pgTable(
   "rtt_modules",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "restrict" }), // 0031: was cascade
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     description: text("description"),
@@ -65,7 +81,7 @@ export const rttSessions = pgTable(
   "rtt_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "restrict" }), // 0031: was cascade
     rttModuleId: uuid("rtt_module_id").references(() => rttModules.id, { onDelete: "set null" }),
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
@@ -83,7 +99,7 @@ export const rttLessons = pgTable(
   "rtt_lessons",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttModuleId: uuid("rtt_module_id").notNull().references(() => rttModules.id, { onDelete: "cascade" }),
+    rttModuleId: uuid("rtt_module_id").notNull().references(() => rttModules.id, { onDelete: "restrict" }), // 0031: was cascade
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     bodyMd: text("body_md"),
@@ -96,7 +112,7 @@ export const rttReadings = pgTable(
   "rtt_readings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "cascade" }),
+    rttSubjectId: uuid("rtt_subject_id").notNull().references(() => rttSubjects.id, { onDelete: "restrict" }), // 0031: was cascade
     title: varchar("title", { length: 240 }).notNull(),
     fileKey: text("file_key"), // MinIO object key (lands with spec 037)
     externalUrl: text("external_url"),
@@ -109,8 +125,8 @@ export const rttAttendance = pgTable(
   "rtt_attendance",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    rttSessionId: uuid("rtt_session_id").notNull().references(() => rttSessions.id, { onDelete: "cascade" }),
-    teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "cascade" }),
+    rttSessionId: uuid("rtt_session_id").notNull().references(() => rttSessions.id, { onDelete: "restrict" }), // 0031: was cascade
+    teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "restrict" }), // 0031: was cascade
     status: attendanceStatusEnum("status").notNull().default("absent"),
     markedByUserId: uuid("marked_by_user_id").references(() => users.id, { onDelete: "set null" }),
     markedAt: timestamp("marked_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

@@ -30,7 +30,11 @@ export const sessionsEntity: AdminEntity = {
     subjectId: z.string().uuid(),
     teacherId: z.string().uuid(),
     outlineLessonId: z.string().uuid().optional().nullable(),
-    scheduledDate: z.string(),
+    // A DATE column. z.string() alone passed a CSV cell like 05/10/2026
+    // straight to Postgres, whose DateStyle (ISO, MDY) stored it as 10 May:
+    // the DD/MM ambiguity admin/dates.ts refuses for every other date. The
+    // grid's date picker submits exactly this form.
+    scheduledDate: z.string().trim().date("must be a date as YYYY-MM-DD"),
     scheduledTime: z.string().optional().nullable(),
     durationMin: z.coerce.number().int().min(1).optional().nullable(),
     topic: z.string().max(240).optional().nullable(),

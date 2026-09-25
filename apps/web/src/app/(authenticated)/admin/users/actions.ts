@@ -16,15 +16,19 @@
 import { revalidatePath } from "next/cache";
 import { eq, and, ne, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { users, teachers, mentors } from "@gml/db/schema";
+import { users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
+import { linkAccountToRecord } from "./link";
 
 export type UserActionState = { error?: string; ok?: string };
 
 const MIN_PASSWORD_LENGTH = 8;
+
+/** The "Link to" record was claimed by another login first. */
+class AlreadyLinked extends Error {}
 
 /**
  * Which roles may the caller hand out?
@@ -177,10 +181,23 @@ export async function createUserAction(
     `);
 
     if (linkId && (linkKind === "teacher" || linkKind === "mentor")) {
-      const table = linkKind === "teacher" ? teachers : mentors;
-      await db.update(table).set({ userId: newId }).where(eq(table.id, linkId));
+      // Claim the record only if nobody holds it (./link.ts). Losing the race
+      // is not an overwrite: the new account is undone below and the admin is
+      // told, rather than silently taking someone else's programme data.
+      if (!(await linkAccountToRecord(db as never, linkKind, linkId, newId))) {
+        throw new AlreadyLinked();
+      }
     }
   } catch (err) {
+    if (err instanceof AlreadyLinked) {
+      // Profile first: public.users.id references auth.users ON DELETE
+      // RESTRICT (_post/003), so the auth record cannot go while it exists.
+      await db.execute(sql`DELETE FROM public.users WHERE id = ${newId}::uuid`).catch(() => undefined);
+      await admin.auth.admin.deleteUser(newId).catch(() => undefined);
+      return {
+        error: `That ${linkKind} record is already linked to another login. Nothing was created; reload the page for the current list.`,
+      };
+    }
     // The auth record exists but the profile is wrong. Leaving it would produce
     // an account that can authenticate and then be refused a token forever,
     // with no row in this list to fix it from -- so undo the auth record and
@@ -193,7 +210,9 @@ export async function createUserAction(
     action: "admin.user.create",
     entityType: "user",
     entityId: newId,
-    metadata: { email, role, linkKind: linkKind || null },
+    // The linked record too: "which login became which teacher" is exactly
+    // what an investigation of a mis-link needs.
+    metadata: { email, role, linkKind: linkKind || null, linkId: linkId || null },
   });
   if (!wrote) noteAuditDegraded("admin/users/createUserAction");
 
@@ -323,6 +342,72 @@ export async function setActiveAction(
       ? "Account reactivated."
       : "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime.",
   };
+}
+
+// ── WhatsApp number ───────────────────────────────────────────────────────────
+
+/**
+ * A phone number as WhatsApp addresses it: E.164, "+" and 8-15 digits.
+ * A bare 10-digit number is an Indian mobile (the programme is in Ladakh);
+ * a leading 0 or 91 before one is the same number. null = not a number.
+ */
+function normalisePhone(raw: string): string | null {
+  const s = raw.replace(/[\s\-().]/g, "");
+  if (/^\+\d{8,15}$/.test(s)) return s;
+  if (/^\d{10}$/.test(s)) return `+91${s}`;
+  if (/^0\d{10}$/.test(s)) return `+91${s.slice(1)}`;
+  if (/^91\d{10}$/.test(s)) return `+${s}`;
+  return null;
+}
+
+/**
+ * Record (or clear) a staff member's WhatsApp number.
+ *
+ * WHY THIS EXISTS. /admin/gates offers a rotated section password to "staff
+ * with a phone number on file", and nothing in the product wrote users.phone
+ * -- no screen, action, import or entity -- so that list was always empty and
+ * "Share via WhatsApp" could never be offered. This is the write path.
+ *
+ * Unlike role and status, a number may be set on your own account: it cannot
+ * lock anyone out. programme_admin still cannot edit an administrator.
+ */
+export async function setPhoneAction(
+  _prev: UserActionState | undefined,
+  formData: FormData,
+): Promise<UserActionState> {
+  const actor = await requireAdmin();
+  if ("error" in actor) return { error: actor.error };
+
+  const targetId = String(formData.get("userId") ?? "");
+  const typed = String(formData.get("phone") ?? "").trim();
+  const phone = typed === "" ? null : normalisePhone(typed);
+  if (typed !== "" && phone === null) {
+    return { error: "Enter a mobile number, e.g. 98765 43210 or +91 98765 43210." };
+  }
+
+  if (targetId !== actor.id) {
+    const permitted = await canActOn(actor, targetId);
+    if (!permitted.ok) return { error: permitted.error };
+  }
+
+  const updated = await db
+    .update(users)
+    .set({ phone, updatedAt: new Date() })
+    .where(eq(users.id, targetId))
+    .returning({ id: users.id });
+  if (updated.length === 0) return { error: "No such user." };
+
+  // Whether a number is on file, not the number: the audit log is readable by
+  // every administrator.
+  const wrote = await recordAudit({
+    action: phone ? "admin.user.phone_set" : "admin.user.phone_cleared",
+    entityType: "user",
+    entityId: targetId,
+  });
+  if (!wrote) noteAuditDegraded("admin/users/setPhoneAction");
+
+  revalidatePath("/admin/users");
+  return { ok: phone ? `WhatsApp number saved (${phone}).` : "WhatsApp number removed." };
 }
 
 // ── password ──────────────────────────────────────────────────────────────────

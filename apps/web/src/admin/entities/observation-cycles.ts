@@ -1,6 +1,52 @@
 import { z } from "zod";
-import { observationCycles } from "@gml/db/schema";
-import type { AdminEntity } from "../types";
+import { and, eq, isNull } from "drizzle-orm";
+import { observationCycles, users } from "@gml/db/schema";
+import type { AdminDb, AdminEntity } from "../types";
+
+/**
+ * The observer must be a live observer account -- the rule
+ * /observation/new's nominateCycleAction applies. lib/authz.ts scopes an
+ * observer to observer_id = me, so a cycle pointed at a mentor, a teacher or a
+ * deactivated account is one nobody can run. The grid and CSV import skipped
+ * it and accepted a mentor's id.
+ */
+async function liveObserver(db: AdminDb, row: Record<string, unknown>): Promise<Record<string, string> | null> {
+  const id = row.observerId;
+  if (typeof id !== "string") return null; // zod already required it
+  const [found] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, id), eq(users.role, "observer"), eq(users.active, true), isNull(users.deletedAt)))
+    .limit(1);
+  return found ? null : { observerId: "must be an active observer account" };
+}
+
+/**
+ * Once a cycle is past "nominated", forms have been written ABOUT a teacher
+ * under a kind: the lesson plan, the observer's rubric, the summary. Changing
+ * teacherId then moves that record onto someone else -- and read access with
+ * it, since lib/authz.ts follows cycle.teacher_id -- and changing kind turns
+ * an evaluative record into a baseline one. Deleting it would erase the forms'
+ * parent (their FKs refuse that since 0031, but the refusal should say why).
+ * Code, observer, schedule, subject and topic stay editable, and every change
+ * is audited with its previous value.
+ */
+function lockAfterNomination(
+  op: "update" | "delete",
+  before: Record<string, unknown>,
+  next?: Record<string, unknown>,
+): string | null {
+  if (before.status === "nominated") return null;
+  if (op === "delete") {
+    return `This cycle is at stage "${String(before.status)}" and has work recorded under it; it cannot be deleted from the grid.`;
+  }
+  for (const field of ["teacherId", "kind"] as const) {
+    if (next && field in next && next[field] !== before[field]) {
+      return `This cycle is at stage "${String(before.status)}": its ${field === "kind" ? "kind" : "teacher"} can no longer be changed.`;
+    }
+  }
+  return null;
+}
 
 // Observation cycles — the nomination record every classroom observation hangs off.
 //
@@ -20,6 +66,12 @@ export const observationCyclesEntity: AdminEntity = {
   table: observationCycles,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
+  // These are the rows /observation keeps behind its password; the grid must
+  // not be the way round it. Test: tests/behaviour/admin-section-gate.test.ts.
+  gate: "observation",
+  validate: liveObserver,
+  // Test: tests/behaviour/admin-cycle-lock.test.ts.
+  guardMutation: lockAfterNomination,
   displayColumns: [
     { key: "code", label: "Code" },
     { key: "teacherId", label: "Teacher" },
@@ -57,5 +109,9 @@ export const observationCyclesEntity: AdminEntity = {
     // column default, "nominated".
   }),
   formFields: ["code", "teacherId", "observerId", "kind", "scheduledAt", "subjectId", "topic"],
+  fields: {
+    observerId: { label: "Observer", userRoles: ["observer"] },
+    subjectId: { label: "Subject" },
+  },
   describeRow: (r) => `observation-cycle:${r.code ?? r.id}`,
 };

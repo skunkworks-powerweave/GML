@@ -14,8 +14,8 @@ export const sessions = pgTable(
   "sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "cascade" }),
-    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
+    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }), // 0031: was cascade
+    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "restrict" }), // 0031: was cascade
     subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "restrict" }),
     teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "restrict" }),
     outlineLessonId: uuid("outline_lesson_id").references(() => outlineLessons.id, { onDelete: "set null" }),

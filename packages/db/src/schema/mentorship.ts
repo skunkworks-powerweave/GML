@@ -36,7 +36,11 @@ export const mentors = pgTable(
   },
   // Resolved on every page that maps a signed-in user to their mentor record.
   // This table previously declared no indexes whatsoever.
-  (t) => [index("mentors_user_idx").on(t.userId)],
+  (t) => [
+    index("mentors_user_idx").on(t.userId),
+    // One mentor record per login (migration 0033), as for teachers.
+    uniqueIndex("mentors_user_id_uq").on(t.userId).where(sql`${t.userId} IS NOT NULL`),
+  ],
 );
 
 export const mentorPairings = pgTable(
@@ -94,7 +98,7 @@ export const mentorMeetings = pgTable(
   "mentor_meetings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "cascade" }),
+    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "restrict" }), // 0031: was cascade
     scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: "date" }).notNull(),
     durationMin: text("duration_min"),
     notes: text("notes"),
@@ -122,7 +126,7 @@ export const feedbackResponses = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     formId: uuid("form_id").notNull().references(() => feedbackForms.id, { onDelete: "restrict" }),
-    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "cascade" }),
+    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "restrict" }), // 0031: was cascade
     respondentUserId: uuid("respondent_user_id").references(() => users.id, { onDelete: "set null" }),
     responses: jsonb("responses").$type<Record<string, unknown>>().notNull(),
     submittedAt: timestamp("submitted_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

@@ -35,9 +35,9 @@ export const teachersEntity: AdminEntity = {
     // unlinked teacher sees an empty programme and 404s on the cycle that is
     // about her. WhatsApp attribution rides on the same column.
     //
-    // A uuid field rather than a picker, matching schoolId. Copy the id from
-    // /admin/users. Nullable, because somebody on the roster who has not been
-    // given an account yet is a legitimate state.
+    // Picked from the teacher accounts by name (admin/references.ts; the value
+    // submitted is still the uuid). Nullable, because somebody on the roster
+    // who has not been given an account yet is a legitimate state.
     userId: z.string().uuid().optional().nullable(),
     fullName: z.string().min(2).max(160),
     schoolId: z.string().uuid(),
@@ -54,12 +54,15 @@ export const teachersEntity: AdminEntity = {
     // empty result reads as "nobody is in Phase 2" rather than "this was never
     // filled in", which is how it went unnoticed.
     //
-    // A uuid rather than a picker, matching schoolId and userId; copy the id
-    // from /admin/data/phases. Nullable -- a teacher on the roster who has not
-    // started a phase yet is a real state.
+    // Picked from /admin/data/phases by label. Nullable -- a teacher on the
+    // roster who has not started a phase yet is a real state.
     currentPhaseId: z.string().uuid().optional().nullable(),
     active: z.boolean().default(true),
   }),
+  fields: {
+    joinedPhase: { help: "Free text, e.g. \"Phase 1\" -- where the teacher started." },
+    userId: { userRoles: ["teacher"] },
+  },
   formFields: [
     "fullName",
     "schoolId",

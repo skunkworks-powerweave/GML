@@ -23,16 +23,26 @@
 //   - next/headers       cookies() / headers() need a request. The stub serves
 //                        whatever the test put in `request`.
 //   - next/font/google   a build-time transform; outside `next build` it throws.
+//   - next/cache         revalidatePath() throws outside a Next request; the
+//                        stub records the call instead.
 //   - *.css              Node cannot import a stylesheet.
 //   - server-only        Next aliases this internally; it is not installable.
 //   - @/auth, the login server actions, @/lib/chrome-counts
 //                        these open Supabase / Postgres connections at import
 //                        time. The components only pass them through (a form
 //                        action, a badge formatter), so a stub changes nothing
-//                        the assertions look at.
+//                        the assertions look at. auth() returns
+//                        `request.session`, so a test can drive a real route
+//                        handler or server action as a chosen role.
 //   - @/lib/supabase/browser
 //                        reads the session from document.cookie; the upload
 //                        module only takes a bearer token from it.
+//   - @/lib/supabase/server, ONLY in a test file that calls
+//                        stubSupabaseServer() before importing the code under
+//                        test: supabaseAdmin() then returns the fake on
+//                        `request.supabaseAdmin`, so an action that creates
+//                        or deletes an auth account (admin/users) runs as far
+//                        as the database without reaching Supabase Auth.
 //
 // ── MECHANICS ────────────────────────────────────────────────────────────────
 //
@@ -72,6 +82,7 @@ const STUB_BY_SPECIFIER: Record<string, string> = {
   "next-intl/server": "next-intl-server.ts",
   "next/headers": "next-headers.ts",
   "next/font/google": "next-font-google.ts",
+  "next/cache": "next-cache.ts",
 };
 
 /** App modules replaced by path (after @/ and relative resolution). */
@@ -81,6 +92,18 @@ const STUB_BY_APP_PATH: Array<[RegExp, string]> = [
   [/\/apps\/web\/src\/lib\/chrome-counts\.ts$/, "chrome-counts.ts"],
   [/\/apps\/web\/src\/lib\/supabase\/browser\.ts$/, "supabase-browser.ts"],
 ];
+
+/** Replaced only once a test asks (stubSupabaseServer); see the header. */
+const SUPABASE_SERVER = /\/apps\/web\/src\/lib\/supabase\/server\.ts$/;
+let supabaseServerStubbed = false;
+
+/**
+ * From now on, in this test process, @/lib/supabase/server resolves to
+ * _stubs/supabase-server.ts. Call it before importing the module under test.
+ */
+export function stubSupabaseServer(): void {
+  supabaseServerStubbed = true;
+}
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -97,6 +120,9 @@ registerHooks({
         return { url: new URL(stub, STUBS_URL).href, shortCircuit: true };
       }
     }
+    if (supabaseServerStubbed && SUPABASE_SERVER.test(normalised)) {
+      return { url: new URL("supabase-server.ts", STUBS_URL).href, shortCircuit: true };
+    }
     return resolved;
   },
 });
@@ -105,6 +131,12 @@ type RequestState = {
   locale: "en" | "hi" | "bo";
   cookies: Record<string, string>;
   headers: Record<string, string>;
+  /** What the @/auth stub's auth() returns; null means signed out. */
+  session?: { user: { id: string; email: string | null; name: string | null; image: string | null; role: string } } | null;
+  /** Paths passed to the next/cache stub's revalidatePath(). */
+  revalidated?: string[];
+  /** What the (opt-in) @/lib/supabase/server stub's supabaseAdmin() returns. */
+  supabaseAdmin?: unknown;
 };
 
 /**
@@ -121,6 +153,14 @@ export function resetRequest(): void {
   request.locale = "en";
   request.cookies = {};
   request.headers = {};
+  request.session = null;
+  request.revalidated = [];
+  request.supabaseAdmin = undefined;
+}
+
+/** Sign the fake request in as `role` (the id should be a real users.id). */
+export function signIn(id: string, role: string, email: string | null = null): void {
+  request.session = { user: { id, email, name: null, image: null, role } };
 }
 
 /** Synchronous render for client components and plain trees. */
