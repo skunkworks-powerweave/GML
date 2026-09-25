@@ -56,10 +56,10 @@ export type SupabaseBrowserConfig = { url: string; anonKey: string };
  *
  * Given no cookie methods, createBrowserClient writes document.cookie itself
  * with @supabase/ssr's defaults: Max-Age 400 days, no Secure. And in a browser
- * it refreshes the session on its own -- the upload path asks it for a token
- * before every request, far more often than a 15-minute token expires on a
- * long upload -- so each refresh rewrote the cookie the server had written
- * Secure and bounded (lib/supabase/cookies.ts) as neither. The library applies
+ * it refreshes the session on its own, on a timer, for as long as the page is
+ * open -- which on a long upload is many 15-minute tokens -- so each refresh
+ * rewrote the cookie the server had written Secure and bounded
+ * (lib/supabase/cookies.ts) as neither. The library applies
  * its 400-day Max-Age after any cookieOptions, so the bound goes on each
  * write here. Secure follows the page: an http page (local development) could
  * not set a Secure cookie at all.

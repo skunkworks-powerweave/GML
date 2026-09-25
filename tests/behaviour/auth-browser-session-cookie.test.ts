@@ -10,10 +10,10 @@
 // Secure and with a Max-Age of at most twelve hours. The browser client was
 // not: createBrowserClient(url, key) with no cookie methods writes through
 // document.cookie with @supabase/ssr's defaults, Max-Age 400 days and no
-// Secure. In a browser it also refreshes the session itself -- and the upload
-// path asks it for a token before every request of a resumable upload, which
-// on a Ladakh link outlives a 15-minute access token many times over. Each of
-// those refreshes rewrote the cookie the server had bounded, unbounded and
+// Secure. In a browser it also refreshes the session itself, on a timer and
+// whenever it is asked for a token near expiry, and an upload page on a Ladakh
+// link stays open through many 15-minute access tokens. Each of those
+// refreshes rewrote the cookie the server had bounded, unbounded and
 // non-Secure.
 //
 // Each test file runs in its own process, so the browser globals set here do
@@ -103,7 +103,7 @@ async function browserHoldingASession(): Promise<void> {
   writes.length = 0;
 }
 
-/** What the upload path does before each tus request: ask for a token. Returns the session-cookie writes it caused. */
+/** What the upload path does: ask the browser client for a token. Returns the session-cookie writes it caused. */
 async function uploadAsksForAToken(): Promise<Write[]> {
   const refreshes = () => fake.calls("POST", "/token").filter((c) => c.query.get("grant_type") === "refresh_token").length;
   const before = refreshes();
