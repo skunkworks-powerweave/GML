@@ -13,6 +13,7 @@ import { eq, getTableColumns, inArray } from "drizzle-orm";
 import { describeWriteError } from "@/admin/db-errors";
 import { MutationRefused, updateAudit } from "@/admin/audit-image";
 import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
+import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 
@@ -339,7 +340,9 @@ export async function importCsv(slug: string, csv: string): Promise<{
               if (!row.update) {
                 throw new MutationRefused("id: that row was added while this file was importing; import it again.");
               }
-              const next = row.data;
+              // As the grid's edit: a hand-typed minute equal to the stored
+              // time keeps its seconds.
+              const next = keepStoredPrecision(before, row.data);
               const reason = entity.guardMutation?.("update", before, { ...before, ...next });
               if (reason) throw new MutationRefused(reason);
               // A file of ids alone changes nothing, and UPDATE needs a column.

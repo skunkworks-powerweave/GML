@@ -29,7 +29,8 @@ export type AdminFieldMeta = {
   userRoles?: RoleName[];
   /**
    * A timestamp column that means a calendar DAY (a phase's start): edited
-   * with a date picker instead of date-and-time. Stored as IST midnight.
+   * with a date picker instead of date-and-time. Stored as IST midnight, unless
+   * the schema moves it (a phase's end is the end of that day).
    */
   input?: "date";
 };

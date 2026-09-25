@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { phases } from "@gml/db/schema";
+import { endOfIstDay } from "../dates";
 import type { AdminEntity } from "../types";
 
 // RTT phases -- the top of the training hierarchy (phase > term > subject).
@@ -36,7 +37,11 @@ export const phasesEntity: AdminEntity = {
       // Nullable in the table: a phase can be planned before it is dated. An
       // undated phase is simply never "current".
       startDate: z.coerce.date().optional().nullable(),
-      endDate: z.coerce.date().optional().nullable(),
+      // The END of the day entered: the dashboard names the phase with
+      // endDate >= now(), so a phase stored as ending at IST midnight at the
+      // start of 31 March was not current on 31 March at all. Grid and CSV
+      // both come through here.
+      endDate: z.coerce.date().transform(endOfIstDay).optional().nullable(),
     })
     // Also a CHECK in the database (0030); here so the form says which field.
     .refine((v) => !v.startDate || !v.endDate || v.endDate >= v.startDate, {
@@ -44,7 +49,8 @@ export const phasesEntity: AdminEntity = {
       path: ["endDate"],
     }),
   formFields: ["label", "sequence", "startDate", "endDate"],
-  // Calendar days, stored as IST midnight: a phase starts on a date, not at a time.
+  // Calendar days: a phase starts at IST midnight of its first day and ends at
+  // the last moment of its last day (endDate above).
   fields: { startDate: { input: "date" }, endDate: { input: "date" } },
   describeRow: (r) => `phase:${r.label ?? r.id}`,
 };

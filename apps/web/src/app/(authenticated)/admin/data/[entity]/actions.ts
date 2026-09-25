@@ -21,6 +21,7 @@ import { ADMIN_ENTITIES } from "@/admin/registry";
 import { entityRowProblems } from "@/admin/access";
 import { deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
 import { describeWriteError } from "@/admin/db-errors";
+import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
@@ -257,13 +258,16 @@ export async function updateRowAction(
           .where(eq(idCol as never, rowId))
           .for("update")) as Record<string, unknown>[];
         if (!before) throw new MutationRefused("That row no longer exists.");
-        const reason = entity.guardMutation?.("update", before, { ...before, ...next });
+        // A timestamp the minute-precision form posted back unchanged keeps
+        // its seconds (admin/dates.ts keepStoredPrecision).
+        const write = keepStoredPrecision(before, next);
+        const reason = entity.guardMutation?.("update", before, { ...before, ...write });
         if (reason) throw new MutationRefused(reason);
         await tx
           .update(entity.table as never)
-          .set(next as never)
+          .set(write as never)
           .where(eq(idCol as never, rowId));
-        return updateAudit(entity, before, next);
+        return updateAudit(entity, before, write);
       }),
     {
       action: "admin.row.update",

@@ -67,3 +67,41 @@ export function istDayRange(ymd: string): [Date, Date] | null {
   if (Number.isNaN(start.getTime())) return null;
   return [start, new Date(start.getTime() + 24 * 60 * 60 * 1000)];
 }
+
+/**
+ * The last millisecond of `d`'s IST calendar day. For a field that means "up
+ * to and including this day" (a phase's end): stored as the day's START, a
+ * phase entered as ending on 31 March stopped being current at 00:00 IST on
+ * 31 March, because the dashboard asks `endDate >= now()`. Still that day in
+ * the date picker (toIstDate), and idempotent, so saving it again is a no-op.
+ */
+export function endOfIstDay(d: Date): Date {
+  if (Number.isNaN(d.getTime())) return d;
+  const [, next] = istDayRange(toIstDate(d))!;
+  return new Date(next.getTime() - 1);
+}
+
+const MINUTE_MS = 60 * 1000;
+
+/**
+ * `next`, with each timestamp that is the stored one cut to the minute put
+ * back to the stored value.
+ *
+ * A datetime-local box shows minutes, so an untouched edit form posts a
+ * stored 04:31:17.123 back as 04:31: every save moved the row's time (a
+ * pairing's startedAt defaults to now(), seconds and all) and the audit diff
+ * recorded a change nobody made. A time the operator actually changed differs
+ * by at least a minute and is written as given.
+ */
+export function keepStoredPrecision(
+  before: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...next };
+  for (const [field, v] of Object.entries(next)) {
+    const stored = before[field];
+    if (!(v instanceof Date) || !(stored instanceof Date) || v.getTime() % MINUTE_MS !== 0) continue;
+    if (Math.floor(stored.getTime() / MINUTE_MS) * MINUTE_MS === v.getTime()) out[field] = stored;
+  }
+  return out;
+}

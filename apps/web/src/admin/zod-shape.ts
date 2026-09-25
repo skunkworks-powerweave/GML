@@ -59,9 +59,12 @@ export function fieldKind(zodType: z.ZodTypeAny | undefined): FieldKind {
   if (!zodType) return "unknown";
   let inner: z.ZodTypeAny = zodType;
   const peek = (t: z.ZodTypeAny) =>
-    t as unknown as { _def?: { innerType?: z.ZodTypeAny; typeName?: string } };
+    t as unknown as { _def?: { innerType?: z.ZodTypeAny; schema?: z.ZodTypeAny; typeName?: string } };
   for (let depth = 0; depth < 10; depth += 1) {
-    const next = peek(inner)._def?.innerType;
+    // A field's own .transform() (a phase's end date, entities/phases.ts)
+    // wraps it in a ZodEffects: still a date to coerce.
+    const def = peek(inner)._def;
+    const next = def?.innerType ?? (def?.typeName === "ZodEffects" ? def.schema : undefined);
     if (!next) break;
     inner = next;
   }

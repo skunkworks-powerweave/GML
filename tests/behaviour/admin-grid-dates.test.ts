@@ -147,3 +147,71 @@ test("clearing an observation cycle's required schedule does not save 1970", { s
     }
   });
 });
+
+// ── SECONDS SURVIVE AN UNTOUCHED EDIT ────────────────────────────────────────
+//
+// A datetime-local box shows minutes, so a stored timestamp with seconds
+// (mentor_pairings.startedAt defaults to now()) came back from an untouched
+// edit form truncated to the minute: the row's time changed on every save,
+// and the audit diff recorded a startedAt change nobody made.
+test("an untouched edit keeps a timestamp's seconds and audits no change to it", { skip }, async () => {
+  const { RowForm } = await rowForm();
+  const { updateRowAction } = await actions();
+  const { h: el, renderSync: draw } = await import("./_ui.js");
+  await withClient(async (c) => {
+    const t = tag("grid-dates-sec");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const teacher = await f.row("teachers", { school_id: school, full_name: `T ${t}` });
+      const mentor = await f.row("mentors", { name: `M ${t}` });
+      const started = new Date("2026-09-03T04:31:17.123Z");
+      const pairing = await f.row("mentor_pairings", { mentor_id: mentor, teacher_id: teacher, started_at: started });
+      const admin = await f.user("programme_admin", "padmin");
+      await f.row("section_gate_grants", { user_id: admin, gate_slug: "mentorship", expires_at: new Date(Date.now() + 3600_000) });
+      actAs(admin, "programme_admin");
+
+      // The value the edit form shows for it, as rendered.
+      const shown = attr(
+        input(
+          draw(
+            el(RowForm, {
+              entitySlug: "mentor-pairings",
+              mode: "edit",
+              rowId: pairing,
+              initialValues: { mentorId: mentor, teacherId: teacher, startedAt: started, status: "active" },
+              options: {},
+            }),
+          ),
+          "startedAt",
+        ) ?? "",
+        "value",
+      );
+      assert.equal(shown, "2026-09-03T10:01");
+
+      const r = await updateRowAction(
+        undefined,
+        form({ entitySlug: "mentor-pairings", rowId: pairing, mentorId: mentor, teacherId: teacher, startedAt: shown!, status: "active", conceptNote: "Fractions first" }),
+      );
+      assert.deepEqual(r, { ok: true });
+      const { rows: [row] } = await c.query(`SELECT started_at, concept_note FROM mentor_pairings WHERE id = $1`, [pairing]);
+      assert.equal(row.concept_note, "Fractions first");
+      assert.equal((row.started_at as Date).toISOString(), started.toISOString(), "saving the form cut the seconds off startedAt");
+
+      let meta: Record<string, unknown> | undefined;
+      for (let i = 0; i < 40 && !meta; i++) {
+        const { rows: audit } = await c.query(
+          `SELECT metadata FROM audit_log WHERE action = 'admin.row.update' AND entity_id = $1 ORDER BY created_at DESC LIMIT 1`,
+          [pairing],
+        );
+        meta = audit[0]?.metadata;
+        if (!meta) await new Promise((res) => setTimeout(res, 50));
+      }
+      assert.deepEqual(Object.keys((meta?.changes as object) ?? {}), ["conceptNote"], "only the note changed");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});

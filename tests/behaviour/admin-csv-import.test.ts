@@ -150,3 +150,62 @@ test("a create that collides with an existing row says so without the driver's t
     }
   });
 });
+
+// F65, for CSV: a DATE column read through zod as a plain string. The strict
+// ISO parsing covers the date-typed fields; sessions.scheduledDate is
+// z.string() over a DATE, so '05/10/2026' reached Postgres unchanged, and with
+// DateStyle 'ISO, MDY' was stored as 10 May -- the very DD/MM ambiguity the
+// import is meant to refuse.
+test("a DATE column accepts only YYYY-MM-DD from a CSV", { skip }, async () => {
+  const { importCsv } = await csvModule();
+  await withClient(async (c) => {
+    const t = tag("imp-date");
+    const f = fixture(c, t);
+    try {
+      const school = await f.row("schools", { zone_id: await zone(f, t), name: `S ${t}`, code: t.slice(-12) });
+      const klass = await f.row("classes", { school_id: school, grade: 5, stage: "Primary" });
+      const subject = await f.row("subjects", { name: `Subject ${t}`, code: t.slice(-12) });
+      const teacher = await f.row("teachers", { school_id: school, full_name: `T ${t}` });
+      f.defer(`DELETE FROM sessions WHERE teacher_id = $1`, [teacher]);
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+      const ids = `${school},${klass},${subject},${teacher}`;
+      const r = await importCsv(
+        "sessions",
+        `schoolId,classId,subjectId,teacherId,scheduledDate,topic\n` +
+          `${ids},05/10/2026,ambiguous\n` +
+          `${ids},2026-02-31,no such day\n` +
+          `${ids},2026-10-05,fine\n`,
+      );
+      assert.equal(r.inserted, 1, JSON.stringify(r));
+      assert.deepEqual(
+        r.errors.map((e) => e.row),
+        [2, 3],
+      );
+      for (const e of r.errors) assert.match(e.message, /^scheduledDate: /);
+      const { rows } = await c.query(`SELECT to_char(scheduled_date, 'YYYY-MM-DD') AS d, topic FROM sessions WHERE teacher_id = $1`, [teacher]);
+      assert.deepEqual(rows, [{ d: "2026-10-05", topic: "fine" }]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("every DATE column's form field refuses an ambiguous or impossible date", async () => {
+  const { getTableColumns } = await import("drizzle-orm");
+  const { ADMIN_ENTITIES } = await import("../../apps/web/src/admin/registry.ts");
+  const { unwrapShape } = await import("../../apps/web/src/admin/zod-shape.ts");
+  const checked: string[] = [];
+  for (const e of Object.values(ADMIN_ENTITIES)) {
+    const cols = getTableColumns(e.table) as Record<string, { columnType?: string }>;
+    const shape = unwrapShape(e.formSchema);
+    for (const field of e.formFields) {
+      if (cols[field]?.columnType !== "PgDate" && cols[field]?.columnType !== "PgDateString") continue;
+      checked.push(`${e.slug}.${field}`);
+      for (const bad of ["05/10/2026", "2026-02-31", "5 Oct 2026"]) {
+        assert.equal(shape[field]!.safeParse(bad).success, false, `${e.slug}.${field} accepted ${bad}`);
+      }
+      assert.equal(shape[field]!.safeParse("2026-10-05").success, true);
+    }
+  }
+  assert.ok(checked.length > 0, "no DATE column found to check");
+});
