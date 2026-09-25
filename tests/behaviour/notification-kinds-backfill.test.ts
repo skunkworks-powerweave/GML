@@ -7,7 +7,7 @@
 // meeting.cancelled and cycle.complete were written (cancelMeetingAction, the
 // cycle sign-off) and hidden: /inbox and the bell show only the kinds in
 // system_settings.notifications_enabled, and neither was in its default. The
-// schema default is corrected; _post/010 corrects the row a deployment already
+// schema default is corrected; _post/011 corrects the row a deployment already
 // has, which a column default never touches.
 
 import { test } from "node:test";
@@ -38,9 +38,9 @@ async function after(c: Client, file: string, start: unknown): Promise<unknown> 
 
 const sorted = (v: unknown) => [...(v as string[])].sort();
 
-test("_post/010 turns on meeting.cancelled and cycle.complete beside their companions, once", { skip }, async () => {
+test("_post/011 turns on meeting.cancelled and cycle.complete beside their companions, once", { skip }, async () => {
   await withClient(async (c) => {
-    const file = "010_notification_kinds_cancel_complete.sql";
+    const file = "011_notification_kinds_cancel_complete.sql";
     assert.deepEqual(
       sorted(await after(c, file, ["cycle.assigned", "video.transcoded", "meeting.scheduled", "helpdesk.ticket"])),
       ["cycle.assigned", "cycle.complete", "helpdesk.ticket", "meeting.cancelled", "meeting.scheduled", "video.transcoded"],
@@ -62,9 +62,9 @@ test("_post/010 turns on meeting.cancelled and cycle.complete beside their compa
 
 // W3-33: pairing.final_submitted is new with its producer (submitFormAction,
 // on a pairing's final form), so its absence was nobody's choice.
-test("_post/011 turns on pairing.final_submitted, once, unless every kind is off", { skip }, async () => {
+test("_post/012 turns on pairing.final_submitted, once, unless every kind is off", { skip }, async () => {
   await withClient(async (c) => {
-    const file = "011_final_form_notification_backfill.sql";
+    const file = "012_final_form_notification_backfill.sql";
     assert.deepEqual(
       sorted(await after(c, file, ["helpdesk.ticket", "meeting.scheduled"])),
       ["helpdesk.ticket", "meeting.scheduled", "pairing.final_submitted"],

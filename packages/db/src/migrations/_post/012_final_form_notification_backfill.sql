@@ -1,4 +1,4 @@
--- 011 — put `pairing.final_submitted` into notifications_enabled.
+-- 012 — put `pairing.final_submitted` into notifications_enabled.
 --
 -- WHY
 --
@@ -7,7 +7,7 @@
 -- `pairing.final_submitted` notice to the programme admins and the other party
 -- on the pairing. /inbox and the bell show only the kinds in
 -- `system_settings.notifications_enabled`, so a new kind that is not in the
--- array is written and hidden -- the defect _post/006 and _post/010 fixed for
+-- array is written and hidden -- the defect _post/006 and _post/011 fixed for
 -- earlier kinds.
 --
 -- The column default is corrected in the Drizzle schema. This file handles the

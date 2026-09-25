@@ -1,4 +1,4 @@
--- 010 — put `meeting.cancelled` and `cycle.complete` into notifications_enabled.
+-- 011 — put `meeting.cancelled` and `cycle.complete` into notifications_enabled.
 --
 -- WHY
 --
