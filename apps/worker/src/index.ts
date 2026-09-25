@@ -52,8 +52,8 @@ import {
 import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
 import { transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
-import { fetchWhatsAppMedia } from "./whatsapp-fetch.js";
-import type { WhatsAppFetchPayload } from "@gml/shared/whatsapp/fetch-job";
+import { fetchWhatsAppMedia, runWhatsAppReply } from "./whatsapp-fetch.js";
+import type { WhatsAppFetchPayload, WhatsAppReplyPayload } from "@gml/shared/whatsapp/fetch-job";
 import { log } from "./log.js";
 
 export type TranscodeJobInput = {
@@ -113,6 +113,10 @@ async function runJob(job: ClaimedJob): Promise<void> {
           attempt: job.attempts,
           maxAttempts: job.maxAttempts,
         });
+        break;
+      // The answer to a WhatsApp message that was not a video.
+      case "whatsapp_reply":
+        await runWhatsAppReply(job.payload as unknown as WhatsAppReplyPayload);
         break;
       // The nightly retention sweep. The name predates the second table; it is
       // kept because scheduleDailyWork() enqueues it and its dedupe key is what

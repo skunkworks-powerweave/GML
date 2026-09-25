@@ -25,12 +25,13 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
-import { auditLog, files, videoSubmissions } from "@gml/db/schema";
+import { auditLog, files, observationCycles, videoSubmissions } from "@gml/db/schema";
 import { enqueue } from "@gml/db/queue";
 import type { BucketName } from "@gml/shared/storage/buckets";
 import { putObject } from "@gml/shared/storage/client";
-import { mediaMetadataUrl, type EnvLike } from "@gml/shared/whatsapp/graph";
-import type { WhatsAppFetchPayload } from "@gml/shared/whatsapp/fetch-job";
+import { mediaMetadataUrl, sendWhatsAppText, type EnvLike } from "@gml/shared/whatsapp/graph";
+import type { WhatsAppFetchPayload, WhatsAppReplyPayload } from "@gml/shared/whatsapp/fetch-job";
+import { replyText, type ReplyOutcome } from "@gml/shared/whatsapp/replies";
 import { log } from "./log.js";
 
 /**
@@ -163,6 +164,69 @@ async function markFailed(p: WhatsAppFetchPayload, reason: string, attempts: num
   await audit("whatsapp.media.fetch_failed", p.videoSubmissionId, { msgId: p.msgId, attempts, error: reason.slice(0, 500) });
 }
 
+/** What the webhook made of a stored video, for the reply. */
+async function outcomeOf(videoSubmissionId: string): Promise<ReplyOutcome> {
+  const [row] = await db
+    .select({
+      contextType: videoSubmissions.contextType,
+      submittedBy: videoSubmissions.submittedByUserId,
+      cycleCode: observationCycles.code,
+    })
+    .from(videoSubmissions)
+    .leftJoin(
+      observationCycles,
+      and(eq(videoSubmissions.contextType, "observation_cycle"), eq(observationCycles.id, videoSubmissions.contextId)),
+    )
+    .where(eq(videoSubmissions.id, videoSubmissionId))
+    .limit(1);
+  if (!row) return { kind: "unmatched" };
+  if (row.contextType === "observation_cycle" && row.cycleCode) return { kind: "linked_cycle", code: row.cycleCode };
+  if (row.contextType === "teach_back") return { kind: "linked_teach_back" };
+  if (row.contextType === "mentor_meeting") return { kind: "linked_meeting" };
+  // 'generic': either nobody answers to the number, or the caption named no
+  // target this sender may use. The two need different next steps.
+  return row.submittedBy ? { kind: "unmatched" } : { kind: "unregistered" };
+}
+
+/**
+ * Tell the sender what happened (F140). Best effort by design: it never throws
+ * into the fetch, whose outcome is already decided, and with WhatsApp replies
+ * not configured it is the logged no-op in sendWhatsAppText.
+ */
+async function replyToSender(
+  p: Pick<WhatsAppFetchPayload, "msgId" | "from" | "videoSubmissionId">,
+  outcome: () => Promise<ReplyOutcome>,
+  deps: { fetch: typeof fetch; env: EnvLike },
+): Promise<void> {
+  try {
+    const o = await outcome();
+    const r = await sendWhatsAppText({ to: p.from, body: replyText(o) }, deps);
+    if (r.sent) {
+      await audit("whatsapp.reply.sent", p.videoSubmissionId, { msgId: p.msgId, kind: o.kind });
+    } else if (r.reason !== "not_configured") {
+      log.warn("whatsapp reply not sent", { msgId: p.msgId, reason: r.reason.slice(0, 300) });
+      await audit("whatsapp.reply.failed", p.videoSubmissionId, { msgId: p.msgId, kind: o.kind, reason: r.reason.slice(0, 500) });
+    }
+  } catch (err) {
+    log.warn("whatsapp reply skipped", { msgId: p.msgId, err: String(err).slice(0, 300) });
+  }
+}
+
+/**
+ * The 'whatsapp_reply' job: an answer the webhook queued for a message it did
+ * not ingest (a text, an image, a PDF). Not retried on failure -- a reply Meta
+ * refused once (outside the 24-hour window, say) will be refused again.
+ */
+export async function runWhatsAppReply(
+  p: WhatsAppReplyPayload,
+  overrides: { fetch?: typeof fetch; env?: EnvLike } = {},
+): Promise<void> {
+  const r = await sendWhatsAppText({ to: p.to, body: p.body }, { fetch: overrides.fetch ?? fetch, env: overrides.env ?? process.env });
+  if (!r.sent && r.reason !== "not_configured") {
+    log.warn("whatsapp reply not sent", { msgId: p.msgId, reason: r.reason.slice(0, 300) });
+  }
+}
+
 /**
  * The job handler. `attempt` is the queue's count for this run (1-based) and
  * `maxAttempts` its ceiling, so the handler knows when a failure is the last.
@@ -185,13 +249,14 @@ export async function fetchWhatsAppMedia(
     return;
   }
 
-  const deps: FetchDeps = {
-    fetch: overrides.fetch ?? fetch,
-    put: overrides.put ?? storagePut(),
-    env: overrides.env ?? process.env,
-  };
+  const fetchImpl = overrides.fetch ?? fetch;
+  const env = overrides.env ?? process.env;
 
   try {
+    // Inside the try: a worker without its Storage credentials fails the
+    // attempt with that reason, like any other cause, and the last attempt
+    // still marks the submission failed.
+    const deps: FetchDeps = { fetch: fetchImpl, env, put: overrides.put ?? storagePut() };
     const bytes = await download(p, deps);
     const sum = checksum(bytes, p.sha256);
     if (sum.matches === false) {
@@ -232,10 +297,15 @@ export async function fetchWhatsAppMedia(
       bucket: p.bucket,
       objectKey: p.objectKey,
     });
+    await replyToSender(p, () => outcomeOf(p.videoSubmissionId), { fetch: fetchImpl, env });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     log.warn("whatsapp fetch attempt failed", { msgId: p.msgId, attempt: run.attempt, of: run.maxAttempts, reason: reason.slice(0, 300) });
-    if (run.attempt >= run.maxAttempts) await markFailed(p, reason, run.attempt);
+    if (run.attempt >= run.maxAttempts) {
+      await markFailed(p, reason, run.attempt);
+      // Only now: an attempt that will be retried is not news to the sender.
+      await replyToSender(p, async () => ({ kind: "fetch_failed" }), { fetch: fetchImpl, env });
+    }
     // Rethrown so the queue records last_error and schedules the retry.
     throw err;
   }

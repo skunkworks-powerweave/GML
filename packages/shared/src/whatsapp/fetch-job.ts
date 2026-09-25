@@ -35,6 +35,16 @@ export const WHATSAPP_FETCH_JOB = "whatsapp_fetch" as const;
  */
 export const WHATSAPP_FETCH_MAX_ATTEMPTS = 10;
 
+/**
+ * A reply to a message that needs no fetch -- one that is not a video. Queued
+ * rather than sent from the webhook so the request stays database-only and the
+ * reply survives a restart. Replies about a video are sent by the fetch itself,
+ * once the outcome is known.
+ */
+export const WHATSAPP_REPLY_JOB = "whatsapp_reply" as const;
+
+export type WhatsAppReplyPayload = { msgId: string; to: string; body: string };
+
 /** One live fetch per WhatsApp message (jobs_dedupe_live_uq). */
 export function whatsappFetchDedupeKey(msgId: string): string {
   return `wa:${msgId}`;

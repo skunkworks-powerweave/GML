@@ -109,7 +109,9 @@ test("spec 105: the fetch is queued AFTER the insert, and the transcode only aft
   // worker is told to look for it -- and a transcode needs an object to read.
   const src = read(ROUTE_PATH);
   const insertIdx = src.search(/\.insert\s*\(\s*videoSubmissions\s*\)/);
-  const enqueueIdx = src.search(/\bawait\s+enqueue\s*\(/);
+  // The FETCH job specifically -- the route also queues a reply job for
+  // messages that are not videos, which has no submission to wait for.
+  const enqueueIdx = src.search(/name\s*:\s*WHATSAPP_FETCH_JOB/);
   assert.ok(insertIdx > -1, "route must insert into videoSubmissions");
   assert.ok(enqueueIdx > -1, "route must queue the fetch");
   assert.ok(enqueueIdx > insertIdx, `the fetch must be queued AFTER the insert (insert=${insertIdx}, enqueue=${enqueueIdx})`);

@@ -21,9 +21,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDatabase } from "./_harness.js";
 import {
+  acceptAndClaim,
   deferred,
   documentMessage,
   envelope,
+  fakeGraph,
+  fakeStorage,
   route,
   runDeferred,
   SECRET,
@@ -140,54 +143,6 @@ test("a message that is not a video is audited as ignored, not dropped without t
 // code against the real database.
 
 const fetcher = () => import("../../apps/worker/src/whatsapp-fetch.ts");
-const queue = () => import("../../packages/db/src/queue.ts");
-
-type Call = { url: string; hasSignal: boolean; auth: string | null };
-
-/** Graph and Meta's media CDN, answering from a script. */
-function fakeGraph(script: { meta?: Response; media?: Response } = {}) {
-  const calls: Call[] = [];
-  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
-    const headers = new Headers(init?.headers);
-    calls.push({ url, hasSignal: init?.signal instanceof AbortSignal, auth: headers.get("authorization") });
-    if (url.startsWith("https://graph.facebook.com/")) {
-      return script.meta ?? Response.json({ url: "https://lookaside.fbsbx.example/media/abc" });
-    }
-    return (
-      script.media ??
-      new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), { headers: { "content-type": "video/mp4" } })
-    );
-  }) as typeof globalThis.fetch;
-  return { calls, fetch };
-}
-
-function fakeStorage() {
-  const puts: Array<{ bucket: string; key: string; bytes: number; type: string }> = [];
-  const put = async (bucket: string, key: string, body: Uint8Array, type: string) => {
-    puts.push({ bucket, key, bytes: body.byteLength, type });
-  };
-  return { puts, put };
-}
-
-type W = Parameters<Parameters<typeof withWorld>[0]>[0];
-
-/** Accept a message through the real webhook and claim its fetch job. */
-async function acceptAndClaim(w: W, caption = w.cycleCode) {
-  const { POST } = await route();
-  const id = w.wamid();
-  assert.equal((await POST(signed(envelope([videoMessage({ id, from: w.teacher.phone, caption })])))).status, 200);
-  const { db } = await import("../../packages/db/src/client.ts");
-  const { claim } = await queue();
-  const [ours] = await w.jobs(id);
-  assert.ok(ours, "the webhook queued a fetch");
-  // Claim through the real queue. Another file's job could be ahead of ours in
-  // a shared database, so put ours at the front.
-  await w.c.query(`UPDATE jobs SET run_at = now() - interval '1 day' WHERE id = $1`, [ours!.id]);
-  const job = await claim(db as never, "whatsapp", "test-worker");
-  assert.equal(job?.id, ours!.id, "the fetch job is claimable from the whatsapp queue");
-  return { id, job: job! };
-}
 
 test("worker: a fetch stores the bytes, marks the file stored and queues the transcode", { skip }, async () => {
   await withEnv(PARTLY_CONFIGURED, () =>

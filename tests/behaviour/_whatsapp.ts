@@ -218,3 +218,78 @@ export async function withEnv(vars: Record<string, string | undefined>, body: ()
 
 /** recordAudit is fire-and-forget; give it a moment to land. */
 export const settle = () => new Promise((r) => setTimeout(r, 300));
+
+// ── Graph, Meta's media CDN and Storage, for the worker's half ───────────────
+
+export type GraphCall = { url: string; method: string; hasSignal: boolean; auth: string | null; body: unknown };
+
+/**
+ * Graph and Meta's media CDN, answering from a script. Replies the worker sends
+ * (POST /{phone-number-id}/messages) are recorded in `sent`.
+ */
+export function fakeGraph(script: { meta?: Response; media?: Response; send?: Response } = {}) {
+  const calls: GraphCall[] = [];
+  const sent: Array<{ to: string; body: string }> = [];
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = new Headers(init?.headers);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    calls.push({ url, method: init?.method ?? "GET", hasSignal: init?.signal instanceof AbortSignal, auth: headers.get("authorization"), body });
+    if (url.startsWith("https://graph.facebook.com/") && url.endsWith("/messages")) {
+      sent.push({ to: String(body?.to), body: String(body?.text?.body) });
+      return script.send ?? Response.json({ messaging_product: "whatsapp", messages: [{ id: "wamid.reply" }] });
+    }
+    if (url.startsWith("https://graph.facebook.com/")) {
+      return script.meta ?? Response.json({ url: "https://lookaside.fbsbx.example/media/abc" });
+    }
+    return (
+      script.media ??
+      new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), { headers: { "content-type": "video/mp4" } })
+    );
+  }) as typeof globalThis.fetch;
+  return { calls, sent, fetch };
+}
+
+export function fakeStorage() {
+  const puts: Array<{ bucket: string; key: string; bytes: number; type: string }> = [];
+  const put = async (bucket: string, key: string, body: Uint8Array, type: string) => {
+    puts.push({ bucket, key, bytes: body.byteLength, type });
+  };
+  return { puts, put };
+}
+
+export type ClaimedJob = { id: string; queue: string; name: string; payload: Record<string, unknown>; attempts: number; maxAttempts: number };
+
+/**
+ * Claim one specific job the way the worker's claim() does (queued -> running,
+ * attempts + 1). By id, because other test files share the queue and may have
+ * jobs of their own ahead of this one.
+ */
+export async function claimJob(w: World, jobId: string): Promise<ClaimedJob> {
+  const r = (
+    await w.c.query(
+      `UPDATE jobs SET status = 'running', attempts = attempts + 1, locked_by = 'test-worker',
+              lease_expires_at = now() + interval '15 minutes', updated_at = now()
+        WHERE id = $1 AND status = 'queued'
+        RETURNING id, queue, name, payload, attempts, max_attempts`,
+      [jobId],
+    )
+  ).rows[0];
+  if (!r) throw new Error(`job ${jobId} was not queued`);
+  return { id: r.id, queue: r.queue, name: r.name, payload: r.payload, attempts: Number(r.attempts), maxAttempts: Number(r.max_attempts) };
+}
+
+/** Accept a message through the real webhook and claim its fetch job. */
+export async function acceptAndClaim(w: World, opts: { caption?: string; from?: string } = {}) {
+  const { POST } = await route();
+  const id = w.wamid();
+  const res = await POST(
+    signed(envelope([videoMessage({ id, from: opts.from ?? w.teacher.phone, caption: opts.caption ?? w.cycleCode })])),
+  );
+  if (res.status !== 200) throw new Error(`webhook answered ${res.status}`);
+  const [ours] = (await w.jobs(id)).filter((j) => j.name === "whatsapp_fetch");
+  if (!ours) throw new Error("the webhook queued no fetch");
+  const job = await claimJob(w, String(ours.id));
+  if (job.queue !== "whatsapp") throw new Error(`fetch queued on ${job.queue}`);
+  return { id, job };
+}

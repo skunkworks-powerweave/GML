@@ -45,9 +45,12 @@ import {
   WHATSAPP_FETCH_JOB,
   WHATSAPP_FETCH_MAX_ATTEMPTS,
   WHATSAPP_QUEUE,
+  WHATSAPP_REPLY_JOB,
   whatsappFetchDedupeKey,
   type WhatsAppFetchPayload,
+  type WhatsAppReplyPayload,
 } from "@gml/shared/whatsapp/fetch-job";
+import { replyText } from "@gml/shared/whatsapp/replies";
 
 // Caption-format UUID validator. TB-<uuid> and MM-<uuid> branches require a
 // canonical lowercase-or-uppercase 8-4-4-4-12 hex group; anything else falls
@@ -132,6 +135,7 @@ export async function POST(req: Request) {
                 to: phone,
               },
             });
+            await answerIgnored(msg);
             continue;
           }
           await acceptVideoMessage(msg, media, phone);
@@ -196,6 +200,30 @@ function inboundVideo(msg: WhatsAppMessage): InboundVideo | null {
     caption: (media.caption ?? "").trim(),
     sha256: media.sha256 ?? null,
   };
+}
+
+/**
+ * Kinds of message a person sends when they are trying to submit something.
+ * Reactions, system notices and the like get no answer: replying "this number
+ * accepts lesson videos" to a thumbs-up on our own reply would be noise.
+ */
+const ANSWERED_TYPES = new Set(["text", "image", "audio", "document", "sticker"]);
+
+/**
+ * Queue the reply that tells the sender this number takes videos (F140). The
+ * sender used to hear nothing, ever. Queued, not sent here: the request stays
+ * database-only, and the reply survives a restart. One per message id.
+ */
+async function answerIgnored(msg: WhatsAppMessage): Promise<void> {
+  if (!msg.from || !msg.id || !ANSWERED_TYPES.has(msg.type)) return;
+  const payload: WhatsAppReplyPayload = { msgId: msg.id, to: msg.from, body: replyText({ kind: "not_a_video" }) };
+  await enqueue(db as unknown as NodePgDatabase<Record<string, unknown>>, {
+    queue: WHATSAPP_QUEUE,
+    name: WHATSAPP_REPLY_JOB,
+    payload: payload as unknown as Record<string, unknown>,
+    dedupeKey: `reply:${msg.id}`,
+    maxAttempts: 1,
+  });
 }
 
 /** A concurrent delivery of the same message won the insert. */

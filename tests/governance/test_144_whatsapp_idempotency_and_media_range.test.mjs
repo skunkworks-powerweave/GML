@@ -94,9 +94,10 @@ test("spec 144: webhook pre-checks WHERE whatsappMessageId = msg.id before queue
   // (apps/worker/src/whatsapp-fetch.ts), because running it after Meta's 200
   // made every failure permanent. The pre-check still has to come first, now
   // ahead of the fetch JOB, so a redelivery neither queues a second fetch nor
-  // wastes Graph egress on one.
+  // wastes Graph egress on one. (The FETCH job: a reply job for a non-video
+  // message is queued elsewhere and has nothing to pre-check.)
   const selectIdx = src.search(/\.from\s*\(\s*videoSubmissions\s*\)/);
-  const fetchIdx = src.search(/\bawait\s+enqueue\s*\(/);
+  const fetchIdx = src.search(/name\s*:\s*WHATSAPP_FETCH_JOB/);
   assert.ok(selectIdx > -1, "webhook must perform a SELECT against videoSubmissions");
   assert.ok(fetchIdx > -1, "webhook must queue the media fetch");
   assert.ok(
