@@ -52,11 +52,13 @@ import {
   QUEUE_NAMES,
   type ClaimedJob,
   type QueueName,
+  type QueueTx,
+  type ReapedJob,
 } from "@gml/db/queue";
 import { deleteOldNotifications, pruneExpiredGateGrants, pruneRateLimits } from "@gml/db/scripts/retention";
 import { repairReapedTranscodes, repairStrandedTranscodes, sweepStaleScratch, transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
-import { fetchWhatsAppMedia, runWhatsAppReply } from "./whatsapp-fetch.js";
+import { fetchWhatsAppMedia, repairReapedWhatsAppFetch, runWhatsAppReply } from "./whatsapp-fetch.js";
 import type { WhatsAppFetchPayload, WhatsAppReplyPayload } from "@gml/shared/whatsapp/fetch-job";
 import { log } from "./log.js";
 
@@ -321,6 +323,17 @@ async function consumer(queue: QueueName, slot: number): Promise<void> {
 }
 
 /**
+ * The reaper's `onReaped`: each handler's repair of the domain rows a killed
+ * job left behind, run in the reaper's transaction. Each returns early for a
+ * job that is not its own. The fetch's was missing, so a WhatsApp video whose
+ * worker died on the last attempt stayed "received" for good.
+ */
+async function repairReaped(tx: QueueTx, job: ReapedJob): Promise<void> {
+  await repairReapedTranscodes(tx, job);
+  await repairReapedWhatsAppFetch(tx, job);
+}
+
+/**
  * Periodic housekeeping.
  *
  * The reaper is the important one: it is what turns a hard-killed worker from
@@ -328,9 +341,9 @@ async function consumer(queue: QueueName, slot: number): Promise<void> {
  */
 async function housekeeping(): Promise<void> {
   try {
-    // The transcode handler's own rows are repaired in the reaper's transaction
-    // (see repairReapedTranscodes).
-    const reaped = await reapExpiredLeases(db, repairReapedTranscodes);
+    // The handlers' own rows are repaired in the reaper's transaction (see
+    // repairReaped).
+    const reaped = await reapExpiredLeases(db, repairReaped);
     const requeued = reaped.filter((r) => !r.dead);
     const dead = reaped.filter((r) => r.dead);
     // Reaped all the same; only their domain rows were left as they were. A

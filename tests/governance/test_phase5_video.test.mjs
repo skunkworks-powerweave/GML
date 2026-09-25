@@ -240,12 +240,15 @@ test("worker entry consumes the transcode queue from Postgres", () => {
     /setInterval\([\s\S]{0,120}?heartbeat\(db,\s*job\.id/,
     "a claimed job must have its lease heartbeated for as long as it runs",
   );
-  // With the transcode repair: reaping only the transport row left the killed
-  // attempt's ledger row 'running' and its video 'transcoding' forever (F04).
-  // tests/behaviour/transcode-lifecycle.test.ts executes this; this pins it.
+  // With the handlers' repairs: reaping only the transport row left the killed
+  // attempt's ledger row 'running' and its video 'transcoding' forever (F04),
+  // and a WhatsApp video whose fetch died on its last attempt 'received'
+  // forever (W3-63). The hook is now repairReaped, which runs both.
+  // tests/behaviour/transcode-lifecycle.test.ts and
+  // whatsapp-worker-wiring.test.ts execute it; this pins the wiring.
   assert.match(
     src,
-    /reapExpiredLeases\(db,\s*repairReapedTranscodes\)/,
+    /reapExpiredLeases\(db,\s*repairReaped\)/,
     "the worker must requeue jobs whose lease lapsed, or a SIGKILL strands them as 'running'",
   );
 });

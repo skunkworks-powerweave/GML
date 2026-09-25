@@ -15,23 +15,30 @@
 // transaction before answering, and this handler THROWS on every failure, so
 // the queue retries it with backoff (WHATSAPP_FETCH_MAX_ATTEMPTS). The last
 // attempt marks the submission and its file 'failed' with the reason, which
-// /admin/whatsapp-log shows next to a "Retry fetch" button.
+// /admin/whatsapp-log shows next to a "Retry fetch" button -- or, when the
+// worker dies during it, the lease reaper does (repairReapedWhatsAppFetch).
 //
 // Each error names its cause -- the missing variable, the HTTP status and
 // Graph's error code -- because "url_failed" alone could not tell an expired
 // token from a Meta outage.
 
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { auditLog, files, observationCycles, videoSubmissions } from "@gml/db/schema";
-import { enqueue } from "@gml/db/queue";
+import { enqueue, type QueueTx, type ReapedJob } from "@gml/db/queue";
 import { linkSubmissionToContext } from "@gml/db/uploads";
 import { storableVideoType, type BucketName } from "@gml/shared/storage/buckets";
 import { putObject } from "@gml/shared/storage/client";
 import { mediaMetadataUrl, sendWhatsAppText, type EnvLike } from "@gml/shared/whatsapp/graph";
-import type { WhatsAppFetchPayload, WhatsAppReplyPayload } from "@gml/shared/whatsapp/fetch-job";
+import {
+  WHATSAPP_FETCH_JOB,
+  WHATSAPP_QUEUE,
+  WHATSAPP_REPLY_JOB,
+  type WhatsAppFetchPayload,
+  type WhatsAppReplyPayload,
+} from "@gml/shared/whatsapp/fetch-job";
 import { replyText, type ReplyOutcome } from "@gml/shared/whatsapp/replies";
 import { log } from "./log.js";
 
@@ -149,6 +156,64 @@ function checksum(bytes: Uint8Array, claimed: string | null): { hex: string; mat
   const hex = digest.toString("hex");
   if (!claimed) return { hex, matches: null };
   return { hex, matches: claimed.toLowerCase() === hex || claimed === digest.toString("base64") };
+}
+
+/**
+ * Repair the domain rows of a fetch whose worker died on its LAST attempt: the
+ * lease reaper's `onReaped`, run in its transaction (a savepoint per job).
+ *
+ * The final bookkeeping -- the submission and its file 'failed', the audit row,
+ * the "please send it again" reply -- lives in fetchWhatsAppMedia's catch, and a
+ * SIGKILL, an OOM kill or a drain that ran out of time never reaches it. The
+ * reaper repaired only the transport row, so the video stayed "Received.
+ * Waiting for the worker to pick it up." for good and the sender heard nothing.
+ * A reaped fetch with attempts left needs nothing: its re-run decides.
+ *
+ * The reply is QUEUED, not sent: no network call runs inside the reaper's
+ * transaction, and the reply job commits with the repair or not at all.
+ */
+export async function repairReapedWhatsAppFetch(tx: QueueTx, job: ReapedJob): Promise<void> {
+  if (job.name !== WHATSAPP_FETCH_JOB || !job.dead) return;
+  const p = job.payload as unknown as WhatsAppFetchPayload;
+  if (!p.videoSubmissionId) return;
+  const reason = "worker stopped responding (lease expired); attempts exhausted";
+  // The same guarded write markFailed makes: only a submission still waiting.
+  const rows = await tx
+    .update(videoSubmissions)
+    .set({ status: "failed", processingLog: `WhatsApp media fetch failed: ${reason}` })
+    .where(and(eq(videoSubmissions.id, p.videoSubmissionId), eq(videoSubmissions.status, "received")))
+    .returning({ id: videoSubmissions.id });
+  if (rows.length === 0) return;
+  await tx.update(files).set({ status: "failed" }).where(eq(files.id, p.fileId));
+  const [counted] = (
+    (await tx.execute(sql`SELECT attempts FROM jobs WHERE id = ${job.id}::uuid`)) as unknown as { rows: { attempts: number }[] }
+  ).rows;
+  // Best effort, like every audit row here: in a savepoint of its own, so a
+  // refused insert cannot undo the repair (the job is dead and is never reaped
+  // again).
+  try {
+    await tx.transaction(async (sp) => {
+      await sp.insert(auditLog).values({
+        action: "whatsapp.media.fetch_failed",
+        entityType: "video_submission",
+        entityId: p.videoSubmissionId,
+        metadata: { msgId: p.msgId, attempts: counted?.attempts ?? null, error: reason },
+      });
+    });
+  } catch (err) {
+    log.warn("audit insert failed", { action: "whatsapp.media.fetch_failed", err: String(err).slice(0, 200) });
+  }
+  if (p.from) {
+    const reply: WhatsAppReplyPayload = { msgId: p.msgId, to: p.from, body: replyText({ kind: "fetch_failed" }) };
+    // Keyed like the webhook's own replies; not retried, as those are not.
+    await enqueue(tx as never, {
+      queue: WHATSAPP_QUEUE,
+      name: WHATSAPP_REPLY_JOB,
+      payload: reply as unknown as Record<string, unknown>,
+      dedupeKey: `reply:${p.msgId}`,
+      maxAttempts: 1,
+    });
+  }
 }
 
 /** Mark the submission failed with the reason. Only a still-waiting one. */
