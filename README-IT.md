@@ -121,8 +121,8 @@ this is only the operator-facing subset.
 | `WHATSAPP_APP_SECRET` | Optional until WhatsApp is switched on. While empty, the webhook refuses **all** traffic (503 `whatsapp_not_configured`) and deploy/preflight report WhatsApp ingest as OFF; everything else works. |
 | `WHATSAPP_VERIFY_TOKEN` | Must match what you type into the Meta dashboard during webhook setup. |
 | `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` | From Meta Business Manager. |
-| `GML_WHATSAPP_NUMBER` | Display E.164 shown on the upload pages as the "send your clip here" hint. |
-| `GML_HELPDESK_PHONE` | wa.me-ready E.164 without the plus, for the in-product Help button. |
+| `GML_WHATSAPP_NUMBER` | E.164 **with** the leading `+`, e.g. `+919419100001`. Shown on the upload pages as the "send your clip here" hint. |
+| `GML_HELPDESK_PHONE` | E.164 **with** the leading `+`, e.g. `+919419100001`, for the in-product Help button's WhatsApp link. Without the `+` the app rejects the value (a SEVERE line in its log) and hides that contact for everyone. |
 | `GML_HELPDESK_EMAIL` | mailto target for the same Help button. |
 | `WORKER_CONCURRENCY` | **1.** One ffmpeg at `-preset veryfast` saturates both vCPUs; a second starves the web tier sharing the box. |
 | `TZ` | IANA zone, `Asia/Kolkata`. Pins the worker's sweeps and audit-log timestamp interpretation. |
