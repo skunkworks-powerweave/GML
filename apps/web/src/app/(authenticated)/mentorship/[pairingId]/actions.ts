@@ -40,15 +40,12 @@ import { isUuid } from "@/lib/ids";
 
 /**
  * The two people on a pairing, as users, for notify(). Either may be null: a
- * mentor record need not have a login, nor a teacher's.
+ * mentor record need not have a login, nor a teacher's. Their user ids only:
+ * what a notification says must not name them (see logMeetingAction).
  */
 async function pairingParties(pairing: { mentorId: string; teacherId: string }) {
-  const [m] = await db.select({ userId: mentors.userId, name: mentors.name }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
-  const [t] = await db
-    .select({ userId: teachers.userId, name: teachers.fullName })
-    .from(teachers)
-    .where(eq(teachers.id, pairing.teacherId))
-    .limit(1);
+  const [m] = await db.select({ userId: mentors.userId }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+  const [t] = await db.select({ userId: teachers.userId }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
   return { mentor: m ?? null, mentee: t ?? null };
 }
 
@@ -173,8 +170,13 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // wrote it: the mentee's bell stayed at 0. Both parties, minus whoever
   // logged it; the row opens the pairing. notify() never throws, so the
   // meeting stands whatever happens to the bell.
+  //
+  // NOTHING THE SECTION PASSWORD GUARDS goes into the row: no notes, no names.
+  // /inbox has no gate, and a subject naming mentor and mentee with the notes
+  // as its body put the pairing roster and the meeting record in front of a
+  // borrowed session that never entered the password. The row opens the
+  // (gated) pairing page, which shows both.
   const parties = await pairingParties(pairing);
-  const subject = `Mentorship meeting ${meetingWhen(scheduledAt)} — ${parties.mentor?.name ?? "Mentor"} and ${parties.mentee?.name ?? "mentee"}`;
   await notify(
     db,
     [parties.mentor?.userId, parties.mentee?.userId]
@@ -182,8 +184,8 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
       .map((userId) => ({
         userId,
         kind: "meeting.scheduled",
-        subject,
-        body: notes.length > 0 ? notes.slice(0, 500) : null,
+        subject: `A mentorship meeting was logged for ${meetingWhen(scheduledAt)}`,
+        body: null,
         entityType: "mentor_pairing",
         entityId: pairingId,
       })),

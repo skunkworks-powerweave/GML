@@ -39,10 +39,31 @@ async function as<T>(who: Person, fn: () => Promise<T>) {
 }
 
 const notes = (w: World, userId: string) =>
-  w.q<{ kind: string; entity_type: string; entity_id: string; subject: string }>(
-    `SELECT kind, entity_type, entity_id, subject FROM notifications WHERE user_id = $1 ORDER BY created_at`,
+  w.q<{ kind: string; entity_type: string; entity_id: string; subject: string; body: string | null }>(
+    `SELECT kind, entity_type, entity_id, subject, body FROM notifications WHERE user_id = $1 ORDER BY created_at`,
     [userId],
   );
+
+/**
+ * A notification carries nothing the mentorship password guards.
+ *
+ * /inbox has no gate, so a row there is readable by a borrowed session that
+ * never entered the password -- and the rows used to carry the mentor's
+ * free-text meeting notes (as the body) and both people's names (in the
+ * subject): the pairing roster and the meeting record, outside the section.
+ * The row links to the gated pairing page, which is where the detail belongs.
+ */
+function assertNothingGated(w: World, rows: Array<{ subject: string; body: string | null }>, meetingNotes: string) {
+  for (const row of rows) {
+    const text = `${row.subject}
+${row.body ?? ""}`;
+    assert.equal(row.body, null, "no body: the meeting's notes stay on the pairing page");
+    assert.ok(!text.includes(meetingNotes), `the meeting notes are not in the notification: ${text}`);
+    for (const p of [w.teacherA, w.teacherB, w.mentor]) {
+      assert.ok(!text.includes(p.name), `no name of the pairing's people (${p.name}) in: ${text}`);
+    }
+  }
+}
 
 test("logging a meeting notifies the mentee, not the mentor who logged it", { skip }, async () => {
   await withWorld(async (w) => {
@@ -56,8 +77,23 @@ test("logging a meeting notifies the mentee, not the mentor who logged it", { sk
     assert.equal(forMentee[0]!.kind, "meeting.scheduled");
     assert.equal(forMentee[0]!.entity_type, "mentor_pairing");
     assert.equal(forMentee[0]!.entity_id, w.pairingA, "the notification opens the pairing");
-    assert.match(forMentee[0]!.subject, new RegExp(w.mentor.name));
+    assert.match(forMentee[0]!.subject, /^A mentorship meeting was logged for Fri,? 2 Oct/);
+    assertNothingGated(w, forMentee, "phonics plan");
     assert.deepEqual(await notes(w, w.mentor.id), [], "the actor is not told about their own action");
+  });
+});
+
+test("a meeting an administrator logs tells both parties, and neither row carries the notes or a name", { skip }, async () => {
+  await withWorld(async (w) => {
+    await w.grant(w.admin.id);
+    const { logMeetingAction } = await actions();
+    const r = await as(w.admin, () =>
+      logMeetingAction(formData({ pairingId: w.pairingA, scheduledAt: "2026-10-02T10:30", notes: "reading corner, fluency concerns" })),
+    );
+    assert.equal(r.kind, "redirect", describe(r));
+    const rows = [...(await notes(w, w.mentor.id)), ...(await notes(w, w.teacherA.id))];
+    assert.equal(rows.length, 2, "the mentor and the mentee");
+    assertNothingGated(w, rows, "reading corner, fluency concerns");
   });
 });
 
@@ -92,6 +128,7 @@ test("the mentor can cancel a meeting: it goes, the counters follow, the mentee 
 
     const told = await notes(w, w.teacherA.id);
     assert.deepEqual(told.map((n) => [n.kind, n.entity_id]), [["meeting.cancelled", w.pairingA]]);
+    assertNothingGated(w, told, "phonics plan");
   });
 });
 
