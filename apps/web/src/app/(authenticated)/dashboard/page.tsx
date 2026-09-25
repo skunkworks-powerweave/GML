@@ -61,6 +61,7 @@ import { recordAudit } from "@/lib/audit";
 import { getActiveGrant } from "@/lib/gates";
 import { countOpenAssessments } from "@/lib/rtt/assessments";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
+import { greetingKey, PROGRAMME_TIME_ZONE } from "./greeting";
 
 export const dynamic = "force-dynamic";
 
@@ -702,13 +703,8 @@ export default async function DashboardPage() {
     metadata: { role },
   });
 
-  const greeting = (() => {
-    const h = new Date().getUTCHours();
-    if (h < 5) return tDash("lateNight");
-    if (h < 12) return tDash("morning");
-    if (h < 17) return tDash("afternoon");
-    return tDash("evening");
-  })();
+  // In IST, not UTC: see ./greeting.ts.
+  const greeting = tDash(greetingKey(new Date()));
 
   const firstName = name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").split(/\s+/)[0];
 
@@ -754,7 +750,14 @@ export default async function DashboardPage() {
             number from. Rather than swap one invented number for another, that
             half is dropped. */}
         <p style={{ color: "var(--ink-3)", marginTop: 6 }}>
-          {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+          {new Date().toLocaleDateString("en-IN", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+            // The programme's date, not the server process's (same clock as the greeting).
+            timeZone: PROGRAMME_TIME_ZONE,
+          })}
           {currentPhase ? ` · RTT ${currentPhase.label}` : ""}
           {role === "teacher" ? "" : ` · ${roleLabel} view`}
         </p>
