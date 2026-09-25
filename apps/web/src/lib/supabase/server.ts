@@ -10,9 +10,10 @@
 //                                 never be reachable from a browser.
 
 import "server-only";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { boundSessionCookie, isSecureOrigin, sessionCookieOptions } from "@/lib/supabase/cookies";
 
 // Read at call time, not at module scope. `next build` imports this module to
 // prerender pages, and a module-scope throw would turn a missing env var into a
@@ -36,13 +37,18 @@ function publicEnv(): { url: string; key: string } {
 export async function createSupabaseServerClient(): Promise<SupabaseClient> {
   const { url, key } = publicEnv();
   const store = await cookies();
+  // Secure and a bounded Max-Age on every write: see lib/supabase/cookies.ts.
+  const secure = isSecureOrigin(process.env.APP_URL, (await headers()).get("x-forwarded-proto"));
 
   return createServerClient(url, key, {
+    cookieOptions: sessionCookieOptions(secure),
     cookies: {
       getAll: () => store.getAll(),
       setAll: (toSet) => {
         try {
-          for (const { name, value, options } of toSet) store.set(name, value, options);
+          for (const { name, value, options } of toSet) {
+            store.set(name, value, boundSessionCookie(options, secure));
+          }
         } catch {
           // Server Components cannot write cookies -- `cookies().set()` throws
           // there by design. This is EXPECTED and is not an error to log.

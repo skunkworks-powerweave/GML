@@ -98,6 +98,18 @@ sign-up endpoint tells anyone which addresses already have accounts.
 If an address is already squatted, delete that user in Authentication → Users
 and create the account again at `/admin/users`; do not reactivate it.
 
+**e) Bound how long a session lives.** Authentication → Sessions → *Time-box
+user sessions*: **12 hours**; *Inactivity timeout*: **2 hours** (both are Pro
+features, which §2.1 requires anyway).
+
+These are for shared school computers. The application already writes the
+session cookie `Secure` on an https deployment and with a Max-Age of at most
+12 hours, renewed while the person keeps using the site, so a browser left
+signed in drops the session twelve hours after it was last used. Those are
+browser-side limits; they do not stop a copied cookie. The two Supabase
+settings are enforced by Supabase itself and do. Without them a refresh token
+never expires.
+
 ### 2.3 Optional: outbound email
 
 SMTP is configured **in Supabase** (Authentication → Emails → SMTP Settings),

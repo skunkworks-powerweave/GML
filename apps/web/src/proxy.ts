@@ -57,6 +57,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { hasAnyRole, isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { buildCsp } from "@/lib/csp";
+import { boundSessionCookie, isSecureOrigin, sessionCookieOptions } from "@/lib/supabase/cookies";
 
 type PolicyRule = {
   prefix: string;
@@ -218,13 +219,19 @@ export default async function proxy(request: NextRequest) {
   // layouts reads the same env, every protected page fails closed there too.
   if (!url || !key) return response;
 
+  // The refreshed session is written with the same attributes sign-in used
+  // (Secure behind https, bounded Max-Age); see lib/supabase/cookies.ts.
+  const secure = isSecureOrigin(process.env.APP_URL, request.headers.get("x-forwarded-proto"));
   const supabase = createServerClient(url, key, {
+    cookieOptions: sessionCookieOptions(secure),
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll: (toSet) => {
         for (const { name, value } of toSet) request.cookies.set(name, value);
         response = nextWithCsp();
-        for (const { name, value, options } of toSet) response.cookies.set(name, value, options);
+        for (const { name, value, options } of toSet) {
+          response.cookies.set(name, value, boundSessionCookie(options, secure));
+        }
       },
     },
   });
