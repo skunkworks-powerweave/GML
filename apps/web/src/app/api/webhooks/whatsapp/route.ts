@@ -11,7 +11,9 @@
 //      with the Graph media id and the sender) and a 'whatsapp_fetch' job on
 //      the Postgres queue. Only then is Meta told 200.
 //   4. The worker (apps/worker/src/whatsapp-fetch.ts) claims the job, fetches
-//      the media from the Graph API, stores it, and queues the transcode. A
+//      the media from the Graph API, stores it, links it to the cycle's
+//      Evidence or the meeting's recording (linkSubmissionToContext, the same
+//      step a direct upload gets), and queues the transcode. A
 //      failure there is retried with backoff and, if it never succeeds, marks
 //      the submission failed with the reason and shows on /admin/whatsapp-log.
 //   5. Once transcoded, the row moves to status='ready' and the teacher's
@@ -375,10 +377,10 @@ async function acceptVideoMessage(
     return;
   }
 
-  // Parse the caption to determine context (OBS- / TB- / MM-, anywhere in the
-  // caption, any case; see packages/shared/src/whatsapp/caption.ts). The media
-  // itself is fetched by the worker, after this request has recorded
-  // everything needed to do so.
+  // Parse the caption to determine context (OBS- / TB- / MM- / Q1- / Q4-,
+  // anywhere in the caption, any case; see packages/shared/src/whatsapp/
+  // caption.ts). The media itself is fetched by the worker, after this request
+  // has recorded everything needed to do so.
   const caption = media.caption;
   const ctx = parseCaption(caption);
 
@@ -387,10 +389,13 @@ async function acceptVideoMessage(
   // typo never blocks the upload -- the raw caption is kept on the submission
   // (caption_raw) and the unmatched case is audited as
   // whatsapp.context.unmatched, so an operator can see on /admin/whatsapp-log
-  // what was sent and by whom. The app has no control yet for attaching a
-  // generic video to its cycle afterwards; the sender resends it with the code.
-  let contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "generic" = ctx.type;
+  // what was sent and by whom. A sender whose number matched a user can attach
+  // the generic video afterwards from her own /uploads (attachUploadAction);
+  // an unattributed one is resent with the code.
+  let contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly" | "generic" = ctx.type;
   let contextId: string | null = null;
+  // Only for a quarterly video (migration 0039).
+  let contextQuarter: 1 | 4 | null = null;
 
   if (ctx.type === "observation_cycle" && ctx.code) {
     const [cycle] = await db
@@ -452,6 +457,27 @@ async function acceptVideoMessage(
         metadata: { msgId: msg.id, caption, reason: "mentor_meeting.invalid_uuid" },
       });
     }
+  } else if (ctx.type === "mentee_quarterly" && ctx.code) {
+    // Q1-<pairing> / Q4-<pairing>: a mentee's baseline or endline video. The
+    // context id is the PAIRING, as on the direct path (uploads/context.ts).
+    const [pairing] = UUID_RE.test(ctx.code)
+      ? await db.select({ id: mentorPairings.id }).from(mentorPairings).where(eq(mentorPairings.id, ctx.code)).limit(1)
+      : [];
+    if (pairing?.id && ctx.quarter) {
+      contextId = pairing.id;
+      contextQuarter = ctx.quarter;
+    } else {
+      contextType = "generic";
+      void recordAudit({
+        action: "whatsapp.context.unmatched",
+        entityType: "video_submission",
+        metadata: {
+          msgId: msg.id,
+          caption,
+          reason: UUID_RE.test(ctx.code) ? "mentee_quarterly.pairing_not_found" : "mentee_quarterly.invalid_uuid",
+        },
+      });
+    }
   } else if (ctx.type === "generic") {
     // Caption didn't match any known prefix — record it so ops can see
     // what teachers are actually sending.
@@ -486,7 +512,7 @@ async function acceptVideoMessage(
   // is still ingested, as 'generic' -- admin-and-sender only -- with the
   // caption and sender kept, so nothing is lost.
   if (contextType !== "generic") {
-    const refusal = await refusalFor(sender, contextType, contextId);
+    const refusal = await refusalFor(sender, contextType, contextId, contextQuarter);
     if (refusal) {
       void recordAudit({
         action: "whatsapp.context.forbidden",
@@ -498,11 +524,13 @@ async function acceptVideoMessage(
           senderUserId: sender?.id ?? null,
           attemptedContextType: contextType,
           attemptedContextId: contextId,
+          ...(contextQuarter ? { attemptedQuarter: contextQuarter } : {}),
           reason: refusal,
         },
       });
       contextType = "generic";
       contextId = null;
+      contextQuarter = null;
     }
   }
 
@@ -548,6 +576,7 @@ async function acceptVideoMessage(
           status: "received",
           contextType,
           contextId,
+          contextQuarter,
           captionRaw: caption,
           whatsappMessageId: msg.id,
           whatsappMediaId: media.mediaId,
@@ -700,11 +729,17 @@ async function resolveSender(from: string): Promise<Actor | null> {
  * (lib/visibility.ts, which lib/authz.ts binds):
  *
  *   observation_cycle  the cycle's teacher or observer, a mentor actively
- *                      paired with its teacher, or an admin
+ *                      paired with its teacher, or an admin -- and not once
+ *                      the cycle is signed off
  *   mentor_meeting     a member of the meeting's pairing, or an admin
+ *   mentee_quarterly   a member of the pairing, or an admin; the Q4 video only
+ *                      once the pairing has reached Q4
  *   teach_back         any registered sender. A teach-back is the uploader's
  *                      own work and has no owning row to check -- the upload
  *                      path accepts it from any signed-in user the same way.
+ *
+ * These mirror the direct upload's assertContextAllowed (uploads/context.ts),
+ * which cannot be called from here: it answers a refusal with notFound().
  *
  * An unrecognised number may attach to nothing: without a sender there is no
  * one to check, and a stranger's clip must not reach a cycle's reviewers or
@@ -712,19 +747,33 @@ async function resolveSender(from: string): Promise<Actor | null> {
  */
 async function refusalFor(
   sender: Actor | null,
-  contextType: "observation_cycle" | "teach_back" | "mentor_meeting",
+  contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly",
   contextId: string | null,
+  quarter: 1 | 4 | null,
 ): Promise<string | null> {
   if (!sender) return "sender_unregistered";
   if (!contextId) return "no_target";
   if (contextType === "teach_back") return null;
   if (contextType === "observation_cycle") {
     const [ok] = await db
-      .select({ id: observationCycles.id })
+      .select({ status: observationCycles.status })
       .from(observationCycles)
       .where(and(eq(observationCycles.id, contextId), await cycleVisibility(db, sender)))
       .limit(1);
-    return ok ? null : "observation_cycle.not_permitted";
+    if (!ok) return "observation_cycle.not_permitted";
+    // Sign-off closes the record: the direct upload refuses it at reservation
+    // (uploads/context.ts), and the cycle's evidence is not reopened for a
+    // video that arrives afterwards.
+    return ok.status === "complete" ? "observation_cycle.signed_off" : null;
+  }
+  if (contextType === "mentee_quarterly") {
+    const [ok] = await db
+      .select({ currentQuarter: mentorPairings.currentQuarter })
+      .from(mentorPairings)
+      .where(and(eq(mentorPairings.id, contextId), await pairingVisibility(db, sender)))
+      .limit(1);
+    if (!ok) return "mentee_quarterly.not_permitted";
+    return quarter === 4 && (ok.currentQuarter ?? 1) < 4 ? "mentee_quarterly.q4_not_open" : null;
   }
   const [ok] = await db
     .select({ id: mentorMeetings.id })

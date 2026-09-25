@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { teachers, subjects, observationEvidence } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
+import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { Fragment } from "react";
 import { loadSubmittedForms, STAGE_FORMS, stageFieldLabel, type StageKind } from "@/lib/observation/forms";
 import { parseNotes } from "@/lib/observation/notes";
@@ -370,7 +371,17 @@ export default async function CycleDetailPage({
                 Signed off — this record is closed and accepts no further evidence.
               </p>
             ) : (
-              <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+              <>
+                <UploadProgress contextType="observation_cycle" contextId={cycleId} />
+                {/* The upload page, bound to this cycle: the phone flow (record
+                    with the camera) and the exact WhatsApp caption live there. */}
+                <Link
+                  href={uploadHref({ contextType: "observation_cycle", contextId: cycleId })}
+                  style={{ display: "inline-block", marginTop: 8, fontSize: 12, color: "var(--indigo)" }}
+                >
+                  Record on a phone, or send by WhatsApp →
+                </Link>
+              </>
             )}
           </div>
         </article>

@@ -73,6 +73,18 @@ export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
  */
 export const UPLOAD_CHUNK_BYTES = 6 * 1024 * 1024;
 
+/**
+ * The cap a direct upload is held to: the programme's configured
+ * videoMaxUploadMb, bounded by what the bucket will accept. beginUpload
+ * enforces it, and /uploads states it -- the card said "Max file 500 MB" as a
+ * literal whatever the setting was.
+ */
+export async function uploadLimitBytes(): Promise<number> {
+  const settings = await getSystemSettings().catch(() => null);
+  const configuredBytes = settings?.videoMaxUploadMb ? settings.videoMaxUploadMb * 1024 * 1024 : MAX_UPLOAD_BYTES;
+  return Math.min(configuredBytes, MAX_UPLOAD_BYTES);
+}
+
 const ALLOWED_VIDEO_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
@@ -115,6 +127,8 @@ export async function beginUpload(opts: {
   contentType: string;
   contextType: UploadContextType;
   contextId?: string | null;
+  /** 1 or 4 for a 'mentee_quarterly' video; null otherwise (migration 0039). */
+  contextQuarter?: number | null;
 }): Promise<BeginUploadResult | { error: string }> {
   const contentType = ALLOWED_VIDEO_TYPES.has(opts.contentType)
     ? opts.contentType
@@ -123,12 +137,7 @@ export async function beginUpload(opts: {
   if (!Number.isFinite(opts.sizeBytes) || opts.sizeBytes <= 0) {
     return { error: "That file looks empty." };
   }
-  // The programme's configured cap, bounded by what the bucket will accept.
-  const settings = await getSystemSettings().catch(() => null);
-  const configuredBytes = settings?.videoMaxUploadMb
-    ? settings.videoMaxUploadMb * 1024 * 1024
-    : MAX_UPLOAD_BYTES;
-  const effectiveMax = Math.min(configuredBytes, MAX_UPLOAD_BYTES);
+  const effectiveMax = await uploadLimitBytes();
 
   if (opts.sizeBytes > effectiveMax) {
     const mb = Math.floor(effectiveMax / (1024 * 1024));
@@ -152,6 +161,7 @@ export async function beginUpload(opts: {
   // inside the window the reconciler leaves it open (packages/db/src/uploads.ts).
   const filename = opts.filename.slice(0, 255);
   const contextId = opts.contextId ?? null;
+  const contextQuarter = opts.contextQuarter ?? null;
   const [unfinished] = await db
     .select({ submissionId: videoSubmissions.id, objectKey: files.objectKey })
     .from(videoSubmissions)
@@ -163,6 +173,8 @@ export async function beginUpload(opts: {
         eq(videoSubmissions.status, "received"),
         eq(videoSubmissions.contextType, opts.contextType),
         contextId ? eq(videoSubmissions.contextId, contextId) : isNull(videoSubmissions.contextId),
+        // The same file picked again for the OTHER quarter is a new video.
+        contextQuarter ? eq(videoSubmissions.contextQuarter, contextQuarter) : isNull(videoSubmissions.contextQuarter),
         eq(files.status, "uploading"),
         eq(files.originalFilename, filename),
         eq(files.sizeBytes, opts.sizeBytes),
@@ -210,6 +222,7 @@ export async function beginUpload(opts: {
       status: "received",
       contextType: opts.contextType,
       contextId,
+      contextQuarter,
       // THE COLUMN THAT HAD NO WRITERS. `submitted_by_user_id` was declared,
       // indexed, read by lib/authz.ts, by the "My uploads" filter and by three
       // dashboard counts -- and written by nothing, anywhere. So the ownership

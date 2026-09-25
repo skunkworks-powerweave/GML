@@ -7,21 +7,17 @@
 // actually landed before anything is queued. Everything in between happens
 // between the browser and Supabase Storage.
 
+import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
+import { db } from "@gml/db";
+import { attachSubmissionToContext } from "@gml/db/uploads";
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessCycle, assertCanAccessPairing } from "@/lib/authz";
+import { actorFrom, isUuid } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
-import { beginUpload, completeUpload, type UploadContextType } from "@/lib/video/upload";
+import { beginUpload, completeUpload } from "@/lib/video/upload";
 import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
-
-const CONTEXT_TYPES: ReadonlySet<string> = new Set([
-  "observation_cycle",
-  "teach_back",
-  "mentor_meeting",
-  "mentee_quarterly",
-  "classroom_session",
-  "generic",
-]);
+import { assertContextAllowed, decodeTarget, lockedSection } from "./context";
 
 export type BeginUploadState =
   | {
@@ -42,50 +38,14 @@ export type BeginUploadState =
     }
   | { ok: false; error: string };
 
-/**
- * Check that this user may attach a video to this context BEFORE reserving
- * anything.
- *
- * contextId arrives from the browser and is attacker-chosen. Without this, a
- * teacher could attach their upload to another teacher's observation cycle --
- * which is not a read of someone else's data but a WRITE into it, and would
- * then appear in that cycle's evidence.
- */
-async function assertContextAllowed(
-  actor: NonNullable<ReturnType<typeof actorFrom>>,
-  contextType: UploadContextType,
-  contextId: string | null,
-): Promise<string | null> {
-  if (contextType === "generic" || !contextId) return null;
-
-  switch (contextType) {
-    case "observation_cycle":
-      // Throws notFound() when the actor has no business here.
-      await assertCanAccessCycle(actor, contextId);
-      return null;
-    case "mentor_meeting":
-    case "mentee_quarterly": {
-      // These carry a pairing id.
-      await assertCanAccessPairing(actor, contextId);
-      return null;
-    }
-    case "teach_back":
-    case "classroom_session":
-      // Not scoped to a per-row owner: a teach-back is the uploader's own work,
-      // and a classroom session is programme-wide reference data. The
-      // submission still records who uploaded it.
-      return null;
-    default:
-      return "Unknown upload context.";
-  }
-}
-
 export async function beginUploadAction(input: {
   filename: string;
   sizeBytes: number;
   contentType: string;
   contextType: string;
   contextId?: string | null;
+  /** 1 or 4, for a mentee's quarterly video; nothing else takes one. */
+  quarter?: number | null;
 }): Promise<BeginUploadState> {
   const session = await auth();
   const actor = actorFrom(session);
@@ -102,14 +62,15 @@ export async function beginUploadAction(input: {
     };
   }
 
-  if (!CONTEXT_TYPES.has(input.contextType)) {
-    return { ok: false, error: "Unknown upload context." };
-  }
-  const contextType = input.contextType as UploadContextType;
-  const contextId = input.contextId?.trim() || null;
-
-  const denied = await assertContextAllowed(actor, contextType, contextId);
-  if (denied) return { ok: false, error: denied };
+  // Who may attach to what, and what each context id means: ./context.ts.
+  // Throws notFound() for a target this user may not see.
+  const allowed = await assertContextAllowed(actor, {
+    contextType: input.contextType,
+    contextId: input.contextId,
+    quarter: input.quarter,
+  });
+  if (!allowed.ok) return { ok: false, error: allowed.error };
+  const { contextType, contextId, quarter } = allowed.target;
 
   const result = await beginUpload({
     userId: session.user.id,
@@ -118,6 +79,7 @@ export async function beginUploadAction(input: {
     contentType: input.contentType,
     contextType,
     contextId,
+    contextQuarter: quarter,
   });
   if ("error" in result) return { ok: false, error: result.error };
 
@@ -128,6 +90,7 @@ export async function beginUploadAction(input: {
     metadata: {
       contextType,
       contextId,
+      quarter,
       sizeBytes: input.sizeBytes,
       // A picked-again file continues its earlier reservation (beginUpload).
       resumed: result.resumed,
@@ -158,8 +121,8 @@ export type CompleteUploadState = { ok: boolean; error?: string; retryable?: boo
 
 export async function completeUploadAction(
   submissionId: string,
-  // The uploader's note. Stored on the observation_evidence row, which is what
-  // the observer reads on the cycle page.
+  // The uploader's note. Kept on the submission and, for a cycle, on the
+  // observation_evidence row the observer reads on the cycle page.
   caption?: string,
 ): Promise<CompleteUploadState> {
   const session = await auth();
@@ -194,4 +157,59 @@ export async function completeUploadAction(
   });
 
   return { ok: true };
+}
+
+/**
+ * Attach one of the uploader's own GENERIC videos to a cycle, a meeting or a
+ * quarterly slot, from its row on /uploads.
+ *
+ * Until /uploads asked what a video was for, every upload made there was
+ * generic, and so is every WhatsApp video whose caption named nothing the
+ * sender may use. Generic is visible to the uploader and administrators only,
+ * and nothing could change it afterwards, so a lesson video filed that way
+ * stayed off its cycle's Evidence and out of its observer's and mentor's
+ * reach for good; the only way out was to send the whole video again.
+ *
+ * The target is a claim from the browser like any other: it goes through the
+ * reservation's own check (assertContextAllowed -- a target this user may not
+ * see is a 404), and the move itself only touches a row that is still
+ * generic and still this user's (attachSubmissionToContext), so a linked video
+ * is never taken off its evidence and nobody else's is moved.
+ *
+ * Only the three places the control offers can be chosen, each by a
+ * well-formed id: a teach-back target reached the uuid column unchecked (a
+ * 500), and would have moved a private video into every mentor's teach-back
+ * queue. And, as every action inside the two gated sections does, it needs
+ * the section unlocked -- the page offers these targets only then.
+ */
+const ATTACHABLE: ReadonlySet<string> = new Set(["observation_cycle", "mentor_meeting", "mentee_quarterly"]);
+
+export async function attachUploadAction(formData: FormData): Promise<void> {
+  const session = await auth();
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+
+  const submissionId = String(formData.get("submissionId") ?? "").trim();
+  const target = decodeTarget(String(formData.get("target") ?? ""));
+  if (!isUuid(submissionId) || !target || !ATTACHABLE.has(target.contextType) || !target.contextId || !isUuid(target.contextId)) {
+    redirect("/uploads?attach=invalid");
+  }
+  if (await lockedSection(actor, target.contextType)) redirect("/uploads?attach=locked");
+
+  const allowed = await assertContextAllowed(actor, target);
+  if (!allowed.ok || !allowed.target.contextId) redirect("/uploads?attach=refused");
+  const { contextType, quarter } = allowed.target;
+  const contextId = allowed.target.contextId;
+
+  const moved = await attachSubmissionToContext(db, { submissionId, userId: actor.id, contextType, contextId, quarter });
+  if (!moved) redirect("/uploads?attach=not_attachable");
+
+  void recordAudit({
+    action: "video.context.attached",
+    entityType: "video_submission",
+    entityId: submissionId,
+    metadata: { contextType, contextId, quarter },
+  });
+  revalidatePath("/uploads");
+  redirect("/uploads?attach=done");
 }
