@@ -158,6 +158,16 @@ export async function repairReapedTranscodes(tx: QueueTx, job: ReapedJob): Promi
  * offered neither Retry nor Drop, which both need a latest attempt that failed.
  * A stranded video without such a row gets one, so the DLQ lists it.
  *
+ * The same goes for a video already 'failed' by a transcode that died with no
+ * failed attempt on record -- the last attempt's row 'cancelled' by a shutdown
+ * whose release() never landed (the reaper then dead-lettered the job), or
+ * never written at all because the ledger refused the insert. Those were
+ * failed without a failed latest row, so the DLQ offered neither verb, and a
+ * direct upload had no way back. Only for a video whose transcode job is DEAD:
+ * a WhatsApp fetch or an upload that failed never reached a transcode, and a
+ * Retry could only transcode bytes that are not there. An operator's
+ * 'dropped' is a decision, and is left alone.
+ *
  * One statement, so every part sees the same snapshot: the insert skips the
  * videos whose running row the first part has just failed. Idempotent, and safe
  * beside a second worker running the same statement.
@@ -168,6 +178,9 @@ export async function repairStrandedTranscodes(): Promise<{ attempts: number; vi
     SELECT 1 FROM jobs
      WHERE jobs.queue = 'transcode' AND jobs.status IN ('queued', 'running')
        AND jobs.dedupe_key = 'submission:' || ${submissionId}::text)`;
+  const latestAttempt = (submissionId: unknown) => sql`COALESCE((
+    SELECT t.status FROM ${transcodeJobs} t WHERE t.video_submission_id = ${submissionId}
+     ORDER BY t.created_at DESC, t.id DESC LIMIT 1), '')`;
   const res = await db.execute<{ attempts: number; videos: number }>(sql`
     WITH attempts AS (
       UPDATE ${transcodeJobs} SET status = 'failed', ended_at = now(), error = ${reason}
@@ -181,11 +194,21 @@ export async function repairStrandedTranscodes(): Promise<{ attempts: number; vi
       INSERT INTO ${transcodeJobs} (video_submission_id, profile, status, ended_at, error)
       SELECT v.id, '480p', 'failed', now(), ${reason} FROM videos v
        WHERE NOT EXISTS (SELECT 1 FROM attempts a WHERE a.video_submission_id = v.id)
-         AND COALESCE((SELECT t.status FROM ${transcodeJobs} t WHERE t.video_submission_id = v.id
-                        ORDER BY t.created_at DESC, t.id DESC LIMIT 1), '') <> 'failed'
+         AND ${latestAttempt(sql`v.id`)} <> 'failed'
+      RETURNING id
+    ), unrecorded AS (
+      INSERT INTO ${transcodeJobs} (video_submission_id, profile, status, ended_at, error)
+      SELECT v.id, '480p', 'failed', now(), COALESCE(v.processing_log, 'failed with no attempt on record')
+        FROM ${videoSubmissions} v
+       WHERE v.status = 'failed' AND ${noLiveJob(sql`v.id`)}
+         AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.video_submission_id = v.id)
+         AND EXISTS (SELECT 1 FROM jobs WHERE jobs.queue = 'transcode' AND jobs.status = 'dead'
+                       AND jobs.dedupe_key = 'submission:' || v.id::text)
+         AND ${latestAttempt(sql`v.id`)} NOT IN ('failed', 'dropped')
       RETURNING id
     )
-    SELECT (SELECT count(*) FROM attempts)::int AS attempts, (SELECT count(*) FROM videos)::int AS videos
+    SELECT (SELECT count(*) FROM attempts)::int AS attempts,
+           ((SELECT count(*) FROM videos) + (SELECT count(*) FROM unrecorded))::int AS videos
   `);
   const [row] = (res as unknown as { rows: { attempts: number; videos: number }[] }).rows ?? [];
   return { attempts: row?.attempts ?? 0, videos: row?.videos ?? 0 };
@@ -387,10 +410,12 @@ export async function transcode480p(
       // has for exactly this.
       console.warn(`[transcode] ${videoSubmissionId} interrupted by worker shutdown; handing it back`);
       if (jobRowId) {
+        // Only while it is still running: a row the reaper has already failed
+        // (its lease lapsed while this handler lived on) must stay failed.
         await db
           .update(transcodeJobs)
           .set({ status: "cancelled", endedAt: new Date(), error: "interrupted: the worker was shut down" })
-          .where(eq(transcodeJobs.id, jobRowId))
+          .where(and(eq(transcodeJobs.id, jobRowId), eq(transcodeJobs.status, "running")))
           .catch(() => undefined);
       }
       await db

@@ -214,6 +214,82 @@ test(
       const v = await video(w, sub);
       assert.equal(v.status, "failed", `a dead job's video said '${v.status}' -- "Transcoding in progress", forever`);
       assert.match(v.processing_log ?? "", /read-only/);
+
+      // W3-53: once the ledger can be written again, the failure is recorded
+      // where /admin/transcode-jobs looks -- it listed nothing for this video,
+      // so a direct upload had no way back at all.
+      await worker.kill();
+      await w.q(`DROP TRIGGER refuse_ledger ON ${w.schema}.transcode_jobs`);
+      const next = w.spawnWorker(); // housekeeping runs at startup
+      const recorded = await waitFor(async () => (await ledger(w, sub)).length > 0, 30_000);
+      assert.ok(recorded, `still no ledger row for the failed video: ${await state(w, sub, jobId)}\n${next.output()}`);
+      const rows = await ledger(w, sub);
+      assert.deepEqual(rows.map((r) => r.status), ["failed"]);
+      assert.match(rows[0]!.error ?? "", /read-only/, "the row should say why the video failed");
+      const { verbsFor } = await dlqState();
+      assert.deepEqual(
+        verbsFor(
+          { jobId: rows[0]!.id, status: rows[0]!.status },
+          { status: (await video(w, sub)).status, latestAttemptId: rows[0]!.id, liveJob: null },
+        ),
+        { retry: true, drop: true },
+      );
+    });
+  },
+);
+
+test(
+  "W3-53: a last attempt cut short by a shutdown whose hand-back was lost still leaves the DLQ something to act on",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      // Two attempts failed, then the third was interrupted by a shutdown: its
+      // row says 'cancelled' and the video 'queued' -- but release() never
+      // landed, so the job is still 'running' on its last attempt, and the
+      // reaper dead-letters it.
+      const sub = await seedSubmission(w, "queued");
+      for (const [status, ago] of [["failed", 30], ["failed", 20], ["cancelled", 10]] as const) {
+        await w.q(
+          `INSERT INTO ${w.schema}.transcode_jobs (video_submission_id, profile, status, ended_at, error, created_at)
+             VALUES ($1, '480p', $2, now() - make_interval(mins => $3), 'earlier', now() - make_interval(mins => $3))`,
+          [sub, status, ago],
+        );
+      }
+      const jobId = await seedJob(w, sub, { status: "running", attempts: 3, maxAttempts: 3 });
+      // Controls. An operator dropped this one: 'dropped' is a decision, and
+      // nothing may re-open it...
+      const dropped = await seedSubmission(w, "failed");
+      await w.q(
+        `INSERT INTO ${w.schema}.transcode_jobs (video_submission_id, profile, status, ended_at) VALUES ($1, '480p', 'dropped', now())`,
+        [dropped],
+      );
+      const droppedJob = await seedJob(w, dropped, { status: "queued", attempts: 1, maxAttempts: 3 });
+      await w.q(`UPDATE ${w.schema}.jobs SET status = 'dead', completed_at = now() WHERE id = $1`, [droppedJob]);
+      // ...and this one never had a transcode at all (a WhatsApp fetch that
+      // failed): a Retry could only transcode bytes that were never fetched.
+      const neverFetched = await seedSubmission(w, "failed");
+
+      const worker = w.spawnWorker();
+      const settled = await waitFor(async () => {
+        const rows = await ledger(w, sub);
+        return (await job(w, jobId)).status === "dead" && rows[rows.length - 1]!.status === "failed";
+      }, 30_000);
+      assert.ok(settled, `after the reaper ran: ${await state(w, sub, jobId)}\n${worker.output()}`);
+
+      assert.equal((await video(w, sub)).status, "failed");
+      const rows = await ledger(w, sub);
+      assert.deepEqual(rows.map((r) => r.status), ["failed", "failed", "cancelled", "failed"]);
+      const latest = rows[rows.length - 1]!;
+      assert.match(latest.error ?? "", /attempts exhausted/);
+      const { verbsFor } = await dlqState();
+      // It offered neither: both verbs need the latest attempt to be 'failed'.
+      assert.deepEqual(
+        verbsFor({ jobId: latest.id, status: latest.status }, { status: "failed", latestAttemptId: latest.id, liveJob: null }),
+        { retry: true, drop: true },
+      );
+
+      assert.deepEqual((await ledger(w, dropped)).map((r) => r.status), ["dropped"], "an operator's Drop was undone");
+      assert.deepEqual(await ledger(w, neverFetched), [], "a video no transcode ever ran for was given an attempt");
     });
   },
 );
