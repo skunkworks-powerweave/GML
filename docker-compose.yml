@@ -47,8 +47,9 @@ name: gml-lms
 # EC2 box that is a slow disk-fill: the worker logs an ffmpeg line per job and
 # Caddy an access line per request, forever, until / is full -- at which point
 # Postgres connections, the next backup and the next deploy all fail at once,
-# for a reason that looks nothing like "log files". 3x10MB per service is 120MB
-# worst case across the stack.
+# for a reason that looks nothing like "log files". 3x10MB per service, and
+# 5x20MB for caddy, whose access log is the only per-request record (see the
+# caddy service): 190MB worst case across the stack.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -303,7 +304,13 @@ services:
     restart: unless-stopped
     # Same weight as app, for the same reason: every request is TLS here first.
     cpu_shares: 4096
-    logging: *default-logging
+    # More than the default: this is where the Caddyfile's access log goes, one
+    # JSON line (about 1 KB) per request, and it is the only record of them.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     ports:
       - "80:80"
       - "443:443"
@@ -311,11 +318,10 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set for Let's Encrypt}
-      # The CSP has to name the exact Supabase project origin: the browser
-      # uploads to Storage and fetches HLS segments from it directly. Falls back
-      # to a wildcard over supabase.co, which works but is looser than it needs
-      # to be -- set this to your project origin in .env.
-      SUPABASE_ORIGIN: ${NEXT_PUBLIC_SUPABASE_URL:-https://*.supabase.co}
+      # No SUPABASE_ORIGIN here any more. It was passed "because the CSP has to
+      # name the exact Supabase project origin", but docker/Caddyfile never read
+      # it: the CSP is issued per request by apps/web/src/proxy.ts, from
+      # NEXT_PUBLIC_SUPABASE_URL in the app container.
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
