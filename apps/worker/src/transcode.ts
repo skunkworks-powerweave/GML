@@ -47,7 +47,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import { boundedError, PermanentJobError, type QueueTx, type ReapedJob } from "@gml/db/queue";
@@ -138,7 +138,8 @@ export async function repairReapedTranscodes(tx: QueueTx, job: ReapedJob): Promi
       and(
         eq(videoSubmissions.id, videoSubmissionId),
         // Never over a result: a 'ready' video whose succeed() write was lost
-        // (see runJob) stays ready.
+        // (see runJob) is left ready here, and the requeued re-run finds it
+        // ready and does nothing (transcode480p).
         inArray(videoSubmissions.status, job.dead ? ["queued", "transcoding"] : ["transcoding"]),
       ),
     );
@@ -244,6 +245,20 @@ export async function transcode480p(
   let jobRowId: string | undefined;
   let workDir: string | undefined;
   try {
+    // A second delivery of a transcode that already finished: its succeed()
+    // write was lost (see runJob), and the reaper requeued the job. This used
+    // to announce 'transcoding' over the playable video -- the playlist route
+    // refuses anything not 'ready' -- and, if the re-run failed, mark it
+    // failed. No producer enqueues a transcode for a ready video on purpose.
+    const [current] = await db
+      .select({ status: videoSubmissions.status, hlsMasterKey: videoSubmissions.hlsMasterKey })
+      .from(videoSubmissions)
+      .where(eq(videoSubmissions.id, videoSubmissionId));
+    if (current?.status === "ready" && current.hlsMasterKey) {
+      console.warn(`[transcode] ${videoSubmissionId} is ready already (a re-delivered job); nothing to do`);
+      return;
+    }
+
     // An attempt killed before this one left its row 'running'. The reaper
     // closes those as it requeues them; this catches any it could not (rows
     // from before it did, a drain that ran out of time).
@@ -444,7 +459,9 @@ export async function transcode480p(
           ? { status: "failed", processingLog: msg }
           : { status: "queued", processingLog: `attempt failed, retrying: ${msg}` },
       )
-      .where(eq(videoSubmissions.id, videoSubmissionId))
+      // Never over a result: a video this attempt made ready before a later
+      // write threw (the ledger's 'succeeded') is playable, and stays so.
+      .where(and(eq(videoSubmissions.id, videoSubmissionId), ne(videoSubmissions.status, "ready")))
       .catch(() => undefined);
     throw err;
   } finally {

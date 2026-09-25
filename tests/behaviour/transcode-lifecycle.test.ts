@@ -358,6 +358,49 @@ ${worker.output()}`,
   },
 );
 
+// ── W3-56 ────────────────────────────────────────────────────────────────────
+
+test(
+  "W3-56: a transcode re-delivered after its success leaves the ready video ready, and does no work",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      // Attempt 2 of 3 made the video ready and recorded its ledger row, then
+      // succeed() could not be written (runJob gives up after a few tries), so
+      // the job was left 'running' with its lease lapsing.
+      const sub = await seedSubmission(w, "queued");
+      const key = `hls/${sub}/master.m3u8`;
+      await w.q(`UPDATE ${w.schema}.video_submissions SET status = 'ready', hls_master_key = $2, verified_at = now() WHERE id = $1`, [sub, key]);
+      await w.q(
+        `INSERT INTO ${w.schema}.transcode_jobs (video_submission_id, profile, status, started_at, ended_at)
+           VALUES ($1, '480p', 'succeeded', now() - interval '20 minutes', now() - interval '18 minutes')`,
+        [sub],
+      );
+      const jobId = await seedJob(w, sub, { status: "running", attempts: 2, maxAttempts: 3 });
+
+      // The reaper requeues it, and the re-run is the job's LAST attempt. Its
+      // Storage is a closed port: a re-run that tries to transcode fails, on
+      // its final attempt.
+      const worker = w.spawnWorker();
+      const settled = await waitFor(async () => {
+        const j = await job(w, jobId);
+        return j.attempts === 3 && j.status !== "running" && j.status !== "queued";
+      }, 30_000);
+      assert.ok(settled, `the re-delivered job never ran: ${await state(w, sub, jobId)}\n${worker.output()}`);
+
+      const [v] = await w.q<{ status: string; hls_master_key: string | null }>(
+        `SELECT status, hls_master_key FROM ${w.schema}.video_submissions WHERE id = $1`,
+        [sub],
+      );
+      // It used to go 'transcoding' (the playlist route answers 409 for that)
+      // and then 'failed': a playable video, un-readied by a second delivery.
+      assert.deepEqual(v, { status: "ready", hls_master_key: key }, `state: ${await state(w, sub, jobId)}`);
+      assert.equal((await job(w, jobId)).status, "succeeded");
+      assert.deepEqual((await ledger(w, sub)).map((r) => r.status), ["succeeded"], "a re-delivery is not an attempt");
+    });
+  },
+);
+
 // ── F09 ──────────────────────────────────────────────────────────────────────
 
 test(
