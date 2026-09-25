@@ -52,6 +52,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
 import { startResumableUpload } from "@/lib/video/tus-upload";
+import { confirmUpload } from "@/lib/video/confirm-upload";
 
 type MobileUploadRunnerProps = {
   /** Programme WhatsApp number (E.164, no +) for the fallback reminder.
@@ -171,6 +172,9 @@ export function MobileUploadRunner({
   // cancellation token below.
   const mountedRef = useRef(true);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The submission whose bytes are stored but whose completion the server has
+  // not confirmed. While set, Retry confirms it again instead of re-uploading.
+  const unconfirmedRef = useRef<string | null>(null);
 
   function openPicker(id: string) {
     if (id === "record") cameraRef.current?.click();
@@ -236,33 +240,7 @@ export function MobileUploadRunner({
         onSuccess: () => {
           if (!mountedRef.current) return;
           setProgress(100);
-          // Confirm server-side before claiming success. The old code declared
-          // done the moment tus finished, with no row written anywhere.
-          // The caption travels with the completion, not the filename.
-          void completeUploadAction(reservation.submissionId, caption).then((res) => {
-            if (!mountedRef.current) return;
-            if (!res.ok) {
-              setErrorMsg(res.error ?? "Upload could not be confirmed.");
-              setStep("failed");
-              return;
-            }
-            setStep("done");
-            // Spec 149 — hold the redirect behind mountedRef and a stored
-            // timer handle so an unmount between completion and the delay
-            // cancels it, and a router teardown surfaces a retry rather than
-            // leaving the user on a dead success screen.
-            redirectTimerRef.current = setTimeout(() => {
-              redirectTimerRef.current = null;
-              if (!mountedRef.current) return;
-              try {
-                router.push("/uploads");
-              } catch (err) {
-                const msg = err instanceof Error ? err.message : "Redirect failed";
-                setErrorMsg(`${msg} — tap Back to return to My Uploads`);
-                setStep("failed");
-              }
-            }, 1200);
-          });
+          void confirm(reservation.submissionId);
         },
       });
       uploadRef.current = handle;
@@ -271,6 +249,51 @@ export function MobileUploadRunner({
       setErrorMsg(msg);
       setStep("failed");
     }
+  }
+
+  // Confirm server-side before claiming success. The old code declared done
+  // the moment tus finished, with no row written anywhere. The caption travels
+  // with the completion, not the filename.
+  //
+  // This was `void completeUploadAction(...).then(...)` with no catch: a
+  // dropped connection on that last POST left the screen at 100% for good,
+  // and the only Retry restarted the whole upload of a file already stored.
+  // A network failure is now retried (lib/video/confirm-upload), then shown,
+  // and Retry confirms again.
+  async function confirm(submissionId: string) {
+    const res = await confirmUpload(() => completeUploadAction(submissionId, caption));
+    if (!mountedRef.current) return;
+    if (!res.ok) {
+      unconfirmedRef.current = res.retryable ? submissionId : null;
+      setErrorMsg(res.error);
+      setStep("failed");
+      return;
+    }
+    unconfirmedRef.current = null;
+    setStep("done");
+    // Spec 149 — hold the redirect behind mountedRef and a stored
+    // timer handle so an unmount between completion and the delay
+    // cancels it, and a router teardown surfaces a retry rather than
+    // leaving the user on a dead success screen.
+    redirectTimerRef.current = setTimeout(() => {
+      redirectTimerRef.current = null;
+      if (!mountedRef.current) return;
+      try {
+        router.push("/uploads");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Redirect failed";
+        setErrorMsg(`${msg} — tap Back to return to My Uploads`);
+        setStep("failed");
+      }
+    }, 1200);
+  }
+
+  function retry() {
+    const pending = unconfirmedRef.current;
+    if (!pending) return void startUpload();
+    setStep("uploading");
+    setErrorMsg(null);
+    void confirm(pending);
   }
 
   function cancelUpload() {
@@ -785,7 +808,7 @@ export function MobileUploadRunner({
             {file ? (
               <button
                 type="button"
-                onClick={startUpload}
+                onClick={retry}
                 style={{
                   minHeight: 48,
                   padding: "12px 18px",

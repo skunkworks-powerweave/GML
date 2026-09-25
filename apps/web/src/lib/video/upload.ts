@@ -296,9 +296,16 @@ export async function completeUpload(opts: {
     return { ok: true, submissionId: row.id };
   }
 
-  const stat = opts.stat
-    ? await opts.stat(BUCKETS.videosOriginal, row.objectKey)
-    : await storage.stat(BUCKETS.videosOriginal, row.objectKey);
+  // A Storage error is not a missing file: statObject throws for it, and the
+  // browser is told to retry the confirmation, not to upload again.
+  let stat: { size: number } | null;
+  try {
+    stat = opts.stat
+      ? await opts.stat(BUCKETS.videosOriginal, row.objectKey)
+      : await storage.stat(BUCKETS.videosOriginal, row.objectKey);
+  } catch {
+    return { ok: false, error: "storage_unavailable", status: 503 };
+  }
   if (!stat) {
     return { ok: false, error: "object_missing", status: 409 };
   }
