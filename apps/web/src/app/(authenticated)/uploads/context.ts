@@ -8,11 +8,13 @@ import "server-only";
 // pairing a link points at, so the page and the reservation cannot disagree
 // about who may upload where.
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull, lte, ne } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentorMeetings } from "@gml/db/schema";
+import { mentorMeetings, mentorPairings, mentors, observationCycles, teachers } from "@gml/db/schema";
 import { notFound } from "next/navigation";
+import { hasAnyRole } from "@gml/shared/auth/roles";
 import { assertCanAccessCycle, assertCanAccessPairing, isUuid, type Actor } from "@/lib/authz";
+import { activeGrant, isAdmin, mentorshipAccess, observationAccess } from "@/lib/visibility";
 import type { UploadContextType } from "@/lib/video/upload";
 
 export const UPLOAD_CONTEXT_TYPES: ReadonlySet<string> = new Set<UploadContextType>([
@@ -85,7 +87,8 @@ export async function assertContextAllowed(
       const cycle = await assertCanAccessCycle(actor, contextId);
       // Sign-off is the locking transition: the cycle page stops offering an
       // upload, and this refuses one that arrives anyway, before anything is
-      // reserved.
+      // reserved. (One reserved before sign-off and finished after it gets no
+      // evidence row: packages/db/src/uploads.ts, linkSubmissionToContext.)
       if (cycle.status === "complete") {
         return { ok: false, error: "This cycle has been signed off. Its record is closed, so no more evidence can be added." };
       }
@@ -129,4 +132,211 @@ export async function assertContextAllowed(
       // submission still records who uploaded it.
       return { ok: true, target: { contextType, contextId, quarter: null } };
   }
+}
+
+// ── What the /uploads page shows ─────────────────────────────────────────────
+//
+// The names below -- a cycle's code and topic, who is on a pairing, when they
+// met -- are observation and mentorship data, and /uploads sits outside both
+// gated sections. So, like every other surface outside them (lib/visibility.ts
+// observationAccess / mentorshipAccess), nothing of a section is read until its
+// password has been given: the page shows "unlock" instead.
+
+export type GatedSection = "observation" | "mentorship";
+
+const SECTION_OF: Partial<Record<UploadContextType, GatedSection>> = {
+  observation_cycle: "observation",
+  mentor_meeting: "mentorship",
+  mentee_quarterly: "mentorship",
+};
+
+export type TargetDescription = {
+  /** "Lesson video for OBS-2026-009 · Fractions" */
+  title: string;
+  /** Who will see it, and where. */
+  audience: string;
+  /**
+   * What a WhatsApp message should carry as its caption to reach the same
+   * place, or null when WhatsApp cannot deliver it there.
+   */
+  whatsappText: string | null;
+};
+
+const QUARTER_NAME: Record<VideoQuarter, string> = { 1: "Q1 baseline", 4: "Q4 endline" };
+
+function dateIn(d: Date): string {
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
+}
+
+/** "OBS-2026-009", however the code was stored: the form the webhook reads. */
+function cycleCaption(code: string): string {
+  return `OBS-${code.replace(/^OBS-/i, "")}`;
+}
+
+/**
+ * Say what an authorised target is, for the page. Call it only with a target
+ * assertContextAllowed returned, so a gate answer never confirms that a row
+ * exists to someone who may not see it.
+ */
+export async function describeUploadTarget(
+  actor: Actor,
+  target: UploadTarget,
+): Promise<{ locked: GatedSection } | { locked: null; description: TargetDescription }> {
+  const section = SECTION_OF[target.contextType];
+  if (section && !(await activeGrant(db, actor.id, section))) return { locked: section };
+
+  const described = (description: TargetDescription) => ({ locked: null, description }) as const;
+  const id = target.contextId;
+  switch (target.contextType) {
+    case "observation_cycle": {
+      const [c] = await db
+        .select({ code: observationCycles.code, topic: observationCycles.topic, teacherName: teachers.fullName })
+        .from(observationCycles)
+        .innerJoin(teachers, eq(teachers.id, observationCycles.teacherId))
+        .where(eq(observationCycles.id, id!))
+        .limit(1);
+      return described({
+        title: `Lesson video for ${c!.code}${c!.topic ? ` · ${c!.topic}` : ""}${actor.role === "teacher" ? "" : ` · ${c!.teacherName}`}`,
+        audience: "It goes on the cycle's Evidence, where the teacher, the observer and the mentor review it.",
+        whatsappText: cycleCaption(c!.code),
+      });
+    }
+    case "mentor_meeting": {
+      const [m] = await db
+        .select({ scheduledAt: mentorMeetings.scheduledAt, mentorName: mentors.name, teacherName: teachers.fullName })
+        .from(mentorMeetings)
+        .innerJoin(mentorPairings, eq(mentorPairings.id, mentorMeetings.pairingId))
+        .innerJoin(mentors, eq(mentors.id, mentorPairings.mentorId))
+        .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
+        .where(eq(mentorMeetings.id, id!))
+        .limit(1);
+      return described({
+        title: `Recording of the meeting on ${dateIn(m!.scheduledAt)} · ${m!.mentorName} ↔ ${m!.teacherName}`,
+        audience: "It goes on that meeting in the pairing, for the mentor and the mentee.",
+        whatsappText: `MM-${id}`,
+      });
+    }
+    case "mentee_quarterly": {
+      const [p] = await db
+        .select({ mentorName: mentors.name, teacherName: teachers.fullName })
+        .from(mentorPairings)
+        .innerJoin(mentors, eq(mentors.id, mentorPairings.mentorId))
+        .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
+        .where(eq(mentorPairings.id, id!))
+        .limit(1);
+      return described({
+        title: `${QUARTER_NAME[target.quarter!]} video · ${p!.mentorName} ↔ ${p!.teacherName}`,
+        audience: "It goes on the pairing page, for the mentor and the mentee.",
+        // No WhatsApp caption routes a quarterly video to its pairing.
+        whatsappText: null,
+      });
+    }
+    case "teach_back":
+      return described({
+        title: "Teach-back video",
+        audience: "Mentors and observers review teach-backs.",
+        whatsappText: id ? `TB-${id}` : null,
+      });
+    case "classroom_session":
+      return described({ title: "Classroom session video", audience: "Only you and programme administrators can see it.", whatsappText: null });
+    case "generic":
+      return described({
+        title: "Not linked to a cycle, meeting or pairing",
+        audience: "Only you and programme administrators can see it.",
+        whatsappText: "OBS-",
+      });
+  }
+}
+
+export type UploadOption = { href: string; title: string; detail: string };
+
+export function uploadHref(t: { contextType: string; contextId?: string | null; quarter?: number | null }): string {
+  const q = new URLSearchParams({ context: t.contextType });
+  if (t.contextId) q.set("contextId", t.contextId);
+  if (t.quarter) q.set("quarter", String(t.quarter));
+  return `/uploads?${q.toString()}`;
+}
+
+/**
+ * The user's own open places a video can go, for the /uploads chooser:
+ *
+ *   teacher   her cycles not yet signed off; her Q1 video (Q4 in the last
+ *             quarter) for each active pairing
+ *   observer  the cycles she observes, not yet signed off
+ *   mentor    his mentees' open cycles; his past meetings without a recording
+ *
+ * Administrators get none: they arrive from the cycle or pairing they are
+ * looking at, and a list of every open cycle in the programme is not a choice.
+ * `locked` names each section whose password has not been given.
+ */
+export async function openUploadContexts(actor: Actor): Promise<{ options: UploadOption[]; locked: GatedSection[] }> {
+  const options: UploadOption[] = [];
+  const locked: GatedSection[] = [];
+  if (isAdmin(actor)) return { options, locked };
+
+  if (hasAnyRole(actor.role, ["teacher", "observer", "mentor"])) {
+    const access = await observationAccess(db, actor);
+    if (!access.granted) locked.push("observation");
+    else {
+      const cycles = await db
+        .select({ id: observationCycles.id, code: observationCycles.code, topic: observationCycles.topic, status: observationCycles.status, teacherName: teachers.fullName })
+        .from(observationCycles)
+        .innerJoin(teachers, eq(teachers.id, observationCycles.teacherId))
+        .where(and(ne(observationCycles.status, "complete"), access.where))
+        .orderBy(desc(observationCycles.scheduledAt))
+        .limit(20);
+      for (const c of cycles) {
+        options.push({
+          href: uploadHref({ contextType: "observation_cycle", contextId: c.id }),
+          title: `Lesson video for ${c.code}${c.topic ? ` · ${c.topic}` : ""}`,
+          detail: actor.role === "teacher" ? `Cycle ${c.status.replace(/_/g, " ")}` : c.teacherName,
+        });
+      }
+    }
+  }
+
+  if (hasAnyRole(actor.role, ["teacher", "mentor"])) {
+    const access = await mentorshipAccess(db, actor);
+    if (!access.granted) locked.push("mentorship");
+    else if (actor.role === "teacher") {
+      const pairings = await db
+        .select({ id: mentorPairings.id, currentQuarter: mentorPairings.currentQuarter, mentorName: mentors.name })
+        .from(mentorPairings)
+        .innerJoin(mentors, eq(mentors.id, mentorPairings.mentorId))
+        .where(and(eq(mentorPairings.status, "active"), access.where));
+      for (const p of pairings) {
+        const quarter = (p.currentQuarter ?? 1) === 4 ? 4 : (p.currentQuarter ?? 1) === 1 ? 1 : null;
+        if (!quarter) continue;
+        options.push({
+          href: uploadHref({ contextType: "mentee_quarterly", contextId: p.id, quarter }),
+          title: `${QUARTER_NAME[quarter]} video for your mentor`,
+          detail: p.mentorName,
+        });
+      }
+    } else {
+      const meetings = await db
+        .select({ id: mentorMeetings.id, scheduledAt: mentorMeetings.scheduledAt, teacherName: teachers.fullName })
+        .from(mentorMeetings)
+        .innerJoin(mentorPairings, eq(mentorPairings.id, mentorMeetings.pairingId))
+        .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
+        .where(
+          and(
+            eq(mentorPairings.status, "active"),
+            isNull(mentorMeetings.recordingVideoId),
+            lte(mentorMeetings.scheduledAt, new Date()),
+            access.where,
+          ),
+        )
+        .orderBy(desc(mentorMeetings.scheduledAt))
+        .limit(10);
+      for (const m of meetings) {
+        options.push({
+          href: uploadHref({ contextType: "mentor_meeting", contextId: m.id }),
+          title: `Recording of your meeting on ${dateIn(m.scheduledAt)}`,
+          detail: m.teacherName,
+        });
+      }
+    }
+  }
+  return { options, locked };
 }

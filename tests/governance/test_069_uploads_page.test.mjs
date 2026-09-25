@@ -58,7 +58,9 @@ test("069 — ports the three-card explainer (WhatsApp PRIMARY + browser + recor
   //
   // What is pinned now is that the card is built from the env value and that
   // no literal phone number survives in the source.
-  assert.match(src, /function explainerCards\(whatsappPhone: string \| null\)/);
+  // (It also takes the caption WhatsApp should carry for the page's target, so
+  // only the leading parameter is pinned.)
+  assert.match(src, /function explainerCards\(whatsappPhone: string \| null[,)]/);
   assert.match(src, /https:\/\/wa\.me\/\$\{dialable\}/);
   assert.doesNotMatch(
     src,
@@ -69,10 +71,17 @@ test("069 — ports the three-card explainer (WhatsApp PRIMARY + browser + recor
   assert.match(src, /2px solid var\(--ink\)/);
 });
 
-test("069 — hosts the <UploadProgress /> tray with contextType=generic", () => {
+// Was "with contextType=generic", pinning `<UploadProgress contextType="generic" />`
+// -- the defect itself (F18): every upload from /uploads was linked to nothing,
+// so the lesson video the teacher's dashboard to-do sends her here to upload
+// was invisible to her observer and mentor. The tray now takes the context the
+// page resolved; tests/behaviour/uploads-context-page.test.ts renders the page
+// and reads what it is bound to.
+test("069 — hosts the <UploadProgress /> tray, bound to what the page says the video is for", () => {
   const src = read(PAGE);
   assert.match(src, /import\s+\{\s*UploadProgress\s*\}\s+from\s+"@\/components\/video\/UploadProgress"/);
-  assert.match(src, /<UploadProgress\s+contextType="generic"\s*\/>/);
+  assert.match(src, /<UploadProgress[\s\S]*?contextType=\{target\.contextType\}/);
+  assert.doesNotMatch(src.replace(/\/\/.*$/gm, ""), /<UploadProgress\s+contextType="generic"/);
 });
 
 test("069 — table shows the six prototype columns + reuses the STATE_LABEL idiom", () => {

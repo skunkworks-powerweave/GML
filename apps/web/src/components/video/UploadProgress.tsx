@@ -34,6 +34,8 @@ type UploadProgressProps = {
     | "classroom_session"
     | "generic";
   contextId?: string;
+  /** 1 or 4, for a mentee's quarterly video (contextType 'mentee_quarterly'). */
+  quarter?: 1 | 4 | null;
   onComplete?: (videoSubmissionId: string) => void;
 };
 
@@ -49,7 +51,7 @@ type UploadState = {
   handle?: UploadHandle;
 };
 
-export function UploadProgress({ contextType, contextId, onComplete }: UploadProgressProps) {
+export function UploadProgress({ contextType, contextId, quarter, onComplete }: UploadProgressProps) {
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
@@ -115,6 +117,7 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
         contentType: file.type || "video/mp4",
         contextType,
         contextId: contextId ?? null,
+        quarter: quarter ?? null,
       });
     } catch {
       // The request itself failed (offline, or the server threw). Nothing was
@@ -159,6 +162,12 @@ export function UploadProgress({ contextType, contextId, onComplete }: UploadPro
 
   return (
     <div
+      // What a reservation from this tray is for, readable from the markup:
+      // the page's promise ("this video is for ...") and the tray's request
+      // are the same values.
+      data-upload-context={contextType}
+      data-upload-context-id={contextId ?? ""}
+      data-upload-quarter={quarter ?? ""}
       style={{
         border: "1px solid var(--line)",
         borderRadius: "var(--r-3)",
