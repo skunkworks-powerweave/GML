@@ -9,10 +9,10 @@ import { ADMIN_ENTITIES } from "@/admin/registry";
 import { exportColumnKeys } from "@/admin/export-columns";
 import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
-import { eq, getTableColumns } from "drizzle-orm";
+import { eq, getTableColumns, inArray } from "drizzle-orm";
 import { describeWriteError } from "@/admin/db-errors";
 import { MutationRefused, updateAudit } from "@/admin/audit-image";
-import { coerceFormValues, unwrapShape } from "@/admin/zod-shape";
+import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 
@@ -27,6 +27,9 @@ const IMPORT_AUDITED_UPDATES = 200;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Ids per lookup of the rows a file names (a bind parameter each). */
+const ID_LOOKUP_CHUNK = 10_000;
+
 function getEntityOrThrow(slug: string) {
   const e = ADMIN_ENTITIES[slug];
   if (!e) throw new Error(`Unknown admin entity: ${slug}`);
@@ -35,6 +38,31 @@ function getEntityOrThrow(slug: string) {
 
 function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
   return entity.mutateRoles ?? entity.readRoles;
+}
+
+/**
+ * The stored row's values for the form fields a file does NOT carry, so an
+ * update is validated as the whole row it will become. A null is passed on
+ * only where the field takes null; otherwise it is left out, as an untouched
+ * input would be.
+ */
+function storedFormValues(
+  fields: readonly string[],
+  shape: ReturnType<typeof unwrapShape>,
+  before: Record<string, unknown>,
+  carried: ReadonlySet<string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (carried.has(field)) continue;
+    const v = before[field];
+    if (v === null || v === undefined) {
+      if (acceptsNull(shape[field])) out[field] = null;
+    } else {
+      out[field] = v;
+    }
+  }
+  return out;
 }
 
 /**
@@ -132,7 +160,8 @@ export async function exportCsv(slug: string): Promise<Response> {
 
 /**
  * Import CSV — parses raw CSV string, validates rows via formSchema, bulk-inserts.
- * Returns a summary: { ok, inserted, skipped, errors }.
+ * A row whose `id` names an existing row updates the columns the file carries.
+ * Returns a summary: { ok, inserted, updated, skipped, errors }.
  */
 export async function importCsv(slug: string, csv: string): Promise<{
   ok: boolean;
@@ -164,24 +193,77 @@ export async function importCsv(slug: string, csv: string): Promise<{
   const errors: { row: number; message: string }[] = [];
   // Each valid row keeps its spreadsheet line, so a refusal from the database
   // can be reported against it.
-  const validRows: Array<{ line: number; data: Record<string, unknown>; id?: string }> = [];
+  const validRows: Array<{ line: number; data: Record<string, unknown>; id?: string; update?: boolean }> = [];
   const shape = unwrapShape(entity.formSchema);
   const hasIdColumn = "id" in (getTableColumns(entity.table) as Record<string, unknown>);
+  const idCol = (entity.table as unknown as { id: unknown }).id;
+  // The columns this file carries. An update writes those and nothing else.
+  const carried = new Set(parsed.meta.fields ?? []);
+
+  // AN `id` MEANS "THIS ROW". The export writes every row's id first
+  // (admin/export-columns.ts), and the import used to ignore it and only ever
+  // INSERT -- so the ordinary spreadsheet round trip (export the roster, fix
+  // phone numbers in Excel, import it back) made a second copy of every row,
+  // updated nothing and reported ok:true. A row whose id exists is now updated
+  // in place; a row with an unknown id is inserted under that id, so
+  // importing the same file twice does not duplicate it either. The rows the
+  // file names are read first: an update is checked against the row it
+  // changes (below).
+  const idOf = (raw: Record<string, string>) =>
+    hasIdColumn ? raw.id?.trim().toLowerCase() || undefined : undefined;
+  const named = [...new Set(parsed.data.map(idOf).filter((id): id is string => Boolean(id && UUID_RE.test(id))))];
+  const existing = new Map<string, Record<string, unknown>>();
+  for (let start = 0; start < named.length; start += ID_LOOKUP_CHUNK) {
+    const found = (await db
+      .select()
+      .from(entity.table as never)
+      .where(inArray(idCol as never, named.slice(start, start + ID_LOOKUP_CHUNK) as never[]))) as Array<
+      Record<string, unknown>
+    >;
+    for (const r of found) existing.set(String(r.id), r);
+  }
 
   for (const [i, raw] of parsed.data.entries()) {
     const line = i + 2; // header is line 1
+    const id = idOf(raw);
+    if (id && !UUID_RE.test(id)) {
+      errors.push({ row: line, message: "id: not a row id (leave it empty to add a new row)" });
+      continue;
+    }
+    const before = id ? existing.get(id) : undefined;
     // The SAME coercion as the grid's form (admin/zod-shape.ts). importCsv
     // used to keep its own, which knew only lowercase true/false: array
     // columns (expertiseAreas, tags) were "Expected array, received string"
     // in every format, Excel's TRUE/FALSE was rejected, and dates went
-    // through JS Date guessing (05/10/2026 read as 10 May). An empty cell is
-    // an untouched field, as on create. Cells are un-escaped first
-    // (admin/csv-safety.ts), so an edited export imports as it was.
-    const coerced = coerceFormValues(entity.formFields, shape, (field) => {
-      const cell = raw[field];
-      return typeof cell === "string" && cell !== "" ? unescapeFormulaCell(cell) : null;
-    });
-    const parse = entity.formSchema.safeParse(coerced);
+    // through JS Date guessing (05/10/2026 read as 10 May). Cells are
+    // un-escaped first (admin/csv-safety.ts), so an edited export imports as
+    // it was. On a new row an empty cell is an untouched field, as on create;
+    // on an update it is the operator CLEARING the field, as in the grid's
+    // edit: null where the column takes null, an empty list for a list, and
+    // "required" for a field that cannot be empty.
+    const coerced = coerceFormValues(
+      entity.formFields,
+      shape,
+      (field) => {
+        const cell = raw[field];
+        if (typeof cell !== "string") return null; // not a column of this file
+        if (cell === "") return before ? "" : null;
+        return unescapeFormulaCell(cell);
+      },
+      { emptyMeansNull: Boolean(before) },
+    );
+    // AN UPDATE SETS THE COLUMNS THE FILE CARRIES, AND NOTHING ELSE. It used
+    // to write the whole zod result, which includes the schema's defaults for
+    // every column the file does not carry -- and no export carries every
+    // form field. So the round trip itself reset data while reporting
+    // ok:true: the mentors export (its own route, no `active` column)
+    // re-activated every deactivated mentor, and the course-outlines export
+    // zeroed sessionsCount and emptied learningOutcomes. The row is validated
+    // whole, with the stored values for the columns the file leaves out (so a
+    // file of `id,phone` does not fail "fullName: Required", and a cross-field
+    // rule still sees the real row), and only the file's values are written.
+    const candidate = before ? { ...storedFormValues(entity.formFields, shape, before, carried), ...coerced } : coerced;
+    const parse = entity.formSchema.safeParse(candidate);
     if (!parse.success) {
       const issue = parse.error.issues[0];
       errors.push({ row: line, message: `${issue?.path.join(".") ?? "row"}: ${issue?.message ?? "invalid"}` });
@@ -195,19 +277,9 @@ export async function importCsv(slug: string, csv: string): Promise<{
       errors.push({ row: line, message: `${field}: ${message}` });
       continue;
     }
-    // AN `id` MEANS "THIS ROW". The export writes every row's id first
-    // (admin/export-columns.ts), and the import used to ignore it and only
-    // ever INSERT -- so the ordinary spreadsheet round trip (export the roster,
-    // fix phone numbers in Excel, import it back) made a second copy of every
-    // row, updated nothing and reported ok:true. A row whose id exists is now
-    // updated in place; a row with an unknown id is inserted under that id, so
-    // importing the same file twice does not duplicate it either.
-    const id = hasIdColumn ? raw.id?.trim() : undefined;
-    if (id && !UUID_RE.test(id)) {
-      errors.push({ row: line, message: "id: not a row id (leave it empty to add a new row)" });
-      continue;
-    }
-    validRows.push({ line, data: parse.data as Record<string, unknown>, ...(id ? { id } : {}) });
+    const valid = parse.data as Record<string, unknown>;
+    const data = before ? Object.fromEntries(Object.keys(coerced).map((k) => [k, valid[k]])) : valid;
+    validRows.push({ line, data, ...(id ? { id } : {}), ...(before ? { update: true } : {}) });
   }
 
   if (validRows.length === 0) {
@@ -234,7 +306,6 @@ export async function importCsv(slug: string, csv: string): Promise<{
   const errorsBefore = errors.length;
   const newRows = validRows.filter((r) => !r.id);
   const idRows = validRows.filter((r) => r.id);
-  const idCol = (entity.table as unknown as { id: unknown }).id;
 
   const audited = withAudit(
     async () =>
@@ -257,20 +328,30 @@ export async function importCsv(slug: string, csv: string): Promise<{
                 .from(entity.table as never)
                 .where(eq(idCol as never, row.id!))
                 .for("update")) as Record<string, unknown>[];
+              // Checked above as a new row or as a change to this one; a row
+              // that appeared or vanished since is refused, not guessed at.
               if (!before) {
+                if (row.update) throw new MutationRefused("That row no longer exists.");
                 await sp.insert(entity.table as never).values({ ...row.data, id: row.id } as never);
                 inserted += 1;
                 return;
               }
-              const reason = entity.guardMutation?.("update", before, { ...before, ...row.data });
+              if (!row.update) {
+                throw new MutationRefused("id: that row was added while this file was importing; import it again.");
+              }
+              const next = row.data;
+              const reason = entity.guardMutation?.("update", before, { ...before, ...next });
               if (reason) throw new MutationRefused(reason);
-              await sp
-                .update(entity.table as never)
-                .set(row.data as never)
-                .where(eq(idCol as never, row.id!));
+              // A file of ids alone changes nothing, and UPDATE needs a column.
+              if (Object.keys(next).length > 0) {
+                await sp
+                  .update(entity.table as never)
+                  .set(next as never)
+                  .where(eq(idCol as never, row.id!));
+              }
               updated += 1;
               if (updates.length < IMPORT_AUDITED_UPDATES) {
-                updates.push({ id: row.id, ...updateAudit(entity, before, row.data) });
+                updates.push({ id: row.id, ...updateAudit(entity, before, next) });
               }
             });
           } catch (err) {
