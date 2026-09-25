@@ -208,8 +208,16 @@ export default async function RttSubjectPage({
         </div>
       </header>
 
-      <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
-        <div style={{ display: "grid", gap: 14 }}>
+      {/* PHONE WIDTH (F11). This was an inline gridTemplateColumns "1.5fr 1fr",
+          which holds at every width: on a 360 px phone the left column grew to
+          the sessions table's width and Required readings and the Assessment
+          card -- the quiz's Start button -- sat off the right edge of the
+          screen. Below 768 px the columns now stack (modules and sessions, then
+          progress, readings and the assessment, in reading order); from 768 px
+          they are the same 1.5fr / 1fr, as minmax(0, ...) so wide content
+          scrolls in its card instead of widening the page. */}
+      <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
           <article id="modules" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Modules ({modules.length})</div>
@@ -236,11 +244,15 @@ export default async function RttSubjectPage({
                 {modules.map((m, i) => {
                   const moduleLessons = lessonsByModule.get(m.id) ?? [];
                   const moduleDone = moduleLessons.filter((l) => done.lessons.has(l.id)).length;
+                  // minmax(0, ...): a bare 1fr is at least as wide as its
+                  // content, so one long word in a title or description (a
+                  // URL) pushed the row past a phone's edge; the lesson chip's
+                  // column is still its content's width whenever there is room.
                   const header = (
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "36px 1fr auto",
+                        gridTemplateColumns: "36px minmax(0, 1fr) minmax(0, auto)",
                         gap: 14,
                         padding: 14,
                         alignItems: "center",
@@ -263,7 +275,7 @@ export default async function RttSubjectPage({
                       >
                         {i + 1}
                       </div>
-                      <div>
+                      <div style={{ overflowWrap: "anywhere" }}>
                         <div style={{ fontWeight: 500, fontSize: 13 }}>{m.title}</div>
                         {m.description ? (
                           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
@@ -349,94 +361,98 @@ export default async function RttSubjectPage({
                 No sessions scheduled.
               </div>
             ) : (
-              <table className="t">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Session</th>
-                    <th>Type</th>
-                    <th>Duration</th>
-                    <th title="Your attendance, once it has been taken">You</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((s) => {
-                    // Spec 119: each rtt-session row links to /repo/session/${id}
-                    // (the classroom-session detail page). For sessions that are
-                    // still upcoming (scheduledAt in the future or null) the
-                    // action column shows "Join"; for past sessions "Watch".
-                    // Both render as <Link href=…> so they have real handlers.
-                    // NO LINK. `s.id` is an rtt_sessions id, and
-                    // /repo/session/[id] looks up the CLASSROOM sessions table
-                    // -- a different table entirely -- so every one of these
-                    // rows 404'd. rtt_sessions has no detail page; the calendar
-                    // at /rtt/online/synchronous is where these are listed.
-                    const isUpcoming = s.isUpcoming;
-                    // A web link or nothing (lib/rtt/links.ts): a stored
-                    // "meet.google.com/..." was a relative href into the app.
-                    const link = webLink(s.linkOrRecording);
-                    return (
-                      <tr key={s.id}>
-                        <td className="mono" style={{ fontSize: 12 }}>
-                          {s.scheduledAt ? (
-                            new Date(s.scheduledAt).toLocaleString("en-IN", {
-                              dateStyle: "medium",
-                              timeStyle: "short",
-                            })
-                          ) : (
-                            <span className="empty-dash">unscheduled</span>
-                          )}
-                        </td>
-                        <td>
-                          {s.title}
-                        </td>
-                        <td>
-                          {s.type ? (
-                            <span className="chip">{s.type}</span>
-                          ) : (
-                            <em className="dash">—</em>
-                          )}
-                        </td>
-                        <td className="mono" style={{ fontSize: 12 }}>
-                          {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
-                        </td>
-                        <td>
-                          {attendance.has(s.id) ? (
-                            <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
-                              {attendance.get(s.id)!.charAt(0).toUpperCase() + attendance.get(s.id)!.slice(1)}
-                            </span>
-                          ) : (
-                            <em className="dash">—</em>
-                          )}
-                        </td>
-                        <td>
-                          {link ? (
-                            <a
-                              href={link}
-                              className="btn btn-sm"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ textDecoration: "none" }}
-                            >
-                              {isUpcoming ? "Join" : "Watch"}
-                            </a>
-                          ) : (
-                            <span className="chip" title="No meeting link or recording recorded for this session">
-                              {isUpcoming ? "No link yet" : "No recording"}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              // Scrolls sideways inside the card: six columns are wider than a
+              // phone, and with no scroll box the table widened the page.
+              <div style={{ overflowX: "auto" }}>
+                <table className="t">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Session</th>
+                      <th>Type</th>
+                      <th>Duration</th>
+                      <th title="Your attendance, once it has been taken">You</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sessions.map((s) => {
+                      // Spec 119: each rtt-session row links to /repo/session/${id}
+                      // (the classroom-session detail page). For sessions that are
+                      // still upcoming (scheduledAt in the future or null) the
+                      // action column shows "Join"; for past sessions "Watch".
+                      // Both render as <Link href=…> so they have real handlers.
+                      // NO LINK. `s.id` is an rtt_sessions id, and
+                      // /repo/session/[id] looks up the CLASSROOM sessions table
+                      // -- a different table entirely -- so every one of these
+                      // rows 404'd. rtt_sessions has no detail page; the calendar
+                      // at /rtt/online/synchronous is where these are listed.
+                      const isUpcoming = s.isUpcoming;
+                      // A web link or nothing (lib/rtt/links.ts): a stored
+                      // "meet.google.com/..." was a relative href into the app.
+                      const link = webLink(s.linkOrRecording);
+                      return (
+                        <tr key={s.id}>
+                          <td className="mono" style={{ fontSize: 12 }}>
+                            {s.scheduledAt ? (
+                              new Date(s.scheduledAt).toLocaleString("en-IN", {
+                                dateStyle: "medium",
+                                timeStyle: "short",
+                              })
+                            ) : (
+                              <span className="empty-dash">unscheduled</span>
+                            )}
+                          </td>
+                          <td>
+                            {s.title}
+                          </td>
+                          <td>
+                            {s.type ? (
+                              <span className="chip">{s.type}</span>
+                            ) : (
+                              <em className="dash">—</em>
+                            )}
+                          </td>
+                          <td className="mono" style={{ fontSize: 12 }}>
+                            {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
+                          </td>
+                          <td>
+                            {attendance.has(s.id) ? (
+                              <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
+                                {attendance.get(s.id)!.charAt(0).toUpperCase() + attendance.get(s.id)!.slice(1)}
+                              </span>
+                            ) : (
+                              <em className="dash">—</em>
+                            )}
+                          </td>
+                          <td>
+                            {link ? (
+                              <a
+                                href={link}
+                                className="btn btn-sm"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ textDecoration: "none" }}
+                              >
+                                {isUpcoming ? "Join" : "Watch"}
+                              </a>
+                            ) : (
+                              <span className="chip" title="No meeting link or recording recorded for this session">
+                                {isUpcoming ? "No link yet" : "No recording"}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </article>
         </div>
 
-        <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14, alignContent: "start" }}>
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Your progress</div>
@@ -446,7 +462,7 @@ export default async function RttSubjectPage({
                 margin: 0,
                 padding: 14,
                 display: "grid",
-                gridTemplateColumns: "1fr auto",
+                gridTemplateColumns: "minmax(0, 1fr) minmax(0, auto)",
                 gap: "6px 12px",
                 fontSize: 13,
               }}
@@ -493,7 +509,9 @@ export default async function RttSubjectPage({
                     key={r.id}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "30px 1fr auto",
+                      // As the module rows: the title column cannot be pushed
+                      // wider than the card by a long title.
+                      gridTemplateColumns: "30px minmax(0, 1fr) minmax(0, auto)",
                       gap: 10,
                       padding: 12,
                       alignItems: "center",
@@ -515,7 +533,7 @@ export default async function RttSubjectPage({
                     >
                       PDF
                     </span>
-                    <div>
+                    <div style={{ overflowWrap: "anywhere" }}>
                       <div style={{ fontWeight: 500, fontSize: 13 }}>
                         {r.externalUrl ? (
                           <a

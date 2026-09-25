@@ -212,6 +212,9 @@ export default async function TeachBackQueuePage({
         style={{
           marginBottom: 22,
           display: "flex",
+          // On a phone the "All pending review" link goes under the title
+          // rather than being squeezed to one word a line beside it.
+          flexWrap: "wrap",
           alignItems: "flex-end",
           justifyContent: "space-between",
           gap: 16,
@@ -260,7 +263,8 @@ export default async function TeachBackQueuePage({
         </Link>
       </header>
 
-      <section style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+      {/* Wraps: three tabs with their counts are wider than a phone. */}
+      <section style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 16 }}>
         {(
           [
             { v: undefined, l: "All", n: counts.all },
@@ -289,13 +293,16 @@ export default async function TeachBackQueuePage({
         })}
       </section>
 
+      {/* PHONE WIDTH (F11). With a submission open, the list and the review
+          pane were an inline "minmax(0, 2fr) minmax(0, 3fr)" at every width:
+          on a phone, a ~120 px list beside a ~180 px pane whose label column
+          alone is 120 px. Below 768 px the pane now sits under the list. */}
       <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: selected ? "minmax(0, 2fr) minmax(0, 3fr)" : "minmax(0, 1fr)",
-          gap: 18,
-          alignItems: "start",
-        }}
+        className={
+          selected
+            ? "grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+            : "grid grid-cols-1 items-start gap-[18px]"
+        }
       >
         {/* Left: submission list */}
         <div
@@ -491,7 +498,8 @@ export default async function TeachBackQueuePage({
             <dl
               style={{
                 display: "grid",
-                gridTemplateColumns: "120px 1fr",
+                // minmax(0, 1fr): a bare 1fr is as wide as its content.
+                gridTemplateColumns: "120px minmax(0, 1fr)",
                 rowGap: 8,
                 columnGap: 12,
                 margin: 0,

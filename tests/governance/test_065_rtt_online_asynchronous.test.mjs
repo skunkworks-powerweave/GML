@@ -45,10 +45,14 @@ test("spec 065 — subject tab strip with All pill + searchParams.subject (AC-5)
 
 test("spec 065 — 3-column responsive card grid (AC-6)", () => {
   const src = read(PAGE);
+  // The minimum is min(100%, 280px), not a bare 280px (F11): a fixed 280 px
+  // track overflows any column narrower than that and widens the page on a
+  // small phone. This assertion used to pin the bare 280px -- the defect.
+  // tests/behaviour/ui-rtt-quiz-phone.test.ts checks the rendered layout.
   assert.match(
     src,
-    /repeat\(auto-fill,\s*minmax\(280px,\s*1fr\)\)/,
-    "must use the GML card-grid template",
+    /repeat\(auto-fill,\s*minmax\(min\(100%,\s*280px\),\s*1fr\)\)/,
+    "must use the GML card-grid template, capped at the column's width",
   );
 });
 

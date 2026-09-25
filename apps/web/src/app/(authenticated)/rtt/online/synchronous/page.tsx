@@ -176,7 +176,13 @@ export default async function RttOnlineSynchronousPage() {
           </p>
         </div>
       ) : (
-        <section style={{ display: "grid", gridTemplateColumns: "minmax(0, 2.2fr) minmax(280px, 1fr)", gap: 18 }}>
+        // PHONE WIDTH (F11). The calendar and the upcoming panel were an inline
+        // "minmax(0, 2.2fr) minmax(280px, 1fr)" at every width: on a 360 px
+        // phone the panel kept its 280 px and the calendar got the ~30 px
+        // left over, its five day columns spilling over the panel. Below
+        // 768 px they stack, and the calendar becomes a list of the days that
+        // have something on (see the classes in the grid and WeekRow).
+        <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,2.2fr)_minmax(280px,1fr)]">
           {/* ── 3-week Mon-Fri grid ─────────────────────────────────────── */}
           <article
             style={{
@@ -196,11 +202,17 @@ export default async function RttOnlineSynchronousPage() {
               </span>
             </header>
 
-            <div style={{ display: "grid", gridTemplateColumns: `60px repeat(${WEEKDAYS.length}, minmax(0, 1fr))`, gap: 6 }}>
-              <div />
+            {/* Five day columns from 768 px. On a phone they would be ~40 px
+                each, too narrow for a time or a title, so the grid is one
+                column there: the weekday headers are hidden, each week's
+                label heads the days of that week that have a session, and
+                each of those days names its weekday (WeekRow). */}
+            <div className="grid grid-cols-1 gap-[6px] md:grid-cols-[60px_repeat(5,minmax(0,1fr))]">
+              <div className="hidden md:block" />
               {WEEKDAYS.map((wd) => (
                 <div
                   key={wd}
+                  className="hidden md:block"
                   style={{
                     fontSize: 10,
                     textTransform: "uppercase",
@@ -338,9 +350,14 @@ function WeekRow({
   grid: Map<string, SyncSessionRow[]>;
   isCurrent: boolean;
 }) {
+  // On a phone (one column, see the calendar grid) only the days with a
+  // session are shown, under their week's label; a week with none shows
+  // nothing. The desktop grid shows every day.
+  const weekHasSessions = WEEKDAYS.some((_, dIdx) => (grid.get(isoDateKey(addDays(weekStart, dIdx)))?.length ?? 0) > 0);
   return (
     <>
       <div
+        className={weekHasSessions ? undefined : "hidden md:block"}
         style={{
           fontSize: 10,
           textTransform: "uppercase",
@@ -354,25 +371,27 @@ function WeekRow({
       >
         {fmtMonthDay(weekStart)}
       </div>
-      {WEEKDAYS.map((_, dIdx) => {
+      {WEEKDAYS.map((wd, dIdx) => {
         const day = addDays(weekStart, dIdx);
         const key = isoDateKey(day);
         const bucket = grid.get(key) ?? [];
         return (
           <div
             key={key}
+            // display is a class, not inline, so the phone can hide an empty day.
+            className={bucket.length === 0 ? "hidden md:flex md:flex-col" : "flex flex-col"}
             style={{
               minHeight: 88,
               border: "1px solid var(--line)",
               borderRadius: "var(--r-2)",
               background: isCurrent ? "var(--paper)" : "var(--card)",
               padding: 6,
-              display: "flex",
-              flexDirection: "column",
               gap: 4,
             }}
           >
             <div style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--mono)" }}>
+              {/* The weekday is a column header on a desktop; a phone has none. */}
+              <span className="md:hidden">{wd} </span>
               {day.getDate()}
             </div>
             {bucket.length === 0 ? (

@@ -181,139 +181,115 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             )}
           </div>
         ) : (
+          // PHONE WIDTH (F11). This was an ARIA grid of divs with four
+          // minmax(0, ...) columns at every width: on a phone the score,
+          // result and "View result" columns were ~48 px each, narrower than
+          // their contents, so the three ran into each other and the button
+          // was cut off by the card's overflow:hidden. It is a table now, the
+          // native semantics the divs imitated, and it scrolls sideways inside
+          // its card when a phone is too narrow for it; the date links to the
+          // result too, so the attempt can be opened from the row's left edge.
           <div
             data-testid="quiz-history-table"
             className="card card-hi"
-            style={{ padding: 0, overflow: "hidden" }}
+            style={{ padding: 0, overflowX: "auto" }}
           >
-            <div
-              role="table"
-              aria-label="Your quiz attempts"
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "minmax(0, 1.5fr) minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 0.6fr)",
-                rowGap: 0,
-              }}
-            >
-              <div
-                role="row"
-                style={{
-                  display: "contents",
-                  // Header row.
-                }}
-              >
-                {["Submitted", "Score", "Result", ""].map((label, i) => (
-                  <div
-                    key={i}
-                    role="columnheader"
-                    style={{
-                      padding: "10px 14px",
-                      fontSize: 11,
-                      fontFamily: "var(--mono)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                      color: "var(--ink-3)",
-                      borderBottom: "1px solid var(--line)",
-                      background: "var(--paper-2)",
-                    }}
-                  >
-                    {label}
-                  </div>
-                ))}
-              </div>
-              {rows.map((r, i) => (
-                <div
-                  key={r.id}
-                  role="row"
-                  data-testid="quiz-history-row"
-                  style={{ display: "contents" }}
-                >
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      fontFamily: "var(--mono)",
-                      fontSize: 12,
-                      color: "var(--ink)",
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    {formatSubmittedAt(r.submittedAt)}
-                  </div>
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      fontFamily: "var(--mono)",
-                      fontSize: 14,
-                      color: r.passed ? "var(--lichen)" : "var(--saffron)",
-                      fontWeight: 600,
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    {r.score}%
-                  </div>
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      fontSize: 12,
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    <span
+            <table className="t" aria-label="Your quiz attempts">
+              <thead>
+                <tr>
+                  <th>Submitted</th>
+                  <th>Score</th>
+                  <th>Result</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.id} data-testid="quiz-history-row">
+                    <td
                       style={{
-                        display: "inline-block",
-                        padding: "2px 8px",
-                        borderRadius: 999,
-                        fontSize: 11,
+                        padding: "12px 14px",
                         fontFamily: "var(--mono)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                        background: r.passed
-                          ? "var(--lichen-soft)"
-                          : "var(--saffron-soft)",
-                        color: r.passed ? "var(--lichen)" : "var(--saffron)",
-                      }}
-                    >
-                      {r.passed ? "Pass" : "Retry"}
-                    </span>
-                  </div>
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      textAlign: "right",
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    <Link
-                      href={`/quizzes/${slug}/result/${r.id}`}
-                      className="btn btn-sm btn-ghost"
-                      style={{
-                        textDecoration: "none",
                         fontSize: 12,
+                        color: "var(--ink)",
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
                       }}
                     >
-                      View result
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
+                      <Link href={`/quizzes/${slug}/result/${r.id}`} style={{ color: "inherit" }}>
+                        {formatSubmittedAt(r.submittedAt)}
+                      </Link>
+                    </td>
+                    <td
+                      style={{
+                        padding: "12px 14px",
+                        fontFamily: "var(--mono)",
+                        fontSize: 14,
+                        color: r.passed ? "var(--lichen)" : "var(--saffron)",
+                        fontWeight: 600,
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
+                      }}
+                    >
+                      {r.score}%
+                    </td>
+                    <td
+                      style={{
+                        padding: "12px 14px",
+                        fontSize: 12,
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "inline-block",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontFamily: "var(--mono)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          background: r.passed
+                            ? "var(--lichen-soft)"
+                            : "var(--saffron-soft)",
+                          color: r.passed ? "var(--lichen)" : "var(--saffron)",
+                        }}
+                      >
+                        {r.passed ? "Pass" : "Retry"}
+                      </span>
+                    </td>
+                    <td
+                      style={{
+                        padding: "12px 14px",
+                        textAlign: "right",
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
+                      }}
+                    >
+                      <Link
+                        href={`/quizzes/${slug}/result/${r.id}`}
+                        className="btn btn-sm btn-ghost"
+                        style={{
+                          textDecoration: "none",
+                          fontSize: 12,
+                        }}
+                      >
+                        View result
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
         <div

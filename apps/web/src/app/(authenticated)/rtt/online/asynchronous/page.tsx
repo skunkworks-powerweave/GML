@@ -217,11 +217,15 @@ export default async function RttOnlineAsynchronousPage({
         ))}
       </nav>
 
-      {/* 3-column card grid */}
+      {/* 3-column card grid. The minimum is min(100%, 280px), not 280px, so a
+          card never demands more width than the column it sits in: a fixed
+          280 px minimum overflows any column narrower than that (a small
+          phone, or this page inside the usual page padding) and widens the
+          page (F11). */}
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
           gap: 14,
         }}
       >
