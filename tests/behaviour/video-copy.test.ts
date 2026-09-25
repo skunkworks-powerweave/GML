@@ -11,7 +11,8 @@
 //     recordings of children, false assurances about sharing are worse than
 //     none.
 //   - Help said videos are transcoded to "240p, 480p, 720p and audio-only" and
-//     drop to 240p on weak networks; the worker produces ONE 480p rendition. It
+//     drop to 240p on weak networks; the worker produced ONE 480p rendition
+//     (it now writes a 240p / 360p / 480p ladder, F144, and help says so). It
 //     said the watermark is "drawn faintly across every frame" and would show
 //     whose account a leak came from; it is a CSS overlay on the player, and a
 //     fetched segment carries no attribution.
@@ -25,8 +26,8 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { Client } from "pg";
+import { LADDER } from "../../apps/worker/src/encode.ts";
 import { renderSync, render, h, withAppRouter, decodeEntities, openingTags, attr } from "./_ui.js";
 import { signIn, closeAppDb } from "./_server-actions.js";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
@@ -38,13 +39,18 @@ after(async () => {
 });
 const text = (html: string) => decodeEntities(html.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ");
 
-/** The heights the worker's HLS pass encodes (the ffmpeg run that writes -hls_time). */
+/**
+ * The heights the worker encodes: the rungs of its rendition ladder.
+ *
+ * This parsed a single `scale=-2:<h>` out of transcode.ts's ffmpeg run. The
+ * worker now writes a 240p / 360p / 480p ladder whose arguments live in the
+ * pure apps/worker/src/encode.ts (F144), and a rung caps its SHORT side rather
+ * than pinning a height -- so the source of truth is LADDER itself, the same
+ * table hlsEncodeArgs encodes from and transcode-output.test.ts executes.
+ */
 function encodedHeights(): Set<string> {
-  const src = readFileSync(new URL("../../apps/worker/src/transcode.ts", import.meta.url), "utf8").replace(/\/\/.*$/gm, "");
-  const hlsRun = src.slice(0, src.indexOf('"-hls_time"'));
-  const all = [...hlsRun.matchAll(/scale=-2:(\d+)/g)].map((m) => m[1]!);
-  assert.ok(all.length > 0, "found the HLS pass's scale filter");
-  return new Set([all[all.length - 1]!]);
+  assert.ok(LADDER.length > 0, "found the worker's rendition ladder");
+  return new Set(LADDER.map((rung) => String(rung.short)));
 }
 
 test("help describes the rendition the worker actually produces, and what the watermark actually is", async () => {
@@ -60,7 +66,9 @@ test("help describes the rendition the worker actually produces, and what the wa
   }
   const watermark = `${HELP.watermark!.short} ${HELP.watermark!.long ?? ""}`;
   assert.doesNotMatch(watermark, /every frame|whose account it came from/i, "the watermark is an overlay on the player, not in the video");
-  assert.doesNotMatch(`${HELP.hls!.short} ${HELP.hls!.long ?? ""}`, /\b2G\b/, "an 800 kbps stream does not play on 2G");
+  // The ladder's bottom rung is ~250 kbps all in: better odds on a weak link,
+  // still not a promise that a lesson plays on 2G.
+  assert.doesNotMatch(`${HELP.hls!.short} ${HELP.hls!.long ?? ""}`, /\b2G\b/, "the help panel must not promise 2G playback");
 });
 
 test("the quality menu shows no internal spec reference, and says truly why 720p is not offered", async () => {
