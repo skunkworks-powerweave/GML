@@ -8,6 +8,10 @@ Three core surfaces: **Classroom Observation**, **RTT Phases 1–3**, and
 Business — the latter being the primary one, because a teacher in a Ladakh
 classroom has WhatsApp and may not have anything else.
 
+RTT subjects can also carry **SCORM 1.2** modules: uploaded by a super_admin,
+launched from the subject page, tracked per learner. See
+[`docs/operations.md` § SCORM packages](docs/operations.md#scorm-packages).
+
 | | |
 |---|---|
 | Deploying it | [`README-deploy.md`](README-deploy.md) |

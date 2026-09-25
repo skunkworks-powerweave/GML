@@ -98,6 +98,24 @@ export async function startFakeStorage(): Promise<FakeStorage> {
         res.on("close", () => clearInterval(drip));
         return;
       }
+      // A single byte range, as Storage answers one (the SCORM content route
+      // forwards a media element's Range so video can seek).
+      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ""));
+      if (range && (range[1] || range[2])) {
+        const size = obj.body.length;
+        const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+        const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+        if (start >= size || start > end) {
+          res.writeHead(416, { "content-range": `bytes */${size}` });
+          return res.end();
+        }
+        res.writeHead(206, {
+          "content-type": obj.contentType,
+          "content-length": end - start + 1,
+          "content-range": `bytes ${start}-${end}/${size}`,
+        });
+        return res.end(obj.body.subarray(start, end + 1));
+      }
       res.writeHead(200, { "content-type": obj.contentType, "content-length": obj.body.length });
       return res.end(obj.body);
     }
@@ -142,6 +160,10 @@ export async function startFakeStorage(): Promise<FakeStorage> {
       }
       if (req.method === "DELETE" && !key) {
         const { prefixes = [] } = JSON.parse(body.toString() || "{}") as { prefixes?: string[] };
+        // As Storage's own request schema: at most 1,000 keys per remove.
+        if (prefixes.length > 1000) {
+          return json(400, { statusCode: "400", error: "Bad Request", message: "body/prefixes must NOT have more than 1000 items" });
+        }
         for (const p of prefixes) objects.delete(id(bucket, p));
         return json(200, []);
       }

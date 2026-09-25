@@ -84,6 +84,44 @@ are not certain why they lost access.
 4. If the job succeeded but playback fails, check `/api/health` for
    `storage: false`.
 
+## SCORM packages
+
+SCORM **1.2**, one SCO per package. A package belongs to an RTT subject;
+learners open it from that subject's page, and it resumes where they left it.
+
+- **Adding one.** `/admin/scorm`, as a **super_admin** — nobody else can. A
+  package's scripts run on the LMS's own origin as whoever opens it (they must,
+  to reach the SCORM API), so uploading one is as powerful as signing in as
+  every person who will launch it. Only upload packages from a source you trust.
+- **What is refused, and says why:** anything over 20 MB (Caddy refuses bodies
+  over 25 MB), more than 2000 files or 100 MB unpacked; SCORM 2004 (re-export
+  as 1.2); several launchable items (export as one SCO); file names that leave
+  the package; file types outside the allowlist in
+  `apps/web/src/lib/scorm/files.ts` (Flash `.swf`, server scripts, executables
+  — strip them and re-zip). Nothing is stored unless the whole package passes.
+- **Withdrawing one.** "Withdraw from learners" on `/admin/scorm/[id]` hides it
+  everywhere; learners' records and the files are kept, and "Restore" brings it
+  back. There is no delete.
+- **What is tracked** (`/admin/scorm/[id]`): each learner's status, score, time
+  and first finish, as the module reports them. SCORM 1.2 is self-reported by
+  design. A learner's best status is kept, so reviewing a passed module does not
+  undo the pass. With a mastery score in the manifest, a score is recorded as
+  passed or failed once the module says it has finished, or when it exits.
+- **Who sees it.** Administrators: every package on `/admin/scorm`. On
+  `/rtt/progress`, under that page's rules: a teacher sees how many of each
+  subject's modules she has completed; programme and super admins see every
+  teacher's record, and a mentor her mentees' once the mentorship section is
+  unlocked. An administrator's own "Open as a learner" is listed on the
+  package's page, labelled "not counted", and left out of its counts.
+- **Storage.** Files live in the private `scorm-packages` bucket
+  (`_post/009`), served to learners through `/api/scorm/content/...` — the one
+  route whose Content-Security-Policy allows inline script. Audit rows:
+  `scorm.*` in [`audit-actions.md`](audit-actions.md).
+- **A failed upload** removes whatever it had stored. If Storage refuses that
+  clean-up too, the web log says `[scorm] a failed upload's clean-up left up to
+  N … objects under <id>/`: nothing refers to them, so delete that folder from
+  the `scorm-packages` bucket in the Supabase dashboard.
+
 ## The queue is backing up
 
 ```bash

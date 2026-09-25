@@ -288,6 +288,13 @@
       "when": 1790323603704,
       "tag": "0040_sessions_subject_and_date_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790335358330,
+      "tag": "0041_scorm",
+      "breakpoints": true
     }
   ]
 }

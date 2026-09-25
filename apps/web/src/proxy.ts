@@ -79,6 +79,7 @@ const POLICIES: PolicyRule[] = [
   { prefix: "/videos", loggedIn: true },
   { prefix: "/forms", loggedIn: true },
   { prefix: "/quizzes", loggedIn: true },
+  { prefix: "/scorm", loggedIn: true },
   { prefix: "/repo", loggedIn: true },
   { prefix: "/settings", loggedIn: true },
   { prefix: "/uploads", loggedIn: true },
@@ -323,6 +324,18 @@ export const config = {
     //   api/health
     //       Probed by Docker and the load balancer, which have no session and
     //       must not be redirected.
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
+    //   api/scorm/content/*
+    //       SCORM package files. They carry their OWN policy
+    //       (buildScormContentCsp), which permits the inline script SCORM
+    //       content is built on. Passing through here would add the nonce
+    //       policy as well, and a browser enforces both: the intersection
+    //       blocks the content. The route authenticates itself (auth()), and
+    //       sets the baseline headers applySecurityHeaders would have.
+    //   api/scorm/packages
+    //       The SCORM upload (up to 20 MiB). Next buffers the body of any
+    //       request this file runs on, to at most 10 MB, and passes the
+    //       TRUNCATED body on without an error; the route checks its own role
+    //       with auth().
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|api/scorm/content/|api/scorm/packages|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
   ],
 };

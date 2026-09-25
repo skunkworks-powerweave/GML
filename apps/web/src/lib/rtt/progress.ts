@@ -1,6 +1,7 @@
 // RTT progress: what a learner has done (lessons and readings she marked done,
-// quizzes she passed, sessions she was marked present at), and the staff view
-// of quiz results and attendance.
+// quizzes she passed, sessions she was marked present at, SCORM modules she
+// completed), and the staff view of quiz results, SCORM records and
+// attendance.
 //
 // ── WHY ──────────────────────────────────────────────────────────────────────
 //
@@ -13,7 +14,9 @@
 //
 // Completion is SELF-REPORTED -- the learner ticks a lesson or reading done. It
 // is a place-keeper for her and a signal for staff, not evidence; quiz results
-// and attendance are the recorded outcomes, and the staff view shows those.
+// and attendance are the recorded outcomes, and the staff view shows those,
+// with each SCORM module's record (scorm_attempts, lib/scorm/store.ts -- the
+// module's own report, as SCORM 1.2 defines it).
 //
 // Takes the database as a parameter so the behaviour suite can run it.
 
@@ -31,9 +34,12 @@ import {
   rttSessions,
   rttSubjects,
   schools,
+  scormAttempts,
+  scormPackages,
   teachers,
   terms,
 } from "@gml/db/schema";
+import type { LessonStatus } from "../scorm/cmi";
 
 type Db = NodePgDatabase<Record<string, unknown>>;
 
@@ -111,6 +117,9 @@ export type SubjectProgressRow = {
   sessionsPresent: number;
   /** Sessions her attendance was taken at. */
   sessionsMarked: number;
+  /** SCORM modules she may launch (not withdrawn), and those she passed or completed. */
+  modulesCompleted: number;
+  modulesTotal: number;
 };
 
 const int = (q: SQL) => sql<number>`(${q})::int`;
@@ -149,6 +158,13 @@ export async function progressBySubject(db: Db, userId: string, subjectWhere?: S
         JOIN ${rttSessions} ON ${rttSessions.id} = ${rttAttendance.rttSessionId}
         JOIN ${teachers} ON ${teachers.id} = ${rttAttendance.teacherId}
         WHERE ${rttSessions.rttSubjectId} = ${s} AND ${teachers.userId} = ${userId}`),
+      // "failed" is finished but not completed: like a quiz not passed, she
+      // has it still to do.
+      modulesCompleted: int(sql`SELECT count(*) FROM ${scormAttempts}
+        JOIN ${scormPackages} ON ${scormPackages.id} = ${scormAttempts.packageId}
+        WHERE ${scormPackages.rttSubjectId} = ${s} AND ${scormPackages.active}
+          AND ${scormAttempts.userId} = ${userId} AND ${scormAttempts.lessonStatus} IN ('passed', 'completed')`),
+      modulesTotal: int(sql`SELECT count(*) FROM ${scormPackages} WHERE ${scormPackages.rttSubjectId} = ${s} AND ${scormPackages.active}`),
     })
     .from(rttSubjects)
     .innerJoin(terms, eq(terms.id, rttSubjects.termId))
@@ -215,6 +231,55 @@ export async function quizResults(db: Db, f: StaffFilter): Promise<{ rows: QuizR
     .limit(STAFF_ROW_LIMIT + 1);
   return {
     rows: rows.slice(0, STAFF_ROW_LIMIT).map((r) => ({ ...r, lastAt: r.lastAt ?? new Date(0) })),
+    more: rows.length > STAFF_ROW_LIMIT,
+  };
+}
+
+export type ScormResultRow = {
+  teacherId: string;
+  teacherName: string;
+  schoolName: string;
+  packageId: string;
+  packageTitle: string;
+  subjectName: string;
+  lessonStatus: LessonStatus;
+  scoreRaw: number | null;
+  /** Every session's time, in centiseconds. */
+  timeCs: number;
+  updatedAt: Date;
+};
+
+/**
+ * Each teacher's record on each SCORM module. Through her teachers row, as
+ * quiz results are: an administrator's own launch of a module is not a
+ * teacher's record.
+ */
+export async function scormResults(db: Db, f: StaffFilter): Promise<{ rows: ScormResultRow[]; more: boolean }> {
+  const rows = await db
+    .select({
+      teacherId: teachers.id,
+      teacherName: teachers.fullName,
+      schoolName: schools.name,
+      packageId: scormPackages.id,
+      packageTitle: scormPackages.title,
+      subjectName: rttSubjects.name,
+      lessonStatus: scormAttempts.lessonStatus,
+      scoreRaw: scormAttempts.scoreRaw,
+      timeCs: sql<string>`${scormAttempts.totalTimeCs} + ${scormAttempts.sessionTimeCs}`,
+      updatedAt: scormAttempts.updatedAt,
+    })
+    .from(scormAttempts)
+    .innerJoin(scormPackages, eq(scormPackages.id, scormAttempts.packageId))
+    .innerJoin(rttSubjects, eq(rttSubjects.id, scormPackages.rttSubjectId))
+    .innerJoin(teachers, eq(teachers.userId, scormAttempts.userId))
+    .innerJoin(schools, eq(schools.id, teachers.schoolId))
+    .where(and(teacherScope(f), f.subjectId ? eq(rttSubjects.id, f.subjectId) : undefined))
+    .orderBy(asc(teachers.fullName), asc(rttSubjects.name), asc(scormPackages.title))
+    .limit(STAFF_ROW_LIMIT + 1);
+  return {
+    rows: rows
+      .slice(0, STAFF_ROW_LIMIT)
+      .map((r) => ({ ...r, lessonStatus: r.lessonStatus as LessonStatus, timeCs: Number(r.timeCs) })),
     more: rows.length > STAFF_ROW_LIMIT,
   };
 }
