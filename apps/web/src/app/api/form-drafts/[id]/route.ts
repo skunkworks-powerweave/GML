@@ -24,6 +24,7 @@ import { recordAudit } from "@/lib/audit";
 import { actorFrom, type Actor } from "@/lib/visibility";
 import { pairingDraftAccess, templateDraftWhere } from "@/lib/forms/drafts";
 import { isUuid } from "@/lib/ids";
+import { publicIssues, readJsonBody } from "@/lib/api-json";
 
 export const dynamic = "force-dynamic";
 
@@ -64,7 +65,7 @@ async function draftPairing(req: Request, actor: Actor): Promise<string | null |
 
 export async function GET(req: Request, ctx: RouteCtx) {
   const actor = await requireSession();
-  if (!actor) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!actor) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const userId = actor.id;
   const scope = parseScope(req);
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
@@ -91,7 +92,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
 
 export async function PUT(req: Request, ctx: RouteCtx) {
   const actor = await requireSession();
-  if (!actor) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!actor) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const userId = actor.id;
   const scope = parseScope(req);
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
@@ -111,19 +112,18 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   // behind that same 400. We now surface the parse failure as its own
   // explicit `invalid_json` token so the client / observability tooling
   // can distinguish a wire-level failure from a schema-level one.
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch (err) {
-    return NextResponse.json(
-      { error: "invalid_json", message: String(err) },
-      { status: 400 },
-    );
-  }
+  //
+  // Through lib/api-json, as the rest of /api: this route used to add the
+  // parser's own SyntaxError text as `message` and return zod's raw issues,
+  // which copy the rejected value into `received`. The token is the contract;
+  // the client (lib/form-draft.ts) branches on the status alone. An empty body
+  // is invalid_json too: `responses` is required.
+  const { body, response } = await readJsonBody(req);
+  if (response) return response;
   const parsed = PutBodySchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "validation_failed", issues: parsed.error.issues },
+      { error: "validation_failed", issues: publicIssues(parsed.error) },
       { status: 400 },
     );
   }
@@ -175,7 +175,7 @@ export async function PUT(req: Request, ctx: RouteCtx) {
 
 export async function DELETE(req: Request, ctx: RouteCtx) {
   const actor = await requireSession();
-  if (!actor) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!actor) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const userId = actor.id;
   const scope = parseScope(req);
   if (!scope) return NextResponse.json({ error: "invalid_scope" }, { status: 400 });
