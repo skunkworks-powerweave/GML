@@ -68,6 +68,11 @@ const menteeTeacherIds = (mentorId: string) => menteeTeacherIdsIn(db, mentorId);
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** The same test, for callers that answer a malformed id themselves. */
+export function isUuid(id: unknown): id is string {
+  return typeof id === "string" && UUID_RE.test(id);
+}
+
 function assertUuid(id: string): void {
   if (!UUID_RE.test(id)) notFound();
 }
