@@ -227,8 +227,8 @@ export async function describeUploadTarget(
       return described({
         title: `${QUARTER_NAME[target.quarter!]} video · ${p!.mentorName} ↔ ${p!.teacherName}`,
         audience: "It goes on the pairing page, for the mentor and the mentee.",
-        // No WhatsApp caption routes a quarterly video to its pairing.
-        whatsappText: null,
+        // Q1-<pairing> / Q4-<pairing> (packages/shared/src/whatsapp/caption.ts).
+        whatsappText: `Q${target.quarter}-${id}`,
       });
     }
     case "teach_back":

@@ -12,8 +12,8 @@
 //   1. **WhatsApp ingest** — the PRIMARY teacher path. Teachers in
 //      Ladakh have flaky data and overwhelmingly upload from their
 //      phones over WhatsApp. The modal surfaces the programme WhatsApp
-//      number + the three caption formats (OBS-<code> / TB-<uuid> /
-//      MM-<uuid>) so a teacher who has never uploaded before knows
+//      number + the caption formats (OBS-<code> / TB-<uuid> / MM-<uuid> /
+//      Q1-<uuid> and Q4-<uuid>) so a teacher who has never uploaded before knows
 //      exactly what to send. A "Copy phone number" button puts the
 //      digits on the clipboard.
 //
@@ -261,6 +261,10 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                 </li>
                 <li>
                   Caption <code className="mono">MM-&lt;uuid&gt;</code> — attaches to a mentor meeting.
+                </li>
+                <li>
+                  Caption <code className="mono">Q1-&lt;uuid&gt;</code> or <code className="mono">Q4-&lt;uuid&gt;</code> —
+                  a mentee&apos;s quarterly video for her pairing.
                 </li>
               </ul>
               <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 8 }}>

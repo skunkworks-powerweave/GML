@@ -170,6 +170,7 @@ async function outcomeOf(videoSubmissionId: string): Promise<ReplyOutcome> {
   const [row] = await db
     .select({
       contextType: videoSubmissions.contextType,
+      contextQuarter: videoSubmissions.contextQuarter,
       submittedBy: videoSubmissions.submittedByUserId,
       cycleCode: observationCycles.code,
     })
@@ -184,6 +185,9 @@ async function outcomeOf(videoSubmissionId: string): Promise<ReplyOutcome> {
   if (row.contextType === "observation_cycle" && row.cycleCode) return { kind: "linked_cycle", code: row.cycleCode };
   if (row.contextType === "teach_back") return { kind: "linked_teach_back" };
   if (row.contextType === "mentor_meeting") return { kind: "linked_meeting" };
+  if (row.contextType === "mentee_quarterly" && (row.contextQuarter === 1 || row.contextQuarter === 4)) {
+    return { kind: "linked_quarterly", quarter: row.contextQuarter };
+  }
   // 'generic': either nobody answers to the number, or the caption named no
   // target this sender may use. The two need different next steps.
   return row.submittedBy ? { kind: "unmatched" } : { kind: "unregistered" };

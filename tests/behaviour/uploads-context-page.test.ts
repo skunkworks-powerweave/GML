@@ -152,6 +152,7 @@ test("F50: a mentee's Q1 link binds the upload to the pairing and the quarter", 
     const h = await html(w.teacher, { context: "mentee_quarterly", contextId: w.pairingId, quarter: "1" });
     assert.match(h, /data-testid="upload-target"[\s\S]*Q1/);
     assert.deepEqual(uploaders(h), [{ contextType: "mentee_quarterly", contextId: w.pairingId, quarter: "1" }]);
+    assert.deepEqual(waTexts(h), [`Q1-${w.pairingId}`], "the caption that sends it to the same pairing over WhatsApp");
     const bad = await html(w.teacher, { context: "mentee_quarterly", contextId: w.pairingId, quarter: "4" });
     assert.deepEqual(uploaders(bad), [], "the Q4 video is not open in Q1");
     assert.match(bad, /role="alert"[^>]*>[^<]*Q4/);
