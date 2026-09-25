@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { h, render, withAppRouter, openingTags, elements, attr, mount, hostElements, withFakeWindow, SRC_DIR } from "./_ui.js";
+import { h, render, withAppRouter, openingTags, elements, attr, mount, hostElements, textOf, withFakeWindow, SRC_DIR } from "./_ui.js";
 import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const USER = { id: "u1", name: "Tsering Dolma", email: "t@example.org", role: "teacher" as const };
@@ -95,4 +95,122 @@ test("D5: the first-run tour promises only help affordances that exist", async (
   if (callSites("HelpDot") === 0) {
     for (const b of bodies) assert.ok(!/ⓘ/.test(b), `tour copy promises ⓘ icons, but no page renders a HelpDot: "${b}"`);
   }
+});
+
+// ── F128: the first-run tour on a phone ──────────────────────────────────────
+//
+// The tour's targets are sidebar anchors, and a phone renders no sidebar, so
+// every step but the last fell back to a caption at {top:100, left:100} -- in
+// a box 360px wide, on a 375px screen: x = 100..460. "Next" sat at x = 385..443,
+// entirely off the screen, inside a fixed overlay that cannot be scrolled, so a
+// first sign-in on a phone could only Skip. With a target found (the ? FAB,
+// last step), `innerWidth - 380` went negative below 392px and clipped the
+// caption on the left instead.
+//
+// Executed: the real FTUXTour, mounted with its effects against a stand-in
+// window and document of a given size, walked with its own Next button.
+
+type Box = { left: number; top: number; width: number; height: number };
+
+/** Mount the tour in a `vw` x `vh` window whose anchors are `anchors`. */
+function tourAt(vw: number, vh: number, anchors: Record<string, Box>) {
+  const g = globalThis as Record<string, unknown>;
+  const saved = { window: g.window, document: g.document };
+  g.window = { innerWidth: vw, innerHeight: vh, addEventListener() {}, removeEventListener() {} };
+  g.document = {
+    querySelector(sel: string) {
+      const box = anchors[sel];
+      return box ? { getBoundingClientRect: () => box } : null;
+    },
+  };
+  const restore = () => {
+    g.window = saved.window;
+    g.document = saved.document;
+  };
+  return { restore };
+}
+
+function caption(tree: unknown): { style: Record<string, number>; next?: () => void } {
+  const els = hostElements(tree);
+  const cap = els.find((e) => e.props.className === "ftux-caption");
+  assert.ok(cap, "the tour must render its caption");
+  const next = els.find((e) => e.type === "button" && /Next/.test(textOf(e)));
+  return { style: cap.props.style as Record<string, number>, next: next?.props.onClick as (() => void) | undefined };
+}
+
+/** The caption must lie wholly inside the viewport, 12px clear of each edge. */
+function assertInside(style: Record<string, number>, vw: number, vh: number, where: string) {
+  const width = style.width ?? 360; // the CSS width, when the style sets none
+  assert.ok(style.left >= 12, `${where}: caption starts at x=${style.left}, off the left edge`);
+  assert.ok(style.left + width <= vw - 12, `${where}: caption spans x=${style.left}..${style.left + width} on a ${vw}px screen -- its Next button is off the right edge`);
+  assert.ok(style.top >= 12, `${where}: caption starts at y=${style.top}`);
+  assert.ok(typeof style.maxHeight === "number" && style.top + style.maxHeight <= vh - 12, `${where}: caption may run past the bottom (top ${style.top}, maxHeight ${style.maxHeight})`);
+}
+
+test("F128: on a phone with no tour target, the caption and its Next button are on screen", async () => {
+  const { FTUXTour } = await import("../../apps/web/src/components/ftux/FTUXTour.tsx");
+  for (const [vw, vh] of [[320, 640], [360, 780], [375, 812], [390, 844], [412, 915], [1280, 800]] as const) {
+    const env = tourAt(vw, vh, {});
+    try {
+      const m = mount(FTUXTour as (p: unknown) => unknown, { role: "mentor", ftuxSeenAt: null }, { effects: true });
+      m.rerender();
+      assertInside(caption(m.tree).style, vw, vh, `${vw}x${vh}, step 1`);
+      m.unmount();
+    } finally {
+      env.restore();
+    }
+  }
+});
+
+test("F128: a target at the bottom right (the ? FAB) keeps the caption on screen, above it", async () => {
+  const { FTUXTour, FTUX_TOURS } = await import("../../apps/web/src/components/ftux/FTUXTour.tsx");
+  const steps = (FTUX_TOURS as Record<string, Array<{ target: string }>>).mentor;
+  for (const [vw, vh] of [[360, 780], [375, 812], [1280, 800]] as const) {
+    const fab = { left: vw - 58, top: vh - 128, width: 44, height: 44 };
+    const env = tourAt(vw, vh, { [steps[steps.length - 1].target]: fab });
+    try {
+      const m = mount(FTUXTour as (p: unknown) => unknown, { role: "mentor", ftuxSeenAt: null }, { effects: true });
+      for (let s = 1; s < steps.length; s += 1) {
+        caption(m.tree).next!();
+        m.rerender(); // the step changes; its effect measures the target
+        m.rerender(); // ...and the measured rect is drawn
+      }
+      const { style, next } = caption(m.tree);
+      assert.equal(next, undefined, "this is the last step (Got it)");
+      assertInside(style, vw, vh, `${vw}x${vh}, FAB step`);
+      assert.ok(style.top + style.maxHeight <= fab.top, `${vw}x${vh}: the caption must not cover the button it points at`);
+      m.unmount();
+    } finally {
+      env.restore();
+    }
+  }
+});
+
+test("F128: on a phone the tour points at the bottom tabs, which carry the sidebar's anchors", async () => {
+  const { BottomTabs } = await import("../../apps/web/src/components/nav/BottomTabs.tsx");
+  const { FTUX_TOURS } = await import("../../apps/web/src/components/ftux/FTUXTour.tsx");
+  for (const [role, expected] of [
+    ["mentor", ["nav-mentorship", "nav-observation", "nav-repo"]],
+    ["teacher", ["nav-rtt", "nav-observation", "nav-uploads"]],
+    ["programme_admin", ["nav-repo"]],
+  ] as const) {
+    const html = await render(h(BottomTabs, { role }));
+    const anchors = [...html.matchAll(/data-help-anchor="([^"]+)"/g)].map((m) => m[1]);
+    assert.equal(new Set(anchors).size, anchors.length, `${role}: an anchor on two tabs would spotlight whichever comes first`);
+    for (const a of expected) assert.ok(anchors.includes(a), `${role}: the ${a} tab must carry its anchor`);
+    const targets = (FTUX_TOURS as Record<string, Array<{ target: string }>>)[role].map((s) => s.target.match(/'([^']+)'/)![1]);
+    for (const a of expected) assert.ok(targets.includes(a), `${role}: ${a} is a step of this role's tour`);
+  }
+});
+
+test("F128: the tour still renders on the server, where there is no window to measure", async () => {
+  // The layout mounts FTUXTour for every user who has not seen it, so its
+  // first render is a server render. Reading window.innerWidth there throws
+  // and takes the whole authenticated layout down with it.
+  const { FTUXTour } = await import("../../apps/web/src/components/ftux/FTUXTour.tsx");
+  assert.equal(typeof (globalThis as Record<string, unknown>).window, "undefined");
+  const html = await render(h(FTUXTour, { role: "mentor", ftuxSeenAt: null }));
+  const cap = openingTags(html, "div").find((t) => (attr(t, "class") ?? "") === "ftux-caption");
+  assert.ok(cap, "the caption renders");
+  assert.match(attr(cap, "style") ?? "", /visibility:hidden/, "unplaced until measured, not parked where a phone cannot show it");
 });

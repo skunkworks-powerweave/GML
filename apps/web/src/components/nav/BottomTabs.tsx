@@ -39,6 +39,24 @@ const TAB_KEY: Record<string, string> = {
   "uploads": "uploads",
 };
 
+/**
+ * Tab id → the id of the sidebar item that leads to the same page, so the tab
+ * carries the same data-help-anchor (`nav-<id>`). The first-run tour targets
+ * those anchors; a phone renders no sidebar, so without them every step but
+ * the last had nothing to point at. The two shells never render together, so
+ * no anchor appears twice on a page. `inbox` has no sidebar item.
+ */
+const TAB_HELP_ANCHOR: Record<string, string> = {
+  home: "dashboard",
+  learn: "rtt",
+  observe: "observation",
+  pairings: "mentorship",
+  repo: "repo",
+  uploads: "uploads",
+  data: "tbl-all",
+  audit: "audit",
+};
+
 // id → resolver matching the same convention as the sidebar (chrome-counts.ts).
 // Mobile tab ids ("observe", "pairings", "inbox") differ from sidebar nav ids
 // so we keep the mapping local.
@@ -85,6 +103,7 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
           <Link
             key={tab.id}
             href={tab.href}
+            data-help-anchor={TAB_HELP_ANCHOR[tab.id] ? `nav-${TAB_HELP_ANCHOR[tab.id]}` : undefined}
             // The 3px bar and the weight change are visual only.
             aria-current={isActive ? "page" : undefined}
             style={{

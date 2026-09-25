@@ -24,11 +24,12 @@
 // and Topbar.tsx tags its help button with `data-help-anchor='topbar-help'`
 // (the mobile ? FAB carries the same anchor), so every selector in this file
 // resolves on the desktop shell. The anchor used to sit on the notifications
-// bell, so "Help is always here" spotlit the inbox link. On mobile, the BottomTabs use a different id space — those selectors
-// will simply not match, the ring will not paint, and the caption sticks to
-// its default {top:100,left:100} position (matching the prototype's fallback
-// at help.jsx line 524). We accept this on mobile — the FTUX is a desktop
-// pedagogical layer; mobile users see the tour caption but no spotlight.
+// bell, so "Help is always here" spotlit the inbox link. On a phone there is
+// no sidebar: BottomTabs puts the same nav-* anchor on each tab that leads
+// where a sidebar item does, so the steps for those spotlight the tab, and a
+// step with no tab (a mentor's "Pending video reviews") shows its caption as
+// a sheet with no ring. See captionPosition for why the caption used to be
+// unusable on a phone.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -151,6 +152,49 @@ type FTUXTourProps = {
 
 type Rect = { left: number; top: number; width: number; height: number };
 
+/** .ftux-caption's design width, and the gap kept from every screen edge. */
+const CAPTION_WIDTH = 360;
+const EDGE = 12;
+/** A caption's usual height: the label, a title, three lines, the buttons. */
+const CAPTION_HEIGHT = 220;
+/** Kept clear under a target-less caption: the phone's bottom tab bar. */
+const TAB_BAR = 76;
+
+/**
+ * Where the caption goes, for a target at `rect` (null: not on this page)
+ * in a `vw` x `vh` viewport. Always wholly on screen.
+ *
+ * This was `rect ? { top: min(below, vh-220), left: min(max(12, left),
+ * vw-380) } : { top: 100, left: 100 }` under a fixed 360px width, which
+ * assumed a desktop. A phone renders no sidebar, so most steps had no target
+ * and the caption spanned x=100..460 on a 375px screen, with Next entirely
+ * off it inside an overlay that cannot scroll: a first sign-in on a phone
+ * could only Skip. With a target (the ? FAB), vw-380 went negative below
+ * 392px and clipped it on the left instead.
+ */
+export function captionPosition(
+  rect: Rect | null,
+  vw: number,
+  vh: number,
+): { top: number; left: number; width: number; maxHeight: number } {
+  const width = Math.min(CAPTION_WIDTH, vw - 2 * EDGE);
+  const clampLeft = (x: number) => Math.min(Math.max(EDGE, x), vw - width - EDGE);
+  // Nothing to point at: a sheet centred low on the screen, clear of the tabs.
+  const sheet = () => {
+    const top = Math.max(EDGE, vh - CAPTION_HEIGHT - TAB_BAR);
+    return { top, left: clampLeft((vw - width) / 2), width, maxHeight: vh - top - EDGE };
+  };
+  if (!rect) return sheet();
+  const below = rect.top + rect.height + EDGE;
+  if (below + CAPTION_HEIGHT <= vh - EDGE) {
+    return { top: below, left: clampLeft(rect.left), width, maxHeight: vh - below - EDGE };
+  }
+  // No room below (the ? FAB, a bottom tab): above the target, not over it.
+  const top = rect.top - CAPTION_HEIGHT - EDGE;
+  if (top >= EDGE) return { top, left: clampLeft(rect.left), width, maxHeight: CAPTION_HEIGHT };
+  return sheet();
+}
+
 export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
   // Memoised on `role`. The `?? []` fallback allocated a fresh array on every
   // render, so the effect below saw a new dependency each time and re-ran
@@ -159,6 +203,10 @@ export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
   const [dismissed, setDismissed] = useState<boolean>(Boolean(ftuxSeenAt));
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
+  // Measured with the rect, never read from `window` while rendering: this
+  // renders on the server too (the layout mounts it for every first sign-in),
+  // where there is no window, and the first client render must match that.
+  const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null);
   // Guard the PUT — we only want a single fire-and-forget save per
   // skip/finish. Otherwise rapid double-clicks would emit two audit rows.
   const savedRef = useRef(false);
@@ -170,6 +218,7 @@ export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
     const step = steps[i];
     if (!step) return;
     const place = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
       const el = document.querySelector(step.target);
       if (!el) {
         setRect(null);
@@ -212,14 +261,14 @@ export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
   if (!step) return null;
   const lastStep = i === steps.length - 1;
 
-  // Caption placement — same clamping rules as help.jsx lines 521-524.
-  // Falls back to {top:100,left:100} when the target selector misses.
-  const captionPos = rect
-    ? {
-        top: Math.min(rect.top + rect.height + 12, window.innerHeight - 220),
-        left: Math.min(Math.max(12, rect.left), window.innerWidth - 380),
-      }
-    : { top: 100, left: 100 };
+  // Caption placement: see captionPosition. overflowY because a long Hindi or
+  // Bhoti body can outgrow maxHeight; the buttons stay reachable by scrolling
+  // the caption, where they were once unreachable altogether. Hidden until
+  // the first measurement (the server render and hydration), rather than
+  // drawn somewhere a phone cannot show.
+  const captionPos = viewport
+    ? { ...captionPosition(rect, viewport.width, viewport.height), overflowY: "auto" as const }
+    : { visibility: "hidden" as const };
 
   return (
     <div className="ftux-root" role="dialog" aria-label="Product tour" aria-modal="true">
@@ -258,7 +307,7 @@ export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
         />
       )}
 
-      {/* Caption card — 360px wide; Next / Back / Skip controls */}
+      {/* Caption card — up to 360px wide; Next / Back / Skip controls */}
       <div className="ftux-caption" style={captionPos}>
         <div className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
           Tour · step {i + 1} of {steps.length}
