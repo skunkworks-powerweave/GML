@@ -58,6 +58,7 @@ import { createServerClient } from "@supabase/ssr";
 import { hasAnyRole, isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { buildCsp } from "@/lib/csp";
 import { boundSessionCookie, isSecureOrigin, sessionCookieOptions } from "@/lib/supabase/cookies";
+import { mustChangePassword } from "@/lib/password-policy";
 
 type PolicyRule = {
   prefix: string;
@@ -241,11 +242,14 @@ export default async function proxy(request: NextRequest) {
   // near expiry. Calling it is what makes job 1 happen; the claims are a bonus.
   let role: unknown;
   let signedIn = false;
+  let mustChange = false;
   try {
     const { data, error } = await supabase.auth.getClaims();
     if (!error && data?.claims) {
       signedIn = true;
-      role = (data.claims as unknown as Record<string, unknown>).user_role;
+      const claims = data.claims as unknown as Record<string, unknown>;
+      role = claims.user_role;
+      mustChange = mustChangePassword(claims.app_metadata);
     }
   } catch {
     // Treated as signed-out: fail closed.
@@ -271,6 +275,19 @@ export default async function proxy(request: NextRequest) {
     target.search = "";
     target.searchParams.set("from", nextUrl.pathname + (nextUrl.search ?? ""));
     target.searchParams.set("next", nextUrl.pathname);
+    return carryCookies(response, NextResponse.redirect(target));
+  }
+
+  // A password somebody else chose (an administrator created the account or
+  // set it) must be replaced before anything else. The flag is in the token's
+  // app_metadata -- see lib/password-policy.ts -- so this costs no query.
+  // /settings is where it is changed, so it stays reachable. This is a
+  // hand-holding step, not an authorization boundary: the person does hold a
+  // valid session, and the API routes are not redirected.
+  if (mustChange && policy.prefix !== "/settings") {
+    const target = nextUrl.clone();
+    target.pathname = "/settings";
+    target.search = "?password=required";
     return carryCookies(response, NextResponse.redirect(target));
   }
 

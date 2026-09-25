@@ -2,13 +2,11 @@
 
 import { redirect } from "next/navigation";
 import { recoverySessionState } from "@/auth";
+import { passwordPolicyError } from "@/lib/password-policy";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { clearMustChangePassword } from "@/lib/supabase/must-change-password";
 
 export type ResetState = { error?: string };
-
-// Supabase's own floor is 6. Eight is the number this product already told
-// users to expect, and lowering a stated requirement is not an improvement.
-const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * Set a new password for the user holding a recovery session.
@@ -29,9 +27,9 @@ export async function resetPasswordAction(
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
 
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
-  }
+  // The one policy every password-setting path uses (lib/password-policy.ts).
+  const policy = passwordPolicyError(password);
+  if (policy) return { error: policy };
   if (password !== confirm) {
     return { error: "Passwords do not match." };
   }
@@ -78,6 +76,10 @@ export async function resetPasswordAction(
   // defeat the exercise. 'others' keeps THIS session so the redirect lands on a
   // usable dashboard rather than bouncing back to /login.
   await supabase.auth.signOut({ scope: "others" });
+
+  // They chose this password themselves, so one an administrator set for them
+  // no longer needs changing.
+  await clearMustChangePassword(data.user.id, supabase);
 
   redirect("/dashboard");
 }

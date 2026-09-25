@@ -7,6 +7,7 @@
 // was a 404.
 
 import { useActionState, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { changePasswordAction, type ChangePasswordState } from "./actions";
 
 const field: React.CSSProperties = {
@@ -19,7 +20,10 @@ const field: React.CSSProperties = {
 };
 
 export function ChangePasswordForm() {
-  const [open, setOpen] = useState(false);
+  // proxy.ts sends someone here with ?password=required while they are still
+  // on a password an administrator set; the form opens and says why.
+  const required = useSearchParams()?.get("password") === "required";
+  const [open, setOpen] = useState(required);
   const [state, formAction, pending] = useActionState<ChangePasswordState | undefined, FormData>(
     changePasswordAction,
     undefined,
@@ -56,6 +60,11 @@ export function ChangePasswordForm() {
 
   return (
     <form action={formAction} style={{ display: "grid", gap: 6, width: "100%", maxWidth: 320 }}>
+      {required ? (
+        <p role="status" data-testid="password-change-required" style={{ fontSize: 12, margin: 0 }}>
+          Your password was set by an administrator. Choose your own to continue.
+        </p>
+      ) : null}
       {/* autoComplete hints so a password manager offers to update the stored
           entry rather than saving a second one. */}
       <input

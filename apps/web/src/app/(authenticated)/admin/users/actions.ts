@@ -22,10 +22,9 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { revokeAllSessions, type RevokeResult } from "@/lib/supabase/sessions";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
+import { MUST_CHANGE_PASSWORD, passwordPolicyError } from "@/lib/password-policy";
 
 export type UserActionState = { error?: string; ok?: string };
-
-const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * Which roles may the caller hand out?
@@ -139,9 +138,8 @@ export async function createUserAction(
   if (!assignableBy(actor.role).includes(role)) {
     return { error: "You cannot assign that role." };
   }
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return { error: `The initial password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
-  }
+  const policy = passwordPolicyError(password);
+  if (policy) return { error: `Initial password: ${policy}` };
 
   const admin = supabaseAdmin();
   const { data, error } = await admin.auth.admin.createUser({
@@ -152,6 +150,9 @@ export async function createUserAction(
     // There is no confirmation email to wait for: SMTP is deferred.
     email_confirm: true,
     user_metadata: { name },
+    // The administrator knows this password; the holder must replace it
+    // before using the site (lib/password-policy.ts, enforced in proxy.ts).
+    app_metadata: { [MUST_CHANGE_PASSWORD]: true },
   });
 
   if (error || !data?.user) {
@@ -199,7 +200,9 @@ export async function createUserAction(
   if (!wrote) noteAuditDegraded("admin/users/createUserAction");
 
   revalidatePath("/admin/users");
-  return { ok: `Created ${email}. Give them the password you set; they can change it in Settings.` };
+  return {
+    ok: `Created ${email}. Give them the password you set; they will be asked to choose their own when they first sign in.`,
+  };
 }
 
 // ── role ──────────────────────────────────────────────────────────────────────
@@ -355,15 +358,19 @@ export async function setPasswordAction(
 
   const targetId = String(formData.get("userId") ?? "");
   const password = String(formData.get("password") ?? "");
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
-  }
+  const policy = passwordPolicyError(password);
+  if (policy) return { error: policy };
 
   const permitted = await canActOn(actor, targetId);
   if (!permitted.ok) return { error: permitted.error };
 
   const admin = supabaseAdmin();
-  const { error } = await admin.auth.admin.updateUserById(targetId, { password });
+  // Marked for change, as at creation: until the holder chooses their own, the
+  // administrator knows it.
+  const { error } = await admin.auth.admin.updateUserById(targetId, {
+    password,
+    app_metadata: { [MUST_CHANGE_PASSWORD]: true },
+  });
   if (error) return { error: error.message };
 
   // End their sessions. An administrator setting a password is either

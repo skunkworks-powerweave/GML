@@ -15,7 +15,9 @@
 // sign-out implementation to keep working.
 
 import { auth, signOut, signInWithPassword } from "@/auth";
+import { passwordPolicyError } from "@/lib/password-policy";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { clearMustChangePassword } from "@/lib/supabase/must-change-password";
 import { recordAudit } from "@/lib/audit";
 
 export async function signOutAction(): Promise<void> {
@@ -38,8 +40,6 @@ export async function signOutAction(): Promise<void> {
 
 export type ChangePasswordState = { error?: string; ok?: string };
 
-const MIN_PASSWORD_LENGTH = 8;
-
 export async function changePasswordAction(
   _prev: ChangePasswordState | undefined,
   formData: FormData,
@@ -52,9 +52,8 @@ export async function changePasswordAction(
   const confirm = String(formData.get("confirmPassword") ?? "");
 
   if (!current) return { error: "Enter your current password." };
-  if (next.length < MIN_PASSWORD_LENGTH) {
-    return { error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
-  }
+  const policy = passwordPolicyError(next);
+  if (policy) return { error: policy };
   if (next !== confirm) return { error: "The new passwords do not match." };
   if (next === current) return { error: "That is your current password." };
 
@@ -93,6 +92,10 @@ export async function changePasswordAction(
   // the exercise. 'others' keeps THIS session so they are not bounced to
   // /login the instant it succeeds.
   await supabase.auth.signOut({ scope: "others" }).catch(() => undefined);
+
+  // A password they chose themselves: lift the must-change flag an
+  // administrator-set one carries, and re-mint this browser's token without it.
+  await clearMustChangePassword(session.user.id, supabase);
 
   // Never log the password, its length, or any derivative.
   void recordAudit({

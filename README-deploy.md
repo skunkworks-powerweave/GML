@@ -110,6 +110,23 @@ browser-side limits; they do not stop a copied cookie. The two Supabase
 settings are enforced by Supabase itself and do. Without them a refresh token
 never expires.
 
+**f) Make Supabase enforce the password policy.** Authentication → Sign In /
+Providers → *Email*:
+
+- *Minimum password length*: **8** (Supabase's default is 6);
+- *Password requirements*: **Letters and digits**;
+- *Secure password change*: **on**.
+
+Then Authentication → Attack Protection → *Prevent use of leaked passwords*:
+**on**.
+
+The application checks length on every form that sets a password, but a
+signed-in user can also call Supabase directly with their own session, and
+there only Supabase's settings apply: 6 characters and no other checks unless
+you change them. *Secure password change* makes Supabase ask for a fresh
+sign-in before a long-lived session can set a new password, so an unattended
+browser cannot be used to take over the account that way.
+
 ### 2.3 Optional: outbound email
 
 SMTP is configured **in Supabase** (Authentication → Emails → SMTP Settings),
@@ -420,14 +437,21 @@ a stack with no schema "healthy".
 
 ### Creating accounts
 
-`/admin/users`. Set an initial password and hand it over; the account holder
-changes it in Settings. There is no invite email unless you have configured SMTP
-(§2.3).
+`/admin/users`. Set an initial password and hand it over. The first time the
+account holder signs in, every page sends them to Settings until they choose a
+password of their own; the same happens after you set someone's password for
+them. There is no invite email unless you have configured SMTP (§2.3).
+
+The account the seed creates from `SUPER_ADMIN_INITIAL_PASSWORD` is not marked
+this way. Change its password in Settings at first sign-in, then delete the
+value from `.env`, where it would otherwise remain the most privileged
+account's live password.
 
 Deactivating an account does three things: sets the profile inactive (the hook
 then refuses to mint tokens), ends the user's sessions on every device, and bans
 the auth user so the correct password no longer works. Residual access is the
-access token already in their browser — hence §2.2b.
+access token already in their browser — hence §2.2b. Demoting an administrator
+also ends their sessions, and their admin access stops at once.
 
 ### Logs
 
