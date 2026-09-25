@@ -105,6 +105,20 @@ export type ValidationError = { field: string; message: string };
 export const MAX_TEXT_LENGTH = 5000;
 
 /**
+ * A text answer with its line breaks as the browser counted them: LF, one
+ * character each.
+ *
+ * A textarea's maxlength counts a line break as one character, but a form
+ * posts every line break as CRLF, and the server's decoders keep the CR. So an
+ * answer the browser allowed at exactly MAX_TEXT_LENGTH arrived one character
+ * longer per line break and was refused as too long. Lengths are measured on
+ * this, and the observation stage forms store it.
+ */
+export function normaliseLineBreaks(s: string): string {
+  return s.replace(/\r\n?/g, "\n");
+}
+
+/**
  * Kinds whose stored answer is a number, not one of `options`.
  *
  * `likert` belongs here for the same reason `rating` does: both renderers
@@ -151,7 +165,7 @@ export function validateResponses(
     }
 
     for (const raw of values) {
-      if (raw.length > MAX_TEXT_LENGTH) {
+      if (normaliseLineBreaks(raw).length > MAX_TEXT_LENGTH) {
         errors.push({
           field: field.name,
           message: `${label} is too long (max ${MAX_TEXT_LENGTH} characters).`,
@@ -213,9 +227,11 @@ export function validateResponses(
       continue;
     }
 
-    // Non-numeric fields can still carry min/max as a length bound.
+    // Non-numeric fields can still carry min/max as a length bound, counted
+    // as the browser counts it (normaliseLineBreaks).
     if (field.min !== undefined || field.max !== undefined) {
-      for (const v of values) {
+      for (const raw of values) {
+        const v = normaliseLineBreaks(raw);
         if (field.min !== undefined && v.length < field.min) {
           errors.push({
             field: field.name,

@@ -17,7 +17,7 @@
 
 import { eq, sql } from "drizzle-orm";
 import { observationForms, users } from "@gml/db/schema";
-import { validateResponses, type FormField } from "../forms/validate";
+import { normaliseLineBreaks, validateResponses, type FormField } from "../forms/validate";
 import type { Db } from "../visibility";
 import { lookupOwn } from "../lookup";
 
@@ -88,13 +88,17 @@ export type StageParse =
  * Only this stage's own questions are kept (an allow-list), trimmed, and put
  * through the same validator the feedback forms use (required, length cap).
  * The first failing question is reported so the page can name it.
+ *
+ * Line breaks become LF first. The form posts them as CRLF while the
+ * textarea's maxlength counted one character each, so an answer at the cap
+ * with line breaks was refused; what is stored is what was typed.
  */
 export function parseStageResponses(kind: StageKind, formData: FormData): StageParse {
   const fields = STAGE_FORMS[kind].fields;
   const responses: Record<string, string> = {};
   for (const f of fields) {
     const raw = formData.get(f.name);
-    const value = typeof raw === "string" ? raw.trim() : "";
+    const value = typeof raw === "string" ? normaliseLineBreaks(raw).trim() : "";
     if (value) responses[f.name] = value;
   }
   const errors = validateResponses(fields, responses);
