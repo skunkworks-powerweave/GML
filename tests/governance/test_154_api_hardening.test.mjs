@@ -39,6 +39,11 @@ const TUS_PATH = "apps/web/src/app/api/uploads/tus/route.ts";
 // actions that bracket a direct browser -> Storage transfer.
 const UPLOAD_ACTIONS_PATH = "apps/web/src/app/(authenticated)/uploads/actions.ts";
 const UPLOAD_LIB_PATH = "apps/web/src/lib/video/upload.ts";
+// The context check itself (assertContextAllowed). It lives outside actions.ts
+// so the /uploads page can run the same check before naming the cycle, meeting
+// or pairing a link points at: every export of a "use server" module is a
+// server action the browser can call, and the check is not one.
+const UPLOAD_CONTEXT_PATH = "apps/web/src/app/(authenticated)/uploads/context.ts";
 const FORM_DRAFT_PATH = "apps/web/src/app/api/form-drafts/[id]/route.ts";
 const HELPDESK_PATH = "apps/web/src/app/api/helpdesk/tickets/route.ts";
 const SPEC_DIR = "specs/154-api-hardening";
@@ -433,9 +438,9 @@ test("spec 154 — the fix is documented inline so future contributors don't qui
       "the two hand-maintained copies it replaced were both set to an invalid 5 MB",
   );
   assert.match(
-    read(UPLOAD_ACTIONS_PATH),
+    read(UPLOAD_CONTEXT_PATH),
     /contextId arrives from the browser and is attacker-chosen/,
-    "uploads/actions.ts must state why context authorisation exists -- an authentication " +
+    "uploads/context.ts must state why context authorisation exists -- an authentication " +
       "check alone would let a teacher write into another teacher's evidence",
   );
 });

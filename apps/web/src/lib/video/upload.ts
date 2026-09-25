@@ -115,6 +115,8 @@ export async function beginUpload(opts: {
   contentType: string;
   contextType: UploadContextType;
   contextId?: string | null;
+  /** 1 or 4 for a 'mentee_quarterly' video; null otherwise (migration 0039). */
+  contextQuarter?: number | null;
 }): Promise<BeginUploadResult | { error: string }> {
   const contentType = ALLOWED_VIDEO_TYPES.has(opts.contentType)
     ? opts.contentType
@@ -152,6 +154,7 @@ export async function beginUpload(opts: {
   // inside the window the reconciler leaves it open (packages/db/src/uploads.ts).
   const filename = opts.filename.slice(0, 255);
   const contextId = opts.contextId ?? null;
+  const contextQuarter = opts.contextQuarter ?? null;
   const [unfinished] = await db
     .select({ submissionId: videoSubmissions.id, objectKey: files.objectKey })
     .from(videoSubmissions)
@@ -163,6 +166,8 @@ export async function beginUpload(opts: {
         eq(videoSubmissions.status, "received"),
         eq(videoSubmissions.contextType, opts.contextType),
         contextId ? eq(videoSubmissions.contextId, contextId) : isNull(videoSubmissions.contextId),
+        // The same file picked again for the OTHER quarter is a new video.
+        contextQuarter ? eq(videoSubmissions.contextQuarter, contextQuarter) : isNull(videoSubmissions.contextQuarter),
         eq(files.status, "uploading"),
         eq(files.originalFilename, filename),
         eq(files.sizeBytes, opts.sizeBytes),
@@ -210,6 +215,7 @@ export async function beginUpload(opts: {
       status: "received",
       contextType: opts.contextType,
       contextId,
+      contextQuarter,
       // THE COLUMN THAT HAD NO WRITERS. `submitted_by_user_id` was declared,
       // indexed, read by lib/authz.ts, by the "My uploads" filter and by three
       // dashboard counts -- and written by nothing, anywhere. So the ownership

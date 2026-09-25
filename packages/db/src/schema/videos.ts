@@ -10,6 +10,7 @@ import {
   index,
   integer,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -88,6 +89,11 @@ export const videoSubmissions = pgTable(
     reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
     contextType: varchar("context_type", { length: 32 }).notNull(),
     contextId: uuid("context_id"),
+    // Migration 0039. Which quarter a 'mentee_quarterly' video is for: 1 (the
+    // baseline) or 4 (the endline). NULL for every other context. Chosen when
+    // the upload is reserved, so it is on the row that the completion call and
+    // the reconciler both finish from.
+    contextQuarter: smallint("context_quarter"),
     captionRaw: text("caption_raw"), // raw WhatsApp caption (when source='whatsapp')
     // Spec 144 — Meta's webhook delivers the same wa_message_id 2-3 times during
     // their at-least-once retry policy. We dedupe by storing the wa message_id
@@ -119,6 +125,10 @@ export const videoSubmissions = pgTable(
     check(
       "video_submissions_context_type_check",
       sql`${t.contextType} IN ('observation_cycle','teach_back','mentor_meeting','mentee_quarterly','classroom_session','generic')`,
+    ),
+    check(
+      "video_submissions_context_quarter_check",
+      sql`${t.contextQuarter} IS NULL OR (${t.contextType} = 'mentee_quarterly' AND ${t.contextQuarter} IN (1, 4))`,
     ),
     // SM-3 anchor: status='ready' requires hls_master_key non-null AND verified_at non-null
     check(

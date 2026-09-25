@@ -8,20 +8,12 @@
 // between the browser and Supabase Storage.
 
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessCycle, assertCanAccessPairing } from "@/lib/authz";
+import { actorFrom } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
-import { beginUpload, completeUpload, type UploadContextType } from "@/lib/video/upload";
+import { beginUpload, completeUpload } from "@/lib/video/upload";
 import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
-
-const CONTEXT_TYPES: ReadonlySet<string> = new Set([
-  "observation_cycle",
-  "teach_back",
-  "mentor_meeting",
-  "mentee_quarterly",
-  "classroom_session",
-  "generic",
-]);
+import { assertContextAllowed } from "./context";
 
 export type BeginUploadState =
   | {
@@ -42,50 +34,14 @@ export type BeginUploadState =
     }
   | { ok: false; error: string };
 
-/**
- * Check that this user may attach a video to this context BEFORE reserving
- * anything.
- *
- * contextId arrives from the browser and is attacker-chosen. Without this, a
- * teacher could attach their upload to another teacher's observation cycle --
- * which is not a read of someone else's data but a WRITE into it, and would
- * then appear in that cycle's evidence.
- */
-async function assertContextAllowed(
-  actor: NonNullable<ReturnType<typeof actorFrom>>,
-  contextType: UploadContextType,
-  contextId: string | null,
-): Promise<string | null> {
-  if (contextType === "generic" || !contextId) return null;
-
-  switch (contextType) {
-    case "observation_cycle":
-      // Throws notFound() when the actor has no business here.
-      await assertCanAccessCycle(actor, contextId);
-      return null;
-    case "mentor_meeting":
-    case "mentee_quarterly": {
-      // These carry a pairing id.
-      await assertCanAccessPairing(actor, contextId);
-      return null;
-    }
-    case "teach_back":
-    case "classroom_session":
-      // Not scoped to a per-row owner: a teach-back is the uploader's own work,
-      // and a classroom session is programme-wide reference data. The
-      // submission still records who uploaded it.
-      return null;
-    default:
-      return "Unknown upload context.";
-  }
-}
-
 export async function beginUploadAction(input: {
   filename: string;
   sizeBytes: number;
   contentType: string;
   contextType: string;
   contextId?: string | null;
+  /** 1 or 4, for a mentee's quarterly video; nothing else takes one. */
+  quarter?: number | null;
 }): Promise<BeginUploadState> {
   const session = await auth();
   const actor = actorFrom(session);
@@ -102,14 +58,15 @@ export async function beginUploadAction(input: {
     };
   }
 
-  if (!CONTEXT_TYPES.has(input.contextType)) {
-    return { ok: false, error: "Unknown upload context." };
-  }
-  const contextType = input.contextType as UploadContextType;
-  const contextId = input.contextId?.trim() || null;
-
-  const denied = await assertContextAllowed(actor, contextType, contextId);
-  if (denied) return { ok: false, error: denied };
+  // Who may attach to what, and what each context id means: ./context.ts.
+  // Throws notFound() for a target this user may not see.
+  const allowed = await assertContextAllowed(actor, {
+    contextType: input.contextType,
+    contextId: input.contextId,
+    quarter: input.quarter,
+  });
+  if (!allowed.ok) return { ok: false, error: allowed.error };
+  const { contextType, contextId, quarter } = allowed.target;
 
   const result = await beginUpload({
     userId: session.user.id,
@@ -118,6 +75,7 @@ export async function beginUploadAction(input: {
     contentType: input.contentType,
     contextType,
     contextId,
+    contextQuarter: quarter,
   });
   if ("error" in result) return { ok: false, error: result.error };
 
@@ -128,6 +86,7 @@ export async function beginUploadAction(input: {
     metadata: {
       contextType,
       contextId,
+      quarter,
       sizeBytes: input.sizeBytes,
       // A picked-again file continues its earlier reservation (beginUpload).
       resumed: result.resumed,
