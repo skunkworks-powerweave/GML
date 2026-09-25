@@ -538,7 +538,21 @@ export default async function PairingDetailPage({
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
-                {state === "done" ? (
+                {state === "done" && formHref && !viewerIsAdmin && !answeredByViewer.has(formKind) ? (
+                  // CLOSED, BUT NOT BY HER. Only the mentor's form closes a
+                  // quarter, so it can close before the mentee has sent hers.
+                  // "View responses" then led her to a record that shows her
+                  // only her own answers -- none -- and this page, where her
+                  // quarterly forms live, no longer led to the form at all.
+                  <Link
+                    href={formHref}
+                    className="btn btn-sm"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Fill your Q${qNum} form (the quarter is closed)`}
+                  >
+                    Fill your Q{qNum} form →
+                  </Link>
+                ) : state === "done" ? (
                   // The READ-ONLY record. This opened the live form, where
                   // each visit could file another copy and nobody but the
                   // respondent could see the answers at all.
