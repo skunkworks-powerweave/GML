@@ -74,6 +74,10 @@ export default async function CycleDetailPage({
       tone: "error",
     },
     empty_note: { message: "Note text can't be empty.", tone: "warn" },
+    note_too_long: {
+      message: `A note can be at most ${MAX_TEXT_LENGTH.toLocaleString("en-IN")} characters, so this one was not added. Please shorten it and add it again.`,
+      tone: "warn",
+    },
     submit_failed: {
       message:
         "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
@@ -450,6 +454,8 @@ export default async function CycleDetailPage({
             draftVersion={noteDraftVersion}
             rows={3}
             required
+            // The cap addNoteAction enforces (note_too_long).
+            maxLength={MAX_TEXT_LENGTH}
             className="text"
             // Named: a placeholder is not a label, and vanishes as you type.
             aria-label="New note"

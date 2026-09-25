@@ -61,6 +61,7 @@ import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
+import { MAX_TEXT_LENGTH, normaliseLineBreaks } from "@/lib/forms/validate";
 import { formatNoteEntry } from "@/lib/observation/notes";
 import { isUuid } from "@/lib/ids";
 import { notifyCycleParties } from "@/lib/observation/notify";
@@ -509,6 +510,14 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   }
   if (!note) {
     redirect(`/observation/${cycleId}?error=empty_note`);
+  }
+  // THE SAME CAP AS EVERY OTHER ANSWER. Only emptiness was checked, so one
+  // request could append up to Next's 1 MB body limit to a remark every party
+  // to the cycle loads, and repeated notes grew it without bound. Measured as
+  // the note box's maxLength counts it: a line break is one character, though
+  // the form posts it as two.
+  if (normaliseLineBreaks(note).length > MAX_TEXT_LENGTH) {
+    redirect(`/observation/${cycleId}?error=note_too_long`);
   }
 
   // APPEND, do not overwrite.

@@ -188,3 +188,51 @@ test("a forged entry header inside a note stays inside its real author's entry",
     await w.cleanup();
   }
 });
+
+// ── A note has the same length cap as every other answer ─────────────────────
+//
+// addNoteAction checked only that a note was not empty, and the note box had
+// no maxLength, while every stage answer is capped at MAX_TEXT_LENGTH. So one
+// request could append ~1 MB (Next's default body limit) to the remark, which
+// every party to the cycle then loads, and repeated notes grew it without
+// bound. The cap is counted as the browser counts it: a line break is one
+// character, though the form posts it as two.
+
+test("a note over the length cap is refused and the remark is unchanged; one at the cap is added", { skip }, async () => {
+  const w = await observationWorld("notelen");
+  try {
+    const { addNoteAction } = await actions();
+    const { MAX_TEXT_LENGTH } = await import("../../apps/web/src/lib/forms/validate.ts");
+    const cyc = await w.cycle({ status: "observed" });
+    await w.grant(w.observer.id);
+    signIn(w.observer);
+    const remark = async () =>
+      (await w.c.query(`SELECT remark FROM observation_cycles WHERE id = $1`, [cyc.id])).rows[0].remark as string | null;
+
+    const tooLong = await outcome(() => addNoteAction(form({ cycleId: cyc.id, note: "x".repeat(MAX_TEXT_LENGTH + 1) })));
+    assert.deepEqual(tooLong, { kind: "redirect", location: `/observation/${cyc.id}?error=note_too_long` });
+    assert.equal(await remark(), null, "nothing was appended");
+
+    // MAX_TEXT_LENGTH characters as typed, with line breaks posted as CRLF.
+    const typed = `${"y".repeat(MAX_TEXT_LENGTH - 101)}\n${"z".repeat(100)}`;
+    assert.equal(typed.length, MAX_TEXT_LENGTH);
+    const atCap = await outcome(() => addNoteAction(form({ cycleId: cyc.id, note: typed.replace(/\n/g, "\r\n") })));
+    assert.deepEqual(atCap, { kind: "redirect", location: `/observation/${cyc.id}` });
+    assert.ok((await remark())?.endsWith(`(observer): ${typed}`), "the note at the cap was added whole");
+
+    // The box carries the cap, and the refusal says what it is.
+    signIn(w.observer);
+    const { default: CycleDetailPage } = await import("../../apps/web/src/app/(authenticated)/observation/[cycleId]/page.tsx");
+    const html = await render(
+      withAppRouter(
+        await CycleDetailPage({ params: Promise.resolve({ cycleId: cyc.id }), searchParams: Promise.resolve({ error: "note_too_long" }) }),
+      ),
+    );
+    const box = html.match(/<textarea\b[^>]*name="note"[^>]*>/)?.[0] ?? "";
+    assert.match(box, new RegExp(`maxLength="${MAX_TEXT_LENGTH}"`, "i"), box);
+    const alert = elements(html, "div").find((d) => d.open.includes('data-testid="cycle-error"'));
+    assert.match(alert?.text ?? "", /5,000 characters/, alert?.text);
+  } finally {
+    await w.cleanup();
+  }
+});
