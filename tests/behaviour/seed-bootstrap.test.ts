@@ -45,7 +45,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { DATABASE_URL, needsDatabase, tag } from "./_harness.js";
+import { DATABASE_URL, needsDatabase, tag, withRlsProbeLock } from "./_harness.js";
 import { fakeGoTrue } from "./_fake_gotrue.ts";
 
 const skip = needsDatabase();
@@ -560,6 +560,43 @@ test("verify-auth FAILS a deploy that leaves no active super_admin", { skip }, a
         `arms a restore drill that can never pass.\n--- verify-auth\n${out.slice(0, 3000)}`,
     );
   });
+});
+
+// W3-52. For a public table without RLS, verify-auth said "fix: apply
+// _post/002". _post/002 is ledgered in _post_migrations_applied and never runs
+// again: an operator who re-ran migrate saw "_post/002 ... already applied --
+// skipping", as if the fix had done nothing. What re-applies RLS on every
+// deploy is _post/always/001, so the remedy is re-running migrate. The check
+// also looked at ordinary tables only, while always/001 covers partitioned
+// ones too.
+test("verify-auth's remedy for a table without RLS is the step that re-applies it, and it sees partitioned tables", { skip }, async () => {
+  const probe = `rls_probe_${tag("v").slice(-8).replace(/[^a-z0-9]/g, "")}`;
+  // Exclusive: invariants.test.ts must not see this table, and
+  // rls-every-deploy.test.ts's migrate must not lock it down mid-check.
+  await withRlsProbeLock("exclusive", () =>
+    withSeedWorld(["users"], async (w) => {
+      await w.q(`INSERT INTO ${w.schema}.users (id, email, role, active) VALUES (gen_random_uuid(), $1, 'super_admin', true)`, [
+        `${w.schema}.admin@example.invalid`,
+      ]);
+      try {
+        await w.q(`CREATE TABLE public.${probe} (id int PRIMARY KEY)`);
+        await w.q(`CREATE TABLE public.${probe}_p (id int) PARTITION BY LIST (id)`);
+        const out = await verifyAuthIn(w);
+        const fail = new RegExp(`FAIL\\s+RLS enabled on every public table[^\\n]*\\n\\s*fix: ([^\\n]*)`).exec(out);
+        assert.ok(fail, `verify-auth must fail a public table without RLS:\n${out.slice(0, 3000)}`);
+        assert.match(fail[0], new RegExp(`\\b${probe}\\b`), fail[0]);
+        assert.doesNotMatch(
+          fail[1],
+          /_post\/002/,
+          "_post/002 is ledgered and never runs again; following this remedy changes nothing",
+        );
+        assert.match(fail[1], /re-run migrate/i, `the remedy must be the step that re-applies RLS:\n${fail[1]}`);
+        assert.match(fail[0], new RegExp(`\\b${probe}_p\\b`), `a partitioned table without RLS is missed:\n${fail[0]}`);
+      } finally {
+        await w.q(`DROP TABLE IF EXISTS public.${probe}, public.${probe}_p`);
+      }
+    }),
+  );
 });
 
 test("verify-auth passes the check once an active super_admin exists", { skip }, async () => {

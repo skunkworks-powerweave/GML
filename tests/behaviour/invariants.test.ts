@@ -13,7 +13,7 @@ import {
   segmentTtlSeconds,
 } from "@gml/shared/storage/playlist";
 import { uploadKey, ownerFromUploadKey, isBucketName } from "@gml/shared/storage/buckets";
-import { needsDatabase, withClient, tag } from "./_harness.js";
+import { needsDatabase, withClient, withRlsProbeLock, tag } from "./_harness.js";
 
 const skip = needsDatabase();
 
@@ -108,7 +108,8 @@ test("SM-1: deleting a user does NOT destroy their audit trail", { skip }, async
 // ── The Data API stays shut ──────────────────────────────────────────────────
 
 test("every public table has row-level security enabled", { skip }, async () => {
-  await withClient(async (c) => {
+  // Shared: not while another file has a probe table without RLS in place.
+  await withRlsProbeLock("shared", () => withClient(async (c) => {
     const { rows } = await c.query(`
       SELECT c.relname FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -121,7 +122,7 @@ test("every public table has row-level security enabled", { skip }, async () => 
       "a table without RLS is readable through PostgREST by anyone holding the " +
         "anon key, which ships in every browser bundle",
     );
-  });
+  }));
 });
 
 // ── Role checks: exact membership, not rank ──────────────────────────────────

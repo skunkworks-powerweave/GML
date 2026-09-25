@@ -122,12 +122,23 @@ for (const t of ["on_auth_user_created", "on_auth_user_email_changed"]) {
 }
 
 // ── 2. The Data API is shut ──────────────────────────────────────────────────
+// The remedy is re-running migrate, whose _post/always/001 enables RLS (and
+// revokes the API roles' grants) on every public table, every run. It said
+// "apply _post/002", which migrate ledgers and never runs again, so following
+// it printed "_post/002 ... already applied -- skipping" and looked like it
+// had done nothing. Partitioned tables ('p') are checked too, as always/001
+// covers them.
 const open = await q(
   `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname='public' AND c.relkind='r' AND NOT c.relrowsecurity`,
+    WHERE n.nspname='public' AND c.relkind IN ('r','p') AND NOT c.relrowsecurity`,
 );
 open.length
-  ? bad("RLS enabled on every public table", `${open.length} without: ${open.slice(0, 5).map((r) => r.relname).join(", ")}`, "apply _post/002")
+  ? bad(
+      "RLS enabled on every public table",
+      `${open.length} without: ${open.slice(0, 5).map((r) => r.relname).join(", ")}`,
+      "re-run migrate (docker compose run --rm --no-deps migrate): its _post/always/001 enables RLS on every " +
+        "public table on every run. If this still fails after that, RLS was switched off by hand since.",
+    )
   : ok("RLS enabled on every public table");
 
 const anonRead = await fetch(`${URL}/rest/v1/users?select=id&limit=1`, {
