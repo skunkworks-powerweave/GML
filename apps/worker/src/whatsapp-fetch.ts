@@ -94,12 +94,21 @@ async function describeHttpFailure(res: Response): Promise<string> {
   return `HTTP ${res.status}${detail}`;
 }
 
+/** A request's timeout, cut short by the worker's shutdown when there is one. */
+function bounded(timeoutMs: number, stop?: AbortSignal): AbortSignal {
+  return stop ? AbortSignal.any([AbortSignal.timeout(timeoutMs), stop]) : AbortSignal.timeout(timeoutMs);
+}
+
 /**
  * Download the media. Throws, with the reason, on anything that is not a video
  * the right size -- the next attempt asks Graph for a fresh URL, because the
  * one it hands out is short-lived.
+ *
+ * `stop` is the worker's shutdown signal. Without it a download in flight at a
+ * deploy ran on past the drain deadline, the worker exited without handing the
+ * job back, and the lease reaper charged it an attempt fifteen minutes later.
  */
-async function download(p: WhatsAppFetchPayload, deps: FetchDeps): Promise<Uint8Array> {
+async function download(p: WhatsAppFetchPayload, deps: FetchDeps, stop?: AbortSignal): Promise<Uint8Array> {
   const token = deps.env.WHATSAPP_ACCESS_TOKEN?.trim();
   if (!token) {
     throw new Error(
@@ -111,7 +120,7 @@ async function download(p: WhatsAppFetchPayload, deps: FetchDeps): Promise<Uint8
 
   const meta = await deps.fetch(mediaMetadataUrl(p.mediaId, deps.env), {
     headers: auth,
-    signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+    signal: bounded(GRAPH_TIMEOUT_MS, stop),
   });
   if (!meta.ok) {
     const why = await describeHttpFailure(meta);
@@ -121,7 +130,7 @@ async function download(p: WhatsAppFetchPayload, deps: FetchDeps): Promise<Uint8
   const { url } = (await meta.json()) as { url?: string };
   if (!url) throw new Error("Graph media lookup returned no download url");
 
-  const res = await deps.fetch(url, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+  const res = await deps.fetch(url, { headers: auth, signal: bounded(DOWNLOAD_TIMEOUT_MS, stop) });
   if (!res.ok) throw new Error(`media download failed: ${await describeHttpFailure(res)}`);
 
   // An error page served with a 200 was stored as video/mp4 and only failed
@@ -300,10 +309,11 @@ export async function runWhatsAppReply(
 /**
  * The job handler. `attempt` is the queue's count for this run (1-based) and
  * `maxAttempts` its ceiling, so the handler knows when a failure is the last.
+ * `signal` is aborted when the worker begins shutting down (see runJob).
  */
 export async function fetchWhatsAppMedia(
   p: WhatsAppFetchPayload,
-  run: { attempt: number; maxAttempts: number },
+  run: { attempt: number; maxAttempts: number; signal?: AbortSignal },
   overrides: Partial<FetchDeps> = {},
 ): Promise<void> {
   const [row] = await db
@@ -327,7 +337,7 @@ export async function fetchWhatsAppMedia(
     // attempt with that reason, like any other cause, and the last attempt
     // still marks the submission failed.
     const deps: FetchDeps = { fetch: fetchImpl, env, put: overrides.put ?? storagePut() };
-    const bytes = await download(p, deps);
+    const bytes = await download(p, deps, run.signal);
     const sum = checksum(bytes, p.sha256);
     if (sum.matches === false) {
       log.warn("whatsapp media checksum differs from Meta's", { msgId: p.msgId });
@@ -390,6 +400,12 @@ export async function fetchWhatsAppMedia(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     log.warn("whatsapp fetch attempt failed", { msgId: p.msgId, attempt: run.attempt, of: run.maxAttempts, reason: reason.slice(0, 300) });
+    // An attempt that ends once shutdown has begun has no outcome: runJob
+    // hands the job back uncounted, so the re-run is the real last attempt and
+    // decides. Marking it failed here -- and telling the sender to send it
+    // again -- left the re-run nothing to do, and the job was recorded
+    // 'succeeded'.
+    if (run.signal?.aborted) throw err;
     if (run.attempt >= run.maxAttempts) {
       await markFailed(p, reason, run.attempt);
       // Only now: an attempt that will be retried is not news to the sender.

@@ -133,11 +133,13 @@ async function handle(job: ClaimedJob): Promise<void> {
       break;
     // A WhatsApp video the webhook accepted and recorded; see
     // whatsapp-fetch.ts. It throws on failure so runJob() records it for a
-    // retry.
+    // retry. The stop signal cuts a download short at shutdown, as it does a
+    // transcode, so the drain can hand the job back.
     case "whatsapp_fetch":
       await fetchWhatsAppMedia(job.payload as unknown as WhatsAppFetchPayload, {
         attempt: job.attempts,
         maxAttempts: job.maxAttempts,
+        signal: stopping.signal,
       });
       break;
     // The answer to a WhatsApp message that was not a video.

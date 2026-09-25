@@ -231,6 +231,17 @@ test("worker entry consumes the transcode queue from Postgres", () => {
     /case\s+["']transcode["']\s*:[\s\S]{0,200}?transcode480p\(/,
     "the transcode job name must still dispatch to transcode480p",
   );
+  // W3-64. The WhatsApp fetch must get the shutdown signal too, or a download
+  // in flight at a deploy runs past the drain deadline and the job is left to
+  // the lease reaper. tests/behaviour/whatsapp-ingest.test.ts executes what the
+  // fetch does with the signal; this line cannot be: the signal is private to
+  // the process and aborted only by main()'s SIGTERM handler, and the worker's
+  // download goes to Meta's fixed Graph host, which no test may contact.
+  assert.match(
+    src,
+    /case\s+["']whatsapp_fetch["']\s*:[\s\S]{0,300}?fetchWhatsAppMedia\([\s\S]{0,200}?signal:\s*stopping\.signal/,
+    "the fetch must be handed the worker's stop signal, as the transcode is",
+  );
   // The lease is what replaced BullMQ's stalled-job detection, and it is not
   // optional: without it a hard-killed worker leaves a job 'running' forever
   // and the video never transcodes, while a naive timeout instead of a

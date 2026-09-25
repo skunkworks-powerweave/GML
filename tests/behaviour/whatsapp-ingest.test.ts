@@ -278,3 +278,94 @@ test("worker: an HTML error page is refused, not stored as a video", { skip }, a
     }),
   );
 });
+
+// ── Shutdown, retries and refusals (W3-64, W3-65) ────────────────────────────
+
+const REPLIES_ON = { WHATSAPP_ACCESS_TOKEN: "test-token", WHATSAPP_PHONE_NUMBER_ID: "PNID-TEST" };
+
+/**
+ * Graph as fakeGraph() answers it, except that the media download never
+ * answers: only its request's signal ends it. A 100 MB lesson over a slow path
+ * when a deploy begins.
+ */
+function hangingDownload() {
+  const sent: string[] = [];
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("https://graph.facebook.com/") && url.endsWith("/messages")) {
+      sent.push(String(JSON.parse(String(init?.body)).text?.body));
+      return Response.json({ messaging_product: "whatsapp", messages: [{ id: "wamid.reply" }] });
+    }
+    if (url.startsWith("https://graph.facebook.com/")) return Response.json({ url: "https://lookaside.fbsbx.example/media/abc" });
+    return new Promise<Response>((_, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }) as typeof globalThis.fetch;
+  return { sent, fetch };
+}
+
+// W3-64. The fetch was given no stop signal, only its own timeouts, so a
+// shutdown could not cut a download short: past the 20 s drain deadline the
+// worker exited without handing the job back, and the reaper charged it an
+// attempt fifteen minutes later.
+test("W3-64: a shutdown cuts a fetch's download short, and its last attempt records no outcome", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fetchWhatsAppMedia } = await fetcher();
+      const { id, job } = await acceptAndClaim(w);
+      const graph = hangingDownload();
+      const stop = new AbortController();
+      const run = fetchWhatsAppMedia(
+        job.payload as never,
+        { attempt: job.maxAttempts, maxAttempts: job.maxAttempts, signal: stop.signal } as never,
+        { fetch: graph.fetch, put: fakeStorage().put, env: REPLIES_ON },
+      );
+      setTimeout(() => stop.abort(), 50);
+      const ended = await Promise.race([
+        run.then(
+          () => "resolved",
+          () => "rejected",
+        ),
+        new Promise((r) => setTimeout(() => r("still downloading"), 5_000)),
+      ]);
+      assert.equal(ended, "rejected", "the download must stop when shutdown begins, not wait out its five-minute timeout");
+      // The job is handed back uncounted (runJob, release()), so the re-run is
+      // the real last attempt: this one must leave nothing decided.
+      const sub = await w.submission(id);
+      assert.equal(sub!.status, "received");
+      assert.equal(sub!.file_status, "uploading");
+      assert.deepEqual(graph.sent, [], "the sender is not told to send it again by an attempt that will be re-run");
+      assert.deepEqual(await w.audits("whatsapp.media.fetch_failed", id), []);
+    }),
+  );
+});
+
+// A last attempt that fails for its own reason while the worker is going away
+// is interrupted too, by runJob's rule (a failure during shutdown is released,
+// uncounted). It used to mark the submission failed and send "Please send it
+// again" first; the released job's re-run then found it failed, did nothing,
+// and was recorded 'succeeded' -- gone from the dead-fetch count on the health
+// banner.
+test("W3-64: a last attempt that fails once shutdown has begun leaves the video waiting for the re-run", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fetchWhatsAppMedia } = await fetcher();
+      const { id, job } = await acceptAndClaim(w);
+      const graph = fakeGraph();
+      const stop = new AbortController();
+      stop.abort();
+      await assert.rejects(
+        fetchWhatsAppMedia(
+          job.payload as never,
+          { attempt: job.maxAttempts, maxAttempts: job.maxAttempts, signal: stop.signal } as never,
+          { fetch: graph.fetch, put: async () => { throw new Error("Storage is going away too"); }, env: REPLIES_ON },
+        ),
+      );
+      const sub = await w.submission(id);
+      assert.equal(sub!.status, "received");
+      assert.notEqual(sub!.file_status, "failed");
+      assert.deepEqual(graph.sent, []);
+    }),
+  );
+});
