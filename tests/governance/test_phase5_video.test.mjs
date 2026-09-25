@@ -89,9 +89,13 @@ test("WhatsApp webhook parses OBS-/TB-/MM- caption prefixes", () => {
 
 test("WhatsApp webhook uses dotted-notation audit actions", () => {
   const src = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
-  for (const action of ["whatsapp.message.received", "whatsapp.media.fetched", "whatsapp.signature_failed"]) {
+  for (const action of ["whatsapp.message.received", "whatsapp.signature_failed"]) {
     assert.match(src, new RegExp(action.replace(/\./g, "\\.")));
   }
+  // F93: the media fetch moved to the worker (the webhook ran it after Meta's
+  // 200, so any failure lost the video), and its audit action moved with it.
+  const worker = read("apps/worker/src/whatsapp-fetch.ts");
+  assert.match(worker, /whatsapp\.media\.fetched/);
 });
 
 // Spec 044 — external link embed

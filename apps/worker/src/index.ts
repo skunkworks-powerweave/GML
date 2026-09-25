@@ -47,10 +47,13 @@ import {
   HEARTBEAT_SECONDS,
   LEASE_SECONDS,
   type ClaimedJob,
+  type QueueName,
 } from "@gml/db/queue";
 import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
 import { transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
+import { fetchWhatsAppMedia } from "./whatsapp-fetch.js";
+import type { WhatsAppFetchPayload } from "@gml/shared/whatsapp/fetch-job";
 import { log } from "./log.js";
 
 export type TranscodeJobInput = {
@@ -103,6 +106,14 @@ async function runJob(job: ClaimedJob): Promise<void> {
       case "transcode":
         await transcode480p(job.payload as unknown as TranscodeJobInput);
         break;
+      // A WhatsApp video the webhook accepted and recorded; see
+      // whatsapp-fetch.ts. It throws on failure so this catch retries it.
+      case "whatsapp_fetch":
+        await fetchWhatsAppMedia(job.payload as unknown as WhatsAppFetchPayload, {
+          attempt: job.attempts,
+          maxAttempts: job.maxAttempts,
+        });
+        break;
       // The nightly retention sweep. The name predates the second table; it is
       // kept because scheduleDailyWork() enqueues it and its dedupe key is what
       // makes the sweep once-per-day.
@@ -139,12 +150,13 @@ async function runJob(job: ClaimedJob): Promise<void> {
 /**
  * One consumer loop.
  *
- * `queue` is a parameter because the QueueName union has always had two members
- * and only one had a consumer -- anything enqueued onto "retention" would have
- * sat there forever with nothing claiming it. A type that invites you to write
- * a job nobody will run is worse than no type.
+ * `queue` is a parameter because the QueueName union once had two members and
+ * only one had a consumer -- anything enqueued onto "retention" would have sat
+ * there forever with nothing claiming it. A type that invites you to write a
+ * job nobody will run is worse than no type, so every member of QueueName has a
+ * consumer started in main().
  */
-async function consumer(queue: "transcode" | "retention", slot: number): Promise<void> {
+async function consumer(queue: QueueName, slot: number): Promise<void> {
   while (!shuttingDown) {
     let job: ClaimedJob | null = null;
     try {
@@ -274,6 +286,9 @@ async function main(): Promise<void> {
     // needs exactly one runner.
     ...Array.from({ length: CONCURRENCY }, (_, i) => consumer("transcode", i)),
     consumer("retention", 0),
+    // WhatsApp media fetches: network-bound, short, and a teacher is waiting
+    // for the answer, so they do not queue behind a transcode.
+    consumer("whatsapp", 0),
   ]);
 }
 

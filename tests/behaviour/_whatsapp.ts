@@ -1,0 +1,220 @@
+// Shared fixtures for the WhatsApp ingest behaviour tests.
+//
+// The webhook route is executed for real: a correctly signed Meta payload goes
+// into its POST handler, against a real Postgres. What is replaced is only what
+// sits outside the process -- Meta's Graph API and Supabase Storage -- and, for
+// the webhook, Next's `after()`, which throws outside a request scope. The
+// stand-in records the callbacks instead of running them, which is exactly the
+// state a deployment is in between answering Meta and running the deferred
+// work: if the process restarts there, whatever was only in a closure is gone.
+
+import { createRequire } from "node:module";
+import { createHmac } from "node:crypto";
+import { Client } from "pg";
+import "./_ui.js"; // the @/ alias and framework stubs, for apps/web modules
+import { DATABASE_URL, tag } from "./_harness.js";
+
+const webRequire = createRequire(new URL("../../apps/web/package.json", import.meta.url));
+
+/** Callbacks the route handed to after(), not yet run. */
+export const deferred: Array<() => unknown> = [];
+(webRequire("next/server") as { after: (cb: () => unknown) => void }).after = (cb) => {
+  deferred.push(cb);
+};
+
+/** Run what the route deferred, as Next would once the response is sent. */
+export async function runDeferred(): Promise<void> {
+  while (deferred.length) await deferred.shift()!();
+}
+
+export const SECRET = "test-app-secret";
+
+export const route = () => import("../../apps/web/src/app/api/webhooks/whatsapp/route.ts");
+
+export function signed(body: string, secret = SECRET): Request {
+  return new Request("http://127.0.0.1:3100/api/webhooks/whatsapp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-hub-signature-256": "sha256=" + createHmac("sha256", secret).update(body).digest("hex"),
+    },
+    body,
+  });
+}
+
+/** Meta's envelope around a batch of messages. */
+export function envelope(messages: unknown[]): string {
+  return JSON.stringify({
+    object: "whatsapp_business_account",
+    entry: [
+      {
+        id: "WABA-TEST",
+        changes: [
+          {
+            field: "messages",
+            value: {
+              messaging_product: "whatsapp",
+              metadata: { display_phone_number: "15550001111", phone_number_id: "PNID-TEST" },
+              messages,
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
+
+export function videoMessage(o: { id: string; from: string; caption?: string; mediaId?: string; mime?: string }) {
+  return {
+    from: o.from,
+    id: o.id,
+    timestamp: String(Math.floor(Date.now() / 1000)),
+    type: "video",
+    video: {
+      id: o.mediaId ?? `MEDIA-${o.id}`,
+      mime_type: o.mime ?? "video/mp4",
+      sha256: "0".repeat(64),
+      ...(o.caption !== undefined ? { caption: o.caption } : {}),
+    },
+  };
+}
+
+/** A long lesson attached through WhatsApp's "Document" picker. */
+export function documentMessage(o: { id: string; from: string; caption?: string; mime?: string }) {
+  return {
+    from: o.from,
+    id: o.id,
+    timestamp: String(Math.floor(Date.now() / 1000)),
+    type: "document",
+    document: {
+      id: `MEDIA-${o.id}`,
+      mime_type: o.mime ?? "video/mp4",
+      filename: "lesson-recording.mp4",
+      sha256: "0".repeat(64),
+      ...(o.caption !== undefined ? { caption: o.caption } : {}),
+    },
+  };
+}
+
+export type Person = { userId: string; phone: string };
+
+export type World = {
+  c: Client;
+  T: string;
+  /** A fresh WhatsApp message id under this world's tag. */
+  wamid: () => string;
+  teacher: Person & { teacherId: string };
+  otherTeacher: Person & { teacherId: string };
+  cycleCode: string;
+  cycleId: string;
+  otherCycleCode: string;
+  otherCycleId: string;
+  submission: (wamid: string) => Promise<Record<string, unknown> | undefined>;
+  jobs: (wamid: string) => Promise<Array<Record<string, unknown>>>;
+  audits: (action: string, wamid: string) => Promise<Array<Record<string, unknown>>>;
+};
+
+/** A ten-digit Indian mobile number no other test will hold. */
+function phone(): string {
+  return "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
+}
+
+export async function withWorld(body: (w: World) => Promise<void>): Promise<void> {
+  const c = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5000 });
+  await c.connect();
+  const T = tag("wa").replace(/-/g, "");
+  let n = 0;
+  const one = async (q: string, params: unknown[]): Promise<string> => (await c.query(q, params)).rows[0].id as string;
+  const district = await one(`INSERT INTO districts (name, code) VALUES ($1, $2) RETURNING id`, [`D ${T}`, T.slice(-12)]);
+  const zone = await one(`INSERT INTO zones (district_id, name) VALUES ($1, $2) RETURNING id`, [district, `Z ${T}`]);
+  const school = await one(`INSERT INTO schools (zone_id, name, code) VALUES ($1, $2, $3) RETURNING id`, [zone, `S ${T}`, T.slice(-12)]);
+  const person = async (label: string) => {
+    const p = phone();
+    const userId = await one(
+      `INSERT INTO users (id, email, name, role) VALUES (gen_random_uuid(), $1, $2, 'teacher') RETURNING id`,
+      [`${label}.${T}@example.test`, `${label} ${T}`],
+    );
+    // Entered the way an administrator types it, not the way Meta sends it.
+    const teacherId = await one(
+      `INSERT INTO teachers (user_id, school_id, full_name, phone) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [userId, school, `${label} ${T}`, `+91 ${p.slice(0, 5)} ${p.slice(5)}`],
+    );
+    return { userId, teacherId, phone: `91${p}` };
+  };
+  const teacher = await person("teacher");
+  const otherTeacher = await person("other");
+  const year = 9000 + Math.floor(Math.random() * 999);
+  const cycleCode = `OBS-${year}-${String(Math.floor(Math.random() * 900) + 100)}`;
+  const otherCycleCode = `OBS-${year}-${String(Math.floor(Math.random() * 900) + 100)}X`;
+  const cycle = (code: string, teacherId: string) =>
+    one(
+      `INSERT INTO observation_cycles (code, teacher_id, kind, topic, scheduled_at) VALUES ($1, $2, 'evaluative', 'Fractions', now()) RETURNING id`,
+      [code, teacherId],
+    );
+  const cycleId = await cycle(cycleCode, teacher.teacherId);
+  const otherCycleId = await cycle(otherCycleCode, otherTeacher.teacherId);
+
+  const w: World = {
+    c,
+    T,
+    wamid: () => `wamid.${T}${++n}`,
+    teacher,
+    otherTeacher,
+    cycleCode,
+    cycleId,
+    otherCycleCode,
+    otherCycleId,
+    submission: async (wamid) =>
+      (
+        await c.query(
+          `SELECT v.*, f.status AS file_status, f.object_key, f.bucket, f.mime_type AS file_mime
+             FROM video_submissions v JOIN files f ON f.id = v.file_id
+            WHERE v.whatsapp_message_id = $1`,
+          [wamid],
+        )
+      ).rows[0],
+    jobs: async (wamid) =>
+      (await c.query(`SELECT * FROM jobs WHERE payload->>'msgId' = $1 OR dedupe_key = $2 ORDER BY created_at`, [wamid, `wa:${wamid}`]))
+        .rows,
+    audits: async (action, wamid) =>
+      (await c.query(`SELECT * FROM audit_log WHERE action = $1 AND metadata->>'msgId' = $2`, [action, wamid])).rows,
+  };
+  try {
+    await body(w);
+  } finally {
+    const like = `wamid.${T}%`;
+    const subs = (await c.query(`SELECT id, file_id FROM video_submissions WHERE whatsapp_message_id LIKE $1`, [like])).rows;
+    await c.query(`DELETE FROM jobs WHERE payload->>'msgId' LIKE $1 OR dedupe_key LIKE $2`, [like, `wa:${like}`]);
+    for (const s of subs) await c.query(`DELETE FROM jobs WHERE dedupe_key = $1`, [`submission:${s.id}`]);
+    await c.query(`DELETE FROM video_submissions WHERE whatsapp_message_id LIKE $1`, [like]);
+    await c.query(`DELETE FROM files WHERE object_key LIKE $1`, [`whatsapp/${like}`]);
+    await c.query(`DELETE FROM observation_cycles WHERE id = ANY($1)`, [[cycleId, otherCycleId]]);
+    await c.query(`DELETE FROM teachers WHERE id = ANY($1)`, [[teacher.teacherId, otherTeacher.teacherId]]);
+    await c.query(`DELETE FROM users WHERE id = ANY($1)`, [[teacher.userId, otherTeacher.userId]]);
+    await c.query(`DELETE FROM schools WHERE id = $1`, [school]);
+    await c.query(`DELETE FROM zones WHERE id = $1`, [zone]);
+    await c.query(`DELETE FROM districts WHERE id = $1`, [district]);
+    await c.end();
+  }
+}
+
+/** Run a body with WhatsApp configured the way compose allows: secret set, token not. */
+export async function withEnv(vars: Record<string, string | undefined>, body: () => Promise<void>): Promise<void> {
+  const saved: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) {
+    saved[k] = process.env[k];
+    if (vars[k] === undefined) delete process.env[k];
+    else process.env[k] = vars[k];
+  }
+  try {
+    await body();
+  } finally {
+    for (const k of Object.keys(saved)) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+}
+
+/** recordAudit is fire-and-forget; give it a moment to land. */
+export const settle = () => new Promise((r) => setTimeout(r, 300));

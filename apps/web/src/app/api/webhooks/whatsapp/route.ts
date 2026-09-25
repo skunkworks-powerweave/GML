@@ -2,18 +2,25 @@
 //
 // Flow:
 //   1. Teacher sends a video to the GML number with a caption like
-//      `OBS-2026-001` (observation cycle) or `TB-eng-grade5` (teach-back).
+//      `OBS-2026-001` (observation cycle) or `TB-<uuid>` (teach-back). A video
+//      attached through WhatsApp's Document picker counts too.
 //   2. Meta calls this webhook with the message metadata.
-//   3. We verify the signature, fetch the media via Graph API, store it to
-//      MinIO, create video_submissions row with source='whatsapp', then
-//      enqueue a the job queue transcode_jobs row (spec 039 + 040).
-//   4. Once transcoded, the row moves to status='ready' and the teacher's
+//   3. We verify the signature, work out which cycle / teach-back / meeting the
+//      caption names, and -- in ONE transaction -- insert the files row
+//      (status 'uploading'), the video_submissions row (status 'received',
+//      with the Graph media id and the sender) and a 'whatsapp_fetch' job on
+//      the Postgres queue. Only then is Meta told 200.
+//   4. The worker (apps/worker/src/whatsapp-fetch.ts) claims the job, fetches
+//      the media from the Graph API, stores it, and queues the transcode. A
+//      failure there is retried with backoff and, if it never succeeds, marks
+//      the submission failed with the reason and shows on /admin/whatsapp-log.
+//   5. Once transcoded, the row moves to status='ready' and the teacher's
 //      cycle/teach-back drill-in shows the playable HLS link.
 //
-// Meta deletes media 30 days after delivery, so we fetch immediately and
-// retain our copy.
+// Meta deletes media about 30 days after delivery, so the fetch is queued at
+// once and the media id is kept for a retry inside that window.
 
-import { NextResponse, after } from "next/server";
+import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "@gml/db";
 import {
@@ -24,11 +31,18 @@ import {
   users,
   teachers,
 } from "@gml/db/schema";
+import { enqueue } from "@gml/db/queue";
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
-import { storage, BUCKETS } from "@/lib/video/storage";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { BUCKETS } from "@gml/shared/storage/buckets";
 import { recordAudit } from "@/lib/audit";
-import { enqueueTranscode } from "@/lib/queue";
-import { mediaMetadataUrl } from "@gml/shared/whatsapp/graph";
+import {
+  WHATSAPP_FETCH_JOB,
+  WHATSAPP_FETCH_MAX_ATTEMPTS,
+  WHATSAPP_QUEUE,
+  whatsappFetchDedupeKey,
+  type WhatsAppFetchPayload,
+} from "@gml/shared/whatsapp/fetch-job";
 
 // Caption-format UUID validator. TB-<uuid> and MM-<uuid> branches require a
 // canonical lowercase-or-uppercase 8-4-4-4-12 hex group; anything else falls
@@ -75,70 +89,128 @@ export async function POST(req: Request) {
 
   // Meta sends a batch of "entry" -> "changes" -> "value" -> "messages".
   //
-  // The ingest runs in `after()`, so this handler returns 200 immediately and
-  // the media fetch happens once the response is on the wire. Meta times a
-  // webhook out at roughly 20 seconds and RETRIES on timeout; fetching a video
-  // from the Graph API and uploading it to Storage inside the request meant a
-  // slow link produced duplicate deliveries of work that was already in flight.
+  // ACCEPT DURABLY, THEN ANSWER. Each video becomes a submission row and a
+  // queued fetch job BEFORE the 200 (acceptVideoMessage). This used to be the
+  // other way round: the whole ingest ran in after(), once Meta had its 200,
+  // and Meta redelivers only a webhook that did NOT get a 2xx -- so a blank or
+  // expired access token, a Graph or Storage error, or a restart mid-ingest
+  // lost the video for good, with nothing recorded to fetch it again.
   //
-  // Duplicates are still possible -- Meta can retry for reasons of its own --
-  // and remain harmless: ingestVideoMessage pre-checks whatsappMessageId and
-  // the insert carries onConflictDoNothing against the partial unique index,
-  // so the second delivery is audited as a replay and does nothing.
-  const pending: Array<() => Promise<void>> = [];
-  for (const entry of body.entry ?? []) {
-    for (const change of entry.changes ?? []) {
-      for (const msg of change.value?.messages ?? []) {
-        if (msg.type !== "video") continue;
-        const phone = change.value?.metadata?.display_phone_number;
-        pending.push(() => ingestVideoMessage(msg, phone));
-      }
-    }
-  }
-
-  if (pending.length > 0) {
-    after(async () => {
-      for (const run of pending) {
-        try {
-          await run();
-        } catch (err) {
-          // after() work has no response to fail; log loudly so an operator can
-          // find it, and let the remaining messages in the batch proceed.
-          console.error("[whatsapp] ingest failed after response", err);
+  // What stays in the request is database work only, so the answer is still
+  // quick; the slow part (the Graph download) is in the worker, which is why
+  // this handler cannot hit Meta's ~20 s timeout the way the old in-request
+  // fetch did.
+  //
+  // If the database write fails, the answer is a 500 and Meta redelivers.
+  // Messages earlier in the same batch that were already accepted are then
+  // replays: the pre-check and the unique index on whatsapp_message_id make a
+  // second delivery a no-op.
+  try {
+    for (const entry of body.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        for (const msg of change.value?.messages ?? []) {
+          const phone = change.value?.metadata?.display_phone_number;
+          const media = inboundVideo(msg);
+          if (!media) {
+            // Anything that is not a video is not ingested -- but it is not
+            // dropped without trace either, which is what `continue` did.
+            void recordAudit({
+              action: "whatsapp.message.ignored",
+              entityType: "webhook",
+              metadata: {
+                msgId: msg.id,
+                type: msg.type,
+                mime: msg.document?.mime_type ?? null,
+                from: msg.from,
+                to: phone,
+              },
+            });
+            continue;
+          }
+          await acceptVideoMessage(msg, media, phone);
         }
       }
-    });
+    }
+  } catch (err) {
+    console.error("[whatsapp] could not record an inbound message; answering 500 so Meta redelivers", err);
+    return NextResponse.json({ error: "ingest_failed" }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });
 }
+
+type MediaObject = { id: string; mime_type?: string; caption?: string; sha256?: string; filename?: string };
+
+type WhatsAppMessage = {
+  type: string;
+  from: string;
+  id: string;
+  timestamp: string;
+  video?: MediaObject;
+  document?: MediaObject;
+};
 
 type WhatsAppPayload = {
   entry?: Array<{
     changes?: Array<{
       value?: {
         metadata?: { display_phone_number?: string };
-        messages?: Array<{
-          type: string;
-          from: string;
-          id: string;
-          timestamp: string;
-          video?: { id: string; mime_type: string; caption?: string; sha256?: string };
-        }>;
+        messages?: WhatsAppMessage[];
       };
     }>;
   }>;
 };
 
-async function ingestVideoMessage(
-  msg: NonNullable<NonNullable<NonNullable<WhatsAppPayload["entry"]>[number]["changes"]>[number]["value"]>["messages"] extends (infer M)[] | undefined ? M : never,
+/** The media a message carries, when that media is a video. */
+type InboundVideo = { mediaId: string; mimeType: string; caption: string; sha256: string | null };
+
+/**
+ * The video in a message, whichever WhatsApp picker sent it.
+ *
+ * Meta caps a VIDEO message at 16 MB and recompresses it. A classroom lesson is
+ * far bigger, so WhatsApp makes the teacher send it as a DOCUMENT (up to 100
+ * MB, uncompressed), and many send that way on purpose to keep the quality.
+ * Those arrive as type 'document' with a video/* mime type, and the old
+ * `msg.type !== "video"` filter skipped every one of them before any audit row
+ * was written. A document that is not a video (a PDF lesson plan) is still not
+ * a submission.
+ */
+function inboundVideo(msg: WhatsAppMessage): InboundVideo | null {
+  const media =
+    msg.type === "video"
+      ? msg.video
+      : msg.type === "document" && /^video\//i.test(msg.document?.mime_type ?? "")
+        ? msg.document
+        : undefined;
+  if (!media?.id) return null;
+  return {
+    mediaId: media.id,
+    mimeType: media.mime_type || "video/mp4",
+    caption: (media.caption ?? "").trim(),
+    sha256: media.sha256 ?? null,
+  };
+}
+
+/** A concurrent delivery of the same message won the insert. */
+class ReplayLost extends Error {}
+
+async function acceptVideoMessage(
+  msg: WhatsAppMessage,
+  media: InboundVideo,
   recipientPhone?: string,
 ): Promise<void> {
-  if (!msg.video) return;
   void recordAudit({
     action: "whatsapp.message.received",
     entityType: "video_submission",
-    metadata: { msgId: msg.id, mime: msg.video.mime_type, caption: msg.video.caption, from: msg.from, to: recipientPhone },
+    metadata: {
+      msgId: msg.id,
+      type: msg.type,
+      mediaId: media.mediaId,
+      mime: media.mimeType,
+      caption: media.caption,
+      from: msg.from,
+      to: recipientPhone,
+    },
   });
 
   // Spec 144 — idempotency pre-check. Meta's webhook uses at-least-once
@@ -163,46 +235,10 @@ async function ingestVideoMessage(
     return;
   }
 
-  // 1. Fetch the media URL from Graph API
-  const mediaUrl = await fetchMediaUrl(msg.video.id);
-  if (!mediaUrl) {
-    void recordAudit({ action: "whatsapp.media.url_failed", entityType: "video_submission", metadata: { msgId: msg.id } });
-    return;
-  }
-
-  // 2. Download the bytes
-  const bytes = await downloadMediaBytes(mediaUrl);
-  if (!bytes) {
-    void recordAudit({ action: "whatsapp.media.fetch_failed", entityType: "video_submission", metadata: { msgId: msg.id } });
-    return;
-  }
-  void recordAudit({
-    action: "whatsapp.media.fetched",
-    entityType: "video_submission",
-    metadata: { msgId: msg.id, bytes: bytes.byteLength },
-  });
-
-  // 3. Parse caption to determine context
-  const caption = (msg.video.caption ?? "").trim();
+  // Parse the caption to determine context. The media itself is fetched by the
+  // worker, after this request has recorded everything needed to do so.
+  const caption = media.caption;
   const ctx = parseCaption(caption);
-
-  // 4. Store original to MinIO
-  const objectKey = `whatsapp/${msg.id}.mp4`;
-  await storage.put(BUCKETS.videosOriginal, objectKey, bytes, msg.video.mime_type ?? "video/mp4");
-
-  // 5. Insert files + video_submissions rows
-  const [fileRow] = await db
-    .insert(files)
-    .values({
-      bucket: BUCKETS.videosOriginal,
-      objectKey,
-      mimeType: msg.video.mime_type ?? "video/mp4",
-      sizeBytes: bytes.byteLength,
-      checksumSha256: msg.video.sha256,
-      kind: "video_original",
-      status: "stored",
-    })
-    .returning({ id: files.id });
 
   // Resolve context_id by looking up the parent entity using the caption
   // prefix. Each branch falls through to 'generic' on lookup failure so a
@@ -284,11 +320,6 @@ async function ingestVideoMessage(
     });
   }
 
-  // Spec 144 — set whatsapp_message_id on insert and gracefully handle the
-  // race where two concurrent Meta retries pass the pre-check (above) but
-  // only one wins at the DB layer. onConflictDoNothing leaves the index as
-  // the sole arbiter; the loser path returns no rows and we audit it as a
-  // replay too. Downstream transcode enqueue only fires when sub is defined.
   // ATTRIBUTION. `submitted_by_user_id` had no writer anywhere in the codebase,
   // so every dashboard count and the "my uploads" badge that join through it
   // were permanently zero for the PRIMARY ingest path -- and lib/authz.ts's
@@ -301,29 +332,86 @@ async function ingestVideoMessage(
   // file would lose programme evidence to a data-entry mismatch.
   const submittedByUserId = await resolveSenderUserId(msg.from);
 
-  const inserted = await db
-    .insert(videoSubmissions)
-    .values({
-      fileId: fileRow.id,
-      source: "whatsapp",
-      status: "received",
-      contextType,
-      contextId,
-      captionRaw: caption,
-      whatsappMessageId: msg.id,
-      submittedByUserId,
-    })
-    .onConflictDoNothing({
-      target: videoSubmissions.whatsappMessageId,
-      where: isNotNull(videoSubmissions.whatsappMessageId),
-    })
-    .returning({ id: videoSubmissions.id });
+  // THE DURABLE RECORD: file, submission and fetch job, in one transaction, so
+  // there is never a submission with no job to fetch it or a job with no row
+  // to fill. The transcode is queued by the worker once the bytes are stored;
+  // queueing it here would transcode an object that does not exist yet.
+  const objectKey = `whatsapp/${msg.id}.mp4`;
+  let accepted: { submissionId: string; jobId: string };
+  try {
+    accepted = await db.transaction(async (tx) => {
+      // An upsert, not a plain insert. The key is derived from the message id,
+      // and the previous ingest wrote the files row and the submission in two
+      // separate statements; one that failed between them left a files row
+      // with no submission, and a plain insert would have turned every
+      // redelivery of that message into a unique violation. A concurrent
+      // duplicate delivery is still stopped below, at the submission insert,
+      // which rolls this back with it.
+      const [fileRow] = await tx
+        .insert(files)
+        .values({
+          bucket: BUCKETS.videosOriginal,
+          objectKey,
+          mimeType: media.mimeType,
+          checksumSha256: media.sha256,
+          kind: "video_original",
+          status: "uploading",
+        })
+        .onConflictDoUpdate({
+          target: [files.bucket, files.objectKey],
+          set: { status: "uploading", mimeType: media.mimeType, checksumSha256: media.sha256 },
+        })
+        .returning({ id: files.id });
 
-  const sub = inserted[0];
-  if (!sub) {
-    // Lost the race against a concurrent Meta retry. The other request
-    // already inserted the row and enqueued the transcode; we just audit
-    // and return so this attempt is a true no-op.
+      // Spec 144 — whatsapp_message_id set on insert, and the partial unique
+      // index is the arbiter when two concurrent Meta retries both pass the
+      // pre-check above.
+      const inserted = await tx
+        .insert(videoSubmissions)
+        .values({
+          fileId: fileRow!.id,
+          source: "whatsapp",
+          status: "received",
+          contextType,
+          contextId,
+          captionRaw: caption,
+          whatsappMessageId: msg.id,
+          whatsappMediaId: media.mediaId,
+          whatsappFrom: msg.from,
+          submittedByUserId,
+        })
+        .onConflictDoNothing({
+          target: videoSubmissions.whatsappMessageId,
+          where: isNotNull(videoSubmissions.whatsappMessageId),
+        })
+        .returning({ id: videoSubmissions.id });
+      const sub = inserted[0];
+      if (!sub) throw new ReplayLost();
+
+      const payload: WhatsAppFetchPayload = {
+        msgId: msg.id,
+        videoSubmissionId: sub.id,
+        fileId: fileRow!.id,
+        bucket: BUCKETS.videosOriginal,
+        objectKey,
+        mediaId: media.mediaId,
+        mimeType: media.mimeType,
+        sha256: media.sha256,
+        from: msg.from,
+      };
+      const job = await enqueue(tx as unknown as NodePgDatabase<Record<string, unknown>>, {
+        queue: WHATSAPP_QUEUE,
+        name: WHATSAPP_FETCH_JOB,
+        payload: payload as unknown as Record<string, unknown>,
+        dedupeKey: whatsappFetchDedupeKey(msg.id),
+        maxAttempts: WHATSAPP_FETCH_MAX_ATTEMPTS,
+      });
+      return { submissionId: sub.id, jobId: job.id };
+    });
+  } catch (err) {
+    if (!(err instanceof ReplayLost)) throw err;
+    // Lost the race against a concurrent Meta retry, which recorded the row and
+    // queued the fetch itself; this attempt changed nothing.
     void recordAudit({
       action: "whatsapp.message.replay_ignored",
       entityType: "video_submission",
@@ -332,23 +420,11 @@ async function ingestVideoMessage(
     return;
   }
 
-  // 6. Enqueue the transcode. The worker claims it from the jobs table, runs
-  //    ffmpeg -> HLS 480p, uploads to Storage, then flips the submission to
-  //    'ready'.
-  //
-  //    Deduped on the submission id: Meta re-delivers a webhook it believes
-  //    timed out, and this handler is deliberately not fast.
-  await enqueueTranscode({
-    videoSubmissionId: sub.id,
-    fileId: fileRow.id,
-    bucket: BUCKETS.videosOriginal,
-    objectKey,
-  });
   void recordAudit({
-    action: "transcode.enqueued",
+    action: "whatsapp.fetch.enqueued",
     entityType: "video_submission",
-    entityId: sub.id,
-    metadata: { source: "whatsapp", msgId: msg.id, bucket: BUCKETS.videosOriginal, objectKey },
+    entityId: accepted.submissionId,
+    metadata: { msgId: msg.id, mediaId: media.mediaId, jobId: accepted.jobId, contextType },
   });
 }
 
@@ -393,54 +469,6 @@ function parseCaption(caption: string): {
   return { type: "generic" };
 }
 
-
-async function fetchMediaUrl(mediaId: string): Promise<string | null> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) return null;
-  try {
-    const r = await fetch(mediaMetadataUrl(mediaId), {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (!r.ok) return null;
-    const j = (await r.json()) as { url?: string };
-    return j.url ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * WhatsApp Cloud API caps video at 16 MB, so this is buffered rather than
- * streamed. The cap below is generous headroom over that, and it is enforced
- * rather than assumed: this function fetches a URL supplied by an upstream
- * service into memory, and "the platform promises it is small" is not a memory
- * bound. A response that declares or delivers more is refused.
- */
-const MAX_WHATSAPP_MEDIA_BYTES = 64 * 1024 * 1024;
-
-async function downloadMediaBytes(url: string): Promise<Uint8Array | null> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!token) return null;
-  try {
-    const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (!r.ok) return null;
-
-    const declared = Number(r.headers.get("content-length") ?? "0");
-    if (declared > MAX_WHATSAPP_MEDIA_BYTES) {
-      console.error(`[whatsapp] media declares ${declared} bytes, over the cap — refusing`);
-      return null;
-    }
-
-    const buf = await r.arrayBuffer();
-    if (buf.byteLength > MAX_WHATSAPP_MEDIA_BYTES) {
-      console.error(`[whatsapp] media delivered ${buf.byteLength} bytes, over the cap — discarding`);
-      return null;
-    }
-    return new Uint8Array(buf);
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Verify Meta's HMAC over the RAW body.

@@ -29,7 +29,10 @@
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 
-export type QueueName = "transcode" | "retention";
+// "whatsapp" carries the webhook's media fetches (apps/worker/src/whatsapp-fetch.ts).
+// Its own queue, so a fetch is not stuck behind a 40-minute ffmpeg run on the
+// single transcode slot while the teacher waits to hear the video arrived.
+export type QueueName = "transcode" | "retention" | "whatsapp";
 
 export type ClaimedJob = {
   id: string;

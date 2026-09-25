@@ -22,12 +22,12 @@
 // programme-oversight semantics of /admin/audit and /admin/gates).
 
 import Link from "next/link";
-import { desc, eq, and, gte, lte, inArray } from "drizzle-orm";
+import { desc, eq, and, gte, lte, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { videoSubmissions, auditLog } from "@gml/db/schema";
+import { videoSubmissions, auditLog, files } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
-import { resendTranscodeAction } from "./actions";
+import { resendTranscodeAction, retryWhatsAppFetchAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -125,8 +125,19 @@ export default async function WhatsappIngestLogPage({
       contextId: videoSubmissions.contextId,
       captionRaw: videoSubmissions.captionRaw,
       createdAt: videoSubmissions.createdAt,
+      processingLog: videoSubmissions.processingLog,
+      mediaId: videoSubmissions.whatsappMediaId,
+      fileStatus: files.status,
+      // The webhook records a submission BEFORE its media is fetched, so a row
+      // can be waiting on the worker's fetch. Its latest error is the one thing
+      // that says why -- a missing token, a Graph 401, a Storage refusal.
+      fetchError: sql<string | null>`(
+        SELECT j.last_error FROM jobs j
+         WHERE j.queue = 'whatsapp' AND j.dedupe_key = 'wa:' || ${videoSubmissions.whatsappMessageId}
+         ORDER BY j.created_at DESC LIMIT 1)`,
     })
     .from(videoSubmissions)
+    .innerJoin(files, eq(files.id, videoSubmissions.fileId))
     .where(and(...conds))
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(PAGE_LIMIT);
@@ -252,7 +263,14 @@ export default async function WhatsappIngestLogPage({
                 const phone = phoneBySubmissionId.get(r.id) ?? "—";
                 const caption = (r.captionRaw ?? "").trim();
                 const captionShort = caption.length > 40 ? `${caption.slice(0, 40)}…` : caption || "—";
-                const canResend = RESENDABLE_STATUSES.has(r.status);
+                // No bytes in Storage yet (or ever): a transcode has nothing to
+                // read, so the row offers the fetch again instead -- when the
+                // media id was kept (every row since migration 0036).
+                const awaitingMedia = r.fileStatus !== "stored";
+                const canRetryFetch = awaitingMedia && r.mediaId !== null;
+                const canResend = !awaitingMedia && RESENDABLE_STATUSES.has(r.status);
+                const why =
+                  r.status === "failed" ? r.processingLog : awaitingMedia ? r.fetchError : null;
                 const parsing = parsingLabel(r.contextType);
                 return (
                   <tr key={r.id} className="border-t border-neutral-100">
@@ -277,10 +295,27 @@ export default async function WhatsappIngestLogPage({
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      <span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>{r.status}</span>
+                      <span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>
+                        {awaitingMedia && r.status === "received" ? "awaiting media" : r.status}
+                      </span>
+                      {why ? (
+                        <div className="mt-1 max-w-xs break-words text-[11px] text-rust" data-testid="ingest-error">
+                          {why.length > 200 ? `${why.slice(0, 200)}…` : why}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      {canResend ? (
+                      {canRetryFetch ? (
+                        <form action={retryWhatsAppFetchAction}>
+                          <input type="hidden" name="submissionId" value={r.id} />
+                          <button
+                            type="submit"
+                            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                          >
+                            Retry fetch
+                          </button>
+                        </form>
+                      ) : canResend ? (
                         <form action={resendTranscodeAction}>
                           <input type="hidden" name="submissionId" value={r.id} />
                           <button

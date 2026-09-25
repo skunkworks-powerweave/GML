@@ -82,7 +82,7 @@ test("spec 144: 0017 snapshot lists the new column on public.video_submissions",
   );
 });
 
-test("spec 144: webhook pre-checks WHERE whatsappMessageId = msg.id before media fetch", () => {
+test("spec 144: webhook pre-checks WHERE whatsappMessageId = msg.id before queueing the media fetch", () => {
   const src = read(WEBHOOK_PATH);
   // The select must reference videoSubmissions.whatsappMessageId.
   assert.match(
@@ -90,15 +90,20 @@ test("spec 144: webhook pre-checks WHERE whatsappMessageId = msg.id before media
     /\.select\s*\([^)]*\)\s*\.from\s*\(\s*videoSubmissions\s*\)[\s\S]{0,400}?\.where\s*\(\s*eq\s*\(\s*videoSubmissions\.whatsappMessageId\s*,\s*msg\.id\s*\)/,
     "webhook must SELECT FROM videoSubmissions WHERE whatsappMessageId = msg.id",
   );
-  // The pre-check must short-circuit before fetchMediaUrl is called.
+  // F93: the Graph fetch moved out of the webhook into the worker
+  // (apps/worker/src/whatsapp-fetch.ts), because running it after Meta's 200
+  // made every failure permanent. The pre-check still has to come first, now
+  // ahead of the fetch JOB, so a redelivery neither queues a second fetch nor
+  // wastes Graph egress on one.
   const selectIdx = src.search(/\.from\s*\(\s*videoSubmissions\s*\)/);
-  const fetchIdx = src.search(/fetchMediaUrl\s*\(/);
+  const fetchIdx = src.search(/\bawait\s+enqueue\s*\(/);
   assert.ok(selectIdx > -1, "webhook must perform a SELECT against videoSubmissions");
-  assert.ok(fetchIdx > -1, "webhook must call fetchMediaUrl somewhere");
+  assert.ok(fetchIdx > -1, "webhook must queue the media fetch");
   assert.ok(
     selectIdx < fetchIdx,
-    "pre-check SELECT must run BEFORE fetchMediaUrl so retries don't waste Graph API egress",
+    "pre-check SELECT must run BEFORE the fetch is queued so retries don't fetch twice",
   );
+  assert.ok(!/fetchMediaUrl\s*\(/.test(src), "the webhook must not fetch media itself; a failure after its 200 is final");
 });
 
 test("spec 144: webhook audits whatsapp.message.replay_ignored when the row already exists", () => {
