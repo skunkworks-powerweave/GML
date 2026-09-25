@@ -17,14 +17,21 @@
 // The real completeUpload and reconcileStalledUploads against Postgres, with
 // Storage replaced by a map (the only questions these paths ask it: what is at
 // this key, and remove it). Rows are committed under a unique tag and removed.
+// The /uploads server action runs for real too, signed in, with supabaseAdmin()
+// answered by a fake Storage (the opt-in stub in _ui.ts).
 
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "pg";
-import "./_ui.js"; // the @/ alias and the server-only stub, for apps/web modules
+import { stubSupabaseServer, request } from "./_ui.js";
+import { signIn, closeAppDb } from "./_server-actions.js";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 
+stubSupabaseServer();
 const skip = needsDatabase();
+after(async () => {
+  if (!skip) await closeAppDb();
+});
 const webUpload = () => import("../../apps/web/src/lib/video/upload.ts");
 const reconciler = () => import("../../apps/worker/src/reconcile-uploads.ts");
 const uploads = () => import("../../packages/db/src/uploads.ts");
@@ -70,9 +77,9 @@ async function withUploader(body: (w: { c: Client; userId: string }) => Promise<
   }
 }
 
-async function reserve(userId: string) {
+async function reserve(userId: string, filename = "lesson.mp4") {
   const { beginUpload } = await webUpload();
-  const r = await beginUpload({ userId, filename: "lesson.mp4", sizeBytes: DECLARED, contentType: "video/mp4", contextType: "generic" });
+  const r = await beginUpload({ userId, filename, sizeBytes: DECLARED, contentType: "video/mp4", contextType: "generic" });
   assert.ok(!("error" in r), `reservation refused: ${JSON.stringify(r)}`);
   return r as Exclude<typeof r, { error: string }>;
 }
@@ -133,10 +140,73 @@ test("skipping the completion call does not get an oversized upload transcoded b
     const r = await reserve(userId);
     storage.objects.set(r.objectKey, SENT);
     await c.query(`UPDATE video_submissions SET created_at = now() - interval '15 minutes' WHERE id = $1`, [r.submissionId]);
-    await reconcileStalledUploads({ stat: storage.stat });
+    await reconcileStalledUploads({ stat: storage.stat, remove: storage.remove });
     const s = await state(c, r.submissionId);
     assert.equal(s.jobs, 0, "the reconciler finished bytes the cap never allowed");
     assert.deepEqual([s.status, s.fileStatus], ["failed", "failed"], "it cannot become valid by waiting");
+    // Only completeUpload deleted an oversized object, so a client that skipped
+    // that call parked up to the bucket's 2 GB limit in videos-original for good.
+    assert.deepEqual(storage.removed, [r.objectKey], "the oversized object is deleted, not left in the bucket");
+  });
+});
+
+test("the reconciler deletes only the oversized object it failed, and a failed delete is not fatal", { skip }, async () => {
+  await withUploader(async ({ c, userId }) => {
+    const { reconcileStalledUploads } = await reconciler();
+    const { UPLOAD_ABANDON_AFTER_HOURS } = await uploads();
+    const storage = fakeStorage();
+    const oversized = await reserve(userId);
+    const truncated = await reserve(userId, "another-lesson.mp4");
+    storage.objects.set(oversized.objectKey, SENT);
+    storage.objects.set(truncated.objectKey, DECLARED / 2);
+    await c.query(`UPDATE video_submissions SET created_at = now() - make_interval(hours => $2) WHERE id = ANY($1)`, [
+      [oversized.submissionId, truncated.submissionId],
+      UPLOAD_ABANDON_AFTER_HOURS + 1,
+    ]);
+    await reconcileStalledUploads({
+      stat: storage.stat,
+      remove: async (bucket, keys) => {
+        await storage.remove(bucket, keys);
+        throw new Error("storage down");
+      },
+    });
+    assert.deepEqual(storage.removed, [oversized.objectKey], "an abandoned short upload is failed, as before, but not deleted here");
+    for (const id of [oversized.submissionId, truncated.submissionId]) {
+      const s = await state(c, id);
+      assert.deepEqual([s.status, s.fileStatus], ["failed", "failed"]);
+    }
+  });
+});
+
+test("the /uploads action says an oversized upload was refused, not that it could not be found", { skip }, async () => {
+  await withUploader(async ({ c, userId }) => {
+    const r = await reserve(userId);
+    const removed: string[] = [];
+    request.supabaseAdmin = {
+      storage: {
+        from: () => ({
+          list: async () => ({ data: [{ name: r.objectKey.split("/").pop(), metadata: { size: SENT, mimetype: "video/mp4" } }], error: null }),
+          remove: async (keys: string[]) => {
+            removed.push(...keys);
+            return { data: [], error: null };
+          },
+        }),
+      },
+    };
+    signIn({ id: userId, role: "teacher" });
+    try {
+      const { completeUploadAction } = await import("../../apps/web/src/app/(authenticated)/uploads/actions.ts");
+      const res = await completeUploadAction(r.submissionId);
+      assert.equal(res.ok, false);
+      assert.doesNotMatch(res.error ?? "", /could not be found/i, "the upload exists; it was refused");
+      assert.match(res.error ?? "", /larger than/i, res.error);
+      assert.notEqual(res.retryable, true, "confirming again cannot help");
+      assert.deepEqual(removed, [r.objectKey]);
+      assert.equal((await state(c, r.submissionId)).status, "failed");
+    } finally {
+      signIn(null);
+      delete request.supabaseAdmin;
+    }
   });
 });
 

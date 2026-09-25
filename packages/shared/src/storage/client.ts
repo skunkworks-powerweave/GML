@@ -174,8 +174,9 @@ export async function getObjectStream(
  *
  * null means "not there"; a Storage ERROR throws. Both used to be null, so a
  * transient Storage 5xx at completion told the teacher "We could not find the
- * uploaded file" and prompted a full re-upload of a file that was stored. The
- * reconciler already treats a throw as "no answer this sweep".
+ * uploaded file" and prompted a full re-upload of a file that was stored.
+ * completeUpload answers a throw as retryable (storage_unavailable), and the
+ * worker's reconcile-uploads skips the row until the next sweep.
  */
 export async function statObject(
   supabase: SupabaseClient,

@@ -181,7 +181,9 @@ export async function completeUploadAction(
         ? "We could not find the uploaded file. Please try again."
         : result.error === "object_truncated"
           ? "The upload finished early and is incomplete. Please try again."
-          : "That upload could not be found.";
+          : result.error === "object_too_large"
+            ? "That file is larger than it was declared and was refused."
+            : "That upload could not be found.";
     return { ok: false, error: message };
   }
 

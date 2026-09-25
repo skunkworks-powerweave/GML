@@ -169,9 +169,18 @@ test("tray: a definitive refusal is shown at once, without retrying", async () =
 
 // ── The mobile runner ────────────────────────────────────────────────────────
 
-test("mobile: a completion call that fails leaves the progress screen, and Retry re-confirms without re-uploading", async () => {
-  // extractFirstFrame builds a <video> to draw a thumbnail; there is no DOM
-  // here, so it is handed one that fails to decode, which the runner handles.
+/**
+ * Run `body` against the real MobileUploadRunner. extractFirstFrame builds a
+ * <video> to draw a thumbnail; there is no DOM here, so it is handed one that
+ * fails to decode, which the runner handles.
+ */
+async function withMobileRunner(
+  body: (r: {
+    pick: (file: typeof FILE) => Promise<void>;
+    press: (label: string) => Promise<void>;
+    screen: () => string;
+  }, routerCalls: string[], unhandled: unknown[]) => Promise<void>,
+) {
   const g = globalThis as Record<string, unknown>;
   const hadDocument = "document" in g;
   const { createObjectURL, revokeObjectURL } = URL;
@@ -186,36 +195,86 @@ test("mobile: a completion call that fails leaves the progress screen, and Retry
   URL.revokeObjectURL = () => undefined;
   try {
     await driving(async (routerCalls, unhandled) => {
-      const u = script({ complete: dropped });
       const { MobileUploadRunner } = await import("../../apps/web/src/components/video/MobileUploadRunner.tsx");
       const m = mount(MobileUploadRunner as (p: unknown) => unknown, {});
       const els = () => hostElements(m.rerender());
-      const byId = (id: string) => els().find((el) => el.props["data-testid"] === id);
-      await (byId("gallery-input")!.props.onChange as (e: unknown) => Promise<void>)({ target: { files: [FILE], value: "x" } });
-      await (byId("start-upload")!.props.onClick as () => Promise<void>)();
-      await drain();
-
-      assert.deepEqual(unhandled, [], "a dropped completion POST must not be an unhandled rejection");
       const screen = () => textOf(els().find((el) => el.props["data-testid"] === "mobile-upload-runner") ?? null);
-      assert.doesNotMatch(screen(), /Uploading/, "not stuck on the progress screen at 100%");
-      assert.match(screen(), /could not confirm/i, screen());
-
-      u.calls = [];
-      u.complete = async () => ({ ok: true });
-      const retry = els().find((el) => el.type === "button" && textOf(el) === "Retry");
-      assert.ok(retry, "a Retry button");
-      await (retry.props.onClick as () => Promise<void>)();
-      await drain();
-      assert.deepEqual(u.calls, [`complete:${RESERVATION.submissionId}`], "the file is already stored: Retry must not upload it again");
-      assert.match(screen(), /Uploaded/);
-      assert.ok(routerCalls.includes("push:/uploads"));
+      const pick = async (file: typeof FILE) => {
+        const input = els().find((el) => el.props["data-testid"] === "gallery-input")!;
+        await (input.props.onChange as (e: unknown) => Promise<void>)({ target: { files: [file], value: "x" } });
+        await drain();
+      };
+      const press = async (label: string) => {
+        const button = els().find((el) => el.type === "button" && textOf(el).trim() === label);
+        assert.ok(button, `a "${label}" button on: ${screen()}`);
+        await (button.props.onClick as () => Promise<void> | void)();
+        await drain();
+      };
+      await body({ pick, press, screen }, routerCalls, unhandled);
     });
   } finally {
-    if (hadDocument) void 0;
-    else delete g.document;
+    if (!hadDocument) delete g.document;
     URL.createObjectURL = createObjectURL;
     URL.revokeObjectURL = revokeObjectURL;
   }
+}
+
+test("mobile: a completion call that fails leaves the progress screen, and Retry re-confirms without re-uploading", async () => {
+  await withMobileRunner(async ({ pick, press, screen }, routerCalls, unhandled) => {
+    const u = script({ complete: dropped });
+    await pick(FILE);
+    await press("Start upload");
+
+    assert.deepEqual(unhandled, [], "a dropped completion POST must not be an unhandled rejection");
+    assert.doesNotMatch(screen(), /Uploading/, "not stuck on the progress screen at 100%");
+    assert.match(screen(), /could not confirm/i, screen());
+
+    u.calls = [];
+    u.complete = async () => ({ ok: true });
+    await press("Retry");
+    assert.deepEqual(u.calls, [`complete:${RESERVATION.submissionId}`], "the file is already stored: Retry must not upload it again");
+    assert.match(screen(), /Uploaded/);
+    assert.ok(routerCalls.includes("push:/uploads"));
+  });
+});
+
+// The unconfirmed submission belongs to ONE upload. Once the teacher has gone
+// back and started another file, a Retry of that other file's failure must
+// upload it -- confirming the earlier submission instead would report
+// "Uploaded" for a file that was never sent.
+test("mobile: after an unconfirmed upload, Retry of a different file's failure uploads that file", async () => {
+  await withMobileRunner(async ({ pick, press, screen }, routerCalls) => {
+    const u = script({ complete: dropped });
+    await pick(FILE);
+    await press("Start upload");
+    assert.match(screen(), /could not confirm/i, "file A is stored but unconfirmed");
+
+    const FILE_B = { name: "second-lesson.mp4", size: 4321, type: "video/mp4" };
+    const RESERVATION_B = { ...RESERVATION, submissionId: "7c1e9a52-3b0d-4e6f-9a8b-2d4c6e8f0a1b", objectKey: "u/7c1e9a52.mp4" };
+    const begun: string[] = [];
+    u.begin = async (input) => {
+      begun.push((input as { filename: string }).filename);
+      return dropped();
+    };
+    await press("Back");
+    await pick(FILE_B);
+    await press("Start upload");
+    assert.match(screen(), /Upload failed/, "B's reservation call failed");
+
+    u.calls = [];
+    await press("Retry");
+    assert.deepEqual(u.calls, ["begin"], "Retry starts B's upload again; it does not confirm A");
+    assert.deepEqual(begun, [FILE_B.name, FILE_B.name]);
+    assert.doesNotMatch(screen(), /Uploaded/, "B was never sent");
+    assert.ok(!routerCalls.includes("push:/uploads"));
+
+    u.calls = [];
+    u.begin = async () => RESERVATION_B;
+    u.complete = async () => ({ ok: true });
+    await press("Retry");
+    assert.deepEqual(u.calls, ["begin", "tus", `complete:${RESERVATION_B.submissionId}`]);
+    assert.match(screen(), /Uploaded/);
+  });
 });
 
 // ── The server: a Storage error is not a missing file ────────────────────────
@@ -262,6 +321,45 @@ test("completeUpload answers a Storage error as retryable, not as a missing file
     assert.deepEqual(res, { ok: false, error: "storage_unavailable", status: 503 });
     const row = (await c.query(`SELECT status FROM video_submissions WHERE id = $1`, [r.submissionId])).rows[0];
     assert.equal(row.status, "received", "nothing moved: the next attempt can still complete it");
+  } finally {
+    await c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [userId]);
+    await c.query(`DELETE FROM files WHERE owner_user_id = $1`, [userId]);
+    await c.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    await c.end();
+  }
+});
+
+// The reconciler asked the same question with `stat(...).catch(() => null)`, so
+// during a Storage outage a stored upload older than the abandon window was
+// failed as if its object were missing -- the same confusion, in the worker.
+test("the reconciler leaves an upload alone when Storage does not answer, rather than failing it as missing", { skip: needsDatabase() }, async () => {
+  mock.timers.reset();
+  const c = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5000 });
+  await c.connect();
+  const T = tag("cnf");
+  const userId = (
+    await c.query(`INSERT INTO users (id, email, name, role) VALUES (gen_random_uuid(), $1, $2, 'teacher') RETURNING id`, [`${T}@example.test`, T])
+  ).rows[0].id as string;
+  try {
+    await import("./_ui.js");
+    const { beginUpload } = await import("../../apps/web/src/lib/video/upload.ts");
+    const { UPLOAD_ABANDON_AFTER_HOURS } = await import("../../packages/db/src/uploads.ts");
+    const { reconcileStalledUploads } = await import("../../apps/worker/src/reconcile-uploads.ts");
+    const r = await beginUpload({ userId, filename: "a.mp4", sizeBytes: 1000, contentType: "video/mp4", contextType: "generic" });
+    assert.ok(!("error" in r));
+    await c.query(`UPDATE video_submissions SET created_at = now() - make_interval(hours => $2) WHERE id = $1`, [
+      r.submissionId,
+      UPLOAD_ABANDON_AFTER_HOURS + 1,
+    ]);
+    await reconcileStalledUploads({
+      stat: async () => {
+        throw new Error("upstream 503");
+      },
+    });
+    const row = (
+      await c.query(`SELECT v.status, f.status AS "fileStatus" FROM video_submissions v JOIN files f ON f.id = v.file_id WHERE v.id = $1`, [r.submissionId])
+    ).rows[0];
+    assert.deepEqual([row.status, row.fileStatus], ["received", "uploading"], "no answer this sweep; the next one decides");
   } finally {
     await c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [userId]);
     await c.query(`DELETE FROM files WHERE owner_user_id = $1`, [userId]);

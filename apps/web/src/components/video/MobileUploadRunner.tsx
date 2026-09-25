@@ -174,6 +174,11 @@ export function MobileUploadRunner({
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The submission whose bytes are stored but whose completion the server has
   // not confirmed. While set, Retry confirms it again instead of re-uploading.
+  // It belongs to that one upload: going Back, choosing a file, cancelling or
+  // starting an upload clears it, or a Retry of a LATER file's failure would
+  // confirm this one and report "Uploaded" for a file never sent. Abandoned,
+  // it is not lost: the reconciler finishes a stored upload whose completion
+  // never came.
   const unconfirmedRef = useRef<string | null>(null);
 
   function openPicker(id: string) {
@@ -184,6 +189,7 @@ export function MobileUploadRunner({
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    unconfirmedRef.current = null;
     setFile(f);
     setStep("preview");
     setThumb(null);
@@ -195,6 +201,7 @@ export function MobileUploadRunner({
 
   async function startUpload() {
     if (!file) return;
+    unconfirmedRef.current = null;
     setStep("uploading");
     setProgress(0);
     setErrorMsg(null);
@@ -299,6 +306,7 @@ export function MobileUploadRunner({
   function cancelUpload() {
     uploadRef.current?.abort();
     uploadRef.current = null;
+    unconfirmedRef.current = null;
     setStep("choose");
     setFile(null);
     setThumb(null);
@@ -790,7 +798,10 @@ export function MobileUploadRunner({
           <div style={{ display: "flex", gap: 10 }}>
             <button
               type="button"
-              onClick={() => setStep("choose")}
+              onClick={() => {
+                unconfirmedRef.current = null;
+                setStep("choose");
+              }}
               style={{
                 minHeight: 48,
                 padding: "12px 18px",
