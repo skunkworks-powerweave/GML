@@ -103,9 +103,63 @@ async function assertAsksForTls(label: string, args: (url: string) => string[], 
         `connect at all once "Enforce SSL" is on. Build it from @gml/db's client.ts config.\n` +
         `statements it sent in the clear: ${pg.queries.length}\n--- output\n${run.out.slice(0, 3000)}`,
     );
+    // Asking once is not enough: EVERY connection must insist. One that does
+    // stops at the fake's 'N' and never starts a session, so any startup --
+    // with or without a statement after it -- is a connection that went on in
+    // plaintext. (What this cannot see is a plaintext client dialled only
+    // after a TLS connection has already failed the script; the governance
+    // shape test, test_db_tls_one_config, is the guard for that.)
+    assert.equal(
+      pg.startups,
+      0,
+      `${label} asked for TLS on one connection but opened ${pg.startups} plaintext session(s) ` +
+        `beside it; statements sent over them: ${pg.queries.slice(0, 3).join(" | ") || "none"}\n` +
+        `--- output\n${run.out.slice(0, 3000)}`,
+    );
   } finally {
     await pg.close();
   }
+}
+
+// ── The check itself: asking once is not enough ──────────────────────────────
+//
+// W3-47. The assertion above passed as soon as ONE connection sent an
+// SSLRequest. An entry point that builds its TLS pool from client.ts and ALSO
+// opens a plaintext connection -- `drizzle(process.env.DATABASE_URL)`, which
+// builds a bare pg.Pool inside drizzle-orm where the governance shape test
+// (test_db_tls_one_config) cannot see it, or any renamed constructor -- sent
+// one SSLRequest and passed, while the other session spoke plaintext. These
+// probes are such entry points; the check must refuse each of them.
+
+const PG = pathToFileURL(createRequire(here).resolve("pg")).href;
+const CLIENT_TS = src("packages/db/src/client.ts");
+
+/** An entry point that opens `plaintext` first, then its client.ts TLS pool. */
+const mixedEntryPoint = (plaintext: string) => [
+  "--import",
+  TSX_LOADER,
+  "--input-type=module",
+  "-e",
+  `const pg = (await import(${JSON.stringify(PG)})).default;` +
+    `const { poolConfig } = await import(${JSON.stringify(CLIENT_TS)});` +
+    `const bare = new pg.Client({ connectionString: process.env.DATABASE_URL });` +
+    `${plaintext}` +
+    `const pool = new pg.Pool(poolConfig());` +
+    `try { await pool.query("select 1"); } catch (e) { console.error(String(e)); process.exitCode = 1; }` +
+    `await pool.end().catch(() => {});`,
+];
+
+for (const [label, plaintext] of [
+  ["one that also runs a statement over a plaintext client", `await bare.connect(); await bare.query("select 'plaintext'"); await bare.end();`],
+  ["one that also connects a plaintext client and sends nothing", `await bare.connect(); await bare.end();`],
+] as const) {
+  test(`the TLS check refuses an entry point that asks for TLS once but also speaks plaintext: ${label}`, async () => {
+    await assert.rejects(
+      assertAsksForTls(`probe (${label})`, () => mixedEntryPoint(plaintext)),
+      /plaintext session/,
+      "assertAsksForTls passed an entry point that opened a plaintext session beside its TLS one",
+    );
+  });
 }
 
 test("migrate.ts asks for TLS", async () => {
