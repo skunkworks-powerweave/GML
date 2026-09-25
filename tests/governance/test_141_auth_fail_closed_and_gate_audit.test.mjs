@@ -64,30 +64,38 @@ test("spec 141 — recordAudit accepts optional userId + ipOverride overrides", 
   assert.match(src, /input\.ipOverride/);
 });
 
-test("spec 141 — auth.ts no longer hand-rolls sign-in throttling", () => {
+test("spec 141 — auth.ts throttles sign-in itself, and the throttle fails CLOSED", () => {
   const src = read(AUTH_PATH);
 
-  // Spec 141's concern was that a Redis fault on the LOGIN path must fail
-  // closed. That path is gone: Supabase Auth throttles sign-in centrally, so
-  // there is no local limiter on the credential check to fail open OR closed,
-  // and no bespoke audit row for its outage.
+  // CORRECTED. This test used to require that auth.ts call NO local limiter,
+  // on the premise that "Supabase Auth throttles sign-in centrally". It does,
+  // per client IP -- and every GoTrue call is made by the app server, so it
+  // sees one client for the whole deployment: unlimited guessing where it
+  // applies no limit, one shared bucket where it does (F79, reproduced with 35
+  // unthrottled wrong passwords; tests/behaviour/auth-sign-in.test.ts executes
+  // the fix). The Redis hang that motivated the old assertion is gone too:
+  // lib/rate-limit.ts is a single Postgres statement that rejects promptly.
   //
-  // This matters beyond tidiness. The old limiter could not fail closed as
-  // designed: getRedis() set maxRetriesPerRequest: null with no commandTimeout
-  // and the default offline queue, so with Redis down the command QUEUED
-  // FOREVER, rateLimit() never resolved, the documented fail-closed catch was
-  // unreachable, and every login request hung.
+  // What spec 141 established still holds, now on the login path: a limiter
+  // fault must DENY, never allow.
   const code = stripComments(src);
-  assert.ok(
-    !/rateLimit\(/.test(code),
-    "auth.ts must not call the local rate limiter — sign-in throttling is " +
-      "Supabase's, and the local limiter's own failure mode was an indefinite hang",
+  assert.match(code, /rateLimit\(/, "password sign-in must be throttled by the application");
+  assert.match(
+    code,
+    /async function signInAllowed[\s\S]*?try \{[\s\S]*?rateLimit\([\s\S]*?\} catch \{\s*return "unavailable";/,
+    "a throwing limiter must answer 'unavailable' (deny), not let the attempt through",
   );
-  assert.ok(
-    !/recordAudit\(/.test(code),
-    "auth.ts must not write audit rows — it is now a pure session reader with " +
-      "no side effects, called on every render",
-  );
+  // NARROWED (F88). This used to forbid recordAudit anywhere in auth.ts. The
+  // property it protected is that auth() -- the session reader called on
+  // every render -- has no side effects. That still holds. But "no audit rows
+  // from auth.ts" also meant sign-out was never audited, and the audit log is a
+  // hard requirement; signOut() is not called on render, and is the one place
+  // here that records a row.
+  const authFn = code.slice(code.indexOf("export async function auth("), code.indexOf("const ADMIN_ROLES"));
+  assert.ok(authFn.length > 0 && !/recordAudit|audit"\)/.test(authFn), "auth() must not write audit rows");
+  const calls = code.match(/recordAudit\(/g) ?? [];
+  const inSignOut = code.slice(code.indexOf("export async function signOut(")).match(/recordAudit\(/g) ?? [];
+  assert.equal(calls.length, inSignOut.length, "the only audit write in auth.ts is the sign-out");
 });
 
 test("spec 141 — sign-in failures are indistinguishable to the caller", () => {
@@ -96,10 +104,22 @@ test("spec 141 — sign-in failures are indistinguishable to the caller", () => 
   // is wrong, the caller gets one string. The single exception is the
   // hook-refused case, which is safe: reaching it requires already holding the
   // correct password.
+  //
+  // UPDATED SHAPE, same invariant. signInWithPassword now returns a CODE that
+  // the login page translates (the English literal reached Hindi and Bhoti
+  // screens untranslated), so the single shared answer is the fallback code
+  // "invalid_credentials". GoTrue's user_banned must NOT get a code of its
+  // own: GoTrue checks the ban before the password, so a distinct answer
+  // would tell anyone which addresses are deactivated accounts.
   assert.match(
     src,
-    /return \{ error: "Incorrect email or password\." \};/,
-    "the generic credential failure must be a single shared string",
+    /return "invalid_credentials";\s*\}/,
+    "the generic credential failure must be a single shared code, returned as the fallback",
+  );
+  assert.doesNotMatch(
+    stripComments(src),
+    /user_banned/,
+    "a banned account must not be distinguishable from a wrong password",
   );
 });
 
@@ -196,10 +216,16 @@ test("spec 141 — gate actions.ts never includes plaintext password in audit me
   }
 });
 
-test("spec 141 — docs/audit-actions.md lists both new actions with spec 141 cross-ref", () => {
+test("spec 141 — docs/audit-actions.md lists the live rate-limit outage action with spec 141 cross-ref", () => {
   const src = read(DOCS_PATH);
   assert.match(src, /gate\.rate_limit\.redis_down/);
-  assert.match(src, /auth\.rate_limit\.redis_down/);
+  // CORRECTED (F89). auth.rate_limit.redis_down was required here too, but
+  // nothing has emitted it since sign-in moved to Supabase: a documented
+  // action that cannot occur sends an operator looking for rows that do not
+  // exist. A sign-in limiter fault is refused, not audited (auth.ts
+  // signInAllowed). test_audit_actions_auth_doc.test.mjs now compares the
+  // auth.* rows with the code both ways.
+  assert.doesNotMatch(src, /auth\.rate_limit\.redis_down/);
   assert.match(src, /141/);
 });
 

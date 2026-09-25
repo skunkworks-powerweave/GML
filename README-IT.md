@@ -241,9 +241,14 @@ columns. It was a denial-of-service tool in both directions: anyone who knew an
 address could block it at will with wrong passwords, the counter never decayed
 so a single further guess after expiry re-blocked it indefinitely at one request
 an hour, and the distinctive error told a stranger which addresses had accounts.
-Supabase Auth rate-limits sign-in centrally, with no flag a stranger can set on
-someone else's behalf. If a user genuinely cannot get in, set them a new
-password at `/admin/users`.
+Sign-in is throttled by the application instead: 10 attempts at one account
+from one address, and 100 from one address across all accounts, per 15 minutes.
+Supabase Auth rate-limits sign-in too, but per client IP, and every sign-in
+reaches it from the app server, so on its own it would be one bucket shared by
+the whole deployment. Neither is a flag a stranger can set on someone else's
+behalf: the per-account limit only binds the address that made the attempts.
+Someone who hits it waits up to 15 minutes. If a user genuinely cannot get in,
+set them a new password at `/admin/users`.
 
 ### Logs and health
 

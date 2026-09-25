@@ -48,10 +48,12 @@ Note: **point-in-time recovery is NOT included in Pro.** It is a separate paid
 add-on. Without it, Supabase's own recovery granularity is "yesterday", which is
 why §7 exists.
 
-### 2.2 Three manual dashboard steps
+### 2.2 Manual dashboard steps
 
 None has a SQL equivalent. The application does not work without the first,
-and does not accept a real lesson video without the third.
+and does not accept a real lesson video without the third. The others close
+holes that are open by default; `scripts/verify-auth.mjs` (§5) fails until the
+sign-up switch (d) is off.
 
 **a) Enable the access-token hook.** Authentication → Hooks → *Customize Access
 Token (JWT) Claims* → Postgres → schema `public`, function
@@ -69,7 +71,10 @@ it is off.
 This is the window a deactivated user keeps working. Deactivation kills their
 refresh tokens and bans the account immediately, but the access token already in
 their browser cannot be revoked — it simply expires. One hour of residual access
-for someone you have just removed is a long time; 15 minutes is not.
+for someone you have just removed is a long time; 15 minutes is not. (For the
+two administrator roles there is no such window: the application re-checks an
+administrator's role and status on every request, so a demoted or deactivated
+administrator loses admin access at once.)
 
 **c) Raise the Storage upload limit.** Storage → Settings → *Upload file size
 limit*. The default is 50 MB on every plan, and it binds before the 2 GB bucket
@@ -78,6 +83,78 @@ is refused at the resumable endpoint before a byte is sent, and the teacher sees
 a generic upload error. **Set it to 2 GB**, the application's own ceiling
 (`MAX_UPLOAD_BYTES` in `apps/web/src/lib/video/upload.ts`).
 `bash scripts/preflight.sh` checks it by declaring a 600 MB upload.
+
+**d) Turn off public sign-up.** Authentication → Sign In / Providers → turn
+**off** *Allow new users to sign up*. Accounts here are created by an
+administrator at `/admin/users`, which keeps working with this off.
+
+Supabase leaves it on. While it is on, anyone holding the publishable key (every
+signed-in user's browser receives it) can register any address: they can claim
+a staff member's address before you create the account (your create then fails
+with "already registered"), the claimed account shows in `/admin/users` as a
+deactivated teacher that one press of *Reactivate* hands to them, and the
+sign-up endpoint tells anyone which addresses already have accounts.
+`verify-auth.mjs` reports **FAIL public sign-up is disabled** until this is off.
+If an address is already squatted, delete that user in Authentication → Users
+and create the account again at `/admin/users`; do not reactivate it.
+
+**e) Bound how long a session lives.** Authentication → Sessions → *Time-box
+user sessions*: **12 hours**; *Inactivity timeout*: **2 hours** (both are Pro
+features, which §2.1 requires anyway).
+
+These are for shared school computers. The application already writes the
+session cookie `Secure` on an https deployment and with a Max-Age of at most
+12 hours, renewed while the person keeps using the site, so a browser left
+signed in drops the session twelve hours after it was last used. Those are
+browser-side limits; they do not stop a copied cookie. The two Supabase
+settings are enforced by Supabase itself and do. Without them a refresh token
+never expires.
+
+**f) Make Supabase enforce the password policy.** Authentication → Sign In /
+Providers → *Email*:
+
+- *Minimum password length*: **8** (Supabase's default is 6);
+- *Password requirements*: leave at the default, **no required characters**;
+- *Secure password change*: **on**.
+
+Then Authentication → Attack Protection → *Prevent use of leaked passwords*:
+**on**.
+
+The application checks length on every form that sets a password (at least
+8 characters, at most 72 bytes), but a signed-in user can also call Supabase
+directly with their own session, and there only Supabase's settings apply: 6
+characters and no other checks unless you change them.
+
+Leave *Password requirements* off because the application does not check
+character classes. With them on, a password the application accepts (a long
+passphrase with no digit, or one written in Devanagari or Tibetan script,
+which Supabase's Latin letter and digit classes do not count) would be refused
+by Supabase with a raw English message. Length and the leaked-password check are the controls
+that matter.
+
+*Secure password change* is narrower than its name. Supabase asks for
+reauthentication only when the session setting the password is more than
+**24 hours** old. With the 12-hour time-box in (e), no session here reaches that
+age, so the setting never triggers. It does not stop the following: anyone at a
+browser left signed in can read the access token from the session cookie
+(page scripts can read the cookie by design, because uploads use the token)
+and call Supabase's user endpoint to set a new password without knowing the
+current one. The application's own pages do not allow this: Settings asks for
+the current password, and `/login/reset` accepts only a session opened from an
+emailed link in the last 15 minutes. The direct call is limited only by the
+session bounds in (e) and by people signing out. Leave the setting on anyway.
+It costs nothing, and it applies if (e) is ever relaxed.
+
+**g) Raise Supabase's sign-in rate limit.** Authentication → Rate Limits →
+*sign-ups and sign-ins*: **300** per 5 minutes.
+
+Every sign-in reaches Supabase from this server, so its per-IP limit (30 by
+default) is one bucket for the whole deployment: a training room of teachers
+signing in at once, or one person guessing passwords, would lock everyone out.
+The application does the real throttling itself, per account and per client
+address (10 attempts at one account from one address, 100 from one address,
+per 15 minutes). The Supabase limit only needs to sit above the whole
+deployment's legitimate peak.
 
 ### 2.3 Optional: outbound email
 
@@ -91,7 +168,35 @@ true, and better than accepting an address and promising a message that cannot
 be sent. Administrators create accounts with a password at `/admin/users` and
 hand it over directly.
 
-When you attach SMTP: set `AUTH_EMAIL_ENABLED=true` and redeploy. No code change.
+When you attach SMTP, do all four of these, then set `AUTH_EMAIL_ENABLED=true`
+and redeploy. No code change.
+
+1. **Site URL.** Authentication → URL Configuration → *Site URL*: your
+   `APP_URL` (e.g. `https://lms.example.org`). The default is
+   `http://localhost:3000`, and every emailed link is built on it.
+2. **Redirect URLs.** Same page → *Redirect URLs* → add `APP_URL/auth/**`
+   (e.g. `https://lms.example.org/auth/**`). GoTrue silently replaces any
+   redirect it does not allow-list with the bare Site URL, so without this the
+   link never reaches the application's callback at all.
+3. **Reset Password template.** Authentication → Emails → Templates → *Reset
+   Password*: make the link
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/login/reset`
+4. **Magic Link template.** Same place → *Magic Link*: make the link
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=magiclink&next=/dashboard`
+   — `magiclink`, not the `email` that Supabase's own examples use: the
+   application refuses `type=email`, because Supabase would also accept a
+   sign-up confirmation under it.
+
+Steps 3 and 4 are what let a link work on a **different device** from the one
+that asked for it. The default templates use a code that can only be redeemed
+in the browser that made the request: a teacher who asks for a reset on a
+school computer and opens the email on her phone gets "This link has expired".
+The `/auth/confirm` links work anywhere. A reset link is good for one use, and
+the page it opens only accepts it for 15 minutes. Supabase records a session
+from either link the same way, so for those same 15 minutes after a magic-link
+sign-in, `/login/reset` will also set a new password without the current one;
+that proves no less than a reset link, which anyone who can read the mailbox
+can request.
 
 ### 2.4 AWS
 
@@ -376,14 +481,21 @@ a stack with no schema "healthy".
 
 ### Creating accounts
 
-`/admin/users`. Set an initial password and hand it over; the account holder
-changes it in Settings. There is no invite email unless you have configured SMTP
-(§2.3).
+`/admin/users`. Set an initial password and hand it over. The first time the
+account holder signs in, every page sends them to Settings until they choose a
+password of their own; the same happens after you set someone's password for
+them. There is no invite email unless you have configured SMTP (§2.3).
+
+The account the seed creates from `SUPER_ADMIN_INITIAL_PASSWORD` is not marked
+this way. Change its password in Settings at first sign-in, then delete the
+value from `.env`, where it would otherwise remain the most privileged
+account's live password.
 
 Deactivating an account does three things: sets the profile inactive (the hook
 then refuses to mint tokens), ends the user's sessions on every device, and bans
 the auth user so the correct password no longer works. Residual access is the
-access token already in their browser — hence §2.2b.
+access token already in their browser — hence §2.2b. Demoting an administrator
+also ends their sessions, and their admin access stops at once.
 
 ### Logs
 

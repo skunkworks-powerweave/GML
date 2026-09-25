@@ -11,4 +11,12 @@ export type LoginShellProps = {
   from: string;
   /** Whether outbound email works here — see lib/auth-email.ts. */
   emailEnabled: boolean;
+  /**
+   * Why an email link sent the user back here (/auth/callback and
+   * /auth/confirm redirect with ?error=). Validated by the page; only these
+   * two values are ever rendered.
+   */
+  linkError?: LinkErrorCode;
 };
+
+export type LinkErrorCode = "link_expired" | "link_invalid";

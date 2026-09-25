@@ -128,10 +128,22 @@ test("deactivation ends access rather than only setting a flag", () => {
   const src = read(ACTIONS);
   // The profile flag alone leaves the user signed in until their current access
   // token expires, because the hook is only consulted when a token is MINTED.
+  //
+  // CORRECTED. This used to require `signOut(targetId, "global")` -- which is
+  // the defect, not the fix: auth-js's admin signOut takes the target's own
+  // JWT, so a user id got 403 bad_jwt from GoTrue on every call, the error came
+  // back as a value that nothing checked, and no session ever ended
+  // (tests/behaviour/auth-session-revocation.test.ts executes the real path).
+  // The invariant is that sessions are ended BY USER ID.
   assert.match(
     src,
-    /signOut\(targetId,\s*"global"\)/,
+    /revokeAllSessions\(targetId\)/,
     "deactivation must end the user's refresh tokens on every device",
+  );
+  assert.doesNotMatch(
+    src,
+    /admin\.signOut\(targetId/,
+    "auth.admin.signOut() takes a JWT, not a user id: it cannot end another user's sessions",
   );
   assert.match(
     src,
@@ -139,9 +151,15 @@ test("deactivation ends access rather than only setting a flag", () => {
     "deactivation must also ban the auth user, or they simply sign in again " +
       "with the correct password and get a fresh token",
   );
+  // CORRECTED. This required the literal `ban_duration: "none"`. Both ban
+  // calls now go through setSignInBan(), which checks the error auth-js
+  // RETURNS (the old `.catch(() => undefined)` could never fire, so a failed
+  // unban still said "Account reactivated."), and "none" is one arm of its
+  // conditional. The invariant is unchanged; that a failed ban or unban is
+  // reported is executed by tests/behaviour/auth-session-revocation.test.ts.
   assert.match(
     src,
-    /ban_duration:\s*"none"/,
+    /ban_duration:[^\n]*"none"/,
     "reactivation must lift the ban, or a reactivated account still cannot sign in",
   );
 });

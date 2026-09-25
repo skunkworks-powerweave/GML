@@ -15,6 +15,13 @@
 //   emailEnabled  whether an SMTP relay is configured in Supabase. Kept
 //                 server-side deliberately -- see shell-props.ts.
 //
+//   error         /auth/callback and /auth/confirm send a failed email link
+//                 here with ?error=link_expired or link_invalid. The page used
+//                 to read neither, so the person landed on a bare sign-in form
+//                 with no idea why their link had not worked. Only those two
+//                 values are passed on; anything else in the parameter is
+//                 dropped, never echoed.
+//
 // Spec 034 governance contract — the literal Hindi / Ladakhi labels still live
 // inside DesktopLogin.tsx, preserved verbatim from the original lift.
 
@@ -22,11 +29,14 @@ import { getDeviceType } from "@/lib/device";
 import { authEmailEnabled } from "@/lib/auth-email";
 import { DesktopLogin } from "./DesktopLogin";
 import { MobileLogin } from "./MobileLogin";
+import type { LinkErrorCode } from "./shell-props";
+
+const LINK_ERRORS: readonly LinkErrorCode[] = ["link_expired", "link_invalid"];
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ from?: string; next?: string }>;
+  searchParams?: Promise<{ from?: string; next?: string; error?: string }>;
 }) {
   const sp = searchParams ? await searchParams : {};
   const device = await getDeviceType();
@@ -35,10 +45,11 @@ export default async function LoginPage({
   // Passed through as-is. loginAction re-validates it before redirecting --
   // this value reaches the client, so it must not be trusted on the way back.
   const from = sp.from ?? sp.next ?? "";
+  const linkError = LINK_ERRORS.find((code) => code === sp.error);
 
   return device === "mobile" ? (
-    <MobileLogin from={from} emailEnabled={emailEnabled} />
+    <MobileLogin from={from} emailEnabled={emailEnabled} linkError={linkError} />
   ) : (
-    <DesktopLogin from={from} emailEnabled={emailEnabled} />
+    <DesktopLogin from={from} emailEnabled={emailEnabled} linkError={linkError} />
   );
 }

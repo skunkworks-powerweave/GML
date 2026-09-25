@@ -2,8 +2,7 @@
 
 import { useActionState } from "react";
 import { resetPasswordAction, type ResetState } from "./actions";
-
-const MIN_PASSWORD_LENGTH = 8;
+import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 
 const inputStyle: React.CSSProperties = {
   padding: "9px 11px",

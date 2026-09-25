@@ -13,6 +13,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 // authenticates them and then forwards them elsewhere. publicUrl: behind Caddy
 // the request's own origin is Next's bind address (0.0.0.0:3000).
 import { publicUrl, safeInternalPath } from "@/lib/safe-redirect";
+import { recordSignIn } from "@/lib/sign-in-events";
 
 
 export async function GET(request: NextRequest) {
@@ -25,7 +26,7 @@ export async function GET(request: NextRequest) {
   }
 
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error) {
     // Expired, already used, or issued to a different browser. All three are
@@ -39,5 +40,6 @@ export async function GET(request: NextRequest) {
   // public.custom_access_token_hook refuses to mint an access token and auth()
   // returns null -- so `next` renders as signed-out and proxy.ts bounces to
   // /login. That is the intended fail-closed behaviour, not a gap.
+  if (data.user) await recordSignIn(data.user.id, next === "/login/reset" ? "recovery_link" : "email_link");
   return NextResponse.redirect(await publicUrl(next));
 }

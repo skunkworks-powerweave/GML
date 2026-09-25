@@ -32,6 +32,7 @@ import { useTranslations } from "next-intl";
 import { loginAction, type LoginState } from "./actions";
 import type { LoginShellProps } from "./shell-props";
 import { EmailLinkForm } from "./email-link-form";
+import { LoginError } from "./login-error";
 import { LOCALE_LABELS } from "@/i18n/config";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
@@ -42,7 +43,7 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
 // element below applies `minHeight: 44` via this const).
 const TOUCH_TARGET = 44; // minHeight: 44 — Apple HIG / Material Design floor
 
-export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
+export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
     loginAction,
     {},
@@ -261,11 +262,7 @@ export function MobileLogin({ from, emailEnabled }: LoginShellProps) {
                 }}
               />
             </label>
-            {state?.error ? (
-              <p style={{ fontSize: 13, color: "var(--rust)" }} role="alert">
-                {state.error}
-              </p>
-            ) : null}
+            <LoginError code={state?.error ?? linkError} fontSize={13} />
             <button
               data-testid="mobile-signin-button"
               type="submit"
