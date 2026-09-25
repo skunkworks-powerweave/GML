@@ -29,6 +29,7 @@ import { resolve } from "node:path";
 import { makeSandbox, posixish, root } from "./_sandbox.mjs";
 
 const LIB = "scripts/lib/pg-major.sh";
+const AUDIT_LIB = "scripts/lib/audit-host-job.sh";
 
 function sandboxFor(files) {
   const sb = makeSandbox({ prefix: "gml-backup-" });
@@ -57,6 +58,11 @@ head -c 20480 /dev/urandom > "$f"
 
 const PSQL = `
 case "$*" in
+  *"-v action="*)
+    # An audit write (scripts/lib/audit-host-job.sh): the SQL is on stdin.
+    cat >> "$SANDBOX_DIR/audit.sql"
+    [ -n "\${FAKE_AUDIT_FAIL:-}" ] && { echo "psql: error: connection to server failed" >&2; exit 2; }
+    exit 0 ;;
   *server_version_num*)
     [ -n "\${FAKE_PSQL_FAIL:-}" ] && { echo "psql: error: connection to server failed" >&2; exit 2; }
     echo "\${FAKE_PG_SERVER_NUM}" ;;
@@ -83,7 +89,7 @@ fi
 `;
 
 function backupSandbox() {
-  const sb = sandboxFor(["scripts/backup.sh", LIB]);
+  const sb = sandboxFor(["scripts/backup.sh", LIB, AUDIT_LIB]);
   sb.stub("pg_dump", PG_DUMP);
   sb.stub("psql", PSQL);
   sb.stub("rclone", RCLONE);
@@ -254,6 +260,102 @@ test("backup.sh's skip warning tells the operator the endpoint can be overridden
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /Storage mirror SKIPPED/);
     assert.match(r.stderr, /SUPABASE_S3_ENDPOINT/, "a custom-domain project needs a discoverable escape hatch");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── The audit row /admin/system-settings reads ──────────────────────────────
+//
+// W3-51. The Backup & restore panel shows the latest backup.complete row in
+// audit_log, and backup.sh wrote none -- it recorded its run only in
+// last-backup.txt on the host -- so the panel could never show a real time,
+// nor that backups had stopped. The script now appends one row per run,
+// through psql variables (never SQL built from strings), and a failure to
+// write it is a warning, never a failed backup.
+
+/** The audit writes backup.sh made: [{ action, meta, url }]. */
+function auditWrites(sb) {
+  return sb
+    .invocations()
+    .filter((l) => /^psql .*-v action=/.test(l))
+    .map((l) => ({
+      action: /-v action=(\S+)/.exec(l)?.[1],
+      meta: JSON.parse(/-v meta=(\{.*\})$/.exec(l)?.[1] ?? "null"),
+      url: l.split(" ")[1],
+    }));
+}
+
+test("a completed backup records backup.complete in the audit log", () => {
+  const sb = backupSandbox();
+  try {
+    const e = baseEnv(sb);
+    const r = sb.run("scripts/backup.sh", { env: e });
+    assert.equal(r.status, 0, r.stderr);
+    const writes = auditWrites(sb);
+    assert.equal(
+      writes.length,
+      1,
+      `a backup must leave exactly one row for /admin/system-settings to read; it wrote ${writes.length}.\n` +
+        sb.invocations().join("\n"),
+    );
+    const [w] = writes;
+    assert.equal(w.action, "backup.complete");
+    assert.equal(w.url, e.DATABASE_URL, "the row goes to the database that was backed up");
+    assert.match(w.meta.dump, /^gml-\d{8}T\d{6}Z\.dump\.gz$/);
+    assert.ok(w.meta.bytes > 10240, JSON.stringify(w.meta));
+    assert.equal(w.meta.storage_mirrored, false, "no S3 keys here: the mirror was skipped, and the row says so");
+    assert.equal(w.meta.shipped_offsite, false);
+    const sql = sb.read("audit.sql");
+    assert.match(sql, /INSERT INTO audit_log \(user_id, action, entity_type, entity_id, metadata\)/);
+    assert.match(sql, /:'action'/, "the values go in as psql variables, quoted by psql");
+    assert.match(sql, /:'meta'::jsonb/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a backup that mirrors and ships says so in its audit row", () => {
+  const sb = backupSandbox();
+  try {
+    const r = sb.run("scripts/backup.sh", {
+      env: baseEnv(sb, {
+        SUPABASE_S3_ACCESS_KEY_ID: "AKSTUB",
+        SUPABASE_S3_SECRET_ACCESS_KEY: "SKSTUB",
+        BACKUP_S3_BUCKET: "s3://gml-dr-stub",
+      }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const [w] = auditWrites(sb);
+    assert.equal(w?.meta.storage_mirrored, true, JSON.stringify(w));
+    assert.equal(w?.meta.shipped_offsite, true, JSON.stringify(w));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failed backup records backup.failed, with the reason", () => {
+  const sb = backupSandbox();
+  try {
+    const r = sb.run("scripts/backup.sh", {
+      env: baseEnv(sb, { FAKE_PG_CLIENT_VERSION: "16.4", FAKE_PG_SERVER_NUM: "170006" }),
+    });
+    assert.notEqual(r.status, 0);
+    const writes = auditWrites(sb);
+    assert.deepEqual(writes.map((w) => w.action), ["backup.failed"], sb.invocations().join("\n"));
+    assert.match(writes[0].meta.error, /pg_dump 16/, "the row carries what failed");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("an audit write that fails does not fail the backup", () => {
+  const sb = backupSandbox();
+  try {
+    const r = sb.run("scripts/backup.sh", { env: baseEnv(sb, { FAKE_AUDIT_FAIL: "1" }) });
+    assert.equal(r.status, 0, `the dump is the backup; the audit row is a report of it:\n${r.stderr}`);
+    assert.match(r.stderr, /WARNING: could not record backup\.complete in the audit log/, r.stderr);
+    assert.ok(sb.exists("backups/last-backup.txt"));
   } finally {
     sb.cleanup();
   }

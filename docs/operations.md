@@ -17,7 +17,10 @@ Check that the restore drill passed:
 cat workspace/last_restore_drill.json
 ```
 
-`"result": "ok"` and a `ranAt` within the last seven days. A drill that failed
+`"result": "ok"` and a `ranAt` within the last seven days. The same time is on
+`/admin/system-settings` under Backup & restore status, with the last backup's:
+both jobs append a `backup.*` / `restore.*` row to the audit log after each run
+(docs/audit-actions.md), and warn in their own log when they could not. A drill that failed
 says so, `"result": "failed"` with an `error`, instead of leaving no file. If it
 is failed, or stale past 30 days, `scripts/deploy.sh` will refuse to deploy —
 that refusal is the point, not an obstacle to work around. Fix the cause and
@@ -45,6 +48,11 @@ Rotation deletes the live grants for that section, so everyone must re-enter it.
 That is what rotation means, and it did not use to be true: the gate compared a
 cookie to the string `"1"` and never read the grant rows, so rotating revoked
 nobody and every issued cookie survived its full 8 hours.
+
+A deploy never rotates a gate, with one exception: a gate whose current
+password is empty, which the seed wrote while an unset `GATE_PASSWORD_*`
+reached it as `""`. Nobody can open such a gate, so `deploy.sh`'s seed step
+replaces it the way Rotate does and prints the new password.
 
 ## Deactivating a member of staff
 
@@ -208,7 +216,11 @@ Stated so nobody assumes otherwise:
   anchor) and 20 MB × 5 for `caddy`, about 190 MB across the stack, and needs
   no operator action. With no alerting and no metrics these logs are the only
   forensic record. Caddy writes one JSON access line per request (client IP,
-  method, path, status, duration; cookies and Authorization redacted) -- about
+  method, URI with its query string, status, duration; cookies and
+  Authorization redacted, and so are the `hub.verify_token`, `code` and
+  `token_hash` query parameters, in its error lines too -- a new
+  secret-bearing query parameter must be added to `query_secrets` in
+  `docker/Caddyfile`) -- about
   1 KB each, so its 100 MB holds on the order of 100,000 requests, roughly one
   to two weeks for fifty users. Read them with
   `docker compose logs caddy | grep '"logger":"http.log.access'`; raise the

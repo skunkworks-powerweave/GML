@@ -34,6 +34,13 @@ export type FakePg = {
    * client that never asks shows up here as 0.
    */
   readonly sslRequests: number;
+  /**
+   * How many connections went on to a StartupMessage. A client that insists
+   * on TLS stops at the 'N' above and never sends one, so every startup here
+   * is a session that spoke PLAINTEXT -- whether or not it then sent a
+   * statement.
+   */
+  readonly startups: number;
   close(): Promise<void>;
 };
 
@@ -69,6 +76,7 @@ export async function startFakePg(): Promise<FakePg> {
   const queries: string[] = [];
   const sockets = new Set<Socket>();
   let sslRequests = 0;
+  let startups = 0;
 
   const server = createServer((sock) => {
     sockets.add(sock);
@@ -95,6 +103,7 @@ export async function startFakePg(): Promise<FakePg> {
             continue;
           }
           started = true;
+          startups += 1;
           sock.write(Buffer.concat([msg("R", int32(0)), READY]));
           continue;
         }
@@ -172,6 +181,9 @@ export async function startFakePg(): Promise<FakePg> {
     queries,
     get sslRequests() {
       return sslRequests;
+    },
+    get startups() {
+      return startups;
     },
     close: () =>
       new Promise<void>((resolve) => {

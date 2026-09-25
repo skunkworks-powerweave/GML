@@ -223,7 +223,7 @@ can request.
 | Instance | `m7i-flex.large` (2 vCPU, 8 GiB) — or `t3.large` in **unlimited** credit mode |
 | AMI | Ubuntu Server 24.04 LTS (x86_64). §2.5's commands are written for it. |
 | Root volume | 30 GiB gp3 |
-| Data volume | 100 GiB gp3 mounted at `/var/lib/gml`: Docker's data root (images, build cache, the worker's ffmpeg scratch — §2.5) and the local dumps |
+| Data volume | 100 GiB gp3 mounted at `/var/lib/gml`: Docker's data root (images, build cache, the worker's ffmpeg scratch — §2.5) and the local dumps. (A single root volume of 60 GiB or more, with Docker's data root left on it, also passes `scripts/preflight.sh`; df shows such a disk as about 56–58 GiB.) |
 | Region | `ap-south-1` |
 | Security group in | 80, 443 from `0.0.0.0/0`; 22 from your admin range **only** |
 | Security group out | 443 (Supabase, Let's Encrypt, Meta) **and 80** — `docker/worker.Dockerfile` installs ffmpeg with apt, and `node:22-slim`'s Debian sources are `http://deb.debian.org` on port 80. With 443 only, the worker image fails to build on the first deploy. |
@@ -347,6 +347,12 @@ drill less than 30 days old.
 **Write down the section-gate passwords the seed prints.** They are shown once;
 only the hash is stored. You can rotate them later at `/admin/gates`.
 
+A deploy made while the seed hashed an unset `GATE_PASSWORD_*` as the empty
+string printed `GENERATED PASSWORD:` with nothing after it, and those gates
+admit nobody. The next deploy repairs each one and says so: `section gate
+'<slug>' had an EMPTY password ... repaired — GENERATED PASSWORD: ...`. Write
+those down too. A gate with a real password is never changed by a deploy.
+
 ---
 
 ### 3.1 Clearing the demonstration data
@@ -366,6 +372,12 @@ one ends: add the next phase and its terms at `/admin/data/phases` and
 subjects at `/admin/data/rtt-subjects`. New districts are added at
 `/admin/data/districts`. A phase, term or district that still has anything
 under it cannot be deleted; the grid says what is still attached.
+
+A host seeded before the 2026-09 release holds the three phases at UTC
+midnight: each starts 5 h 30 min into its first IST day and ends 5 h 30 min
+into its last, so the dashboard stops naming Phase 3 at 05:30 IST on
+30 September. Open each phase at `/admin/data/phases` and save it once,
+unchanged: the grid stores 00:00 IST on the first day and the end of the last.
 
 **Quizzes are not seeded.** Each RTT subject page lists the active quizzes
 bound to that subject; until someone creates and activates one at
@@ -485,8 +497,26 @@ runs the migrations on their own (`docker compose run --rm --no-deps migrate`)
 before `docker compose up` touches anything, stops when they fail, and puts
 `:current` back on the running images. That is the intended posture: a bad
 schema change degrades to "no deploy happened" rather than "the site is down".
+An image build that fails part-way is handled the same way: nothing is
+migrated or restarted, and `:current` is put back on what was serving. On a
+first deploy nothing is serving yet, and `deploy.sh` says so rather than
+promising otherwise.
 (A bare `docker compose up -d` does NOT give you this: it recreates `app` before
 it waits for `migrate`.)
+
+**Read the migrate output after an upgrade.** A migration that changes existing
+data reports each change as a `[migrate] NOTICE:` line, and that line is the
+only record of it. The two to look for:
+
+- `teachers <id>: unlinked from login <uuid> ...` / `mentors <id>: ...`: two
+  records were linked to one login, the older kept it, and this one is now
+  under "Awaiting an account" in `/admin/users`. Link it to the right login.
+- `section_gates <id>: <slug> version N renumbered to M`: two rotations of one
+  gate collided. If in doubt, rotate that gate once more at `/admin/gates`.
+
+`deploy.sh` prints the migrate output as it runs; if the terminal is gone,
+re-running `docker compose run --rm --no-deps migrate` will not repeat them
+(each migration runs once), so copy them from the deploy's scrollback or log.
 
 ### Rolling back
 
@@ -540,10 +570,13 @@ account holder signs in, every page sends them to Settings until they choose a
 password of their own; the same happens after you set someone's password for
 them. There is no invite email unless you have configured SMTP (§2.3).
 
-The account the seed creates from `SUPER_ADMIN_INITIAL_PASSWORD` is not marked
-this way. Change its password in Settings at first sign-in, then delete the
-value from `.env`, where it would otherwise remain the most privileged
-account's live password.
+The account the seed creates from `SUPER_ADMIN_INITIAL_PASSWORD` is marked the
+same way, so its first sign-in also goes to Settings to choose a new password.
+Then delete the value from `.env`: it is the password of the most privileged
+account until that change is made, and a record of it after. The seed writes
+one `admin.user.super_admin_bootstrapped` audit row when it creates or promotes
+that account (docs/audit-actions.md); it is the only super_admin grant made
+without a super_admin.
 
 Deactivating an account does three things: sets the profile inactive (the hook
 then refuses to mint tokens), ends the user's sessions on every device, and bans

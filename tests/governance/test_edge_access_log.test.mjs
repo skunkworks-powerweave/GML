@@ -31,10 +31,81 @@ test("the site block writes a JSON access log to stdout", () => {
   const caddy = code(read("docker/Caddyfile"));
   const site = caddy.slice(caddy.indexOf("{$DOMAIN:localhost} {"));
   assert.ok(site.length > 0, "the {$DOMAIN:localhost} site block is missing");
+  // This matched `log { output stdout format json }` with no nested braces,
+  // which the redacting `format filter { wrap json ... }` below (W3-46) has.
+  // The invariant is the same: a log directive, to stdout, encoded as JSON.
+  assert.match(site, /^\s*log\s*\{/m, "the site needs a `log` directive -- without one Caddy records no requests");
+  const log = block(site, /^\s*log\s*\{/m);
+  assert.match(log, /^\s*output\s+stdout\s*$/m, "the access log goes to stdout, where Docker's rotation bounds it");
   assert.match(
-    site,
-    /^\s*log\s*\{[^}]*\boutput\s+stdout\b[^}]*\bformat\s+json\b[^}]*\}/m,
-    "the site needs `log { output stdout format json }` -- without a log directive Caddy records no requests",
+    log,
+    /\bformat\s+(?:json\b|filter\s*\{\s*wrap\s+json\b)/,
+    "the access log is JSON (`format json`, or a `format filter` that wraps json)",
+  );
+});
+
+// ── W3-46: secrets in query strings ─────────────────────────────────────────
+//
+// The access line records request>uri: the whole RequestURI, query string
+// included. Three routes take a secret there -- the WhatsApp verify token (a
+// long-lived shared secret), the PKCE code, and token_hash (a single-use
+// recovery / magic-link token that needs nothing from the browser, and stays
+// redeemable if the request that carried it failed) -- so a plain
+// `format json` wrote each of them into the host's log files, and
+// docs/operations.md described the field as "path". The Caddyfile's `filter`
+// encoder replaces each one before the line is written.
+
+/** Every query parameter that carries a secret, and the route that reads it. */
+const SECRET_QUERY_PARAMS = {
+  "hub.verify_token": "apps/web/src/app/api/webhooks/whatsapp/route.ts",
+  code: "apps/web/src/app/auth/callback/route.ts",
+  token_hash: "apps/web/src/app/auth/confirm/route.ts",
+};
+
+/** The `{ ... }` body that follows `opener` in `src`, braces matched. */
+function block(src, opener) {
+  const at = src.search(opener);
+  assert.ok(at >= 0, `no ${opener} block`);
+  let depth = 0;
+  for (let i = src.indexOf("{", at); i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(src.indexOf("{", at) + 1, i);
+  }
+  throw new Error(`unbalanced ${opener} block`);
+}
+
+/** The `fields { ... }` of a log block's `format filter`, which must stay JSON. */
+function filterFields(log, which) {
+  assert.match(log, /\bformat\s+filter\s*\{/, `the ${which} must pass through Caddy's \`filter\` encoder to redact anything`);
+  const filter = block(log, /\bformat\s+filter\s*\{/);
+  assert.match(filter, /\bwrap\s+json\b/, `the filtered ${which} must still be JSON`);
+  return block(filter, /\bfields\s*\{/);
+}
+
+test("every log line that records a request redacts the secrets the app takes in a query string", () => {
+  const caddy = code(read("docker/Caddyfile"));
+  // One list of redactions, imported wherever a request's URI is logged.
+  const query = block(block(caddy, /^\(query_secrets\)\s*\{/m), /request>uri\s+query\s*\{/);
+  for (const [param, route] of Object.entries(SECRET_QUERY_PARAMS)) {
+    // The route still takes it from the query string -- if it moves, this
+    // list moves with it rather than going stale.
+    assert.match(read(route), new RegExp(`searchParams\\.get\\("${param.replace(".", "\\.")}"\\)`), `${route} no longer reads ${param}`);
+    assert.match(
+      query,
+      new RegExp(`^\\s*replace\\s+${param.replace(".", "\\.")}\\s+REDACTED\\s*$`, "m"),
+      `${param} (read by ${route}) is written to the logs in clear`,
+    );
+  }
+  // The access log.
+  const site = caddy.slice(caddy.indexOf("{$DOMAIN:localhost} {"));
+  assert.match(filterFields(block(site, /^\s*log\s*\{/m), "access log"), /^\s*import\s+query_secrets\s*$/m);
+  // The default logger, which writes the site's http.log.error lines: a
+  // request the proxy could not complete (app restarting) is logged there
+  // with its full URI -- and a token_hash in it was never redeemed.
+  const globalOptions = block(caddy, /^\{/m);
+  assert.match(
+    filterFields(block(globalOptions, /^\s*log\s+default\s*\{/m), "default logger"),
+    /^\s*import\s+query_secrets\s*$/m,
   );
 });
 

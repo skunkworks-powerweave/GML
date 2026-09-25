@@ -30,7 +30,8 @@
 # upgrade, so wiring it in here would make a re-deploy impossible.
 #
 # Idempotent. Safe to re-run: the migration ledgers make a re-run a no-op, and
-# the seed never rotates a live account's password or an existing gate.
+# the seed never rotates a live account's password or a gate anyone can open
+# (it repairs only a gate hashed from the empty password, which admits nobody).
 
 set -euo pipefail
 
@@ -277,6 +278,22 @@ for svc in app worker migrate; do
   was_current[${svc}]="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
 done
 
+# Put :current back on what it named before this run's build, after a build or
+# a migration that failed: a later `docker compose up` must not start images
+# that were never migrated, and the next deploy must compare its build with
+# the release that really served (step 2). On a first build there is nothing
+# to put back, and the tag is removed instead: it names a build that never
+# served, and left in place the next run would take it for one that had.
+restore_current() {
+  for svc in app worker migrate; do
+    if [ -n "${was_current[${svc}]}" ]; then
+      docker tag "${was_current[${svc}]}" "gml-lms-${svc}:current"
+    else
+      docker image rm "gml-lms-${svc}:current" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
 log "building images"
 # Compose writes straight into gml-lms-<svc>:current, because docker-compose.yml
 # now names that tag explicitly on each service.
@@ -292,7 +309,21 @@ log "building images"
 # containers at all, so it returned nothing and tagged nothing. Neither
 # gml-lms-app:current nor :previous has ever actually existed on a deployed
 # box, which is why rollback.sh always aborted with ":previous does not exist".
-docker compose build
+#
+# A BUILD THAT FAILS PART-WAY HAS STILL MOVED TAGS. Compose writes each service
+# that finishes into its :current even when another target then fails and the
+# command exits 1. This was a bare `docker compose build` under `set -e`, so a
+# transient failure in one image (an apt mirror blip in the worker's layer, an
+# OOM in app's `next build`) ended the script with :current on an image that
+# never served and was never migrated. The next deploy took THAT for the
+# serving release: :previous stayed on the release before, the one really
+# serving lost its last tag, and the prune below deleted it.
+if ! docker compose build; then
+  restore_current
+  echo "[deploy] image build FAILED (its output is above). Nothing was migrated or restarted, and :current still names the release that was serving." >&2
+  echo "[deploy] Fix the build and re-run this script." >&2
+  exit 1
+fi
 
 # ── 2. Migrate, then up ──────────────────────────────────────────────────────
 # Migrations run BEFORE anything that is serving is touched.
@@ -312,16 +343,19 @@ docker compose build
 # the no-op its two ledgers make it, and only then recreates app and worker.
 log "applying migrations (nothing that is serving is touched until they succeed)"
 if ! docker compose run --rm --no-deps migrate; then
-  # Put :current back on what is still serving, so a later `docker compose up`
-  # cannot start the images whose migration just failed, and the next deploy
-  # compares its build with the release that is really running. :previous has
+  # :current back on what was serving (restore_current, step 1). :previous has
   # not moved yet (below), so the rollback target is untouched too.
-  for svc in app worker migrate; do
-    if [ -n "${was_current[${svc}]}" ]; then
-      docker tag "${was_current[${svc}]}" "gml-lms-${svc}:current"
-    fi
-  done
-  echo "[deploy] migrations FAILED (their output is above). Nothing was restarted: the previous containers are still serving." >&2
+  restore_current
+  # SAY WHAT IS TRUE. This always read "the previous containers are still
+  # serving" -- on a first deploy, where migrate is the first container the
+  # host ever starts, and on a host whose stack is down. Compose is asked,
+  # not was_current: an image existing is not a container running. The
+  # one-off migrate run above does not touch app, so the answer is current.
+  if [ -n "$(docker compose ps --status running -q app 2>/dev/null || true)" ]; then
+    echo "[deploy] migrations FAILED (their output is above). Nothing was restarted: the previous containers are still serving." >&2
+  else
+    echo "[deploy] migrations FAILED (their output is above). Nothing was started: no release is running on this host (a first deploy, or the stack is down), so the site stays down until a deploy succeeds." >&2
+  fi
   echo "[deploy] Fix the migration and re-run this script." >&2
   exit 1
 fi

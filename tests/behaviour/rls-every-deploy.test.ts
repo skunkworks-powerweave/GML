@@ -26,7 +26,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DATABASE_URL, needsDatabase, tag, withClient } from "./_harness.js";
+import { DATABASE_URL, needsDatabase, tag, withClient, withRlsProbeLock } from "./_harness.js";
 
 const here = fileURLToPath(import.meta.url);
 const MIGRATE = resolve(here, "..", "..", "..", "packages/db/scripts/migrate.ts");
@@ -63,7 +63,9 @@ test(
   { skip: needsDatabase() },
   async () => {
     const table = `rls_probe_${tag("t").slice(-8).replace(/[^a-z0-9]/g, "")}`;
-    await withClient(async (c) => {
+    // Exclusive: the probe table must not be seen by invariants.test.ts, and
+    // this migrate run must not lock down another file's probe mid-check.
+    await withRlsProbeLock("exclusive", () => withClient(async (c) => {
       const { rows: roles } = await c.query(`SELECT count(*)::int AS n FROM pg_roles WHERE rolname = 'anon'`);
       const supabaseRoles = roles[0].n === 1;
       try {
@@ -77,6 +79,20 @@ test(
 
         const run = await migrate();
         assert.equal(run.code, 0, `migrate.ts must succeed on an already-migrated database:\n${run.out}`);
+
+        // W3-40: what a migration changes is reported with RAISE NOTICE -- the
+        // unlinked login links of 0033, the renumbered gates of 0034, and this
+        // file's "enabled RLS on public.<table>". node-postgres hands a NOTICE
+        // only to a 'notice' listener on the client, and migrate.ts attached
+        // none, so every one of them was dropped and the deploy log said only
+        // "ran _post/always/001". 0033 sets user_id to NULL, so its notice was
+        // the only record of which login a record had belonged to.
+        assert.match(
+          run.out,
+          new RegExp(`enabled RLS on public\\.${table}\\b`),
+          `migrate.ts changed ${table} and the deploy log does not say so: the migrations' ` +
+            `RAISE NOTICE reports never reach the operator.\n--- migrate output\n${run.out}`,
+        );
 
         const { rows } = await c.query(
           `SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass($1)`,
@@ -109,6 +125,6 @@ test(
       } finally {
         await c.query(`DROP TABLE IF EXISTS public.${table}`);
       }
-    });
+    }));
   },
 );

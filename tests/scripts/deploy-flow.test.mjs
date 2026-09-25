@@ -287,10 +287,16 @@ test("a deploy without WhatsApp configured completes, and says WhatsApp ingest i
 //   compose build             every service's :current -> sha256:<FAKE_BUILD>-<svc>
 //   tag SRC DST               DST -> SRC's id (SRC may itself be an id)
 //   image inspect --format {{.Id}} REF    REF's id, or exit 1 if REF is untagged
+//   compose build             ... unless FAKE_BUILD_FAIL is set: then only app
+//                             finishes and is tagged, and the build exits 1 --
+//                             what real Compose does when one target fails
+//   image rm REF              untags REF
 //   compose run --rm --no-deps migrate    exits FAKE_MIGRATE_EXIT (default 0)
 //   compose up ...            exits FAKE_UP_EXIT (default 0) -- or 1 when the
 //                             migration fails, as the real one does after it
 //                             has already recreated app and worker
+//   compose ps --status running -q app    a container id, or nothing when
+//                             FAKE_NOTHING_RUNNING is set (no stack is up)
 
 const STORE_DOCKER = `
 store="$SANDBOX_DIR/images"; mkdir -p "$store"
@@ -301,21 +307,28 @@ case "$*" in
   "tag "*)
     if [ -f "$(tagfile "$2")" ]; then id="$(cat "$(tagfile "$2")")"; else id="$2"; fi
     printf '%s' "$id" > "$(tagfile "$3")"; exit 0 ;;
+  "image rm "*) rm -f "$(tagfile "$3")"; exit 0 ;;
   "compose build"*)
+    if [ -n "\${FAKE_BUILD_FAIL:-}" ]; then
+      printf '%s' "sha256:\${FAKE_BUILD:-v1}-app" > "$(tagfile "gml-lms-app:current")"
+      echo "target worker: failed to solve: process did not complete successfully: exit code: 100" >&2
+      exit 1
+    fi
     for s in app worker migrate; do printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"; done
     exit 0 ;;
   "compose run --rm --no-deps migrate") exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
   "compose up"*) [ "\${FAKE_MIGRATE_EXIT:-0}" = 0 ] || exit 1; exit "\${FAKE_UP_EXIT:-0}" ;;
+  "compose ps --status running -q app") [ -n "\${FAKE_NOTHING_RUNNING:-}" ] || echo "0123456789ab" ;;
   "compose ps --format"*) echo "app healthy" ;;
 esac
 exit 0
 `;
 
 /** A host that has deployed before, serving `serving` with `previous` behind it. */
-function storeSandbox({ serving = "v1", previous = "v0", healthy = true } = {}) {
+function storeSandbox({ serving = "v1", previous = "v0", healthy = true, deployedBefore = true } = {}) {
   const sb = makeSandbox({ files: ["scripts/deploy.sh"], prefix: "gml-deploy-" });
   sb.write(".env", ENV_FILE);
-  sb.write("workspace/.deploy-completed", "2026-09-01T00:00:00Z");
+  if (deployedBefore) sb.write("workspace/.deploy-completed", "2026-09-01T00:00:00Z");
   for (const svc of ["app", "worker", "migrate"]) {
     if (serving) sb.write(`images/gml-lms-${svc}_current`, `sha256:${serving}-${svc}`);
     if (previous && svc !== "migrate") sb.write(`images/gml-lms-${svc}_previous`, `sha256:${previous}-${svc}`);
@@ -454,6 +467,88 @@ test("a failed migration restarts nothing: the release that was serving keeps se
         `gml-lms-${svc}:current must name the release still serving, so a later \`up\` cannot start the unmigrated build`,
       );
       assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v0-${svc}`, "the rollback target must not move");
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// W3-49. The failure message said "the previous containers are still serving"
+// whatever was running. On a first deploy there are none: migrate is the
+// first container this host ever starts, and the site is down until a deploy
+// succeeds. The operator deciding how urgent the fix is must be told that.
+
+test("a failed migration on a host where nothing is running does not claim anything is still serving", () => {
+  const sb = storeSandbox({ serving: null, previous: null, deployedBefore: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, FAKE_BUILD: "v1", FAKE_MIGRATE_EXIT: "1", FAKE_NOTHING_RUNNING: "1" },
+      timeout: SLOW,
+    });
+    assert.notEqual(r.status, 0, "a failed migration must fail the deploy");
+    assert.match(r.stderr, /migrations FAILED/);
+    assert.doesNotMatch(
+      r.stderr,
+      /still serving/,
+      `nothing is running on this host, yet the operator was told the previous containers are still serving:\n${r.stderr}`,
+    );
+    assert.match(r.stderr, /no release is running on this host/, `say what is actually true:\n${r.stderr}`);
+    for (const svc of ["app", "worker", "migrate"]) {
+      assert.equal(
+        imageId(sb, `gml-lms-${svc}:current`),
+        null,
+        `gml-lms-${svc}:current must not name a build whose migration failed and which never served`,
+      );
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── A partly failed build must not move :current ────────────────────────────
+//
+// W3-45. `docker compose build` writes each service that finishes straight
+// into gml-lms-<svc>:current, even when another target then fails and the
+// command exits 1 (verified on Compose v5 / BuildKit 0.26, with and without
+// bake). deploy.sh ran it bare under `set -e`, so a transient failure in one
+// image -- an apt mirror blip in the worker's layer, an OOM in app's
+// `next build` -- aborted the script with :current naming an image that never
+// served and was never migrated. The next deploy then took THAT as "what was
+// serving": :previous stayed on the release before, the release really
+// serving lost its last tag, and the prune removed it.
+
+test("a build that fails part-way leaves :current and :previous on the releases that served", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, FAKE_BUILD: "v2", FAKE_BUILD_FAIL: "1" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.notEqual(r.status, 0, "a failed build must fail the deploy");
+    assert.ok(
+      !calls.some((l) => /^docker compose (run|up)/.test(l)),
+      `nothing may be migrated or started after a failed build:\n${calls.join("\n")}`,
+    );
+    for (const svc of ["app", "worker", "migrate"]) {
+      assert.equal(
+        imageId(sb, `gml-lms-${svc}:current`),
+        `sha256:v1-${svc}`,
+        `gml-lms-${svc}:current must still name the release that is serving; the half-finished build ` +
+          `left it on an image that never served and was never migrated.\n${r.stderr}`,
+      );
+    }
+    for (const svc of ["app", "worker"]) {
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v0-${svc}`, "the rollback target must not move");
+    }
+    assert.match(r.stderr, /build FAILED/, `the operator must be told what failed:\n${r.stderr}`);
+
+    // The build is fixed and re-run: the release that was serving becomes the
+    // rollback target of BOTH services, not of one.
+    const again = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2" }, timeout: SLOW });
+    assert.equal(again.status, 0, again.stderr);
+    for (const svc of ["app", "worker"]) {
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`, `gml-lms-${svc}:previous after the re-run`);
     }
   } finally {
     sb.cleanup();

@@ -415,10 +415,13 @@ test("the health probe and the smoke suite target the host Caddy's site block se
     .filter((l) => !/^\s*#/.test(l))
     .join("\n");
   // Top-level blocks start at column 0 as `<address> {`; the bare `{`
-  // global-options block has no address and is skipped by requiring one.
+  // global-options block has no address and is skipped by requiring one. A
+  // `(name) {` snippet is not a site either: it is text other blocks import
+  // (the log redaction, query_secrets, is one).
   const sites = [...caddy.matchAll(/^(\S[^\n]*?)[ \t]+\{[ \t]*$/gm)]
     .map((m) => m[1].trim())
-    .filter((s) => s !== "" && !/^:\d+$/.test(s)); // the :2021 health listener is not a site
+    .filter((s) => s !== "" && !/^:\d+$/.test(s)) // the :2021 health listener is not a site
+    .filter((s) => !/^\([^)]+\)$/.test(s));
   assert.deepEqual(sites, ["{$DOMAIN:localhost}"], "expected exactly one DOMAIN-matched site block");
 
   const cases = [

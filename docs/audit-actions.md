@@ -67,6 +67,7 @@ applied or lifted the sign-in ban.
 | `admin.user.phone_set` | An administrator recorded or changed an account's WhatsApp number (the list `/admin/gates` shares a rotated section password with). The only `admin.user.*` action an administrator may take on their own account, so `user_id` can equal `entity_id` | none: the number itself is not recorded |
 | `admin.user.phone_cleared` | An administrator removed an account's WhatsApp number | none |
 | `admin.user.surface_viewed` | `/admin/users`, which lists every account's email address, was rendered (SM-9 visibility) | none |
+| `admin.user.super_admin_bootstrapped` | The seed's `SUPER_ADMIN_*` bootstrap (`packages/db/src/scripts/seed.ts`, run by every deploy) created or promoted the first active `super_admin`, because none existed. The only grant of super_admin made without a super_admin, so `user_id` is null (no actor); `entity_id` is the account. Written in the same transaction as the promotion | `source` ("seed"), `authUserCreated`, `profileCreated` |
 
 ## gate.* — section password flow
 
@@ -238,18 +239,31 @@ component via the audit-fanout endpoint, NOT directly through
 | `anti_download.attempt.printscreen` | The user pressed `PrintScreen` (or the F12 dev-tools combo); not reliably blocked by browsers but the audit row captures the intent | `key`, `surfaceKey` |
 | `anti_download.devtools.detected` | The dev-tools open/close heuristic fired (window outerHeight - innerHeight crossed a threshold) | `widthDelta`, `heightDelta`, `surfaceKey` |
 
+## backup.* / restore.* — host jobs
+
+Written by `scripts/backup.sh` (nightly) and `scripts/restore.sh` (the weekly
+drill), not by the application: each appends one row to the live database per
+run through `scripts/lib/audit-host-job.sh`. `user_id` and `entity_id` are
+null (no account acts), `entity_type` is `host_job`. Best effort: a run that
+cannot reach the database writes no row and says so in its own log, and never
+fails because of it. `/admin/system-settings` shows the latest
+`backup.complete` and `restore.complete`.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `backup.complete` | A backup finished: dump written and checked, mirror and off-site copy done or skipped, local retention applied | `dump` (file name), `bytes`, `storage_mirrored`, `shipped_offsite` |
+| `backup.failed` | A backup exited non-zero | `error` (the failing check or line) |
+| `restore.complete` | A restore drill passed and stamped `workspace/last_restore_drill.json` | `source` (dump file name), `backup_age_days`, `tables`, `users`, `storage_verified` (false: the drill covers the database only) |
+| `restore.failed` | A restore drill failed and stamped the failure | `source`, `error` |
+
 ## Deferred prefixes (reserved but not yet wired)
 
 These prefixes have docs / specs but no live `recordAudit` call sites
 in the shipped codebase. Documenting them so the namespace stays
-reserved. The wildcard form (`backup.*`, `restore.*`, etc.) is the
+reserved. The wildcard form (`pairing.*`, `cycle.*`) is the
 canonical reservation; the concrete sub-action names below are the
 expected leaves once the surface ships.
 
-- `backup.*` — `backup.complete`, `backup.failed`. Nightly backup
-  script audit emission (deferred to spec 091 / 109).
-- `restore.*` — `restore.complete`, `restore.failed`. Restore-drill
-  audit emission (deferred to the same).
 - `pairing.*` — `pairing.created`, `pairing.advanced_to_quarter_2`,
   `pairing.ended`. Formal pairing lifecycle markers (currently the
   `mentor.*` family covers the active surface).

@@ -13,7 +13,8 @@
     "./queue": "./src/queue.ts",
     "./uploads": "./src/uploads.ts",
     "./notify": "./src/notify.ts",
-    "./form-field-kinds": "./src/formFieldKinds.ts"
+    "./form-field-kinds": "./src/formFieldKinds.ts",
+    "./migrations/journal": "./src/migrations/meta/_journal.json"
   },
   "scripts": {
     "generate": "drizzle-kit generate",

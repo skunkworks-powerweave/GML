@@ -45,7 +45,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { DATABASE_URL, needsDatabase, tag } from "./_harness.js";
+import { DATABASE_URL, needsDatabase, tag, withRlsProbeLock } from "./_harness.js";
+import { fakeGoTrue } from "./_fake_gotrue.ts";
 
 const skip = needsDatabase();
 
@@ -133,6 +134,13 @@ function superAdminEnv(email: string) {
 
 type Profile = { role: string; active: boolean; deleted: boolean };
 
+/** The audit rows the super_admin bootstrap writes, in a world. */
+const bootstrapAudit = (w: SeedWorld) =>
+  w.q(
+    `SELECT user_id, entity_type, entity_id, metadata FROM ${w.schema}.audit_log
+      WHERE action = 'admin.user.super_admin_bootstrapped' ORDER BY created_at`,
+  );
+
 // ── The super admin bootstrap ────────────────────────────────────────────────
 
 test(
@@ -140,7 +148,7 @@ test(
   { skip },
   async () => {
     const { bootstrapSuperAdmin } = await import("../../packages/db/src/scripts/seed.ts");
-    await withSeedWorld(["users"], async (w) => {
+    await withSeedWorld(["users", "audit_log"], async (w) => {
       const account = async (label: string, role: string, active: boolean, deleted: boolean) => {
         const id = randomUUID();
         const email = `${w.schema}.${label}@example.invalid`;
@@ -186,6 +194,11 @@ test(
           `the operator must be told why SUPER_ADMIN_* did nothing:\n${logs}`,
         );
       }
+      assert.deepEqual(
+        await w.q(`SELECT action FROM ${w.schema}.audit_log`),
+        [],
+        "a bootstrap that changed nothing must record nothing",
+      );
     });
   },
 );
@@ -198,7 +211,7 @@ test(
     // then failed before promoting it: the trigger has written the profile as
     // an INACTIVE teacher, and nobody can administer anything until this runs.
     const { bootstrapSuperAdmin } = await import("../../packages/db/src/scripts/seed.ts");
-    await withSeedWorld(["users"], async (w) => {
+    await withSeedWorld(["users", "audit_log"], async (w) => {
       const id = randomUUID();
       const email = `${w.schema}.founder@example.invalid`;
       await w.q(`INSERT INTO auth.users (id, email) VALUES ($1, $2)`, [id, email]);
@@ -216,7 +229,68 @@ test(
         { role: "super_admin", active: true, deleted: false },
         `a fresh system must still get its first administrator:\n${logs}`,
       );
+      assert.deepEqual(
+        await bootstrapAudit(w),
+        [{ user_id: null, entity_type: "users", entity_id: id, metadata: { source: "seed", authUserCreated: false, profileCreated: false } }],
+        "the one grant of super_admin made without an existing super_admin must leave an audit row",
+      );
     });
+  },
+);
+
+// W3-42 / W3-43. The account the bootstrap creates is handed over with a
+// password someone else chose -- SUPER_ADMIN_INITIAL_PASSWORD, which also stays
+// in .env -- exactly like an account /admin/users creates. Those are marked
+// app_metadata.must_change_password, and proxy.ts sends the holder to Settings
+// until they pick their own; the seed's createUser set no app_metadata, so the
+// most privileged account was the one account never made to change it. And
+// the promotion wrote no audit row, although it is the only place anything
+// becomes super_admin without a super_admin doing it.
+
+test(
+  "the account a first deploy creates must change its password at first sign-in, and the grant is audited",
+  { skip },
+  async () => {
+    const { bootstrapSuperAdmin } = await import("../../packages/db/src/scripts/seed.ts");
+    const { mustChangePassword } = await import("../../apps/web/src/lib/password-policy.ts");
+    const gotrue = await fakeGoTrue();
+    try {
+      await withSeedWorld(["users", "audit_log"], async (w) => {
+        const email = `${w.schema}.first-admin@example.invalid`;
+        superAdminEnv(email);
+        const restore = gotrue.install();
+        let logs = "";
+        try {
+          logs = (await captureLogs(() => w.withDb((db) => bootstrapSuperAdmin(db)))).logs;
+        } finally {
+          restore();
+        }
+
+        const created = [...gotrue.users.values()].find((u) => u.email === email);
+        assert.ok(created, `the bootstrap must create the auth user:\n${logs}`);
+        assert.equal(
+          mustChangePassword(created.appMetadata),
+          true,
+          "the bootstrap account signs in with SUPER_ADMIN_INITIAL_PASSWORD, which the deployer chose and " +
+            "which stays in .env; proxy.ts must send it to Settings at first sign-in like any handed-over " +
+            `account. app_metadata was ${JSON.stringify(created.appMetadata)}`,
+        );
+        const [row] = await w.q<Profile>(
+          `SELECT role::text AS role, active, deleted_at IS NOT NULL AS deleted FROM ${w.schema}.users WHERE id = $1`,
+          [created.id],
+        );
+        assert.deepEqual(row, { role: "super_admin", active: true, deleted: false }, logs);
+        const audit = await bootstrapAudit(w);
+        assert.deepEqual(
+          audit,
+          [{ user_id: null, entity_type: "users", entity_id: created.id, metadata: { source: "seed", authUserCreated: true, profileCreated: true } }],
+          `the first super_admin must be traceable in the audit log:\n${logs}`,
+        );
+        assert.doesNotMatch(JSON.stringify(audit), /only-used-when-an-account-is-created/, "no password is ever recorded");
+      });
+    } finally {
+      await gotrue.close();
+    }
   },
 );
 
@@ -269,6 +343,150 @@ test(
       }
       assert.equal(await bcrypt.compare("chosen-by-it-4821", hash("admin")), true, "a real GATE_PASSWORD_ADMIN is still used");
       assert.doesNotMatch(logs, /GENERATED PASSWORD: \s*$/m, `no blank password may be printed:\n${logs}`);
+    });
+  },
+);
+
+// W3-44. The fix above stops NEW gates being hashed from "". A host seeded
+// while the defect was live already holds them, and bootstrapSectionGates
+// skipped any slug with a row ("exists — skipping"), so every later deploy
+// left observation, mentorship and the audit log locked for everyone, with
+// nothing in the log to say why. A bcrypt("") gate admits nobody, so replacing
+// it cannot take a working password away from anyone; any other existing gate
+// is still never rotated by a deploy.
+
+test(
+  "a deploy repairs a gate left hashed from the empty password, and leaves a real one alone",
+  { skip },
+  async () => {
+    const { bootstrapSectionGates } = await import("../../packages/db/src/scripts/seed.ts");
+    const bcrypt = (await import(BCRYPT)).default as {
+      compare(p: string, h: string): Promise<boolean>;
+      hash(p: string, cost: number): Promise<string>;
+    };
+    await withSeedWorld(["section_gates", "section_gate_grants"], async (w) => {
+      // What the pre-fix seed left: version 1 of each gate, bcrypt("") -- and,
+      // for contrast, an admin gate IT had given a real password.
+      for (const [slug, pw] of [["observation", ""], ["mentorship", ""], ["admin", "real-admin-password"]]) {
+        await w.q(`INSERT INTO ${w.schema}.section_gates (slug, password_hash, version) VALUES ($1, $2, 1)`, [
+          slug,
+          await bcrypt.hash(pw!, 4),
+        ]);
+      }
+      await w.q(
+        `INSERT INTO ${w.schema}.section_gate_grants (user_id, gate_slug, expires_at)
+           VALUES (gen_random_uuid(), 'observation', now() + interval '1 hour')`,
+      );
+      process.env.GATE_PASSWORD_OBSERVATION = "";
+      process.env.GATE_PASSWORD_MENTORSHIP = "";
+      process.env.GATE_PASSWORD_ADMIN = "";
+      const { logs } = await captureLogs(() => w.withDb((db) => bootstrapSectionGates(db)));
+
+      const current = async (slug: string) =>
+        (
+          await w.q<{ version: number; password_hash: string }>(
+            `SELECT version, password_hash FROM ${w.schema}.section_gates WHERE slug = $1 ORDER BY version DESC LIMIT 1`,
+            [slug],
+          )
+        )[0]!;
+      for (const slug of ["observation", "mentorship"]) {
+        const gate = await current(slug);
+        assert.equal(
+          await bcrypt.compare("", gate.password_hash),
+          false,
+          `the '${slug}' gate still has the empty password nobody can submit, so the section stays locked ` +
+            `for everyone after this deploy too:\n${logs}`,
+        );
+        assert.equal(gate.version, 2, `the repair is a new version, as a rotation is:\n${logs}`);
+        const printed = logs.match(new RegExp(`section gate '${slug}' .*GENERATED PASSWORD: (\\S+)`))?.[1] ?? "";
+        assert.equal(await bcrypt.compare(printed, gate.password_hash), true, `the '${slug}' password must be printed:\n${logs}`);
+      }
+      const admin = await current("admin");
+      assert.equal(admin.version, 1, "a gate with a real password is never rotated by a deploy");
+      assert.equal(await bcrypt.compare("real-admin-password", admin.password_hash), true);
+      assert.match(logs, /exists — skipping section gate 'admin'/);
+      assert.deepEqual(
+        await w.q(`SELECT gate_slug FROM ${w.schema}.section_gate_grants`),
+        [],
+        "a new gate password ends the old one's grants, as /admin/gates' rotation does",
+      );
+    });
+  },
+);
+
+// ── The seeded phases: calendar days in IST ──────────────────────────────────
+//
+// W3-41. The seed wrote each phase as `new Date("2026-09-30")`, which JS reads
+// as UTC midnight: 05:30 IST. In the timestamptz columns each phase therefore
+// began 5.5 h into its first day and ENDED 5.5 h into its last one, and the
+// dashboard names the phase with `start_date <= now AND end_date >= now`, so
+// on 30 September "RTT Phase 3" left the subtitle at 05:30 IST. The admin grid
+// and CSV import already store a date the way the programme means it
+// (apps/web/src/admin/dates.ts): 00:00 IST on the first day, the last
+// millisecond of the last IST day. The seed must store the same.
+
+/** Every table seed.ts main() writes. */
+const SEEDED_TABLES = [
+  "districts", "zones", "schools", "teachers", "mentors", "subjects", "phases", "terms",
+  "rtt_subjects", "mentor_pairings", "observation_cycles", "section_gates",
+];
+
+test(
+  "the seeded phases start at 00:00 IST and stay current until the end of their last IST day",
+  { skip },
+  async () => {
+    const seed = await import("../../packages/db/src/scripts/seed.ts");
+    const { endOfIstDay, parseAdminDate, toIstDate } = await import("../../apps/web/src/admin/dates.ts");
+    await withSeedWorld(SEEDED_TABLES, async (w) => {
+      // main() dials DATABASE_URL itself, so point it at this world; without
+      // SUPER_ADMIN_* the super_admin bootstrap stays out of the way.
+      const saved = { url: process.env.DATABASE_URL, email: process.env.SUPER_ADMIN_EMAIL };
+      process.env.DATABASE_URL = w.url;
+      delete process.env.SUPER_ADMIN_EMAIL;
+      let logs = "";
+      try {
+        logs = (await captureLogs(() => seed.main())).logs;
+      } finally {
+        process.env.DATABASE_URL = saved.url;
+        if (saved.email !== undefined) process.env.SUPER_ADMIN_EMAIL = saved.email;
+      }
+
+      const phases = await w.q<{ label: string; start: Date; end: Date }>(
+        `SELECT label, start_date AS start, end_date AS "end" FROM ${w.schema}.phases ORDER BY sequence`,
+      );
+      assert.equal(phases.length, 3, `the seed writes three phases:\n${logs}`);
+      for (const p of phases) {
+        const first = toIstDate(p.start);
+        assert.equal(
+          p.start.toISOString(),
+          parseAdminDate(first).toISOString(),
+          `${p.label} must start at 00:00 IST on ${first}, as /admin/data/phases stores that date`,
+        );
+        assert.equal(
+          p.end.toISOString(),
+          endOfIstDay(p.end).toISOString(),
+          `${p.label} must end at the last moment of ${toIstDate(p.end)} IST, as /admin/data/phases stores that date`,
+        );
+      }
+
+      // The dashboard's "current phase" (dashboard/page.tsx), at a given moment.
+      const current = async (at: string) =>
+        (
+          await w.q<{ label: string }>(
+            `SELECT label FROM ${w.schema}.phases
+              WHERE start_date IS NOT NULL AND start_date <= $1::timestamptz
+                AND (end_date IS NULL OR end_date >= $1::timestamptz)
+              ORDER BY sequence`,
+            [at],
+          )
+        ).map((r) => r.label);
+      assert.deepEqual(
+        await current("2026-09-30T12:00:00+05:30"),
+        ["Phase 3"],
+        "noon IST on Phase 3's last day: the dashboard must still name it",
+      );
+      assert.deepEqual(await current("2026-04-01T02:00:00+05:30"), ["Phase 3"], "02:00 IST on Phase 3's first day");
+      assert.deepEqual(await current("2026-03-31T23:00:00+05:30"), ["Phase 2"], "23:00 IST on Phase 2's last day");
     });
   },
 );
@@ -342,6 +560,43 @@ test("verify-auth FAILS a deploy that leaves no active super_admin", { skip }, a
         `arms a restore drill that can never pass.\n--- verify-auth\n${out.slice(0, 3000)}`,
     );
   });
+});
+
+// W3-52. For a public table without RLS, verify-auth said "fix: apply
+// _post/002". _post/002 is ledgered in _post_migrations_applied and never runs
+// again: an operator who re-ran migrate saw "_post/002 ... already applied --
+// skipping", as if the fix had done nothing. What re-applies RLS on every
+// deploy is _post/always/001, so the remedy is re-running migrate. The check
+// also looked at ordinary tables only, while always/001 covers partitioned
+// ones too.
+test("verify-auth's remedy for a table without RLS is the step that re-applies it, and it sees partitioned tables", { skip }, async () => {
+  const probe = `rls_probe_${tag("v").slice(-8).replace(/[^a-z0-9]/g, "")}`;
+  // Exclusive: invariants.test.ts must not see this table, and
+  // rls-every-deploy.test.ts's migrate must not lock it down mid-check.
+  await withRlsProbeLock("exclusive", () =>
+    withSeedWorld(["users"], async (w) => {
+      await w.q(`INSERT INTO ${w.schema}.users (id, email, role, active) VALUES (gen_random_uuid(), $1, 'super_admin', true)`, [
+        `${w.schema}.admin@example.invalid`,
+      ]);
+      try {
+        await w.q(`CREATE TABLE public.${probe} (id int PRIMARY KEY)`);
+        await w.q(`CREATE TABLE public.${probe}_p (id int) PARTITION BY LIST (id)`);
+        const out = await verifyAuthIn(w);
+        const fail = new RegExp(`FAIL\\s+RLS enabled on every public table[^\\n]*\\n\\s*fix: ([^\\n]*)`).exec(out);
+        assert.ok(fail, `verify-auth must fail a public table without RLS:\n${out.slice(0, 3000)}`);
+        assert.match(fail[0], new RegExp(`\\b${probe}\\b`), fail[0]);
+        assert.doesNotMatch(
+          fail[1],
+          /_post\/002/,
+          "_post/002 is ledgered and never runs again; following this remedy changes nothing",
+        );
+        assert.match(fail[1], /re-run migrate/i, `the remedy must be the step that re-applies RLS:\n${fail[1]}`);
+        assert.match(fail[0], new RegExp(`\\b${probe}_p\\b`), `a partitioned table without RLS is missed:\n${fail[0]}`);
+      } finally {
+        await w.q(`DROP TABLE IF EXISTS public.${probe}, public.${probe}_p`);
+      }
+    }),
+  );
 });
 
 test("verify-auth passes the check once an active super_admin exists", { skip }, async () => {
