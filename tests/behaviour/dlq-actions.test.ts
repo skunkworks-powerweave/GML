@@ -10,9 +10,10 @@
 // attempt versus the submission's current state.
 //
 // Rows are committed under a unique tag and deleted afterwards. A redirect() is
-// Next's thrown digest; revalidatePath() needs Next's static-generation store
-// and throws outside it, which is how an action that got that far is told
-// apart from one that was refused.
+// Next's thrown digest. An action that got past its checks calls
+// revalidatePath() before redirecting back to the page; _ui.ts maps next/cache
+// to a stub that records the call (_stubs/next-cache.ts), and that record is
+// how an action that got that far is told apart from one that was refused.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -52,12 +53,21 @@ function signInAsAdmin(): void {
 
 /** Run an action: where it redirected, or that it completed (reached revalidatePath). */
 async function act(run: () => Promise<unknown>): Promise<{ redirect?: string; completed?: true }> {
+  // The next/cache stub's process-wide record of revalidatePath() calls.
+  const revalidated = ((globalThis as Record<string, unknown>).__gmlRevalidated ??= []) as string[];
+  const before = revalidated.length;
   try {
     await run();
     return { completed: true };
   } catch (e) {
     const digest = (e as { digest?: unknown } | null)?.digest;
-    if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT;")) return { redirect: digest.split(";")[2] };
+    if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT;")) {
+      // Both verbs redirect back to the DLQ on success as well as on refusal;
+      // only a success revalidates it first.
+      if (revalidated.length > before) return { completed: true };
+      return { redirect: digest.split(";")[2] };
+    }
+    // Without the stub, the real revalidatePath() throws outside a Next request.
     if (/static generation store missing/.test((e as Error).message)) return { completed: true };
     throw e;
   }
