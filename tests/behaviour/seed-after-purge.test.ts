@@ -752,3 +752,136 @@ test(
     });
   },
 );
+
+// The draft race above was the only late work the purge re-checked (W3-78).
+// A commitment is a jsonb element on the pairing row itself, so it has no
+// foreign key to stop the DELETE; a video points at its cycle or pairing
+// through the polymorphic video_submissions.context_id, which has none either
+// and takes no lock on the row. Either one arriving after the plan went, or
+// was left pointing at nothing, while the purge exited 0.
+
+test(
+  "purge --apply stops, rather than take it, when a commitment is added to a listed pairing while it runs",
+  { skip: purgeSkip() },
+  async () => {
+    const id = tag("pc").slice(-8);
+    await withClient(async (c) => {
+      const r = rows(c);
+      const mentorSession = await connect();
+      try {
+        const d = await r.add("districts", { name: `Purge commit ${id}`, code: `PC${id}` });
+        const z = await r.add("zones", { district_id: d, name: "purge commit zone" });
+        const s = await r.add("schools", { zone_id: z, code: `PC-${id}`, name: "Purge commit school" });
+        const t = await r.add("teachers", { school_id: s, full_name: `Purge commit ${id}`, phone: SEED_PHONES[0], active: false });
+        const m = await r.add("mentors", { name: `Purge commit mentor ${id}` });
+        const p = await r.add("mentor_pairings", { mentor_id: m, teacher_id: t });
+
+        // The mentor's UPDATE is not committed when the purge plans, so the
+        // plan reads commitments = [] and lists the pairing as idle. Its row
+        // lock is what the purge's FOR UPDATE then waits on.
+        await mentorSession.query("BEGIN");
+        await mentorSession.query(
+          `UPDATE mentor_pairings SET commitments = commitments || $2::jsonb WHERE id = $1`,
+          [p, JSON.stringify([{ text: `typed while the purge ran ${id}` }])],
+        );
+        const mentorPid = (await mentorSession.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+
+        const purge = runTsx([PURGE, "--apply"], plainUrl());
+        const blocked = await waitFor(
+          async () =>
+            (await c.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", [mentorPid]))
+              .rows[0].n > 0,
+          30_000,
+        );
+        await mentorSession.query("COMMIT");
+        const run = await purge;
+        const out = show(run);
+        assert.ok(blocked, `the purge never reached the pairing the commitment is on:\n${out}`);
+
+        assert.ok(
+          await exists(c, "mentor_pairings", p),
+          `a pairing given a commitment while the purge ran must be kept, commitment and all -- it was deleted:\n${out}`,
+        );
+        assert.notEqual(run.code, 0, `the purge must fail rather than remove less than, or other than, it listed:\n${out}`);
+        assert.match(
+          run.stdout + run.stderr,
+          /commitments=1[\s\S]*Nothing was removed/,
+          `the operator must be told a commitment stopped the purge, and that nothing was removed:\n${out}`,
+        );
+      } finally {
+        await mentorSession.query("ROLLBACK").catch(() => undefined);
+        await mentorSession.end().catch(() => undefined);
+        await r.cleanup();
+      }
+    });
+  },
+);
+
+test(
+  "purge --apply stops, rather than orphan it, when a video is being uploaded to a listed cycle as it runs",
+  { skip: purgeSkip() },
+  async () => {
+    const id = tag("pv").slice(-8);
+    await withClient(async (c) => {
+      const r = rows(c);
+      const uploader = await connect();
+      let video: string | undefined;
+      let file: string | undefined;
+      try {
+        const [code] = await freeCodes(c, SEED_CYCLE_CODES, 1);
+        const d = await r.add("districts", { name: `Purge video ${id}`, code: `PV${id}` });
+        const z = await r.add("zones", { district_id: d, name: "purge video zone" });
+        const s = await r.add("schools", { zone_id: z, code: `PV-${id}`, name: "Purge video school" });
+        const t = await r.add("teachers", { school_id: s, full_name: `Purge video ${id}`, phone: SEED_PHONES[0], active: false });
+        const cycle = await r.add("observation_cycles", { code, teacher_id: t, kind: "baseline" });
+
+        // An observer's upload reservation, written but not yet committed when
+        // the purge plans: the plan cannot see it and lists the cycle as idle.
+        // Nothing about it locks the cycle row -- context_id has no foreign
+        // key -- so FOR UPDATE on the cycle alone never waits for it.
+        await uploader.query("BEGIN");
+        file = (await uploader.query(
+          `INSERT INTO files (bucket, object_key, mime_type, kind) VALUES ('videos-original', $1, 'video/mp4', 'video_original')
+           RETURNING id`,
+          [`purge-test/${id}.mp4`],
+        )).rows[0].id as string;
+        video = (await uploader.query(
+          `INSERT INTO video_submissions (file_id, source, context_type, context_id)
+           VALUES ($1, 'direct', 'observation_cycle', $2) RETURNING id`,
+          [file, cycle],
+        )).rows[0].id as string;
+        const uploaderPid = (await uploader.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+
+        const purge = runTsx([PURGE, "--apply"], plainUrl());
+        const blocked = await waitFor(
+          async () =>
+            (await c.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", [uploaderPid]))
+              .rows[0].n > 0,
+          15_000,
+        );
+        await uploader.query("COMMIT");
+        const run = await purge;
+        const out = show(run);
+
+        assert.ok(
+          await exists(c, "observation_cycles", cycle),
+          `the cycle a video was uploaded to while the purge ran must be kept -- it was deleted, and the video ` +
+            `now points at nothing:\n${out}`,
+        );
+        assert.ok(blocked, `the purge must wait for an upload in progress before it re-checks the cycle:\n${out}`);
+        assert.notEqual(run.code, 0, `the purge must fail rather than remove less than, or other than, it listed:\n${out}`);
+        assert.match(
+          run.stdout + run.stderr,
+          new RegExp(`cycle ${code}[^\\n]*videos=1[\\s\\S]*Nothing was removed`),
+          `the operator must be told a video stopped the purge, and that nothing was removed:\n${out}`,
+        );
+      } finally {
+        await uploader.query("ROLLBACK").catch(() => undefined);
+        await uploader.end().catch(() => undefined);
+        if (video) await c.query("DELETE FROM video_submissions WHERE id = $1", [video]).catch(() => undefined);
+        if (file) await c.query("DELETE FROM files WHERE id = $1", [file]).catch(() => undefined);
+        await r.cleanup();
+      }
+    });
+  },
+);
