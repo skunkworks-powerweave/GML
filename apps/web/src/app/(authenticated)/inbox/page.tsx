@@ -2,6 +2,7 @@
 // Spec 070: unread-first feed grouped by date, filter tabs, mark-all-read form.
 // Schema: notifications (spec 025). Retention ≤ 90 days via packages/db retention script.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -12,6 +13,8 @@ import { notificationKindFilter } from "@/lib/notification-kinds";
 import { hrefForEntity, openHref } from "./links";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Inbox" };
 
 // Kind → emoji glyph. Unknown kinds fall back to the bell.
 const KIND_ICON: Record<string, string> = {
@@ -173,10 +176,12 @@ export default async function InboxPage({
         </form>
       </header>
 
-      {/* Filter tabs — All / Unread */}
+      {/* Filter tabs — All / Unread. aria-current: which tab is on was shown
+          only visually (fill and weight), so a screen reader never said. */}
       <nav style={{ display: "flex", gap: 8, marginBottom: 18, borderBottom: "1px solid var(--line)", paddingBottom: 10 }}>
         <Link
           href="/inbox"
+          aria-current={filter === "all" ? "page" : undefined}
           style={{
             padding: "6px 12px",
             borderRadius: 999,
@@ -192,6 +197,7 @@ export default async function InboxPage({
         </Link>
         <Link
           href="/inbox?filter=unread"
+          aria-current={filter === "unread" ? "page" : undefined}
           style={{
             padding: "6px 12px",
             borderRadius: 999,

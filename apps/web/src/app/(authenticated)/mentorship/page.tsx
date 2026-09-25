@@ -6,6 +6,7 @@
 // Counts come from a single GROUP BY so the chip totals stay accurate
 // even when the visible slice has narrowed.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
@@ -15,6 +16,8 @@ import { auth } from "@/auth";
 import { actorFrom, pairingVisibilityFilter } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Pairings" };
 
 const STATUS_CHIP: Record<string, string> = {
   active: "chip-lichen",
@@ -152,6 +155,9 @@ export default async function MentorshipListPage({
               <Link
                 key={f.v}
                 href={href}
+                // The chip that is on was marked by its fill alone; a screen
+                // reader could not tell which status the list was showing.
+                aria-current={active ? "page" : undefined}
                 className="btn btn-sm"
                 style={{
                   background: active ? "var(--ink)" : "transparent",
@@ -170,7 +176,9 @@ export default async function MentorshipListPage({
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            // min(100%, ...): a 320 px minimum is wider than a phone's content
+            // box, so each card overflowed it and the page scrolled sideways.
+            gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))",
             gap: 14,
           }}
         >

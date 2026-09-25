@@ -470,9 +470,13 @@ function BigRating({
   value: unknown;
   onChange: (v: number) => void;
 }) {
-  // Large tappable star row — each star is a 56x56 tap target (well above
-  // the 44px floor) so the user can pick a rating with their thumb without
-  // mis-hitting the neighbour.
+  // Large tappable star row. The stars share one line and split it evenly,
+  // square, from 56 px down to the 44 px touch floor: five of those and
+  // their 2 px gaps are the 228 px a 360 px phone leaves this row. Five fixed
+  // 56 px stars needed 312 px: the runner clipped the fourth and fifth, and
+  // a wrapping row of them read "3 stars, then 2", which hides the length and
+  // order of the scale. The row still wraps, but only when the stars cannot
+  // fit at 44 px: a longer scale (the schema allows 10) or a narrower screen.
   const max = field.starsMax ?? 5;
   // Same string-vs-number problem as Likert above.
   const current = coerceScaleValue(value) ?? 0;
@@ -481,7 +485,7 @@ function BigRating({
       data-testid="mobile-rating"
       role="group"
       aria-label={field.label}
-      style={{ display: "flex", gap: 8, justifyContent: "flex-start" }}
+      style={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "flex-start", justifyContent: "flex-start" }}
     >
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const on = current >= n;
@@ -495,8 +499,10 @@ function BigRating({
             aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
             data-testid={`mobile-star-${field.name}-${n}`}
             style={{
-              width: 56,
-              height: 56,
+              flex: "1 1 0",
+              minWidth: TOUCH_TARGET,
+              maxWidth: 56,
+              aspectRatio: "1 / 1",
               borderRadius: "var(--r-2)",
               fontSize: 28,
               lineHeight: 1,
@@ -736,13 +742,17 @@ export function MobileFormRunner({
   // One pill per step (field screens + review). Active is a wide pill,
   // others are small dots. Tap an earlier step to jump back; later steps
   // are non-tappable until the user has reached them.
+  //
+  // Each dot is a 24 px button around the 8 px pill, and the current one says
+  // aria-current="step". The pills were the buttons themselves: 8 x 8 px
+  // targets 6 px apart (under WCAG 2.5.8's 24 px), and which step was current
+  // showed by width and colour alone.
   const progressDots = (
     <div
       data-testid="mobile-progress-dots"
       style={{
         display: "flex",
-        gap: 6,
-        padding: "12px 16px 4px",
+        padding: "4px 16px 0",
         alignItems: "center",
         justifyContent: "center",
         flexWrap: "wrap",
@@ -759,22 +769,35 @@ export function MobileFormRunner({
             disabled={!tappable}
             onClick={() => (tappable ? setStep(i) : undefined)}
             aria-label={`Step ${i + 1} of ${totalSteps}`}
+            aria-current={isActive ? "step" : undefined}
             data-testid={`mobile-progress-dot-${i}`}
             style={{
-              height: 8,
-              width: isActive ? 28 : 8,
-              borderRadius: 4,
-              background: isActive
-                ? "var(--ink)"
-                : isPast
-                  ? "var(--ink-3)"
-                  : "var(--paper-3)",
+              height: 24,
+              minWidth: 24,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
               border: "none",
               cursor: tappable ? "pointer" : "default",
               padding: 0,
-              transition: "width 120ms ease",
             }}
-          />
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                height: 8,
+                width: isActive ? 28 : 8,
+                borderRadius: 4,
+                background: isActive
+                  ? "var(--ink)"
+                  : isPast
+                    ? "var(--ink-3)"
+                    : "var(--paper-3)",
+                transition: "width 120ms ease",
+              }}
+            />
+          </button>
         );
       })}
     </div>

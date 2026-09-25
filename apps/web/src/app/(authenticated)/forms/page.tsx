@@ -10,6 +10,7 @@
 // existed to be enforced, and a mentee had no way to discover which forms were
 // theirs other than by guessing slugs.
 
+import type { Metadata } from "next";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -22,6 +23,8 @@ import { actorFrom, mentorshipAccess } from "@/lib/visibility";
 import { formTitle } from "@/lib/forms/quarterly";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Forms" };
 
 /**
  * Which audiences may this role fill in?
@@ -68,16 +71,19 @@ export default async function FormsIndexPage({
   const role = session.user.role;
   const audiences = audiencesFor(role);
 
+  // A <div>, not a <main>: both shells already wrap the page in
+  // <main id="main-content">, and a second one inside it is invalid HTML and
+  // a second "main" landmark for a screen reader.
   if (audiences.length === 0) {
     return (
-      <main style={{ padding: "24px 28px", maxWidth: 820 }}>
+      <div style={{ padding: "24px 28px", maxWidth: 820 }}>
         <div className="label">Feedback</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>Forms</h1>
         <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 10, lineHeight: 1.6 }}>
           There are no feedback forms for your role. The mentorship feedback cycle is
           completed by mentors and their mentees.
         </p>
-      </main>
+      </div>
     );
   }
 
@@ -138,7 +144,7 @@ export default async function FormsIndexPage({
   const pairingCount = isAdmin || lookupFailed || locked ? null : pairings.length;
 
   return (
-    <main style={{ padding: "24px 28px", maxWidth: 820 }}>
+    <div style={{ padding: "24px 28px", maxWidth: 820 }}>
       <header style={{ marginBottom: 18 }}>
         <div className="label">Feedback</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>Forms</h1>
@@ -341,7 +347,7 @@ export default async function FormsIndexPage({
           })}
         </ul>
       )}
-    </main>
+    </div>
   );
 }
 
