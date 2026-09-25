@@ -352,21 +352,28 @@ in the dashboard counts, indistinguishable from real staff.
 docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/purge_demo_data.ts
 ```
 
-That is a **dry run** — it prints what would go and changes nothing. Add
-`--apply` to commit, which runs in a single transaction.
+That is a **dry run** — it lists every cycle, pairing, teacher, mentor and
+school it would remove, and every candidate it would keep and why, and changes
+nothing. Read the list before adding `--apply` to commit, which runs in a
+single transaction and removes exactly what the list names.
 
-Two things it does deliberately:
+Three things it does deliberately:
 
 - **It keeps the districts.** `seed.ts` skips everything when any district
   exists, and `deploy.sh` runs the seed on every deploy — so removing them
   would reinstate all of this on the next deployment.
+- **It matches the seed's exact rows.** Only those ten mobiles and those eight
+  cycle codes, and a cycle only when its teacher is one of the ten — so a real
+  cycle created at `/observation/new` (which numbers on from the seed's, and
+  starts again at `OBS-2026-001` once they are gone) is never caught.
 - **It keeps anything with real work attached.** A demo cycle that has acquired
-  a genuine form, video or evidence row, or a demo teacher who has been given a
-  login, is reported and left alone rather than cascaded away. A kept cycle's
-  teacher (and that teacher's school) is kept with it, because a cycle cannot
-  exist without its teacher.
+  a genuine form, video or evidence row; a demo pairing with a meeting, a
+  feedback response, a quarterly video or commitments; a demo teacher who has
+  been given a login; and a demo-named mentor record with a login linked to it
+  are all reported and left alone. Whatever a kept row cannot exist without —
+  its teacher, its mentor, the teacher's school — is kept with it.
 
-Safe to run twice; the second run finds nothing.
+Safe to run twice; the second run removes nothing.
 
 ### 3.2 Loading your programme's data (the Repository reads zero until you do)
 
