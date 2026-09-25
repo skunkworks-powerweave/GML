@@ -66,6 +66,18 @@ export function parseScore(value: string): number | null | undefined {
   return n !== null && n >= 0 && n <= 100 ? n : undefined;
 }
 
+/**
+ * cmi.core.student_name, which SCORM 1.2 defines as "Last, First" (a
+ * CMIString255). The LMS holds one display name, so its last word is taken as
+ * the family name; a one-word name is left as it is, and no name falls back
+ * to the email, then "Learner".
+ */
+export function cmiStudentName(name: string | null, email: string | null): string {
+  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  const out = parts.length > 1 ? `${parts.at(-1)}, ${parts.slice(0, -1).join(" ")}` : (parts[0] ?? (email?.trim() || "Learner"));
+  return out.slice(0, 255);
+}
+
 /** What the browser sends on LMSCommit / LMSFinish; see parseCommitPayload. */
 export type CommitPayload = {
   /** One per LMSInitialize; lets the server fold a session's time in once. */

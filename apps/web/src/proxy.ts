@@ -79,6 +79,7 @@ const POLICIES: PolicyRule[] = [
   { prefix: "/videos", loggedIn: true },
   { prefix: "/forms", loggedIn: true },
   { prefix: "/quizzes", loggedIn: true },
+  { prefix: "/scorm", loggedIn: true },
   { prefix: "/repo", loggedIn: true },
   { prefix: "/settings", loggedIn: true },
   { prefix: "/uploads", loggedIn: true },
