@@ -28,10 +28,24 @@ after(closeAppDb);
 async function inbox(w: ObservationWorld, entityId: string) {
   return (
     await w.c.query(
-      `SELECT user_id, kind, entity_type FROM notifications WHERE entity_id = $1 ORDER BY kind, user_id`,
+      `SELECT user_id, kind, entity_type, subject, body FROM notifications WHERE entity_id = $1 ORDER BY kind, user_id`,
       [entityId],
     )
-  ).rows as { user_id: string; kind: string; entity_type: string }[];
+  ).rows as { user_id: string; kind: string; entity_type: string; subject: string; body: string | null }[];
+}
+
+// The bell and /inbox are outside the Observation section, so a notification
+// may not carry what that section's password guards (lib/gated-reads.ts): the
+// cycle's code, its teacher, its kind, its date. The entity link takes the
+// reader to the cycle, through the gate.
+function assertNothingGated(rows: { subject: string; body: string | null }[], gated: Record<string, RegExp>) {
+  assert.ok(rows.length > 0, "something was written");
+  for (const r of rows) {
+    const text = `${r.subject}\n${r.body ?? ""}`;
+    for (const [what, re] of Object.entries(gated)) {
+      assert.doesNotMatch(text, re, `the notification names the cycle's ${what}: ${JSON.stringify(text)}`);
+    }
+  }
 }
 
 test("nominating a cycle notifies its teacher, its observer and her mentor -- not the nominator", { skip }, async () => {
@@ -59,6 +73,20 @@ test("nominating a cycle notifies its teacher, its observer and her mentor -- no
         ["cycle.assigned", w.teacher.id, "observation_cycle"],
       ].sort(),
     );
+    const code = (await w.c.query(`SELECT code FROM observation_cycles WHERE id = $1`, [cycleId])).rows[0].code as string;
+    assertNothingGated(rows, {
+      code: new RegExp(code),
+      teacher: /Teacher Row/,
+      kind: /developmental/i,
+      date: /2099|March/,
+    });
+
+    // As /inbox shows it to a party with no grant for the section.
+    signIn(w.teacher);
+    const { default: InboxPage } = await import("../../apps/web/src/app/(authenticated)/inbox/page.tsx");
+    const inboxText = (await render(withAppRouter(await InboxPage({ searchParams: Promise.resolve({}) })))).replace(/<[^>]*>/g, " ");
+    assert.match(inboxText, /observation cycle/i, "the teacher is still told");
+    assert.doesNotMatch(inboxText, new RegExp(`${code}|Teacher Row|developmental`, "i"));
   } finally {
     await w.cleanup();
   }
@@ -81,6 +109,7 @@ test("signing a cycle off notifies every other party that it is complete", { ski
       ].sort(),
       "the teacher and the observer are told; the mentor who signed is not told about his own act",
     );
+    assertNothingGated(await inbox(w, cyc.id), { code: new RegExp(cyc.code), teacher: /Teacher Row/ });
   } finally {
     await w.cleanup();
   }

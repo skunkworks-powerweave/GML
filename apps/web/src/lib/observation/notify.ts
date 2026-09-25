@@ -8,6 +8,15 @@
 // cycle. Whether a kind is SHOWN is decided at read time
 // (lib/notification-kinds.ts); writing is unconditional (@gml/db/notify).
 //
+// NOTHING THE SECTION PASSWORD GUARDS. The bell and /inbox are outside the
+// Observation section, and a notification is text copied into another table,
+// so the read-time rule the dashboard and lib/gated-reads.ts follow ("no
+// grant, no query": cycle codes, teachers, kinds) cannot apply to it. The
+// subject and body used to name the cycle's code, its teacher, its kind and
+// its date, which /inbox showed to every party whether or not they had
+// unlocked the section. They now say only that there is a cycle; the entity
+// link opens it through the gate, which returns the reader to that cycle.
+//
 // Database as a parameter, no "server-only": tests/behaviour runs it.
 
 import { and, eq, isNotNull } from "drizzle-orm";
@@ -22,13 +31,9 @@ import type { Db } from "../visibility";
 async function cycleParties(db: Db, cycleId: string) {
   const [row] = await db
     .select({
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      scheduledAt: observationCycles.scheduledAt,
       observerId: observationCycles.observerId,
       teacherId: observationCycles.teacherId,
       teacherUserId: teachers.userId,
-      teacherName: teachers.fullName,
     })
     .from(observationCycles)
     .innerJoin(teachers, eq(teachers.id, observationCycles.teacherId))
@@ -66,17 +71,15 @@ export async function notifyCycleParties(
   try {
     const cycle = await cycleParties(db, cycleId);
     if (!cycle) return 0;
-    const when = cycle.scheduledAt
-      ? ` on ${cycle.scheduledAt.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`
-      : "";
+    // Generic on purpose: see the header.
     const subject =
       event === "cycle.assigned"
-        ? `Observation cycle ${cycle.code} assigned`
-        : `Observation cycle ${cycle.code} signed off`;
+        ? "You have been added to an observation cycle"
+        : "An observation cycle you are part of has been signed off";
     const body =
       event === "cycle.assigned"
-        ? `A ${cycle.kind} observation of ${cycle.teacherName}${when}.`
-        : `The cycle for ${cycle.teacherName} is complete; its forms and notes stay on the cycle page.`;
+        ? "Open it to see which cycle and when; the Observation section asks for its password first."
+        : "Its forms and notes stay on the cycle page in the Observation section.";
     return await notify(
       db,
       cycle.userIds.map((userId) => ({
