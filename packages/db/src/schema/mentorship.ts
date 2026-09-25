@@ -91,6 +91,8 @@ export const mentorPairings = pgTable(
     index("mentor_pairings_teacher_idx").on(t.teacherId),
     check("mentor_pairings_quarter_check", sql`${t.currentQuarter} IS NULL OR (${t.currentQuarter} BETWEEN 1 AND 4)`),
     check("mentor_pairings_meetings_count_check", sql`${t.meetingsCount} >= 0`),
+    // Migration 0027; declared so the snapshot describes the database (F107).
+    check("mentor_pairings_commitments_is_array", sql`jsonb_typeof(${t.commitments}) = 'array'`),
   ],
 );
 

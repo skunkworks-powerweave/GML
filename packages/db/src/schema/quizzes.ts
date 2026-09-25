@@ -180,7 +180,10 @@ export const quizAttempts = pgTable(
     closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
   },
   (t) => [
-    index("quiz_attempts_user_quiz_idx").on(t.userId, t.quizId, t.startedAt),
+    // started_at DESC, as migration 0026 created it (F107: the snapshot must
+    // describe the database). NULLS FIRST is Postgres's default for DESC;
+    // drizzle's is NULLS LAST, so it is spelled out.
+    index("quiz_attempts_user_quiz_idx").on(t.userId, t.quizId, t.startedAt.desc().nullsFirst()),
     // At most ONE open attempt per learner per quiz. Partial, so a closed
     // attempt does not block a legitimate retry -- opening the runner in two
     // tabs would otherwise create two attempts and the earlier one becomes an
