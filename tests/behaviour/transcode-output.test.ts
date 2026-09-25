@@ -21,8 +21,14 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hlsEncodeArgs, parseProbe, probeArgs } from "../../apps/worker/src/encode.ts";
-import * as encode from "../../apps/worker/src/encode.ts";
+import {
+  hlsEncodeArgs,
+  parseProbe,
+  posterArgs,
+  probeArgs,
+  renditionProbeArgs,
+  renditionProblem,
+} from "../../apps/worker/src/encode.ts";
 
 const tools = ["ffmpeg", "ffprobe"].every((bin) => spawnSync(bin, ["-version"]).status === 0);
 // CI sets GML_REQUIRE_FFMPEG=1 wherever it has installed ffmpeg, so a runner
@@ -149,9 +155,50 @@ test("F02: a rendition that is not 8-bit 4:2:0 H.264 is refused before it can be
   run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-i", source("bad-src.mp4", { args: ["-pix_fmt", "yuv420p10le", "-c:v", "libx264"] }), "-c", "copy", "-f", "mpegts", bad]);
   const good = transcode(source("good-src.mp4", { args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] })).seg;
 
-  const problem = (encode as Record<string, unknown>).renditionProblem as ((stdout: string) => string | null) | undefined;
-  assert.equal(typeof problem, "function", "encode.ts has no check of what the encoder produced");
-  const probeRendition = (encode as Record<string, unknown>).renditionProbeArgs as (p: string) => string[];
-  assert.match(problem!(run("ffprobe", probeRendition(bad))) ?? "", /High 10|yuv420p10le/);
-  assert.equal(problem!(run("ffprobe", probeRendition(good))), null);
+  assert.match(renditionProblem(run("ffprobe", renditionProbeArgs(bad))) ?? "", /High 10|yuv420p10le/);
+  assert.equal(renditionProblem(run("ffprobe", renditionProbeArgs(good))), null);
+});
+
+// ── F10: the SHORT side is capped at 480, and nothing is scaled up ──────────
+//
+// `scale=-2:480` pinned the HEIGHT: a phone held upright (1080x1920, or a
+// landscape-coded clip with a 90-degree rotation, which ffmpeg autorotates
+// before the filter) came out 270 px wide -- too narrow to read a blackboard
+// -- and a 320x180 WhatsApp forward was scaled UP to 854x480, spending about
+// twice the bytes on interpolated pixels in a pipeline built for 2G.
+
+const SIZES: Array<{ name: string; size: string; expect: [number, number]; args?: string[] }> = [
+  { name: "portrait phone 1080x1920", size: "1080x1920", expect: [480, 854] },
+  { name: "landscape 1920x1080 (unchanged)", size: "1920x1080", expect: [854, 480] },
+  { name: "small 320x180 forward (not upscaled)", size: "320x180", expect: [320, 180] },
+  { name: "small portrait 360x640 (not upscaled)", size: "360x640", expect: [360, 640] },
+  { name: "square 480x480", size: "480x480", expect: [480, 480] },
+  // Odd sizes need 4:4:4 to be encoded at all; the output must still be even.
+  { name: "odd 321x181", size: "321x181", expect: [320, 180], args: ["-pix_fmt", "yuv444p", "-c:v", "libx264"] },
+];
+
+for (const s of SIZES) {
+  test(`F10: ${s.name} comes out ${s.expect.join("x")}`, { skip }, () => {
+    const src = source(`size-${s.size}.mp4`, { size: s.size, args: s.args ?? ["-pix_fmt", "yuv420p", "-c:v", "libx264"] });
+    const { stream } = transcode(src);
+    assert.deepEqual([stream.width, stream.height], s.expect);
+  });
+}
+
+test("F10: a phone clip coded landscape with a 90-degree rotation comes out portrait, 480 wide", { skip }, () => {
+  const coded = source("rotated-coded.mp4", { size: "1920x1080", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] });
+  const rotated = join(dir, "rotated.mp4");
+  run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90", "-i", coded, "-c", "copy", rotated]);
+  const { stream } = transcode(rotated);
+  assert.deepEqual([stream.width, stream.height], [480, 854]);
+});
+
+test("F10: the poster frame follows the same rule at 360", { skip }, () => {
+  for (const [size, expect] of [["1080x1920", [360, 640]], ["320x180", [320, 180]]] as const) {
+    const src = source(`poster-${size}.mp4`, { size, args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] });
+    const jpg = join(dir, `poster-${size}.jpg`);
+    run("ffmpeg", ["-hide_banner", "-loglevel", "error", ...posterArgs(src, jpg, 0)]);
+    const st = streamOf(jpg);
+    assert.deepEqual([st.width, st.height], expect, `poster of a ${size} source`);
+  }
 });

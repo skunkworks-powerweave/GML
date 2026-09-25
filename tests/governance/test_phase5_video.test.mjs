@@ -246,7 +246,15 @@ test("transcode.ts re-encodes EVERY source, including WhatsApp", () => {
   const src = read("apps/worker/src/transcode.ts") + read("apps/worker/src/encode.ts");
   assert.match(read("apps/worker/src/transcode.ts"), /runFfmpeg\(hlsEncodeArgs\(/);
   assert.match(src, /libx264/);
-  assert.match(src, /scale=-2:480/);
+  // CORRECTED (F10). This pinned `scale=-2:480`, which fixes the HEIGHT: a
+  // portrait phone clip came out 270 px wide and a 320x180 forward was scaled
+  // up. The short side is capped at 480 instead, with no upscaling;
+  // tests/behaviour/transcode-output.test.ts executes it on real sources.
+  assert.match(src, /boundedScale\(480\)/);
+  assert.ok(
+    !/scale=-2:(480|360)/.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")),
+    "no filter may pin the output height again",
+  );
   assert.match(src, /800k/);
 
   // INVERTED. This used to require `source === "whatsapp"` to take a `-c copy`

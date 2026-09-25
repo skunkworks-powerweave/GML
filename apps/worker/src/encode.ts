@@ -85,6 +85,26 @@ function toneMapFilters(probe: Probe): string[] {
 }
 
 /**
+ * A scale filter that caps the SHORTER side at `maxShort`, never scales up,
+ * and keeps both sides even (libx264 refuses odd ones at 4:2:0).
+ *
+ * `scale=-2:480` pinned the height, whatever the orientation or size: a phone
+ * held upright (1080x1920 -- or a landscape-coded clip with a rotation flag,
+ * which ffmpeg autorotates BEFORE the filter) came out 270 px wide, too narrow
+ * to read a blackboard, and a 320x180 WhatsApp forward was scaled UP to
+ * 854x480 at about twice the bytes. Portrait 480x854 has the same pixel count
+ * as landscape 854x480, which the bitrate caps were sized for.
+ *
+ * The quotes are filtergraph quoting; spawn() passes them through with no
+ * shell. -2 from inside an expression works on Debian's ffmpeg 5.1 and 7.1.
+ */
+export function boundedScale(maxShort: number): string {
+  const w = `if(gte(iw,ih),-2,min(${maxShort},trunc(iw/2)*2))`;
+  const h = `if(gte(iw,ih),min(${maxShort},trunc(ih/2)*2),-2)`;
+  return `scale=w='${w}':h='${h}'`;
+}
+
+/**
  * The HLS encode: one 480p media playlist plus its segments in `outDir`.
  *
  * Targets ~800 kbps total (480p video + 64 kbps mono AAC) for Ladakh 3G.
@@ -111,13 +131,12 @@ export function hlsEncodeArgs(input: string, outDir: string, probe: Probe): stri
     "-crf", "26",
     "-maxrate", "800k",
     "-bufsize", "1600k",
-    // scale=-2:480 keeps the aspect ratio and forces an EVEN width, which
-    // libx264 requires; a bare -1 produces odd widths on some sources and
-    // ffmpeg then refuses the encode. out_range=tv brings full-range sources
-    // (MJPEG, some Android cameras) to the limited range web delivery expects;
-    // it changes nothing on a source that is already limited. format= comes
-    // last so the conversion does not depend on option order.
-    "-vf", [...toneMap, "scale=-2:480:out_range=tv", "format=yuv420p"].join(","),
+    // The short side capped at 480 (see boundedScale). out_range=tv brings
+    // full-range sources (MJPEG, some Android cameras) to the limited range web
+    // delivery expects; it changes nothing on a source that is already
+    // limited. format= comes last so the conversion does not depend on option
+    // order.
+    "-vf", [...toneMap, `${boundedScale(480)}:out_range=tv`, "format=yuv420p"].join(","),
     // A tone-mapped stream is BT.709 now and must say so; leaving the BT.2020
     // / PQ / HLG tags on it would make a player "correct" it a second time.
     ...(toneMap.length > 0
@@ -185,7 +204,7 @@ export function posterArgs(input: string, output: string, atSec: number): string
     "-ss", atSec.toFixed(2),
     "-i", input,
     "-frames:v", "1",
-    "-vf", "scale=-2:360",
+    "-vf", boundedScale(360),
     "-q:v", "6",
     output,
   ];
