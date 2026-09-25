@@ -29,7 +29,11 @@
 //                submissions could not exist.
 
 import type { Upload } from "tus-js-client";
-import { accessToken, type SupabaseBrowserConfig } from "@/lib/supabase/browser";
+// A TYPE import only: the browser Supabase client (@supabase/ssr + supabase-js,
+// ~63 KB gzipped) is loaded when an upload starts, like tus-js-client below.
+// The static import put it in the first-load JavaScript of every page that
+// mounts an uploader, /uploads and /videos, for viewers who never upload too.
+import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
 
 export type UploadHandle = { abort: () => void };
 
@@ -59,6 +63,15 @@ export async function startResumableUpload(
     return null;
   }
 
+  let accessToken: typeof import("@/lib/supabase/browser").accessToken;
+  try {
+    // Relative, not "@/": the behaviour suite's alias hook resolves "@/" for
+    // require() but not for a dynamic import(). Same module either way.
+    ({ accessToken } = await import("../supabase/browser"));
+  } catch {
+    opts.onError("Upload library unavailable. Please send the video over WhatsApp instead.");
+    return null;
+  }
   const token = await accessToken(opts.supabase);
   if (!token) {
     opts.onError("Your session has expired. Please sign in again.");

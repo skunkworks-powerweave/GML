@@ -11,6 +11,10 @@
 
 export type SupabaseBrowserConfig = { url: string; anonKey: string };
 
+// Recorded at evaluation, so a test can tell whether a module pulled the
+// browser Supabase client in eagerly (upload-bundle.test.ts).
+(globalThis as Record<string, unknown>).__gmlSupabaseBrowserLoaded = true;
+
 export const TEST_ACCESS_TOKEN = "test-access-token";
 
 type TokenState = { current: string; refreshed?: string; refreshCalls: number };
