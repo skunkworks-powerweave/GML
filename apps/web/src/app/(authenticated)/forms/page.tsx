@@ -10,6 +10,7 @@
 // existed to be enforced, and a mentee had no way to discover which forms were
 // theirs other than by guessing slugs.
 
+import type { Metadata } from "next";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -22,6 +23,8 @@ import { actorFrom, mentorshipAccess } from "@/lib/visibility";
 import { formTitle } from "@/lib/forms/quarterly";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Forms" };
 
 /**
  * Which audiences may this role fill in?

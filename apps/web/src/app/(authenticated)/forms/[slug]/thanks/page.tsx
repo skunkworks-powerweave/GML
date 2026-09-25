@@ -9,6 +9,7 @@
 // text promised "The mentor/mentee on the other side of this pairing will see
 // a summary in their inbox". Nothing ever wrote that notification.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
@@ -20,6 +21,8 @@ import { formTitle } from "@/lib/forms/quarterly";
 import { isUuid } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Response saved" };
 
 type FeedbackKind = "baseline" | "progress_1" | "progress_2" | "final";
 type FeedbackAudience = "mentor" | "mentee";

@@ -738,13 +738,17 @@ export function MobileFormRunner({
   // One pill per step (field screens + review). Active is a wide pill,
   // others are small dots. Tap an earlier step to jump back; later steps
   // are non-tappable until the user has reached them.
+  //
+  // Each dot is a 24 px button around the 8 px pill, and the current one says
+  // aria-current="step". The pills were the buttons themselves: 8 x 8 px
+  // targets 6 px apart (under WCAG 2.5.8's 24 px), and which step was current
+  // showed by width and colour alone.
   const progressDots = (
     <div
       data-testid="mobile-progress-dots"
       style={{
         display: "flex",
-        gap: 6,
-        padding: "12px 16px 4px",
+        padding: "4px 16px 0",
         alignItems: "center",
         justifyContent: "center",
         flexWrap: "wrap",
@@ -761,22 +765,35 @@ export function MobileFormRunner({
             disabled={!tappable}
             onClick={() => (tappable ? setStep(i) : undefined)}
             aria-label={`Step ${i + 1} of ${totalSteps}`}
+            aria-current={isActive ? "step" : undefined}
             data-testid={`mobile-progress-dot-${i}`}
             style={{
-              height: 8,
-              width: isActive ? 28 : 8,
-              borderRadius: 4,
-              background: isActive
-                ? "var(--ink)"
-                : isPast
-                  ? "var(--ink-3)"
-                  : "var(--paper-3)",
+              height: 24,
+              minWidth: 24,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
               border: "none",
               cursor: tappable ? "pointer" : "default",
               padding: 0,
-              transition: "width 120ms ease",
             }}
-          />
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                height: 8,
+                width: isActive ? 28 : 8,
+                borderRadius: 4,
+                background: isActive
+                  ? "var(--ink)"
+                  : isPast
+                    ? "var(--ink-3)"
+                    : "var(--paper-3)",
+                transition: "width 120ms ease",
+              }}
+            />
+          </button>
         );
       })}
     </div>

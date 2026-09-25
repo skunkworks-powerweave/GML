@@ -12,6 +12,7 @@
 //                       that wrote an audit row and changed nothing.
 //   - "Complete"      → completePairingAction (super_admin + programme_admin).
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
@@ -39,6 +40,8 @@ import {
 } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Pairing" };
 
 const QUARTERS = ["baseline", "progress_1", "progress_2", "final"] as const;
 const QUARTER_LABEL: Record<string, string> = {
@@ -799,11 +802,15 @@ export default async function PairingDetailPage({
               }}
             >
               <input type="hidden" name="pairingId" value={pairingId} />
+              {/* aria-labels: the row has no visible labels, and a placeholder
+                  names a box only until something is typed in it; the who
+                  select had no name at all. */}
               <input
                 name="text"
                 required
                 maxLength={500}
                 placeholder="Add a commitment…"
+                aria-label="New commitment"
                 style={{
                   gridColumn: "1 / -1",
                   width: "100%",
@@ -817,6 +824,7 @@ export default async function PairingDetailPage({
               <select
                 name="who"
                 defaultValue="mentee"
+                aria-label="Whose commitment"
                 style={{
                   padding: "6px 4px",
                   border: "1px solid var(--line-2)",
@@ -832,6 +840,7 @@ export default async function PairingDetailPage({
                 name="due"
                 maxLength={40}
                 placeholder="Wk 8"
+                aria-label="Due"
                 style={{
                   padding: "6px 6px",
                   border: "1px solid var(--line-2)",
