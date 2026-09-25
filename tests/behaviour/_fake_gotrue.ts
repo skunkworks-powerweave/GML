@@ -147,6 +147,8 @@ export async function fakeGoTrue(options: Options = {}) {
   let settings: Record<string, unknown> = { disable_signup: true, mailer_autoconfirm: false, external: { email: true } };
   /** When set, every request except the JWKS is answered with this status (an outage). */
   let outage: number | null = null;
+  /** When set, a request it returns an error for is answered with that error instead (one failing call). */
+  let fault: ((r: Seen) => { status: number; code: string; message: string } | null) | null = null;
   let ttl = options.accessTokenTtl ?? 900;
   const table = options.sessionTable;
   const hook = options.hook ?? (() => ({ role: "teacher" }));
@@ -298,10 +300,13 @@ export async function fakeGoTrue(options: Options = {}) {
     } catch {
       body = {};
     }
-    seen.push({ method: req.method ?? "", path, query: full.searchParams, auth: bearer, body });
+    const request: Seen = { method: req.method ?? "", path, query: full.searchParams, auth: bearer, body };
+    seen.push(request);
 
     if (path === "/.well-known/jwks.json") return send(res, 200, { keys: [jwk] });
     if (outage !== null) return fail(res, outage, "unexpected_failure", "service unavailable");
+    const injected = fault?.(request);
+    if (injected) return fail(res, injected.status, injected.code, injected.message);
     if (path === "/settings" && req.method === "GET") return send(res, 200, settings);
 
     // ── admin API ──────────────────────────────────────────────────────────
@@ -511,6 +516,8 @@ export async function fakeGoTrue(options: Options = {}) {
     },
     setSettings: (s: Record<string, unknown>) => void (settings = s),
     setOutage: (status: number | null) => void (outage = status),
+    /** Fail the requests `f` picks out (null: none); every other request is answered as usual. */
+    setFault: (f: typeof fault) => void (fault = f),
     setAccessTokenTtl: (s: number) => void (ttl = s),
     /** Point the app's Supabase clients at this server. Returns a restore(). */
     install(): () => void {

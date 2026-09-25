@@ -54,13 +54,15 @@ can fill. Token refreshes are not audited.
 `user_id` is the administrator, `entity_id` the account acted on. No password
 is ever recorded, in any form. `sessionsEnded` is true only when the account's
 sessions really were ended, and `sessionsEndedCount` then says how many.
+`banApplied` and `banLifted` likewise record whether Supabase actually
+applied or lifted the sign-in ban.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `admin.user.create` | An administrator created an account (with an initial password the holder must replace at first sign-in) | `email`, `role`, `linkKind` ("teacher" / "mentor" / null) |
 | `admin.user.role_change` | An account's role was changed. Losing an administrator role ends the account's sessions | `from`, `to`, `sessionsEnded`, `sessionsEndedCount` |
-| `admin.user.deactivate` | An account was deactivated: profile inactive, sessions ended, sign-in banned | `role`, `sessionsEnded`, `sessionsEndedCount` |
-| `admin.user.activate` | An account was reactivated (its old sessions stay ended) | `role` |
+| `admin.user.deactivate` | An account was deactivated: profile inactive, sessions ended, sign-in banned | `role`, `sessionsEnded`, `sessionsEndedCount`, `banApplied` |
+| `admin.user.activate` | An account was reactivated (its old sessions stay ended) | `role`, `banLifted` |
 | `admin.user.password_set` | An administrator set an account's password (the holder must replace it) | `role`, `sessionsEnded`, `sessionsEndedCount` |
 | `admin.user.surface_viewed` | `/admin/users`, which lists every account's email address, was rendered (SM-9 visibility) | none |
 

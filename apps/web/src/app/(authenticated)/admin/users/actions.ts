@@ -318,33 +318,64 @@ export async function setActiveAction(
     // Residual exposure is the access token already in their browser, which
     // cannot be recalled and dies at its own expiry. That is the honest bound,
     // and it is why the token lifetime matters.
-    const admin = supabaseAdmin();
     revoked = await revokeAllSessions(targetId);
-    await admin.auth.admin
-      .updateUserById(targetId, { ban_duration: "876000h" /* ~100 years */ })
-      .catch(() => undefined);
-  } else {
-    await supabaseAdmin()
-      .auth.admin.updateUserById(targetId, { ban_duration: "none" })
-      .catch(() => undefined);
   }
+  // Applied on deactivation, lifted on reactivation -- without the lift, a
+  // reactivated account is still refused at sign-in with user_banned.
+  const ban = await setSignInBan(targetId, !active);
 
   const wrote = await recordAudit({
     action: active ? "admin.user.activate" : "admin.user.deactivate",
     entityType: "user",
     entityId: targetId,
-    metadata: active ? { role: permitted.targetRole } : { role: permitted.targetRole, ...sessionsOutcome(revoked) },
+    metadata: active
+      ? { role: permitted.targetRole, banLifted: ban.ok }
+      : { role: permitted.targetRole, ...sessionsOutcome(revoked), banApplied: ban.ok },
   });
   if (!wrote) noteAuditDegraded("admin/users/setActiveAction");
 
   revalidatePath("/admin/users");
+  if (active) {
+    return {
+      ok: ban.ok
+        ? "Account reactivated."
+        : `Account reactivated, but Supabase still blocks their sign-in (${ban.error}). Deactivate and reactivate them to retry.`,
+    };
+  }
+  // No "deactivate again to retry": the row now offers only Reactivate. The
+  // inactive profile is what matters most -- the access-token hook refuses to
+  // mint for it, so a session that survived cannot be renewed and a sign-in
+  // that got past a missing ban still gets no token.
+  const sessions = revoked?.ok
+    ? "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime."
+    : "Account deactivated, but their existing sessions could not be ended. They cannot be renewed while the account is inactive and stop working within one token lifetime.";
   return {
-    ok: active
-      ? "Account reactivated."
-      : revoked?.ok
-        ? "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime."
-        : "Account deactivated, but their existing sessions could not be ended; they stop working within one token lifetime. Deactivate again to retry.",
+    ok: ban.ok
+      ? sessions
+      : `${sessions} Supabase did not block their sign-in (${ban.error}); the inactive account is still refused a session.`,
   };
+}
+
+/**
+ * Apply or lift the sign-in ban. Never throws.
+ *
+ * auth-js RETURNS an API failure as {error} rather than throwing it, so the
+ * `.catch(() => undefined)` these calls used to carry could never fire -- the
+ * pattern that hid F62's failed revocation. A failed unban reported
+ * "Account reactivated." for an account that still could not sign in.
+ */
+async function setSignInBan(targetId: string, banned: boolean): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const { error } = await supabaseAdmin().auth.admin.updateUserById(targetId, {
+      ban_duration: banned ? "876000h" /* ~100 years */ : "none",
+    });
+    if (error) throw error;
+    return { ok: true };
+  } catch (err) {
+    console.error(`[auth] could not ${banned ? "apply" : "lift"} the sign-in ban for ${targetId}:`, err);
+    const message = (err as { message?: unknown } | null)?.message;
+    return { ok: false, error: String(typeof message === "string" && message ? message : err).slice(0, 200) };
+  }
 }
 
 // ── password ──────────────────────────────────────────────────────────────────

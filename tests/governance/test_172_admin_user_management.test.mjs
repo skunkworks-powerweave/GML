@@ -151,9 +151,15 @@ test("deactivation ends access rather than only setting a flag", () => {
     "deactivation must also ban the auth user, or they simply sign in again " +
       "with the correct password and get a fresh token",
   );
+  // CORRECTED. This required the literal `ban_duration: "none"`. Both ban
+  // calls now go through setSignInBan(), which checks the error auth-js
+  // RETURNS (the old `.catch(() => undefined)` could never fire, so a failed
+  // unban still said "Account reactivated."), and "none" is one arm of its
+  // conditional. The invariant is unchanged; that a failed ban or unban is
+  // reported is executed by tests/behaviour/auth-session-revocation.test.ts.
   assert.match(
     src,
-    /ban_duration:\s*"none"/,
+    /ban_duration:[^\n]*"none"/,
     "reactivation must lift the ban, or a reactivated account still cannot sign in",
   );
 });

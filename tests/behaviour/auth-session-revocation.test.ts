@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { request, resetRequest, form, closeAppDb } from "./_auth-harness.ts";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
-import { fakeGoTrue, ensureAuthSessionsTable, withRowFault, type FakeGoTrue } from "./_fake_gotrue.ts";
+import { fakeGoTrue, ensureAuthSessionsTable, withRowFault, type FakeGoTrue, type Seen } from "./_fake_gotrue.ts";
 
 const skip = needsDatabase();
 
@@ -181,6 +181,8 @@ test("deactivation ends every session, and reactivation does not bring them back
   );
   const meta = await auditMetadata("admin.user.deactivate", target.id);
   assert.equal(meta.sessionsEnded, true);
+  assert.equal(meta.banApplied, true, "the audit row records that sign-in was blocked");
+  assert.equal((await auditMetadata("admin.user.activate", target.id)).banLifted, true);
 });
 
 test("when sessions cannot be ended, the administrator and the audit log are told so", { skip }, async () => {
@@ -198,6 +200,57 @@ test("when sessions cannot be ended, the administrator and the audit log are tol
   assert.match(res.ok ?? "", /sessions could not be ended/i, `the message must not claim sessions ended: ${res.ok}`);
   const meta = await auditMetadata("admin.user.role_change", target.id);
   assert.equal(meta.sessionsEnded, false, "the audit row must not record a revocation that did not happen");
+});
+
+// The ban is the third layer of a deactivation, and lifting it is what lets a
+// reactivated account sign in. Both calls RETURN their error (auth-js does
+// not throw), and both were followed by `.catch(() => undefined)` -- the
+// pattern that hid F62's failed revocation -- so a failed unban still said
+// "Account reactivated." to an administrator whose colleague could not sign in.
+test("a sign-in ban that cannot be applied or lifted is reported, not swallowed", { skip }, async () => {
+  const actor = await makeUser("super_admin");
+  const target = await makeUser("teacher");
+  await signInThroughApp(actor);
+  const { setActiveAction } = await adminActions();
+  const failBan = (lifting: boolean) => (r: Seen) =>
+    r.method === "PUT" &&
+    r.path === `/admin/users/${target.id}` &&
+    typeof r.body.ban_duration === "string" &&
+    (r.body.ban_duration === "none") === lifting
+      ? { status: 500, code: "unexpected_failure", message: "Database error updating user" }
+      : null;
+
+  fake.setFault(failBan(false));
+  let off: Awaited<ReturnType<typeof setActiveAction>>;
+  try {
+    off = await setActiveAction(undefined, form({ userId: target.id, active: "false" }));
+  } finally {
+    fake.setFault(null);
+  }
+  assert.equal(fake.users.get(target.id)!.bannedUntil, null, "precondition: the ban really was not applied");
+  assert.ok(off.ok, `the deactivation itself committed and must be reported: ${JSON.stringify(off)}`);
+  assert.match(off.ok ?? "", /did not block their sign-in/i, `the message must say the ban failed: ${off.ok}`);
+  assert.equal((await auditMetadata("admin.user.deactivate", target.id)).banApplied, false);
+
+  // Deactivated properly this time, so there is a ban to lift.
+  assert.ok((await setActiveAction(undefined, form({ userId: target.id, active: "false" }))).ok);
+  assert.notEqual(fake.users.get(target.id)!.bannedUntil, null);
+
+  fake.setFault(failBan(true));
+  let on: Awaited<ReturnType<typeof setActiveAction>>;
+  try {
+    on = await setActiveAction(undefined, form({ userId: target.id, active: "true" }));
+  } finally {
+    fake.setFault(null);
+  }
+  assert.notEqual(fake.users.get(target.id)!.bannedUntil, null, "precondition: the ban really is still on");
+  assert.ok(on.ok, JSON.stringify(on));
+  assert.match(
+    on.ok ?? "",
+    /still blocks their sign-in/i,
+    `a reactivated account that still cannot sign in must not be reported as plainly reactivated: ${on.ok}`,
+  );
+  assert.equal((await auditMetadata("admin.user.activate", target.id)).banLifted, false);
 });
 
 test("setting a password ends the user's sessions and records it", { skip }, async () => {
