@@ -129,3 +129,58 @@ test(
     );
   },
 );
+
+// ── W3-57 ────────────────────────────────────────────────────────────────────
+
+/** A source ffprobe fails on for a reason that is not "unreadable" (a failed probe costs only metadata). */
+const PROBE_FAILS = `
+const args = process.argv.slice(2);
+if (args.includes("-select_streams")) {
+  process.stdout.write(JSON.stringify({ streams: [{ codec_name: "h264", profile: "High", pix_fmt: "yuv420p" }] }));
+} else {
+  process.stderr.write("input: Cannot allocate memory\\n");
+  process.exit(1);
+}
+`;
+
+/** ffmpeg on a source with NO sound: mapping 0:a:0 is fatal, as ffmpeg 7.1 words it. */
+const FFMPEG_ON_A_SILENT_SOURCE = `
+if (process.argv.slice(2).includes("0:a:0")) {
+  process.stderr.write(
+    "Stream map '' matches no streams.\\nTo ignore this, add a trailing '?' to the map.\\n" +
+      "Failed to set value '0:a:0' for option 'map': Invalid argument\\nError opening output files: Invalid argument\\n",
+  );
+  process.exit(234);
+}
+${FFMPEG_WRITES_OUTPUT}`;
+
+test(
+  "W3-57: a silent source whose probe failed is encoded without sound, instead of failing on the audio map",
+  { skip, timeout: 120_000 },
+  async () => {
+    await transcodeWith({ ffprobe: PROBE_FAILS, ffmpeg: FFMPEG_ON_A_SILENT_SOURCE }, async ({ w, sub, tools, output }) => {
+      const v = await video(w, sub);
+      // It failed with "Stream map '' matches no streams" -- on every attempt
+      // whose probe failed -- where a video-only encode works.
+      assert.equal(v.status, "ready", `${v.processing_log}\n${output()}`);
+      const encodes = tools.calls("ffmpeg").filter((c) => c.args.includes("-var_stream_map"));
+      assert.equal(encodes.length, 2, "one encode as unknown-means-sound, one without");
+      const second = encodes[1]!.args;
+      assert.ok(!second.includes("0:a:0"), "the second encode still maps audio");
+      assert.equal(second[second.indexOf("-var_stream_map") + 1], "v:0 v:1 v:2");
+    });
+  },
+);
+
+test(
+  "W3-57: a source with sound whose probe failed is still encoded WITH its sound (unknown stays 'yes')",
+  { skip, timeout: 120_000 },
+  async () => {
+    await transcodeWith({ ffprobe: PROBE_FAILS, ffmpeg: FFMPEG_WRITES_OUTPUT }, async ({ w, sub, tools, output }) => {
+      assert.equal((await video(w, sub)).status, "ready", output());
+      const encodes = tools.calls("ffmpeg").filter((c) => c.args.includes("-var_stream_map"));
+      assert.equal(encodes.length, 1);
+      assert.ok(encodes[0]!.args.includes("0:a:0"), "a lesson video published without its sound");
+    });
+  },
+);

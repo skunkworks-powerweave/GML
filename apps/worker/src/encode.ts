@@ -22,7 +22,11 @@ export type Probe = {
   colorTransfer?: string | null;
   colorPrimaries?: string | null;
   colorSpace?: string | null;
-  /** Whether it has sound. Unknown (a failed probe) is treated as yes. */
+  /**
+   * Whether it has sound. Unknown (a failed probe) is treated as yes: the
+   * audio is mapped explicitly, so a SILENT source then fails the encode on
+   * that map (missingAudioMap), and the worker encodes it again without.
+   */
   hasAudio?: boolean | null;
   /** Whether it has a picture at all. False only when the probe WORKED and found none. */
   hasVideo?: boolean | null;
@@ -279,6 +283,17 @@ export function hlsEncodeArgs(input: string, outDir: string, probe: Probe): stri
     "-var_stream_map", rungs.map((_, i) => (audio ? `v:${i},a:${i}` : `v:${i}`)).join(" "),
     join(outDir, "v%v.m3u8"),
   ];
+}
+
+/**
+ * Whether a failed hlsEncodeArgs() run failed because the source has no audio
+ * stream for its `-map 0:a:0`. The old single encode left stream selection to
+ * ffmpeg, which skips a missing audio stream quietly; the ladder maps it by
+ * name, which is fatal. ffmpeg 7.1 says "Stream map '' matches no streams",
+ * 5.1 names the map, and both then say they failed to set it.
+ */
+export function missingAudioMap(ffmpegError: string): boolean {
+  return /Stream map '[^']*' matches no streams|Failed to set value '0:a:0' for option 'map'/.test(ffmpegError);
 }
 
 /** ffprobe arguments for what the encoder actually wrote into a segment. */

@@ -60,6 +60,7 @@ import {
   encodeDeadlineMs,
   hlsEncodeArgs,
   ladderFor,
+  missingAudioMap,
   parseProbe,
   posterArgs,
   probeArgs,
@@ -317,7 +318,23 @@ export async function transcode480p(
 
     // ── 3. Transcode ─────────────────────────────────────────────────────────
     // The encoder settings are in encode.ts, where they can be tested.
-    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal, deadline(encodeDeadlineMs(probe.durationSec)));
+    const encode = () =>
+      runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal, deadline(encodeDeadlineMs(probe.durationSec)));
+    try {
+      await encode();
+    } catch (err) {
+      // With the probe failed, whether the source has sound is unknown, and
+      // unknown is encoded as sound: a silent source then failed on its audio
+      // map, on every attempt whose probe failed, where a video-only encode
+      // works. Again without audio ONLY on ffmpeg's word that there is none --
+      // guessing silent would publish a lesson with its sound missing.
+      if (probe.hasAudio != null || signal?.aborted || !missingAudioMap(String(err))) throw err;
+      console.warn(`[transcode] ${videoSubmissionId}: the source has no audio stream; encoding it without`);
+      probe.hasAudio = false;
+      await rm(localOut, { recursive: true, force: true });
+      await mkdir(localOut, { recursive: true });
+      await encode();
+    }
 
     // ffmpeg exiting 0 proves it wrote something, not that a phone can play
     // it. Refuse an undecodable rendition here -- any rung, since a player may
