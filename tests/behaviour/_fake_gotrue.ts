@@ -433,18 +433,19 @@ export async function fakeGoTrue(options: Options = {}) {
       if (req.method === "GET") return send(res, 200, userJson(who.user));
       if (req.method === "PUT") {
         if (typeof body.password === "string") {
-          // Checked before same_password, in GoTrue's order.
+          // Checked before same_password, in GoTrue's order. Only this check
+          // exempts an emailed-link session; same_password applies to all.
           const fromEmailedLink = who.session.amr.some((a) => RECOVERY_AMR.has(a.method));
           if (requireCurrentPassword && body.password !== "" && who.user.password && !fromEmailedLink) {
             const current = body.current_password;
             if (typeof current !== "string" || current === "") {
               return fail(res, 400, "current_password_required", "Current password required when setting new password.");
             }
-            if (current !== who.user.password && !fromEmailedLink) {
+            if (current !== who.user.password) {
               return fail(res, 400, "current_password_mismatch", "Current password required when setting new password.");
             }
           }
-          if (body.password === who.user.password && !fromEmailedLink) {
+          if (body.password === who.user.password) {
             return fail(res, 422, "same_password", "New password should be different from the old password.");
           }
           who.user.password = body.password;

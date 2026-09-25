@@ -142,6 +142,31 @@ test("with the setting on, a recovery-link reset still works: GoTrue exempts ema
   assert.equal(fake.users.get(u.id)!.password, "reset-by-me-1");
 });
 
+test("a recovery-link reset to the same password is refused, with the setting on or off", { skip }, async () => {
+  // Only the current-password check exempts an emailed-link session; GoTrue's
+  // same_password check runs for every session whose user has a password
+  // (user.go:167-196 in v2.196.0). /login/reset surfaces GoTrue's message.
+  for (const on of [true, false]) {
+    fake.setRequireCurrentPassword(on);
+    try {
+      const u = await makeUser("teacher");
+      resetRequest({ "x-real-ip": IP });
+      const { createSupabaseServerClient } = await serverClient();
+      const sb = await createSupabaseServerClient();
+      assert.equal((await sb.auth.verifyOtp({ type: "recovery", token_hash: fake.issueOtp(u.id, "recovery") })).error, null);
+      const { resetPasswordAction } = await resetActions();
+      const res = await outcome(() => resetPasswordAction(undefined, form({ password: u.password, confirm: u.password })));
+      assert.deepEqual(
+        res,
+        { kind: "returned", value: { error: "New password should be different from the old password." } },
+        `setting ${on ? "on" : "off"}`,
+      );
+    } finally {
+      fake.setRequireCurrentPassword(true);
+    }
+  }
+});
+
 test("with the setting on, a bare PUT /user from a password session cannot set a password", { skip }, async () => {
   // What someone at a browser left signed in could do with the token the
   // page scripts can read (README-deploy §2.2f).
