@@ -174,6 +174,14 @@ test("an RTT subject page with content fits a phone: modules, then the readings 
       ["Modules", "Required readings", "Assessment", "Cohort sessions", "Your progress"],
       "the cards in a phone's reading order",
     );
+    // That arrangement is one column at any width. The device cookie says
+    // "mobile" up to and including 768 px (lib/use-device.ts), where md:
+    // already applies -- an iPad held upright -- and two columns there would
+    // be everything but the progress card on the left.
+    const section = (e: { tag: string; attrs: Record<string, string> }) => e.tag === "section" && /\bgrid\b/.test(e.attrs.class ?? "");
+    for (const width of [PHONE_WIDTH, 768, 1024]) {
+      assert.deepEqual((await templateAt(html, width, section)).map(columns), [1], `the phone arrangement is one column at ${width}px`);
+    }
 
     // The desktop layout is unchanged: modules and sessions beside progress,
     // readings and the assessment.

@@ -377,8 +377,16 @@ export default async function RttSubjectPage({
           modules, readings, the assessment, sessions, then progress; in a
           narrow desktop window the desktop's order -- and from 768 px they are
           the same 1.5fr / 1fr, as minmax(0, ...) so wide content scrolls in
-          its card instead of widening the page. */}
-      <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+          its card instead of widening the page. The phone arrangement is one
+          column at every width: the device cookie says "mobile" up to and
+          including 768 px (lib/use-device.ts), where md: already applies. */}
+      <section
+        className={
+          phone
+            ? "grid grid-cols-1 gap-[18px]"
+            : "grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"
+        }
+      >
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
           <article id="modules" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
