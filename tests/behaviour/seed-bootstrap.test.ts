@@ -347,6 +347,73 @@ test(
   },
 );
 
+// W3-44. The fix above stops NEW gates being hashed from "". A host seeded
+// while the defect was live already holds them, and bootstrapSectionGates
+// skipped any slug with a row ("exists — skipping"), so every later deploy
+// left observation, mentorship and the audit log locked for everyone, with
+// nothing in the log to say why. A bcrypt("") gate admits nobody, so replacing
+// it cannot take a working password away from anyone; any other existing gate
+// is still never rotated by a deploy.
+
+test(
+  "a deploy repairs a gate left hashed from the empty password, and leaves a real one alone",
+  { skip },
+  async () => {
+    const { bootstrapSectionGates } = await import("../../packages/db/src/scripts/seed.ts");
+    const bcrypt = (await import(BCRYPT)).default as {
+      compare(p: string, h: string): Promise<boolean>;
+      hash(p: string, cost: number): Promise<string>;
+    };
+    await withSeedWorld(["section_gates", "section_gate_grants"], async (w) => {
+      // What the pre-fix seed left: version 1 of each gate, bcrypt("") -- and,
+      // for contrast, an admin gate IT had given a real password.
+      for (const [slug, pw] of [["observation", ""], ["mentorship", ""], ["admin", "real-admin-password"]]) {
+        await w.q(`INSERT INTO ${w.schema}.section_gates (slug, password_hash, version) VALUES ($1, $2, 1)`, [
+          slug,
+          await bcrypt.hash(pw!, 4),
+        ]);
+      }
+      await w.q(
+        `INSERT INTO ${w.schema}.section_gate_grants (user_id, gate_slug, expires_at)
+           VALUES (gen_random_uuid(), 'observation', now() + interval '1 hour')`,
+      );
+      process.env.GATE_PASSWORD_OBSERVATION = "";
+      process.env.GATE_PASSWORD_MENTORSHIP = "";
+      process.env.GATE_PASSWORD_ADMIN = "";
+      const { logs } = await captureLogs(() => w.withDb((db) => bootstrapSectionGates(db)));
+
+      const current = async (slug: string) =>
+        (
+          await w.q<{ version: number; password_hash: string }>(
+            `SELECT version, password_hash FROM ${w.schema}.section_gates WHERE slug = $1 ORDER BY version DESC LIMIT 1`,
+            [slug],
+          )
+        )[0]!;
+      for (const slug of ["observation", "mentorship"]) {
+        const gate = await current(slug);
+        assert.equal(
+          await bcrypt.compare("", gate.password_hash),
+          false,
+          `the '${slug}' gate still has the empty password nobody can submit, so the section stays locked ` +
+            `for everyone after this deploy too:\n${logs}`,
+        );
+        assert.equal(gate.version, 2, `the repair is a new version, as a rotation is:\n${logs}`);
+        const printed = logs.match(new RegExp(`section gate '${slug}' .*GENERATED PASSWORD: (\\S+)`))?.[1] ?? "";
+        assert.equal(await bcrypt.compare(printed, gate.password_hash), true, `the '${slug}' password must be printed:\n${logs}`);
+      }
+      const admin = await current("admin");
+      assert.equal(admin.version, 1, "a gate with a real password is never rotated by a deploy");
+      assert.equal(await bcrypt.compare("real-admin-password", admin.password_hash), true);
+      assert.match(logs, /exists — skipping section gate 'admin'/);
+      assert.deepEqual(
+        await w.q(`SELECT gate_slug FROM ${w.schema}.section_gate_grants`),
+        [],
+        "a new gate password ends the old one's grants, as /admin/gates' rotation does",
+      );
+    });
+  },
+);
+
 // ── The seeded phases: calendar days in IST ──────────────────────────────────
 //
 // W3-41. The seed wrote each phase as `new Date("2026-09-30")`, which JS reads

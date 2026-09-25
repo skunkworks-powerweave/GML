@@ -76,7 +76,9 @@ service on its own before `docker compose up`, so if a migration fails nothing
 is restarted and the previous containers keep serving. (`app` and `worker` also
 wait on it through `depends_on`, but a bare `docker compose up -d` recreates
 them first -- which is why the script does not rely on that.) Write down the section-gate passwords the seed prints — they are shown
-once.
+once. A gate an earlier deploy left with an empty password (it printed a blank
+`GENERATED PASSWORD:`, and nobody can open that section) is repaired by the next
+deploy, which prints the new password in the same way.
 
 Upgrading is the same command: `git pull && ./scripts/deploy.sh`. Rolling the
 application back is `./scripts/rollback.sh`, which restarts `app` and `worker`

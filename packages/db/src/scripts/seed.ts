@@ -14,7 +14,7 @@ import bcrypt from "bcryptjs";
 import { createClient } from "@supabase/supabase-js";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, max, sql } from "drizzle-orm";
 import * as schema from "../schema/index.js";
 import { poolConfig } from "../client.js";
 
@@ -299,19 +299,36 @@ export async function main() {
 // Idempotent: a slug that already has a row is left alone, so re-running seed
 // never rotates a live password out from under its users. Rotation is an
 // explicit admin action (/admin/gates), not a side effect of deployment.
+//
+// ONE EXCEPTION: a gate whose current password is the EMPTY string. The seed
+// wrote exactly that while the `??` defect below was live, the gate form
+// cannot submit an empty password, so such a gate admits nobody -- and
+// because an existing slug was skipped, every later deploy left observation,
+// mentorship and the audit log locked, printing only "exists — skipping".
+// Replacing it takes a working password away from no one, so the deploy
+// repairs it the way /admin/gates rotates one: a new version, the slug's
+// grants ended, under the rotation route's per-slug lock.
 export async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
   // 'tkt' and 'ttt' are deliberately NOT seeded: they gate /rtt/tkt and
   // /rtt/ttt, and neither route exists in the app.
   const slugs = ["observation", "mentorship", "admin"] as const;
 
-  for (const slug of slugs) {
-    const existing = await db
-      .select({ id: schema.sectionGates.id })
-      .from(schema.sectionGates)
-      .where(eq(schema.sectionGates.slug, slug))
-      .limit(1);
+  /** The slug's current (highest-version) hash, or null when it has no row. */
+  const currentHash = async (q: Pick<typeof db, "select">, slug: (typeof slugs)[number]) =>
+    (
+      await q
+        .select({ hash: schema.sectionGates.passwordHash })
+        .from(schema.sectionGates)
+        .where(eq(schema.sectionGates.slug, slug))
+        .orderBy(desc(schema.sectionGates.version))
+        .limit(1)
+    )[0]?.hash ?? null;
+  const admitsNobody = (hash: string) => bcrypt.compare("", hash);
 
-    if (existing.length > 0) {
+  for (const slug of slugs) {
+    const existing = await currentHash(db, slug);
+
+    if (existing !== null && !(await admitsNobody(existing))) {
       console.log(`[seed] exists — skipping section gate '${slug}'`);
       continue;
     }
@@ -334,17 +351,40 @@ export async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Pro
     // the dependency direction), so the value is duplicated here with this
     // paired comment as the contract. The governance test pins both literals -
     // a future cost bump that misses one side fails the test.
-    await db.insert(schema.sectionGates).values({
-      slug,
-      passwordHash: await bcrypt.hash(password, 10),
-      version: 1,
-    });
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    let done = "created";
+    if (existing === null) {
+      await db.insert(schema.sectionGates).values({ slug, passwordHash, version: 1 });
+    } else {
+      // The repair (see above), as /api/admin/gates/[slug]/rotate does it:
+      // the same advisory lock, the version computed under it, the slug's
+      // grants ended. Re-checked under the lock, so a super_admin who has
+      // just rotated this gate by hand keeps the password they distributed.
+      const repaired = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`section_gate_rotate:${slug}`}))`);
+        const now = await currentHash(tx, slug);
+        if (now === null || !(await admitsNobody(now))) return false;
+        const [top] = await tx
+          .select({ v: max(schema.sectionGates.version) })
+          .from(schema.sectionGates)
+          .where(eq(schema.sectionGates.slug, slug));
+        await tx.insert(schema.sectionGates).values({ slug, passwordHash, version: (top?.v ?? 0) + 1 });
+        await tx.delete(schema.sectionGateGrants).where(eq(schema.sectionGateGrants.gateSlug, slug));
+        return true;
+      });
+      if (!repaired) {
+        console.log(`[seed] exists — skipping section gate '${slug}' (rotated while this deploy ran)`);
+        continue;
+      }
+      done = "had an EMPTY password, which nobody can enter — repaired";
+    }
 
     if (fromEnv) {
-      console.log(`[seed] ✓ section gate '${slug}' created from ${envKey}`);
+      console.log(`[seed] ✓ section gate '${slug}' ${done} from ${envKey}`);
     } else {
       console.log(
-        `[seed] ✓ section gate '${slug}' created — GENERATED PASSWORD: ${password}`,
+        `[seed] ✓ section gate '${slug}' ${done} — GENERATED PASSWORD: ${password}`,
       );
       console.log(
         `[seed]   ^ store this now; only the hash is kept. Set ${envKey} to choose your own.`,

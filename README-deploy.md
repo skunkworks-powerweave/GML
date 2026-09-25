@@ -347,6 +347,12 @@ drill less than 30 days old.
 **Write down the section-gate passwords the seed prints.** They are shown once;
 only the hash is stored. You can rotate them later at `/admin/gates`.
 
+A deploy made while the seed hashed an unset `GATE_PASSWORD_*` as the empty
+string printed `GENERATED PASSWORD:` with nothing after it, and those gates
+admit nobody. The next deploy repairs each one and says so: `section gate
+'<slug>' had an EMPTY password ... repaired — GENERATED PASSWORD: ...`. Write
+those down too. A gate with a real password is never changed by a deploy.
+
 ---
 
 ### 3.1 Clearing the demonstration data

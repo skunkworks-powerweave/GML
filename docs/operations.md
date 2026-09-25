@@ -46,6 +46,11 @@ That is what rotation means, and it did not use to be true: the gate compared a
 cookie to the string `"1"` and never read the grant rows, so rotating revoked
 nobody and every issued cookie survived its full 8 hours.
 
+A deploy never rotates a gate, with one exception: a gate whose current
+password is empty, which the seed wrote while an unset `GATE_PASSWORD_*`
+reached it as `""`. Nobody can open such a gate, so `deploy.sh`'s seed step
+replaces it the way Rotate does and prints the new password.
+
 ## Deactivating a member of staff
 
 `/admin/users` → Deactivate. Three things happen: the profile goes inactive (the
