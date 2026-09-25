@@ -28,6 +28,7 @@ type Check = { ok: boolean; label: string; detail?: string; fix?: string };
 const settingsModule = () =>
   import("../../packages/db/scripts/auth-settings.mjs") as Promise<{
     checkAuthSettings: (o: { url: string; anonKey: string }) => Promise<Check[]>;
+    probePassword: () => string;
   }>;
 
 let fake: FakeGoTrue;
@@ -61,5 +62,28 @@ test("an unreadable settings endpoint is a FAIL, not a silent pass", async () =>
     assert.ok(checks.length > 0 && checks.some((c) => !c.ok), JSON.stringify(checks));
   } finally {
     fake.setOutage(null);
+  }
+});
+
+// ── F86: the probe account's password ────────────────────────────────────────
+//
+// verify-auth creates a throwaway account with admin.createUser, and Supabase
+// applies its password policy there too. The probe was `Verify-` plus base36
+// from Math.random(), which has no digit about one run in fifty ((26/36)^12),
+// so the deploy check would fail at random once *Password requirements* asks
+// for digits. It must satisfy every character-class preset the dashboard
+// offers, every time.
+test("verify-auth's probe password satisfies every Supabase password preset, every time", async () => {
+  const { probePassword } = await settingsModule();
+  const classes: Array<[string, RegExp]> = [
+    ["a lowercase letter", /[a-z]/],
+    ["an uppercase letter", /[A-Z]/],
+    ["a digit", /[0-9]/],
+    ["a symbol", /[^A-Za-z0-9]/],
+  ];
+  for (let i = 0; i < 2000; i++) {
+    const p = probePassword();
+    assert.ok(p.length >= 12 && p.length <= 72, `length ${p.length}: ${p}`);
+    for (const [name, re] of classes) assert.match(p, re, `${JSON.stringify(p)} lacks ${name}`);
   }
 });

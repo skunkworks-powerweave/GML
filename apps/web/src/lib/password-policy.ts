@@ -7,7 +7,11 @@
 // call GoTrue's user endpoint directly with their own session, and GoTrue
 // applies ITS settings (default minimum: 6). README-deploy §2.2 has the
 // dashboard settings that make GoTrue enforce at least this much, plus the
-// character requirements and leaked-password check this module cannot.
+// leaked-password check this module cannot. It deliberately leaves GoTrue's
+// character-class requirements OFF: this module checks none, and GoTrue's
+// classes are Latin letters and ASCII digits, so with them on a password
+// accepted here -- one in Devanagari or Tibetan script, say -- would fail
+// there with a raw English message.
 //
 // No "server-only": pure, and the client forms may show the same numbers.
 

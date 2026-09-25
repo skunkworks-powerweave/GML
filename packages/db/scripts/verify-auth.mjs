@@ -18,7 +18,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import pg from "pg";
-import { checkAuthSettings } from "./auth-settings.mjs";
+import { checkAuthSettings, probePassword } from "./auth-settings.mjs";
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ANON = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -154,7 +154,7 @@ for (const r of await checkAuthSettings({ url: URL, anonKey: ANON })) {
 console.log("\nEnd to end\n");
 
 const email = `verify.auth.${Date.now()}@example.invalid`;
-const password = `Verify-${Math.random().toString(36).slice(2, 14)}`;
+const password = probePassword();
 let id = null;
 
 try {

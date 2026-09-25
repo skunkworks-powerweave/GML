@@ -114,18 +114,36 @@ never expires.
 Providers → *Email*:
 
 - *Minimum password length*: **8** (Supabase's default is 6);
-- *Password requirements*: **Letters and digits**;
+- *Password requirements*: leave at the default, **no required characters**;
 - *Secure password change*: **on**.
 
 Then Authentication → Attack Protection → *Prevent use of leaked passwords*:
 **on**.
 
-The application checks length on every form that sets a password, but a
-signed-in user can also call Supabase directly with their own session, and
-there only Supabase's settings apply: 6 characters and no other checks unless
-you change them. *Secure password change* makes Supabase ask for a fresh
-sign-in before a long-lived session can set a new password, so an unattended
-browser cannot be used to take over the account that way.
+The application checks length on every form that sets a password (at least
+8 characters, at most 72 bytes), but a signed-in user can also call Supabase
+directly with their own session, and there only Supabase's settings apply: 6
+characters and no other checks unless you change them.
+
+Leave *Password requirements* off because the application does not check
+character classes. With them on, a password the application accepts (a long
+passphrase with no digit, or one written in Devanagari or Tibetan script,
+which Supabase's Latin letter and digit classes do not count) would be refused
+by Supabase with a raw English message. Length and the leaked-password check are the controls
+that matter.
+
+*Secure password change* is narrower than its name. Supabase asks for
+reauthentication only when the session setting the password is more than
+**24 hours** old. With the 12-hour time-box in (e), no session here reaches that
+age, so the setting never triggers. It does not stop the following: anyone at a
+browser left signed in can read the access token from the session cookie
+(page scripts can read the cookie by design, because uploads use the token)
+and call Supabase's user endpoint to set a new password without knowing the
+current one. The application's own pages do not allow this: Settings asks for
+the current password, and `/login/reset` accepts only a session opened from an
+emailed link in the last 15 minutes. The direct call is limited only by the
+session bounds in (e) and by people signing out. Leave the setting on anyway.
+It costs nothing, and it applies if (e) is ever relaxed.
 
 **g) Raise Supabase's sign-in rate limit.** Authentication → Rate Limits →
 *sign-ups and sign-ins*: **300** per 5 minutes.

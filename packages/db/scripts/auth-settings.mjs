@@ -18,6 +18,8 @@
 // Accounts in this product are created by administrators (admin.createUser
 // keeps working with sign-up disabled), so the switch goes OFF.
 
+import { randomBytes } from "node:crypto";
+
 /**
  * @param {{ url: string, anonKey: string, fetchImpl?: typeof fetch }} opts
  * @returns {Promise<Array<{ ok: boolean, label: string, detail?: string, fix?: string }>>}
@@ -52,4 +54,19 @@ export async function checkAuthSettings({ url, anonKey, fetchImpl = fetch }) {
           fix: "Dashboard -> Authentication -> Sign In / Providers -> turn OFF 'Allow new users to sign up'",
         },
   ];
+}
+
+/**
+ * The throwaway probe account's password.
+ *
+ * Supabase applies its password policy to admin.createUser too, so this must
+ * pass whatever README-deploy §2.2f leaves on: the minimum length, the
+ * leaked-password check, and any of the dashboard's character-class presets
+ * (lowercase, uppercase, digits, symbols). The fixed parts supply one of each;
+ * the random part makes it unguessable. It used to be `Verify-` plus base36
+ * from Math.random(), which had no digit about one run in fifty -- a deploy
+ * check that failed at random once digits were required.
+ */
+export function probePassword() {
+  return `Verify-${randomBytes(12).toString("base64url")}-7`;
 }
