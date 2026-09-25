@@ -195,7 +195,50 @@ export async function Topbar({
             See `./LanguagePicker.tsx` for the implementation. */}
         <LanguagePicker current={locale} ariaLabel={tLanguage("pickerLabel")} />
 
-        {/* User pill */}
+        {/* User pill: a link to /settings. It WAS the sign-out submit
+            button, with no menu and no confirmation, so clicking your own
+            name -- how people look for their profile -- ended the session,
+            and its accessible name (the name itself) never said so. The
+            phone header already split the two; this matches it. */}
+        <Link
+          href="/settings"
+          data-testid="topbar-settings-link"
+          title={user.email ?? undefined}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "4px 10px 4px 4px",
+            border: "1px solid var(--line)",
+            borderRadius: 999,
+            background: "var(--card-hi)",
+            color: "inherit",
+            textDecoration: "none",
+          }}
+        >
+          <span
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "var(--ink)",
+              color: "var(--paper)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              fontWeight: 600,
+              fontFamily: "var(--sans)",
+            }}
+          >
+            {initials(user.name, user.email)}
+          </span>
+          <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", fontSize: 11 }}>
+            <span style={{ color: "var(--ink)", fontWeight: 500 }}>{user.name ?? user.email}</span>
+            <span style={{ color: "var(--ink-3)" }}>{tRole(user.role)}</span>
+          </span>
+        </Link>
+
         {/* Spec 169 — the submit button is a 'use client' SignOutButton
             island so the device-local QuickFind recents (spec 121) are
             cleared from localStorage BEFORE the server-action signOut
@@ -209,37 +252,15 @@ export async function Topbar({
           <SignOutButton
             title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "4px 10px 4px 4px",
+              padding: "5px 10px",
               border: "1px solid var(--line)",
               borderRadius: 999,
               background: "var(--card-hi)",
+              fontSize: 11,
               cursor: "pointer",
             }}
           >
-            <span
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: "50%",
-                background: "var(--ink)",
-                color: "var(--paper)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 11,
-                fontWeight: 600,
-                fontFamily: "var(--sans)",
-              }}
-            >
-              {initials(user.name, user.email)}
-            </span>
-            <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", fontSize: 11 }}>
-              <span style={{ color: "var(--ink)", fontWeight: 500 }}>{user.name ?? user.email}</span>
-              <span style={{ color: "var(--ink-3)" }}>{tRole(user.role)}</span>
-            </span>
+            {tAction("signOut")}
           </SignOutButton>
         </form>
       </div>

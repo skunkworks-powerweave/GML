@@ -114,3 +114,31 @@ test("F136: the desktop sidebar keeps exactly one indicator", async () => {
   const html = await render(h(Sidebar, { role: "teacher" }));
   assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1);
 });
+
+// ── F137: the name in the topbar ─────────────────────────────────────────────
+//
+// On desktop the user pill -- initials, name, role -- WAS the sign-out submit
+// button, with no menu and no confirmation: clicking your own name, which is
+// how people look for their profile, ended the session (live: 303 to /login,
+// auth cookie cleared). Its accessible name was the name itself, so a
+// screen-reader user heard nothing about signing out either. The phone
+// header already split the two: the avatar links to /settings, and a
+// separate, labelled button signs out.
+
+test("F137: your name in the topbar links to your settings; signing out is its own labelled button", async () => {
+  const { Topbar } = await import("../../apps/web/src/components/nav/Topbar.tsx");
+  for (const locale of ["en", "hi", "bo"] as const) {
+    resetRequest();
+    request.locale = locale;
+    const html = await render(withAppRouter(await withIntl(h(Topbar, { user: USER, locale }), locale)));
+    const signOut = elements(html, "button").filter((b) => attr(b.open, "data-testid") === "signout-button");
+    assert.equal(signOut.length, 1);
+    const action = loadMessages(locale).action as Record<string, string>;
+    assert.equal(signOut[0].text.trim(), action.signOut, `${locale}: the sign-out button says what it does`);
+    assert.ok(!signOut[0].text.includes(USER.name), `${locale}: the name is not part of the sign-out button`);
+    const pill = elements(html, "a").find((a) => attr(a.open, "data-testid") === "topbar-settings-link");
+    assert.ok(pill, `${locale}: the user pill must be a link`);
+    assert.equal(attr(pill.open, "href"), "/settings");
+    assert.ok(pill.text.includes(USER.name), `${locale}: and it is the one that shows the name`);
+  }
+});
