@@ -280,7 +280,8 @@ export async function main() {
 // nobody can reach. So it has to be seeded.
 //
 // Password source, in order:
-//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION)
+//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION),
+//      when it holds more than whitespace
 //   2. a generated 16-char random password, PRINTED ONCE so the operator can
 //      distribute it. It is not recoverable afterwards -- only the bcrypt hash
 //      is stored -- which is the same contract as the super_admin bootstrap.
@@ -306,7 +307,15 @@ export async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Pro
     }
 
     const envKey = `GATE_PASSWORD_${slug.toUpperCase()}`;
-    const fromEnv = process.env[envKey];
+    // EMPTY MEANS UNSET. docker-compose.yml forwards each of these to the
+    // migrate container as `${GATE_PASSWORD_X:-}`, which for a key .env leaves
+    // out -- the documented default -- is the EMPTY STRING, not undefined. This
+    // was `fromEnv ?? random`, and `??` falls back only on null/undefined, so
+    // every gate was hashed from "" and the log printed a blank GENERATED
+    // PASSWORD. The gate form cannot submit an empty password, so nobody,
+    // super_admin included, could open observation, mentorship or the audit
+    // log -- and a redeploy skips existing gates, so it never repaired itself.
+    const fromEnv = process.env[envKey]?.trim() || undefined;
     const password = fromEnv ?? randomBytes(12).toString("base64url").slice(0, 16);
 
     // Spec 167 — cost 10 mirrors BCRYPT_COST in apps/web/src/lib/password.ts,

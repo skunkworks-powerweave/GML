@@ -17,6 +17,11 @@
 // active super_admin again after the next deploy, with no audit row -- and a
 // deactivation's GoTrue ban still in place, so profile and auth disagreed.
 //
+// ── SECTION GATES: A PASSWORD NOBODY COULD TYPE ──────────────────────────────
+//
+// See the gate test below: an unset GATE_PASSWORD_* reached the seed as "" and
+// every gate was hashed from the empty string.
+//
 // ── HOW THESE TESTS RUN ──────────────────────────────────────────────────────
 //
 // Each test gets its own schema holding a copy of the tables the bootstrap
@@ -32,14 +37,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { DATABASE_URL, needsDatabase, tag } from "./_harness.js";
 
 const skip = needsDatabase();
+
+/** The bcrypt the seed itself hashes with (a dependency of @gml/db, not of the root). */
+const BCRYPT = pathToFileURL(
+  createRequire(new URL("../../packages/db/package.json", import.meta.url)).resolve("bcryptjs"),
+).href;
 
 // seed.ts begins `import "dotenv/config"`. Point it at a file that does not
 // exist, so a .env in whatever checkout runs the suite can never contribute a
@@ -201,6 +213,59 @@ test(
         { role: "super_admin", active: true, deleted: false },
         `a fresh system must still get its first administrator:\n${logs}`,
       );
+    });
+  },
+);
+
+// ── Section gates ────────────────────────────────────────────────────────────
+//
+// .env.example ships GATE_PASSWORD_* commented out: the documented default is
+// "the seed generates each password and prints it once". docker-compose.yml
+// forwards them to the migrate service as `${GATE_PASSWORD_X:-}`, which hands
+// the container an EMPTY STRING rather than leaving the variable unset -- and
+// the seed chose `fromEnv ?? random`. `??` falls back only on null/undefined,
+// so every gate was created as bcrypt("") and the log read
+// "GENERATED PASSWORD: " with nothing after it. The gate form refuses an empty
+// submission (`required`, and "Enter a password." in the action), so the one
+// password that matched could never be entered: observation, mentorship and the
+// audit log were locked for everyone, and redeploying could not repair it,
+// because an existing gate is skipped.
+
+test(
+  "a GATE_PASSWORD_* that compose forwards as empty gets a generated password, printed once",
+  { skip },
+  async () => {
+    const { bootstrapSectionGates } = await import("../../packages/db/src/scripts/seed.ts");
+    const bcrypt = (await import(BCRYPT)).default as { compare(p: string, h: string): Promise<boolean> };
+    await withSeedWorld(["section_gates"], async (w) => {
+      // What `${GATE_PASSWORD_X:-}` gives the container for a key .env lacks;
+      // then a value that is only whitespace; then one IT chose.
+      process.env.GATE_PASSWORD_OBSERVATION = "";
+      process.env.GATE_PASSWORD_MENTORSHIP = "   ";
+      process.env.GATE_PASSWORD_ADMIN = "chosen-by-it-4821";
+      const { logs } = await captureLogs(() => w.withDb((db) => bootstrapSectionGates(db)));
+
+      const rows = await w.q<{ slug: string; password_hash: string }>(
+        `SELECT slug, password_hash FROM ${w.schema}.section_gates`,
+      );
+      const hash = (slug: string) => rows.find((r) => r.slug === slug)?.password_hash ?? "";
+
+      for (const slug of ["observation", "mentorship"]) {
+        const printed = logs.match(new RegExp(`section gate '${slug}' created — GENERATED PASSWORD: (\\S*)`))?.[1] ?? "";
+        assert.ok(
+          printed.length >= 12,
+          `the '${slug}' gate must get a generated password, printed for the operator -- not the ` +
+            `empty string compose forwarded:\n${logs}`,
+        );
+        assert.equal(await bcrypt.compare(printed, hash(slug)), true, `the printed '${slug}' password must be the stored one`);
+        assert.equal(
+          await bcrypt.compare("", hash(slug)),
+          false,
+          `the '${slug}' gate was hashed from an empty password, which the gate form can never submit`,
+        );
+      }
+      assert.equal(await bcrypt.compare("chosen-by-it-4821", hash("admin")), true, "a real GATE_PASSWORD_ADMIN is still used");
+      assert.doesNotMatch(logs, /GENERATED PASSWORD: \s*$/m, `no blank password may be printed:\n${logs}`);
     });
   },
 );
