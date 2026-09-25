@@ -20,7 +20,8 @@
 # ── WHAT IT DOES NOW ─────────────────────────────────────────────────────────
 #
 #   host toolchain + .env checks + SM-5 restore-drill gate -> build
-#   -> tag :previous (only what the build changed) -> up (migrate gates app)
+#   -> migrate (nothing serving is touched until it succeeds)
+#   -> tag :previous (only what the build changed) -> up
 #   -> health via caddy -> seed -> verify auth -> post-deploy smoke
 #
 # It does NOT run scripts/preflight.sh. That script is the read-only,
@@ -262,7 +263,8 @@ fi
 # scripts/rollback.sh needs a ':previous' to go back to -- without one a
 # rollback has no target, which is how the repository ended up with no rollback
 # procedure at all. So note, BY IMAGE ID, what :current is before the build
-# moves the tag.
+# moves the tag; :previous is moved from it once migrations have succeeded
+# (step 2).
 #
 # :previous MOVES ONLY FOR AN IMAGE THE BUILD ACTUALLY CHANGED. It used to be
 # retagged from :current unconditionally, first thing, on every run -- and the
@@ -292,6 +294,41 @@ log "building images"
 # box, which is why rollback.sh always aborted with ":previous does not exist".
 docker compose build
 
+# ── 2. Migrate, then up ──────────────────────────────────────────────────────
+# Migrations run BEFORE anything that is serving is touched.
+#
+# This used to be `docker compose up -d` alone, trusting migrate's depends_on
+# to keep the old app serving if a migration failed. Compose does not work that
+# way: its create phase recreates every service whose image changed -- stopping
+# and removing the old container -- and only its start phase waits for migrate
+# to complete. So a failing migration left NO app (Caddy answering 502 for the
+# whole site), every deploy had a 502 window of migrate's runtime plus app
+# start, and `up` itself exits non-zero then -- so under `set -e` the script
+# died on that line, and the "migrations FAILED ... the previous app container
+# is still serving" branch after it could never run, and would not have been
+# true if it had.
+#
+# A one-off migrate first makes that promise true. `up` then re-runs migrate as
+# the no-op its two ledgers make it, and only then recreates app and worker.
+log "applying migrations (nothing that is serving is touched until they succeed)"
+if ! docker compose run --rm --no-deps migrate; then
+  # Put :current back on what is still serving, so a later `docker compose up`
+  # cannot start the images whose migration just failed, and the next deploy
+  # compares its build with the release that is really running. :previous has
+  # not moved yet (below), so the rollback target is untouched too.
+  for svc in app worker migrate; do
+    if [ -n "${was_current[${svc}]}" ]; then
+      docker tag "${was_current[${svc}]}" "gml-lms-${svc}:current"
+    fi
+  done
+  echo "[deploy] migrations FAILED (their output is above). Nothing was restarted: the previous containers are still serving." >&2
+  echo "[deploy] Fix the migration and re-run this script." >&2
+  exit 1
+fi
+log "migrations applied"
+
+# Only now, with the new release about to replace the serving one, does the
+# serving one become :previous (see step 1).
 for svc in app worker; do
   built="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
   if [ -z "${was_current[${svc}]}" ]; then
@@ -304,22 +341,13 @@ for svc in app worker; do
   fi
 done
 
-# ── 2. Up ────────────────────────────────────────────────────────────────────
-# `migrate` runs first and `app`/`worker` block on it exiting 0. If the schema
-# change fails, the new containers never start and the PREVIOUS ones keep
-# serving — that is the rollback posture, and it is why this is safe to run
-# against a live box.
-log "starting stack (migrate runs first and gates app/worker)"
-docker compose up -d --remove-orphans
-
-# Surface the migration outcome explicitly rather than leaving it in the logs.
-migrate_exit="$(docker compose ps -a --format '{{.Service}} {{.ExitCode}}' 2>/dev/null | awk '$1=="migrate"{print $2}' | head -1)"
-if [ -n "${migrate_exit}" ] && [ "${migrate_exit}" != "0" ]; then
-  echo "[deploy] migrations FAILED (exit ${migrate_exit}). The previous app container is still serving." >&2
-  docker compose logs --no-color --tail 40 migrate >&2
+log "starting stack"
+if ! docker compose up -d --remove-orphans; then
+  echo "[deploy] 'docker compose up' failed. Container state and recent logs:" >&2
+  docker compose ps -a >&2 || true
+  docker compose logs --no-color --tail 40 migrate app worker >&2 || true
   exit 1
 fi
-log "migrations applied"
 
 # ── 3. Health ────────────────────────────────────────────────────────────────
 # The app container's own healthcheck verdict: healthy | unhealthy | starting.

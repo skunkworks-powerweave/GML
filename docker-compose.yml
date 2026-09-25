@@ -63,9 +63,13 @@ services:
     # used to happen (health reported 0-of-22 migrations applied and every
     # authenticated page threw). See docs/verification.md (B13).
     #
-    # Safe on every `up`: both ledgers make it a no-op once current. If it exits
-    # non-zero, `app` never starts and the PREVIOUS container keeps serving.
-    # That is the rollback posture, and it is deliberate.
+    # Safe on every `up`: both ledgers make it a no-op once current. But the
+    # depends_on below does NOT keep an old app serving through a failed
+    # migration: `up` recreates app and worker in its create phase and waits
+    # for migrate only in its start phase. So scripts/deploy.sh runs this
+    # service on its own first (`docker compose run --rm --no-deps migrate`)
+    # and calls `up` only once it has exited 0 -- that is what leaves the
+    # previous containers serving when a migration fails.
     # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
     #
     # Without an `image:` key Compose derives one from the project name --

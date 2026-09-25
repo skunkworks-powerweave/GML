@@ -64,17 +64,18 @@ curl -s https://$DOMAIN/api/health | jq
 ```
 
 Step 4 runs: the host-toolchain and `.env` checks, the SM-5 restore-drill gate
-(skipped, loudly, on a host's first deploy; see Backups below), build, tag the
-images that were serving `:previous` (only those the build changed),
-`docker compose up -d`, wait for health through
+(skipped, loudly, on a host's first deploy; see Backups below), build, run the
+migrations on their own, tag the images that were serving `:previous` (only
+those the build changed), `docker compose up -d`, wait for health through
 Caddy, seed, verify auth, post-deploy smoke. It does **not** run
 `preflight.sh`; that is step 3.5, by hand. Preflight fails when ports 80 and 443
 are in use, which is true of every later deploy.
 
-**Migrations are not a separate step.** The `migrate` service runs them and
-gates `app` and `worker` through `depends_on: service_completed_successfully`.
-If a migration fails, the new containers never start and the previous ones keep
-serving. Write down the section-gate passwords the seed prints — they are shown
+**Migrations are not a separate step you run.** `deploy.sh` runs the `migrate`
+service on its own before `docker compose up`, so if a migration fails nothing
+is restarted and the previous containers keep serving. (`app` and `worker` also
+wait on it through `depends_on`, but a bare `docker compose up -d` recreates
+them first -- which is why the script does not rely on that.) Write down the section-gate passwords the seed prints — they are shown
 once.
 
 Upgrading is the same command: `git pull && ./scripts/deploy.sh`. Rolling the
@@ -87,9 +88,8 @@ from the `:previous` image and does **not** touch the database. See
 When `deploy.sh` aborts and you want to take it apart by hand:
 
 ```bash
-docker compose up -d                        # migrate runs first and gates the rest
-docker compose logs migrate                 # why the schema step failed
-docker compose run --rm --no-deps migrate pnpm exec tsx scripts/migrate.ts
+docker compose run --rm --no-deps migrate   # migrations FIRST; nothing serving is touched
+docker compose up -d                        # only once they succeeded: recreates app and worker
 docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
 docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 ```

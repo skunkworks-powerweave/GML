@@ -288,7 +288,9 @@ test("a deploy without WhatsApp configured completes, and says WhatsApp ingest i
 //   tag SRC DST               DST -> SRC's id (SRC may itself be an id)
 //   image inspect --format {{.Id}} REF    REF's id, or exit 1 if REF is untagged
 //   compose run --rm --no-deps migrate    exits FAKE_MIGRATE_EXIT (default 0)
-//   compose up ...            exits FAKE_UP_EXIT (default 0)
+//   compose up ...            exits FAKE_UP_EXIT (default 0) -- or 1 when the
+//                             migration fails, as the real one does after it
+//                             has already recreated app and worker
 
 const STORE_DOCKER = `
 store="$SANDBOX_DIR/images"; mkdir -p "$store"
@@ -303,7 +305,7 @@ case "$*" in
     for s in app worker migrate; do printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"; done
     exit 0 ;;
   "compose run --rm --no-deps migrate") exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
-  "compose up"*) exit "\${FAKE_UP_EXIT:-0}" ;;
+  "compose up"*) [ "\${FAKE_MIGRATE_EXIT:-0}" = 0 ] || exit 1; exit "\${FAKE_UP_EXIT:-0}" ;;
   "compose ps --format"*) echo "app healthy" ;;
 esac
 exit 0
@@ -412,6 +414,73 @@ test("when verify-auth fails, the host is not marked deployed and no success is 
     assert.notEqual(r.status, 0);
     assert.ok(!sb.exists(MARKER), "the SM-5 gate must not be armed on a deploy that failed verification");
     assert.doesNotMatch(r.stdout, /done\. Sign in/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── A failed migration must leave the serving release alone ─────────────────
+//
+// `docker compose up -d` recreates every service whose image changed in its
+// CREATE phase -- stopping and removing the old container -- and waits on
+// migrate's service_completed_successfully only in its START phase. So with
+// `up` as the first step, a failing migration left no app at all and the whole
+// site answered 502. And `up` exits non-zero in that case, so under set -e the
+// script died on that line: its "migrations FAILED ... still serving" branch
+// never ran. The stub above said "migrate 0" to `compose ps -a`, so neither
+// path had ever executed.
+
+test("a failed migration restarts nothing: the release that was serving keeps serving", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, FAKE_BUILD: "v2", FAKE_MIGRATE_EXIT: "1" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.notEqual(r.status, 0, "a failed migration must fail the deploy");
+    assert.ok(
+      !calls.some((l) => /^docker compose up/.test(l)),
+      "`docker compose up` ran although migrations had not succeeded. Its create phase removes the " +
+        `serving app before migrate even starts, so the site goes 502.\n${calls.join("\n")}`,
+    );
+    assert.ok(calls.includes("docker compose run --rm --no-deps migrate"), "migrations must run on their own, first");
+    assert.match(r.stderr, /migrations FAILED[\s\S]*still serving/);
+    assert.ok(!calls.some((l) => /seed_all\.ts/.test(l)), "nothing may be seeded after a failed migration");
+    for (const svc of ["app", "worker"]) {
+      assert.equal(
+        imageId(sb, `gml-lms-${svc}:current`),
+        `sha256:v1-${svc}`,
+        `gml-lms-${svc}:current must name the release still serving, so a later \`up\` cannot start the unmigrated build`,
+      );
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v0-${svc}`, "the rollback target must not move");
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("migrations are applied before `docker compose up` on a normal deploy", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2" }, timeout: SLOW });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = sb.invocations();
+    const migrate = calls.indexOf("docker compose run --rm --no-deps migrate");
+    const up = calls.findIndex((l) => /^docker compose up/.test(l));
+    assert.ok(migrate >= 0 && up > migrate, `migrate must run before up:\n${calls.join("\n")}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failing `docker compose up` is reported with the container state, not a bare abort", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2", FAKE_UP_EXIT: "1" }, timeout: SLOW });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /'docker compose up' failed/, `the failure must be explained:\n${r.stderr}`);
+    assert.ok(sb.invocations().includes("docker compose ps -a"), "the operator must be shown the container state");
   } finally {
     sb.cleanup();
   }

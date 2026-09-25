@@ -24,9 +24,9 @@
 //      double-quoted string), so the operator was directed to a placeholder.
 //      The old success-message test matched loosely enough not to notice.
 //
-// New flow: preflight -> tag :previous -> build -> up (migrate gates app) ->
-// check migrate's exit code -> health THROUGH CADDY -> seed in the migrate
-// image -> verify-auth. The assertions below follow that order and additionally
+// New flow: preflight -> build -> migrate on its own (stop on failure, nothing
+// serving touched) -> tag :previous -> up -> health THROUGH CADDY -> seed in the
+// migrate image -> verify-auth. The assertions below follow that order and additionally
 // pin the absence of each defect above, so a revert would be caught.
 
 import { test } from "node:test";
@@ -107,15 +107,22 @@ test("spec 108: deploy.sh waits on /api/health AFTER the migrate gate, through c
   // step moved: `migrate` is a compose service that `app` blocks on, so by the
   // time anything can answer /api/health the migrations have already succeeded.
   // Health is therefore the LAST gate, not a step before migrating.
+  //
+  // RE-ORDERED again. This required `docker compose up` BEFORE a migrate exit
+  // code read back from `compose ps -a` -- the order that took the site down:
+  // up's create phase removes the serving app before migrate even runs, and up
+  // itself then exits non-zero, so under set -e the check after it never ran.
+  // Migrations now run on their own first, and up only once they succeeded
+  // (tests/scripts/deploy-flow.test.mjs executes the failing case).
   const upIdx = src.indexOf("docker compose up");
-  const migrateGateIdx = src.search(/migrate_exit=/);
+  const migrateGateIdx = src.search(/if ! docker compose run --rm --no-deps migrate; then/);
   const curlIdx = src.search(/until\s+curl|curl[^\n]*HEALTH_URL/);
   assert.ok(upIdx >= 0, "deploy.sh must invoke 'docker compose up'");
-  assert.ok(migrateGateIdx >= 0, "deploy.sh must capture the migrate service's exit code");
+  assert.ok(migrateGateIdx >= 0, "deploy.sh must run the migrations on their own and stop when they fail");
   assert.ok(curlIdx >= 0, "deploy.sh must contain a curl-based health-wait loop");
   assert.ok(
-    upIdx < migrateGateIdx && migrateGateIdx < curlIdx,
-    "order must be: docker compose up -> check migrate exit code -> health-wait",
+    migrateGateIdx < upIdx && upIdx < curlIdx,
+    "order must be: migrate (stop on failure) -> docker compose up -> health-wait",
   );
 
   // The defect that made the old loop unsatisfiable. Nothing publishes 3000.
@@ -190,11 +197,12 @@ test("spec 108: migrations run in the migrate service, and the seed runs in the 
       "what makes it impossible for the stack to come up against an unmigrated database",
   );
 
-  // Migration failure must be surfaced, not left in the logs.
+  // Migration failure must be surfaced, not left in the logs -- and must stop
+  // the deploy before anything that is serving is touched.
   assert.match(
     src,
-    /migrate_exit/,
-    "deploy.sh must read the migrate service's exit code and stop the deploy on non-zero",
+    /if ! docker compose run --rm --no-deps migrate; then[\s\S]*?migrations FAILED[\s\S]*?exit 1/,
+    "deploy.sh must stop the deploy, saying so, when the migrations fail",
   );
 
   // The seed still runs, and still after migrations — but in the one image that
@@ -205,7 +213,7 @@ test("spec 108: migrations run in the migrate service, and the seed runs in the 
     "deploy.sh must run seed_all.ts in the migrate image (the only one with pnpm + tsx + packages/db)",
   );
   assert.ok(
-    src.search(/migrate_exit=/) < src.indexOf("seed_all.ts"),
+    src.search(/if ! docker compose run --rm --no-deps migrate; then/) < src.indexOf("seed_all.ts"),
     "migrations must be confirmed before the seed runs",
   );
 });

@@ -188,10 +188,11 @@ that ports 80 and 443 are free. `deploy.sh` does **not** run it: it fails when
 80 and 443 are already bound, which is true of every later deploy.
 
 `deploy.sh` runs: host-toolchain and `.env` checks → the SM-5 restore-drill
-gate (§7; skipped, loudly, on a host's first deploy) → build → tag the images
+gate (§7; skipped, loudly, on a host's first deploy) → build → migrations, on
+their own (nothing serving is touched unless they succeed) → tag the images
 that were serving as `:previous` (only those the build changed, so a re-run of
-the same code keeps the rollback target) → `up` (migrate gates app/worker) →
-wait for health through Caddy → seed → verify auth → post-deploy smoke.
+the same code keeps the rollback target) → `up` → wait for health through
+Caddy → seed → verify auth → post-deploy smoke.
 
 It is idempotent. Re-running it is the normal upgrade path.
 
@@ -326,10 +327,13 @@ between (an interrupted session, or `deploy.sh` refusing on a check), finish it
 by re-running `./scripts/deploy.sh`. An up-to-date tree is not evidence that
 the deploy happened.
 
-If a migration fails, `migrate` exits non-zero, `app` and `worker` never start,
-and **the previous containers keep serving**. That is the intended posture:
-a bad schema change degrades to "no deploy happened" rather than "the site is
-down".
+If a migration fails, **the previous containers keep serving**: `deploy.sh`
+runs the migrations on their own (`docker compose run --rm --no-deps migrate`)
+before `docker compose up` touches anything, stops when they fail, and puts
+`:current` back on the running images. That is the intended posture: a bad
+schema change degrades to "no deploy happened" rather than "the site is down".
+(A bare `docker compose up -d` does NOT give you this: it recreates `app` before
+it waits for `migrate`.)
 
 ### Rolling back
 
