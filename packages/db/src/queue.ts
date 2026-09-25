@@ -165,6 +165,32 @@ export async function succeed(
 }
 
 /**
+ * A failure no retry can fix -- a corrupt source, a file with no picture.
+ * Thrown by a handler so that fail() dead-letters the job at once instead of
+ * spending its remaining attempts (each one re-downloading the source over the
+ * Leh uplink) on the same result.
+ */
+export class PermanentJobError extends Error {
+  override name = "PermanentJobError";
+}
+
+/**
+ * An error bounded to `max` characters, keeping its first line AND its end.
+ *
+ * Errors here put the verdict LAST -- ffmpeg's final lines, the reaper's
+ * appended note -- and every column and log line used to keep the head, so a
+ * long ffmpeg failure lost exactly the lines that said why, and a short one
+ * kept 1800 characters of version banner.
+ */
+export function boundedError(error: string, max = 4000): string {
+  if (error.length <= max) return error;
+  const nl = error.indexOf("\n");
+  const head = nl > 0 && nl < max / 4 ? error.slice(0, nl) : error.slice(0, Math.floor(max / 8));
+  const gap = "\n…\n";
+  return head + gap + error.slice(-(max - head.length - gap.length));
+}
+
+/**
  * Record a failure, and either schedule a retry or dead-letter it.
  *
  * Exponential backoff from ONE MINUTE: 1 min, 10 min, then an hour. It was
@@ -175,7 +201,8 @@ export async function succeed(
  * source over the Leh uplink; spacing them out is the point. A job that has
  * exhausted its attempts becomes 'dead' rather than 'failed' -- the two are
  * distinguished so the admin view can tell "will be retried" from "needs a
- * human", which the old DLQ page could not.
+ * human", which the old DLQ page could not. `retryable: false` (a
+ * PermanentJobError) dead-letters at once, whatever attempts remain.
  */
 export async function fail(
   db: NodePgDatabase<Record<string, unknown>>,
@@ -183,13 +210,14 @@ export async function fail(
   error: string,
   attempts: number,
   maxAttempts: number,
+  opts: { retryable?: boolean } = {},
 ): Promise<{ willRetry: boolean }> {
-  const willRetry = attempts < maxAttempts;
+  const willRetry = opts.retryable !== false && attempts < maxAttempts;
   const backoffSeconds = Math.min(60 * 10 ** (attempts - 1), 3600);
   await db.execute(sql`
     UPDATE jobs
        SET status = ${willRetry ? "queued" : "dead"},
-           last_error = ${error.slice(0, 4000)},
+           last_error = ${boundedError(error)},
            run_at = ${willRetry ? sql`now() + make_interval(secs => ${backoffSeconds})` : sql`run_at`},
            completed_at = ${willRetry ? null : sql`now()`},
            lease_expires_at = NULL,

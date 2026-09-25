@@ -54,23 +54,37 @@ const video = async (w: WorkerWorld, id: string) =>
     [id],
   ))[0]!;
 
-/** Seed a submission whose source is in Storage, run the worker, wait for it to settle. */
-async function transcodeOnce(
+/**
+ * Seed a submission whose source is in Storage, run the worker, and wait for
+ * the video to settle ('ready' or 'failed').
+ */
+async function runOnce(
   w: WorkerWorld,
   opts: { source: Buffer; processingLog?: string; attempts?: number },
-): Promise<{ id: string; v: Video; output: string }> {
+): Promise<{ id: string; jobId: string; v: Video; output: string }> {
   const id = await seedSubmission(w, "queued", { processingLog: opts.processingLog });
   storage.put("videos-original", sourceKeyFor(id), opts.source, "video/mp4");
-  await seedJob(w, id, { status: "queued", attempts: opts.attempts ?? 0, maxAttempts: 3 });
+  const jobId = await seedJob(w, id, { status: "queued", attempts: opts.attempts ?? 0, maxAttempts: 3 });
   const worker = w.spawnWorker({ NEXT_PUBLIC_SUPABASE_URL: storage.url });
   const settled = await waitFor(async () => {
     const v = await video(w, id);
     return v.status === "ready" || v.status === "failed" ? v : null;
   }, 120_000, 500);
   assert.ok(settled, `the transcode never finished: ${JSON.stringify(await video(w, id))}\n${worker.output()}`);
-  assert.equal(settled.status, "ready", `the transcode failed: ${settled.processing_log}\n${worker.output()}`);
+  // Let the job's own outcome write land before anyone reads it.
+  await new Promise((r) => setTimeout(r, 1000));
   await worker.kill();
-  return { id, v: settled, output: worker.output() };
+  return { id, jobId, v: settled, output: worker.output() };
+}
+
+/** runOnce, and the video must have become ready. */
+async function transcodeOnce(
+  w: WorkerWorld,
+  opts: { source: Buffer; processingLog?: string; attempts?: number },
+): Promise<{ id: string; v: Video; output: string }> {
+  const r = await runOnce(w, opts);
+  assert.equal(r.v.status, "ready", `the transcode failed: ${r.v.processing_log}\n${r.output}`);
+  return r;
 }
 
 test(
@@ -105,6 +119,54 @@ test(
       assert.equal((master.match(/#EXT-X-STREAM-INF/g) ?? []).length, 3);
       const [row] = await w.q<{ kind: string }>(`SELECT kind FROM ${w.schema}.files WHERE object_key = $1`, [`${prefix}master.m3u8`]);
       assert.equal(row?.kind, "hls_master");
+    });
+  },
+);
+
+// ── F15 ──────────────────────────────────────────────────────────────────────
+
+const jobState = async (w: WorkerWorld, jobId: string) =>
+  (await w.q<{ status: string; attempts: number }>(`SELECT status, attempts FROM ${w.schema}.jobs WHERE id = $1`, [jobId]))[0]!;
+const ledgerErrors = async (w: WorkerWorld, id: string) =>
+  (await w.q<{ error: string | null }>(`SELECT error FROM ${w.schema}.transcode_jobs WHERE video_submission_id = $1`, [id])).map(
+    (r) => r.error ?? "",
+  );
+
+test(
+  "F15: a corrupt source fails ONCE, with its reason first, instead of three identical attempts",
+  { skip, timeout: 180_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      // What a broken phone export looks like: bytes, not media.
+      const garbage = Buffer.from(Array.from({ length: 200_000 }, (_, i) => (i * 7919) % 251));
+      const { id, jobId, v, output } = await runOnce(w, { source: garbage });
+      assert.equal(v.status, "failed");
+      const job = await jobState(w, jobId);
+      assert.deepEqual(job, { status: "dead", attempts: 1 }, `a source no retry can fix was retried:\n${output}`);
+      // The DLQ shows the first 60 characters of the attempt's error. They
+      // used to be "Error: ffmpeg exited 183 ffmpeg version 7.1 Copyright".
+      const [err] = await ledgerErrors(w, id);
+      assert.doesNotMatch(err!.slice(0, 120), /ffmpeg version|Copyright/, `the error starts with the banner: ${err!.slice(0, 120)}`);
+      assert.match(err!.slice(0, 120), /could not be read as a video|Invalid data|moov atom/i);
+    });
+  },
+);
+
+test(
+  "F15: an audio-only file is refused, not published as a 'video' with no picture",
+  { skip, timeout: 180_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      const out = join(dir, "audio-only.mp4");
+      const r = spawnSync("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "2", "-c:a", "aac", out,
+      ]);
+      assert.equal(r.status, 0, String(r.stderr));
+      const { jobId, v, output } = await runOnce(w, { source: readFileSync(out) });
+      assert.equal(v.status, "failed", `an audio-only file became '${v.status}':\n${output}`);
+      assert.match(v.processing_log ?? "", /no picture/i, "the teacher is not told why");
+      assert.deepEqual(await jobState(w, jobId), { status: "dead", attempts: 1 });
     });
   },
 );

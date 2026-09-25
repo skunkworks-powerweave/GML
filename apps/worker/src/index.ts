@@ -37,9 +37,11 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { db } from "@gml/db";
 import {
+  boundedError,
   claim,
   enqueue,
   fail,
+  PermanentJobError,
   heartbeat,
   pruneFinished,
   reapExpiredLeases,
@@ -195,13 +197,17 @@ async function runJob(job: ClaimedJob, lockedBy: string): Promise<void> {
         await succeed(db, job.id);
         log.info("job succeeded", { id: job.id, name: job.name, attempt: job.attempts });
       } else {
-        const { willRetry } = await fail(db, job.id, String(failure.err), job.attempts, job.maxAttempts);
+        // A PermanentJobError (a corrupt source, no picture) is not retried:
+        // every attempt would re-download it and fail identically.
+        const { willRetry } = await fail(db, job.id, String(failure.err), job.attempts, job.maxAttempts, {
+          retryable: !(failure.err instanceof PermanentJobError),
+        });
         log.error("job failed", {
           id: job.id,
           name: job.name,
           attempt: job.attempts,
           willRetry,
-          err: String(failure.err).slice(0, 500),
+          err: boundedError(String(failure.err), 500),
         });
       }
       return;

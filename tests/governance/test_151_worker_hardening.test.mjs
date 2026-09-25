@@ -144,9 +144,11 @@ test("spec 151 — exponential-from-5s backoff survives as arithmetic in fail()"
   );
   // The retry decision must be driven by the job's own budget, not a constant,
   // so a producer can widen or narrow it per job (the retention sweep uses 2).
+  // Since F15 a handler can also say a failure is permanent (a corrupt source),
+  // which dead-letters at once instead of spending the rest of the budget.
   assert.match(
     src,
-    /const\s+willRetry\s*=\s*attempts\s*<\s*maxAttempts/,
+    /const\s+willRetry\s*=\s*opts\.retryable\s*!==\s*false\s*&&\s*attempts\s*<\s*maxAttempts/,
     "fail() must compare attempts against the job's own maxAttempts",
   );
   // Exhausted != errored. BullMQ collapsed both into 'failed', which is why the

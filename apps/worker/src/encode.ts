@@ -24,7 +24,34 @@ export type Probe = {
   colorSpace?: string | null;
   /** Whether it has sound. Unknown (a failed probe) is treated as yes. */
   hasAudio?: boolean | null;
+  /** Whether it has a picture at all. False only when the probe WORKED and found none. */
+  hasVideo?: boolean | null;
 };
+
+/**
+ * The first line of a failed ffmpeg/ffprobe run's error: which binary, its
+ * exit code, and its LAST line of output -- the verdict -- followed by the
+ * output itself. The DLQ shows the first 60 characters of an attempt's error,
+ * and they used to read "Error: ffmpeg exited 183 ffmpeg version 7.1 Copyright
+ * (c) 20..." for every failure alike.
+ */
+export function commandFailure(bin: string, code: number | null, stderr: string): string {
+  const lines = stderr.split("\n").map((l) => l.trim()).filter(Boolean);
+  return `${bin} exited ${code}: ${lines[lines.length - 1] ?? "(no output)"}\n${stderr}`;
+}
+
+/**
+ * ffprobe's reason, when a failed probe means the SOURCE cannot be opened as
+ * media at all -- which no retry changes -- or null for anything else (a
+ * missing binary, a crash), which a retry might. The bytes were downloaded
+ * whole: a truncated transfer fails the download, not the probe.
+ */
+export function unreadableSource(probeError: string): string | null {
+  const m = /(Invalid data found when processing input|moov atom not found|could not find codec parameters|Error opening input[^\n]*)/i.exec(
+    probeError,
+  );
+  return m ? m[1]! : null;
+}
 
 /** ffprobe arguments for the source's duration, its streams' kinds, and its video stream. */
 export function probeArgs(path: string): string[] {
@@ -61,8 +88,17 @@ export function parseProbe(stdout: string): Probe {
     colorPrimaries: v?.color_primaries ?? null,
     colorSpace: v?.color_space ?? null,
     hasAudio: streams.some((s) => s.codec_type === "audio"),
+    hasVideo: v !== undefined,
   };
 }
+
+/**
+ * Errors only, no banner, no per-frame progress. What ffmpeg writes on failure
+ * is kept (as the tail of its stderr) and shown; with the ~1800-character
+ * version banner and a progress line per frame in front of it, the reason was
+ * buried, or cut off entirely, on every failure.
+ */
+const QUIET = ["-hide_banner", "-nostats", "-loglevel", "error"];
 
 /**
  * The rendition ladder, lowest first. Each rung caps its SHORT side (so a
@@ -181,6 +217,7 @@ export function hlsEncodeArgs(input: string, outDir: string, probe: Probe): stri
     ...rungs.map((r, i) => `[s${i}]${boundedScale(r.short)}:out_range=tv,format=yuv420p[v${i}]`),
   ].join(";");
   return [
+    ...QUIET,
     "-y",
     "-i", input,
     "-filter_complex", graph,
@@ -254,6 +291,7 @@ export function renditionProblem(stdout: string): string | null {
 /** One poster frame, `atSec` into the source. */
 export function posterArgs(input: string, output: string, atSec: number): string[] {
   return [
+    ...QUIET,
     "-y",
     "-ss", atSec.toFixed(2),
     "-i", input,

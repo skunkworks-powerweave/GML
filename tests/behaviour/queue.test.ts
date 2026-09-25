@@ -288,6 +288,47 @@ test("F09: a failed attempt is retried minutes later, so a short outage cannot s
   }
 });
 
+test("F15: a long error keeps its END in last_error, where the verdict is", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("tail");
+  try {
+    const j = await enqueue(db, { queue: "transcode", name, payload: {}, maxAttempts: 3 });
+    // What ffmpeg's stderr looks like on a long failure: pages of per-packet
+    // noise, and the decisive line last.
+    const error = `Error: ffmpeg exited 69\n${"[h264 @ 0x55] Invalid NAL unit size\n".repeat(300)}Conversion failed! ${name}`;
+    await fail(db, j.id, error, 1, 3);
+    const [row] = ((await db.execute<{ last_error: string }>(sql`
+      SELECT last_error FROM jobs WHERE id = ${j.id}::uuid
+    `)) as unknown as { rows: { last_error: string }[] }).rows;
+    assert.ok(row!.last_error.length <= 4000, "last_error is bounded");
+    assert.ok(row!.last_error.endsWith(`Conversion failed! ${name}`), "the verdict at the end of the error was cut off");
+    assert.ok(row!.last_error.startsWith("Error: ffmpeg exited 69"), "the first line says what failed");
+  } finally {
+    await cleanup(db, name);
+    await close();
+  }
+});
+
+test("F15: a failure the handler knows is permanent is dead-lettered at once, not retried", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("permanent");
+  try {
+    const j = await enqueue(db, { queue: "transcode", name, payload: {}, maxAttempts: 3 });
+    const failWith = fail as unknown as (...a: unknown[]) => Promise<{ willRetry: boolean }>;
+    const r = await failWith(db, j.id, "This file is not a playable video", 1, 3, { retryable: false });
+    assert.equal(r.willRetry, false, "a corrupt source was scheduled for two more identical attempts");
+    const [row] = ((await db.execute<{ status: string; done: boolean }>(sql`
+      SELECT status, completed_at IS NOT NULL AS done FROM jobs WHERE id = ${j.id}::uuid
+    `)) as unknown as { rows: { status: string; done: boolean }[] }).rows;
+    assert.deepEqual(row, { status: "dead", done: true });
+  } finally {
+    await cleanup(db, name);
+    await close();
+  }
+});
+
 test("queueDepth counts what the admin view renders", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("depth");

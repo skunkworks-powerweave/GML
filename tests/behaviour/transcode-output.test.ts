@@ -18,7 +18,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -275,6 +275,27 @@ test("F144: a portrait source's rungs are portrait", { skip }, () => {
 test("F144: a small source gets no upscaled rungs", { skip }, () => {
   const out = transcode(source("ladder-small.mp4", { size: "320x180", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
   assert.deepEqual(out.variants.map((v) => v.resolution), ["320x180"], "a rung above the source is an upscale in disguise");
+});
+
+// ── F15: a failure says what failed, first ──────────────────────────────────
+
+test("F15: ffmpeg's failure output is the error itself, not its banner and progress", { skip }, () => {
+  // Random bytes named .mp4: what a broken phone export or a truncated
+  // WhatsApp forward looks like to ffmpeg.
+  const garbage = join(dir, "garbage.mp4");
+  writeFileSync(garbage, Buffer.from(Array.from({ length: 200_000 }, (_, i) => (i * 7919) % 251)));
+  const outDir = join(dir, "garbage-out");
+  mkdirSync(outDir, { recursive: true });
+  const r = spawnSync("ffmpeg", hlsEncodeArgs(garbage, outDir, { durationSec: null, width: null, height: null }), {
+    encoding: "utf8",
+  });
+  assert.notEqual(r.status, 0, "ffmpeg accepted random bytes");
+  // Callers keep a bounded slice of this, and the DLQ shows its first 60
+  // characters: they used to be "ffmpeg version 7.1 Copyright (c) 20..." on
+  // every failure, with the real reason ~1800 characters further in, or cut
+  // off entirely behind progress lines.
+  assert.doesNotMatch(r.stderr, /ffmpeg version|configuration:|built with/, "the banner is still printed");
+  assert.match(r.stderr.slice(0, 300), /Invalid data|Error opening input|moov atom/i, `the error is not up front:\n${r.stderr.slice(0, 500)}`);
 });
 
 test("F144: a source without sound still gets its ladder", { skip }, () => {

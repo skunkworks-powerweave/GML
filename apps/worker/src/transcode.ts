@@ -50,11 +50,12 @@ import { join } from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
-import type { QueueTx, ReapedJob } from "@gml/db/queue";
+import { boundedError, PermanentJobError, type QueueTx, type ReapedJob } from "@gml/db/queue";
 import { files, transcodeJobs, videoSubmissions } from "@gml/db/schema";
 import { BUCKETS, hlsPrefix, hlsMasterPlaylistKey, posterKey } from "@gml/shared/storage/buckets";
 import { putObject, getObjectStream } from "@gml/shared/storage/client";
 import {
+  commandFailure,
   hlsEncodeArgs,
   ladderFor,
   parseProbe,
@@ -62,6 +63,7 @@ import {
   probeArgs,
   renditionProbeArgs,
   renditionProblem,
+  unreadableSource,
   variantFirstSegment,
   type Probe,
 } from "./encode.js";
@@ -202,6 +204,16 @@ export async function transcode480p(
 
     // ── 2. Probe, for metadata and for the poster timestamp ──────────────────
     const probe = await ffprobe(localInput);
+    // A source ffprobe cannot open, or one with no picture, fails the same way
+    // on every attempt: say so in words a teacher can read, and do not spend
+    // the other attempts re-downloading it. (An audio-only file used to be
+    // published as a "video" with no picture and no poster.)
+    if (probe.unreadable) {
+      throw new PermanentJobError(`This file could not be read as a video (${probe.unreadable}).`);
+    }
+    if (probe.hasVideo === false) {
+      throw new PermanentJobError("This file has no picture, so it is not a video (is it an audio recording?).");
+    }
 
     // ── 3. Transcode ─────────────────────────────────────────────────────────
     // The encoder settings are in encode.ts, where they can be tested.
@@ -235,7 +247,7 @@ export async function transcode480p(
       );
       posterUploaded = true;
     } catch (err) {
-      console.warn(`[transcode] poster failed for ${videoSubmissionId}:`, String(err).slice(0, 200));
+      console.warn(`[transcode] poster failed for ${videoSubmissionId}:`, boundedError(String(err), 300));
     }
 
     // ── 5. Upload the playlists and every segment ────────────────────────────
@@ -327,7 +339,8 @@ export async function transcode480p(
       throw err;
     }
     console.error(`[transcode] ${videoSubmissionId} failed:`, err);
-    const msg = String(err).slice(0, 4000);
+    // The first line says what failed; the END is where the tool's verdict is.
+    const msg = boundedError(String(err), 4000);
     if (jobRowId) {
       await db
         .update(transcodeJobs)
@@ -335,10 +348,12 @@ export async function transcode480p(
         .where(eq(transcodeJobs.id, jobRowId))
         .catch(() => undefined);
     }
+    // A permanent failure is the last attempt, however many remain.
+    const final = opts.finalAttempt || err instanceof PermanentJobError;
     await db
       .update(videoSubmissions)
       .set(
-        opts.finalAttempt
+        final
           ? { status: "failed", processingLog: msg }
           : { status: "queued", processingLog: `attempt failed, retrying: ${msg}` },
       )
@@ -353,16 +368,16 @@ export async function transcode480p(
 /**
  * Duration and dimensions, or nulls.
  *
- * Never throws. A source ffprobe cannot read is very likely a source ffmpeg
- * cannot transcode either -- but that should surface as a transcode failure
- * with ffmpeg's own diagnostics, not as an opaque probe error.
+ * Never throws. When ffprobe could not open the source as media at all it
+ * says so in `unreadable` (the caller fails the job, permanently); any other
+ * probe failure only costs the metadata, and ffmpeg's own diagnostics decide.
  */
-async function ffprobe(path: string): Promise<Probe> {
+async function ffprobe(path: string): Promise<Probe & { unreadable?: string | null }> {
   try {
     return parseProbe(await run("ffprobe", probeArgs(path)));
   } catch (err) {
-    console.warn("[transcode] ffprobe failed:", String(err).slice(0, 200));
-    return { durationSec: null, width: null, height: null };
+    console.warn("[transcode] ffprobe failed:", boundedError(String(err), 300));
+    return { durationSec: null, width: null, height: null, unreadable: unreadableSource(String(err)) };
   }
 }
 
@@ -391,7 +406,7 @@ function run(bin: string, args: string[], signal?: AbortSignal): Promise<string>
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve(stdout);
-      else reject(new Error(`${bin} exited ${code}\n${stderr}`));
+      else reject(new Error(commandFailure(bin, code, stderr)));
     });
   });
 }
