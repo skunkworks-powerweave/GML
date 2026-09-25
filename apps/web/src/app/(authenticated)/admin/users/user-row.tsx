@@ -224,14 +224,16 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
       ) : null}
 
       {/* The WhatsApp number /admin/gates offers a rotated section password
-          to. Nothing else writes users.phone. Your own may be set here too. */}
+          to, and the one the WhatsApp webhook matches an incoming video's
+          sender against -- so changing it changes whose uploads are whose.
+          Nothing else writes users.phone. Your own may be set here too. */}
       {canManage || isSelf ? (
         <form
           action={(fd: FormData) => {
             setLastSubmitted("phone");
             phoneForm(fd);
           }}
-          style={{ display: "flex", gap: 6, alignItems: "center" }}
+          style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}
           data-testid="admin-user-phone-form"
         >
           <input type="hidden" name="userId" value={user.id} />
@@ -246,6 +248,9 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
           <button type="submit" disabled={phonePending} style={{ ...control, cursor: "pointer" }}>
             {phonePending ? "Saving…" : "Save number"}
           </button>
+          <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
+            Gate passwords are shared to it, and videos sent from it on WhatsApp are filed under this person.
+          </span>
         </form>
       ) : null}
 

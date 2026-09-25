@@ -65,3 +65,23 @@ test("a programme_admin cannot change an administrator's number", { skip }, asyn
     }
   });
 });
+
+// The same column is how the WhatsApp webhook attributes an incoming video to
+// its sender (api/webhooks/whatsapp: users.phone, then teachers.phone). An
+// administrator changing the number should know that, not only that it is
+// where gate passwords are sent.
+test("the number's field says it also attributes WhatsApp uploads", { skip }, async () => {
+  const { h, renderSync } = await import("./_ui.js");
+  const { UserRow } = await import("../../apps/web/src/app/(authenticated)/admin/users/user-row.tsx");
+  const html = renderSync(
+    h(UserRow, {
+      user: { id: "44444444-4444-4444-8444-444444444444", email: "o@example.test", name: "O", role: "observer", active: true, phone: null, deleted: false, lastSeenAt: null },
+      roleLabel: "Observer",
+      actorRole: "super_admin",
+      isSelf: false,
+    }),
+  );
+  const phoneForm = /<form[^>]*data-testid="admin-user-phone-form"[^>]*>([\s\S]*?)<\/form>/.exec(html)?.[1] ?? "";
+  assert.match(phoneForm, /gate passwords/i);
+  assert.match(phoneForm, /videos? .*WhatsApp|WhatsApp .*videos?/i, "the field must say the number attributes WhatsApp videos");
+});
