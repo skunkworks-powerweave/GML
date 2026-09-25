@@ -282,6 +282,61 @@ ${worker.output()}`,
   },
 );
 
+// W3-61. Every producer writes 'queued' in the same transaction as its job, so
+// a 'queued' video with no live job has nothing coming. Two ways one arose: a
+// WhatsApp Resend whose enqueue failed after its status write had committed,
+// and the old worker's Storage-unset path, which threw before its ledger row
+// and let the job dead-letter. The sweep above skipped 'queued' entirely, so
+// the teacher's page said "in progress" for good, and the DLQ -- which needs a
+// failed attempt to offer Retry -- had nothing to list.
+test(
+  "W3-61: a video left 'queued' with no live job is failed on the next tick, and the DLQ can Retry it",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      const orphan = await seedSubmission(w, "queued");
+      const deadNoLedger = await seedSubmission(w, "queued");
+      const deadJobId = await seedJob(w, deadNoLedger, { status: "queued", attempts: 3, maxAttempts: 3 });
+      await w.q(`UPDATE ${w.schema}.jobs SET status = 'dead', completed_at = now() - interval '2 days' WHERE id = $1`, [deadJobId]);
+      // The control: a retry waiting out its backoff, which the worker will not
+      // claim yet. Its video is 'queued' and must stay so.
+      const waiting = await seedSubmission(w, "queued");
+      const waitingJob = await seedJob(w, waiting, { status: "queued", attempts: 1, maxAttempts: 3 });
+      await w.q(`UPDATE ${w.schema}.jobs SET run_at = now() + interval '1 hour' WHERE id = $1`, [waitingJob]);
+
+      const worker = w.spawnWorker();
+      const settled = await waitFor(async () => {
+        for (const id of [orphan, deadNoLedger]) if ((await video(w, id)).status !== "failed") return false;
+        return true;
+      }, 30_000);
+      assert.ok(
+        settled,
+        `'queued' videos with nothing queued stayed 'queued': ${JSON.stringify(
+          await Promise.all([orphan, deadNoLedger].map(async (id) => ({ v: await video(w, id), l: await ledger(w, id) }))),
+        )}
+${worker.output()}`,
+      );
+
+      const { verbsFor } = await dlqState();
+      for (const id of [orphan, deadNoLedger]) {
+        const rows = await ledger(w, id);
+        assert.equal(rows.length, 1, `one failed attempt for the DLQ to list: ${JSON.stringify(rows)}`);
+        assert.equal(rows[0]!.status, "failed");
+        assert.match(rows[0]!.error ?? "", /no worker/i);
+        const verbs = verbsFor(
+          { jobId: rows[0]!.id, status: rows[0]!.status },
+          { status: (await video(w, id)).status, latestAttemptId: rows[0]!.id, liveJob: null },
+        );
+        assert.deepEqual(verbs, { retry: true, drop: true });
+      }
+
+      assert.equal((await video(w, waiting)).status, "queued", "a video whose retry is merely waiting was failed");
+      assert.deepEqual(await ledger(w, waiting), []);
+      assert.equal((await job(w, waitingJob)).status, "queued");
+    });
+  },
+);
+
 // ── F09 ──────────────────────────────────────────────────────────────────────
 
 test(
