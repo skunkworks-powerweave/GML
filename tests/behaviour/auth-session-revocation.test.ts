@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { request, resetRequest, form, closeAppDb } from "./_auth-harness.ts";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
-import { fakeGoTrue, ensureAuthSessionsTable, type FakeGoTrue } from "./_fake_gotrue.ts";
+import { fakeGoTrue, ensureAuthSessionsTable, withRowFault, type FakeGoTrue } from "./_fake_gotrue.ts";
 
 const skip = needsDatabase();
 
@@ -186,17 +186,14 @@ test("deactivation ends every session, and reactivation does not bring them back
 test("when sessions cannot be ended, the administrator and the audit log are told so", { skip }, async () => {
   const actor = await makeUser("super_admin");
   const target = await makeUser("programme_admin");
+  await fake.deviceSignIn(target.email, target.password);
   await signInThroughApp(actor);
   const { setRoleAction } = await adminActions();
 
-  // The revocation's table is unreachable for the duration of this call.
-  await pg.query("ALTER TABLE auth.sessions RENAME TO sessions_unavailable");
-  let res: { ok?: string; error?: string };
-  try {
-    res = await setRoleAction(undefined, form({ userId: target.id, role: "mentor" }));
-  } finally {
-    await pg.query("ALTER TABLE auth.sessions_unavailable RENAME TO sessions");
-  }
+  // Deleting THIS user's sessions fails for the duration of the call.
+  const res = await withRowFault(pg, "auth.sessions", "DELETE", `OLD.user_id = '${target.id}'::uuid`, () =>
+    setRoleAction(undefined, form({ userId: target.id, role: "mentor" })),
+  );
   assert.ok(res.ok, "the role change itself committed and must be reported");
   assert.match(res.ok ?? "", /sessions could not be ended/i, `the message must not claim sessions ended: ${res.ok}`);
   const meta = await auditMetadata("admin.user.role_change", target.id);

@@ -78,12 +78,54 @@ function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64url");
 }
 
-/** Create the stand-in for GoTrue's session table in the test database. */
+/**
+ * Create the stand-in for GoTrue's session table in the test database.
+ *
+ * Several test files call this concurrently, and two concurrent IF NOT EXISTS
+ * creations can still collide in the catalog; losing that race means the
+ * object exists, which is all this needs.
+ */
 export async function ensureAuthSessionsTable(c: Queryable): Promise<void> {
-  await c.query("CREATE SCHEMA IF NOT EXISTS auth");
-  await c.query(
+  const tolerate = async (sql: string) => {
+    try {
+      await c.query(sql);
+    } catch (err) {
+      if (!["23505", "42P06", "42P07"].includes(String((err as { code?: unknown }).code))) throw err;
+    }
+  };
+  await tolerate("CREATE SCHEMA IF NOT EXISTS auth");
+  await tolerate(
     "CREATE TABLE IF NOT EXISTS auth.sessions (id uuid PRIMARY KEY, user_id uuid NOT NULL, created_at timestamptz DEFAULT now())",
   );
+}
+
+/**
+ * Make one statement kind fail for rows matching `condition` on `table`, for
+ * the duration of `body` -- a fault scoped to this test's own rows, so test
+ * files running concurrently against the same database are unaffected (a
+ * table rename was not: it broke every other file using the table).
+ * `condition` is SQL over NEW/OLD and must contain only test-generated values.
+ */
+export async function withRowFault<T>(
+  c: Queryable,
+  table: string,
+  when: "INSERT" | "DELETE",
+  condition: string,
+  body: () => Promise<T>,
+): Promise<T> {
+  const name = `test_fault_${randomUUID().replace(/-/g, "")}`;
+  const row = when === "DELETE" ? "OLD" : "NEW";
+  await c.query(
+    `CREATE FUNCTION public.${name}() RETURNS trigger LANGUAGE plpgsql AS $f$
+     BEGIN IF ${condition} THEN RAISE EXCEPTION 'fault injected by a test'; END IF; RETURN ${row}; END $f$`,
+  );
+  await c.query(`CREATE TRIGGER ${name} BEFORE ${when} ON ${table} FOR EACH ROW EXECUTE FUNCTION public.${name}()`);
+  try {
+    return await body();
+  } finally {
+    await c.query(`DROP TRIGGER IF EXISTS ${name} ON ${table}`);
+    await c.query(`DROP FUNCTION IF EXISTS public.${name}()`);
+  }
 }
 
 export async function fakeGoTrue(options: Options = {}) {

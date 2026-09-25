@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { resetRequest, outcome, form, closeAppDb } from "./_auth-harness.ts";
 import { needsDatabase, DATABASE_URL } from "./_harness.js";
-import { fakeGoTrue, type FakeGoTrue } from "./_fake_gotrue.ts";
+import { fakeGoTrue, withRowFault, type FakeGoTrue } from "./_fake_gotrue.ts";
 
 const skip = needsDatabase();
 
@@ -105,15 +105,14 @@ test("F79: one address spraying many accounts is throttled too", { skip }, async
 });
 
 test("F79: when the limiter itself is down, sign-in fails closed", { skip }, async () => {
-  const u = makeUser();
+  const marker = randomUUID();
+  const password = `pw-${randomUUID()}`;
+  const u = fake.addUser({ email: `limiter-down-${marker}@example.test`, password });
   const evaluated = passwordGrants();
-  await pg.query("ALTER TABLE rate_limits RENAME TO rate_limits_unavailable");
-  let r;
-  try {
-    r = await submitLogin(freshIp(), u.email, u.password);
-  } finally {
-    await pg.query("ALTER TABLE rate_limits_unavailable RENAME TO rate_limits");
-  }
+  // The limiter's write fails for this account's counter only.
+  const r = await withRowFault(pg, "rate_limits", "INSERT", `NEW.key LIKE '%${marker}%'`, () =>
+    submitLogin(freshIp(), u.email, password),
+  );
   assert.equal(r.kind, "returned", "no session may be established while the limiter cannot count");
   assert.equal((r as { value: { error?: string } }).value.error, "unavailable");
   assert.equal(passwordGrants(), evaluated);
