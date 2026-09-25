@@ -21,8 +21,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
@@ -74,9 +74,11 @@ test("every .env file is kept out of the build context, at any depth", () => {
 });
 
 test("the app image's builder drops the traced source before the runner copies standalone", () => {
-  // pingMigrations() reads a process.cwd()-relative path, so the file tracer
+  // pingMigrations() read a process.cwd()-relative path, so the file tracer
   // put the whole apps/web directory -- src/, tsconfig.tsbuildinfo, READMEs --
-  // into .next/standalone, which the runner stage copies wholesale.
+  // into .next/standalone, which the runner stage copies wholesale. That cause
+  // is gone (it imports the journal: health-probe-ok.test.ts), and this step
+  // is the guard against the next dynamic read bringing the source back.
   const df = readFileSync(resolve(root, "docker/app.Dockerfile"), "utf8").replace(/^\s*#.*$/gm, "");
   const build = df.indexOf("RUN pnpm exec next build");
   const prune = df.search(/RUN cd \.next\/standalone\/apps\/web \\\s*\n\s*&& rm -rf src\b/);
@@ -86,6 +88,25 @@ test("the app image's builder drops the traced source before the runner copies s
     prune > build && prune < runner,
     "the builder must remove apps/web/src from .next/standalone after `next build` and before the runner copies it",
   );
+});
+
+test("no application module builds a path from process.cwd() (the file tracer copies all of apps/web for one)", () => {
+  // Structural, because nothing a test can run executes Next's tracer: one
+  // cwd-relative read was enough to put src/ and the READMEs into
+  // .next/standalone (W3-50). Read what the build needs through an import.
+  const offenders = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(ts|tsx|js|mjs)$/.test(name)) {
+        const code = readFileSync(p, "utf8").replace(/^\s*(\/\/|\*).*$/gm, "");
+        if (/process\.cwd\(\)/.test(code)) offenders.push(p.slice(root.length + 1));
+      }
+    }
+  };
+  walk(resolve(root, "apps/web/src"));
+  assert.deepEqual(offenders, [], "these modules read relative to the working directory");
 });
 
 test(".env.example and the sources the images need are still in the context", () => {

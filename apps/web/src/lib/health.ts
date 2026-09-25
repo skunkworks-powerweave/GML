@@ -1,5 +1,8 @@
 // Sub-system health pings used by /api/health.
 
+// Data only: importing it opens nothing (the pool is imported lazily below).
+import migrationsJournal from "@gml/db/migrations/journal";
+
 export type PingResult = {
   ok: boolean;
   detail?: string;
@@ -176,44 +179,14 @@ export async function whatsappHealth(): Promise<WhatsAppHealth> {
  * diagnose without needing shell access to the DB.
  */
 export async function pingMigrations(): Promise<MigrationsResult> {
-  // Expected: count entries in the journal shipped with the build.
-  let expected = 0;
-  try {
-    const { readFileSync } = await import("node:fs");
-    const { resolve } = await import("node:path");
-    // process.cwd() during `next start` / `next dev` is the repo root in
-    // dev and the apps/web folder in standalone builds. Try both.
-    const candidates = [
-      resolve(process.cwd(), "packages/db/src/migrations/meta/_journal.json"),
-      resolve(process.cwd(), "../../packages/db/src/migrations/meta/_journal.json"),
-    ];
-    let journalRaw: string | null = null;
-    for (const p of candidates) {
-      try {
-        journalRaw = readFileSync(p, "utf8");
-        break;
-      } catch {
-        // try next candidate
-      }
-    }
-    if (journalRaw === null) {
-      return {
-        ok: false,
-        applied: 0,
-        expected: 0,
-        error: "_journal.json not found",
-      };
-    }
-    const journal = JSON.parse(journalRaw) as { entries?: unknown[] };
-    expected = Array.isArray(journal.entries) ? journal.entries.length : 0;
-  } catch (err) {
-    return {
-      ok: false,
-      applied: 0,
-      expected: 0,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
+  // Expected: the entries of the journal this build was made from, imported
+  // statically so it is part of the build. It was read at request time from
+  // paths built on process.cwd(), which Next's file tracer cannot resolve to
+  // one file: it counted all of apps/web as reachable from /api/health and
+  // copied it -- src, READMEs, tsconfig.tsbuildinfo -- into .next/standalone,
+  // and the answer depended on where the process was started.
+  const entries = (migrationsJournal as { entries?: unknown[] }).entries;
+  const expected = Array.isArray(entries) ? entries.length : 0;
 
   // Applied: query the drizzle.__drizzle_migrations table, through the app's pool.
   if (!process.env.DATABASE_URL) {
