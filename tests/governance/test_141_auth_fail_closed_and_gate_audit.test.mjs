@@ -85,11 +85,17 @@ test("spec 141 — auth.ts throttles sign-in itself, and the throttle fails CLOS
     /async function signInAllowed[\s\S]*?try \{[\s\S]*?rateLimit\([\s\S]*?\} catch \{\s*return "unavailable";/,
     "a throwing limiter must answer 'unavailable' (deny), not let the attempt through",
   );
-  assert.ok(
-    !/recordAudit\(/.test(code),
-    "auth.ts must not write audit rows — it is now a pure session reader with " +
-      "no side effects, called on every render",
-  );
+  // NARROWED (F88). This used to forbid recordAudit anywhere in auth.ts. The
+  // property it protected is that auth() -- the session reader called on
+  // every render -- has no side effects. That still holds. But "no audit rows
+  // from auth.ts" also meant sign-out was never audited, and the audit log is a
+  // hard requirement; signOut() is not called on render, and is the one place
+  // here that records a row.
+  const authFn = code.slice(code.indexOf("export async function auth("), code.indexOf("const ADMIN_ROLES"));
+  assert.ok(authFn.length > 0 && !/recordAudit|audit"\)/.test(authFn), "auth() must not write audit rows");
+  const calls = code.match(/recordAudit\(/g) ?? [];
+  const inSignOut = code.slice(code.indexOf("export async function signOut(")).match(/recordAudit\(/g) ?? [];
+  assert.equal(calls.length, inSignOut.length, "the only audit write in auth.ts is the sign-out");
 });
 
 test("spec 141 — sign-in failures are indistinguishable to the caller", () => {

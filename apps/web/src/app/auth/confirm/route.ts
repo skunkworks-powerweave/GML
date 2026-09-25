@@ -23,6 +23,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 // /auth/callback. publicUrl: behind Caddy the request's own origin is Next's
 // bind address.
 import { publicUrl, safeInternalPath } from "@/lib/safe-redirect";
+import { recordSignIn } from "@/lib/sign-in-events";
 
 /**
  * The link types this product sends: password recovery, and magic-link sign-in
@@ -42,7 +43,7 @@ export async function GET(request: NextRequest) {
   }
 
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.verifyOtp({ type: type as EmailOtpType, token_hash: tokenHash });
+  const { data, error } = await supabase.auth.verifyOtp({ type: type as EmailOtpType, token_hash: tokenHash });
   if (error) {
     // Expired or already used. One instruction either way -- request a new
     // link -- and saying which would confirm the address exists.
@@ -52,5 +53,6 @@ export async function GET(request: NextRequest) {
   // As with /auth/callback, a verified link is not a guarantee of access: the
   // access-token hook still refuses an inactive profile, and auth() then reads
   // the result as signed out.
+  if (data.user) await recordSignIn(data.user.id, type === "recovery" ? "recovery_link" : "email_link");
   return NextResponse.redirect(await publicUrl(next));
 }

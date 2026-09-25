@@ -19,7 +19,7 @@
 // one: their resolve hooks would put the @/auth stub back.
 
 import { createRequire, registerHooks } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const WEB_URL = new URL("../../apps/web/", import.meta.url);
 const SRC_DIR = fileURLToPath(new URL("src/", WEB_URL));
@@ -42,7 +42,11 @@ registerHooks({
     const direct = STUB_BY_SPECIFIER[specifier];
     if (direct) return { url: new URL(direct, STUBS_URL).href, shortCircuit: true };
     if (specifier.endsWith(".css")) return { url: new URL("empty.ts", STUBS_URL).href, shortCircuit: true };
-    return nextResolve(specifier.startsWith("@/") ? SRC_DIR + specifier.slice(2) : specifier, context);
+    if (!specifier.startsWith("@/")) return nextResolve(specifier, context);
+    // A dynamic import() of an @/ path goes through the ESM loader, which
+    // takes file URLs, not Windows paths; require() takes the path.
+    const target = SRC_DIR + specifier.slice(2);
+    return nextResolve(context.conditions?.includes("import") ? pathToFileURL(target).href : target, context);
   },
 });
 

@@ -227,15 +227,16 @@ export type SignInError =
 export async function signInWithPassword(
   email: string,
   password: string,
-): Promise<{ error: SignInError | null }> {
+): Promise<{ error: SignInError | null; userId?: string }> {
   const allowed = await signInAllowed(email);
   if (allowed === "unavailable") return { error: "unavailable" };
   if (allowed === "limited") return { error: "rate_limited" };
 
   try {
     const supabase = await createSupabaseServerClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error ? signInErrorCode(error) : null };
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: signInErrorCode(error) };
+    return { error: null, userId: data.user?.id };
   } catch {
     return { error: "unavailable" };
   }
@@ -330,8 +331,27 @@ async function signInAllowed(email: string): Promise<"ok" | "limited" | "unavail
  * on every device is what the admin deactivate path does (lib/supabase/
  * sessions.ts), and is not what someone clicking "sign out" on a shared school
  * computer expects to happen to their phone.
+ *
+ * Audited first, while auth() can still say who is leaving. lib/audit is
+ * imported lazily: it imports auth() from this module, and a sign-out is the
+ * only place here that writes a row -- auth() itself, called on every render,
+ * stays free of side effects.
  */
 export async function signOut(opts?: { redirectTo?: string }): Promise<never> {
+  try {
+    const session = await auth();
+    if (session) {
+      const { recordAudit } = await import("@/lib/audit");
+      await recordAudit({
+        action: "auth.sign_out",
+        entityType: "user",
+        entityId: session.user.id,
+        userId: session.user.id,
+      });
+    }
+  } catch {
+    // Best effort, like every audit write: never block leaving.
+  }
   try {
     const supabase = await createSupabaseServerClient();
     await supabase.auth.signOut({ scope: "local" });

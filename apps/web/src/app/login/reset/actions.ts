@@ -5,6 +5,7 @@ import { recoverySessionState } from "@/auth";
 import { passwordPolicyError } from "@/lib/password-policy";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { clearMustChangePassword } from "@/lib/supabase/must-change-password";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 
 export type ResetState = { error?: string };
 
@@ -80,6 +81,16 @@ export async function resetPasswordAction(
   // They chose this password themselves, so one an administrator set for them
   // no longer needs changing.
   await clearMustChangePassword(data.user.id, supabase);
+
+  // Never the password, its length, or any derivative.
+  const wrote = await recordAudit({
+    action: "auth.password.reset_completed",
+    entityType: "user",
+    entityId: data.user.id,
+    userId: data.user.id,
+    metadata: { otherSessionsEnded: true },
+  });
+  if (!wrote) noteAuditDegraded("login/reset/resetPasswordAction");
 
   redirect("/dashboard");
 }
