@@ -367,6 +367,12 @@ subjects at `/admin/data/rtt-subjects`. New districts are added at
 `/admin/data/districts`. A phase, term or district that still has anything
 under it cannot be deleted; the grid says what is still attached.
 
+A host seeded before the 2026-09 release holds the three phases at UTC
+midnight: each starts 5 h 30 min into its first IST day and ends 5 h 30 min
+into its last, so the dashboard stops naming Phase 3 at 05:30 IST on
+30 September. Open each phase at `/admin/data/phases` and save it once,
+unchanged: the grid stores 00:00 IST on the first day and the end of the last.
+
 **Quizzes are not seeded.** Each RTT subject page lists the active quizzes
 bound to that subject; until someone creates and activates one at
 `/admin/quizzes`, the subject's Assessment card reads "No assessments published

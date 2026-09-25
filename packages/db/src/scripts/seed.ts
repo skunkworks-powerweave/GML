@@ -170,12 +170,22 @@ export async function main() {
   const subjectByCode = Object.fromEntries(curricularInsert.map((s) => [s.code, s.id]));
 
   // RTT phases + terms + RTT subjects (training units)
+  //
+  // A phase is a run of CALENDAR DAYS IN IST, stored the way /admin/data/phases
+  // stores one (apps/web/src/admin/dates.ts, which packages/db cannot import):
+  // from 00:00 IST on the first day to the last millisecond of the last. This
+  // was `new Date("2026-09-30")`, which JS reads as UTC midnight -- 05:30 IST --
+  // so every phase began 5.5 h into its first day and ended 5.5 h into its
+  // last, and the dashboard (`end_date >= now()`) dropped "RTT Phase 3" at
+  // 05:30 IST on 30 September.
+  const istDayStart = (ymd: string) => new Date(`${ymd}T00:00:00.000+05:30`);
+  const istDayEnd = (ymd: string) => new Date(`${ymd}T23:59:59.999+05:30`);
   const phaseInsert = await db
     .insert(schema.phases)
     .values([
-      { label: "Phase 1", sequence: 1, startDate: new Date("2025-04-01"), endDate: new Date("2025-09-30") },
-      { label: "Phase 2", sequence: 2, startDate: new Date("2025-10-01"), endDate: new Date("2026-03-31") },
-      { label: "Phase 3", sequence: 3, startDate: new Date("2026-04-01"), endDate: new Date("2026-09-30") },
+      { label: "Phase 1", sequence: 1, startDate: istDayStart("2025-04-01"), endDate: istDayEnd("2025-09-30") },
+      { label: "Phase 2", sequence: 2, startDate: istDayStart("2025-10-01"), endDate: istDayEnd("2026-03-31") },
+      { label: "Phase 3", sequence: 3, startDate: istDayStart("2026-04-01"), endDate: istDayEnd("2026-09-30") },
     ])
     .returning({ id: schema.phases.id, label: schema.phases.label });
   const phaseByLabel = Object.fromEntries(phaseInsert.map((p) => [p.label, p.id]));

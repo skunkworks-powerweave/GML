@@ -273,6 +273,83 @@ test(
   },
 );
 
+// ── The seeded phases: calendar days in IST ──────────────────────────────────
+//
+// W3-41. The seed wrote each phase as `new Date("2026-09-30")`, which JS reads
+// as UTC midnight: 05:30 IST. In the timestamptz columns each phase therefore
+// began 5.5 h into its first day and ENDED 5.5 h into its last one, and the
+// dashboard names the phase with `start_date <= now AND end_date >= now`, so
+// on 30 September "RTT Phase 3" left the subtitle at 05:30 IST. The admin grid
+// and CSV import already store a date the way the programme means it
+// (apps/web/src/admin/dates.ts): 00:00 IST on the first day, the last
+// millisecond of the last IST day. The seed must store the same.
+
+/** Every table seed.ts main() writes. */
+const SEEDED_TABLES = [
+  "districts", "zones", "schools", "teachers", "mentors", "subjects", "phases", "terms",
+  "rtt_subjects", "mentor_pairings", "observation_cycles", "section_gates",
+];
+
+test(
+  "the seeded phases start at 00:00 IST and stay current until the end of their last IST day",
+  { skip },
+  async () => {
+    const seed = await import("../../packages/db/src/scripts/seed.ts");
+    const { endOfIstDay, parseAdminDate, toIstDate } = await import("../../apps/web/src/admin/dates.ts");
+    await withSeedWorld(SEEDED_TABLES, async (w) => {
+      // main() dials DATABASE_URL itself, so point it at this world; without
+      // SUPER_ADMIN_* the super_admin bootstrap stays out of the way.
+      const saved = { url: process.env.DATABASE_URL, email: process.env.SUPER_ADMIN_EMAIL };
+      process.env.DATABASE_URL = w.url;
+      delete process.env.SUPER_ADMIN_EMAIL;
+      let logs = "";
+      try {
+        logs = (await captureLogs(() => seed.main())).logs;
+      } finally {
+        process.env.DATABASE_URL = saved.url;
+        if (saved.email !== undefined) process.env.SUPER_ADMIN_EMAIL = saved.email;
+      }
+
+      const phases = await w.q<{ label: string; start: Date; end: Date }>(
+        `SELECT label, start_date AS start, end_date AS "end" FROM ${w.schema}.phases ORDER BY sequence`,
+      );
+      assert.equal(phases.length, 3, `the seed writes three phases:\n${logs}`);
+      for (const p of phases) {
+        const first = toIstDate(p.start);
+        assert.equal(
+          p.start.toISOString(),
+          parseAdminDate(first).toISOString(),
+          `${p.label} must start at 00:00 IST on ${first}, as /admin/data/phases stores that date`,
+        );
+        assert.equal(
+          p.end.toISOString(),
+          endOfIstDay(p.end).toISOString(),
+          `${p.label} must end at the last moment of ${toIstDate(p.end)} IST, as /admin/data/phases stores that date`,
+        );
+      }
+
+      // The dashboard's "current phase" (dashboard/page.tsx), at a given moment.
+      const current = async (at: string) =>
+        (
+          await w.q<{ label: string }>(
+            `SELECT label FROM ${w.schema}.phases
+              WHERE start_date IS NOT NULL AND start_date <= $1::timestamptz
+                AND (end_date IS NULL OR end_date >= $1::timestamptz)
+              ORDER BY sequence`,
+            [at],
+          )
+        ).map((r) => r.label);
+      assert.deepEqual(
+        await current("2026-09-30T12:00:00+05:30"),
+        ["Phase 3"],
+        "noon IST on Phase 3's last day: the dashboard must still name it",
+      );
+      assert.deepEqual(await current("2026-04-01T02:00:00+05:30"), ["Phase 3"], "02:00 IST on Phase 3's first day");
+      assert.deepEqual(await current("2026-03-31T23:00:00+05:30"), ["Phase 2"], "23:00 IST on Phase 2's last day");
+    });
+  },
+);
+
 // ── verify-auth: a deploy that leaves nobody able to sign in must not pass ───
 //
 // SUPER_ADMIN_* are not REQUIRED in .env, and with them empty the seed logs
