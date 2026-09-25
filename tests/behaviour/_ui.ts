@@ -23,6 +23,8 @@
 //   - next/headers       cookies() / headers() need a request. The stub serves
 //                        whatever the test put in `request`.
 //   - next/font/google   a build-time transform; outside `next build` it throws.
+//   - next/cache         revalidatePath() needs Next's work store; the stub
+//                        records the call instead.
 //   - *.css              Node cannot import a stylesheet.
 //   - server-only        Next aliases this internally; it is not installable.
 //   - @/auth, the login server actions, @/lib/chrome-counts
@@ -72,6 +74,9 @@ const STUB_BY_SPECIFIER: Record<string, string> = {
   "next-intl/server": "next-intl-server.ts",
   "next/headers": "next-headers.ts",
   "next/font/google": "next-font-google.ts",
+  // revalidatePath needs Next's work store; a server action run by a test only
+  // needs the call recorded (see _stubs/next-cache.ts).
+  "next/cache": "next-cache.ts",
 };
 
 /** App modules replaced by path (after @/ and relative resolution). */

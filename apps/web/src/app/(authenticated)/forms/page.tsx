@@ -17,7 +17,8 @@ import { db } from "@gml/db";
 import { feedbackForms, feedbackResponses, mentorPairings, mentors, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { formCatalogueLinks, type PairingChoice } from "@/lib/forms/catalogue-links";
+import { formCatalogueLinks, UNLOCK_FORMS_HREF, type PairingChoice } from "@/lib/forms/catalogue-links";
+import { actorFrom, mentorshipAccess } from "@/lib/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -114,8 +115,20 @@ export default async function FormsIndexPage() {
   // nothing to answer about, so say that plainly instead of linking to a page
   // that will reject the submission.
   const isAdmin = role === "programme_admin" || role === "super_admin";
-  const { pairings, lookupFailed } = await pairingsFor(session.user.id, role);
-  const pairingCount = isAdmin || lookupFailed ? null : pairings.length;
+
+  // THE MENTORSHIP PASSWORD. This page lists a mentor's mentees by name, one
+  // link per pairing, and each link opens what the mentor wrote about that
+  // mentee -- the data /mentorship keeps behind its section password. It sat
+  // outside that section and never asked, so a borrowed session read the
+  // roster without the password. Locked: no pairing is looked up at all, not
+  // even a count, and every row links to the password prompt. An administrator
+  // previews bare forms and is party to no pairing, so has nothing to lock.
+  const actor = actorFrom(session);
+  const locked = !isAdmin && (!actor || !(await mentorshipAccess(db, actor)).granted);
+  const { pairings, lookupFailed } = locked
+    ? { pairings: [], lookupFailed: false }
+    : await pairingsFor(session.user.id, role);
+  const pairingCount = isAdmin || lookupFailed || locked ? null : pairings.length;
 
   return (
     <main style={{ padding: "24px 28px", maxWidth: 820 }}>
@@ -126,6 +139,26 @@ export default async function FormsIndexPage() {
           Feedback forms for the mentorship cycle. Answers save as you type.
         </p>
       </header>
+
+      {locked ? (
+        <p
+          role="status"
+          data-testid="forms-locked"
+          style={{
+            border: "1px solid var(--line-2)",
+            background: "var(--paper-2)",
+            borderRadius: "var(--r-2, 8px)",
+            padding: "12px 14px",
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 16,
+          }}
+        >
+          Mentorship feedback is behind the mentorship password.{" "}
+          <Link href={UNLOCK_FORMS_HREF}>Enter it</Link> to see who each form is for and to
+          answer it.
+        </p>
+      ) : null}
 
       {pairingCount === 0 ? (
         <p
@@ -169,7 +202,7 @@ export default async function FormsIndexPage() {
             // than one mentee. /inbox has no feedback-form card, so that was a
             // dead end. Now a row with several pairings lists one link per
             // pairing, named, and nobody is sent to /inbox.
-            const links = formCatalogueLinks(slug, { isAdmin, pairings, lookupFailed });
+            const links = formCatalogueLinks(slug, { isAdmin, pairings, lookupFailed, locked });
             const title = (
               <span>
                 <span style={{ fontWeight: 500, fontSize: 14 }}>

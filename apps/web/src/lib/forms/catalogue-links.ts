@@ -35,17 +35,25 @@ export const MAX_PAIRING_LINKS = 6;
 /** The pairing list, where each pairing page links its own quarter's forms. */
 const PAIRING_LIST = "/mentorship";
 
+/** The mentorship password prompt, returning to the catalogue once unlocked. */
+export const UNLOCK_FORMS_HREF = `/gate/mentorship?next=${encodeURIComponent("/forms")}`;
+
 export function formRunnerHref(slug: string, pairingId: string): string {
   return `/forms/${slug}?pairingId=${encodeURIComponent(pairingId)}`;
 }
 
 export function formCatalogueLinks(
   slug: string,
-  opts: { isAdmin: boolean; pairings: readonly PairingChoice[]; lookupFailed?: boolean },
+  opts: { isAdmin: boolean; pairings: readonly PairingChoice[]; lookupFailed?: boolean; locked?: boolean },
 ): CatalogueLink[] {
   // An administrator is party to no pairing; the bare form is a preview, and
   // the runner says plainly that it cannot be submitted without one.
   if (opts.isAdmin) return [{ href: `/forms/${slug}`, label: null }];
+
+  // The mentorship section is locked. Who the caller's mentees are is exactly
+  // what its password guards, so the page looks no pairing up and the one link
+  // is the password prompt.
+  if (opts.locked) return [{ href: UNLOCK_FORMS_HREF, label: "Enter the mentorship password to answer" }];
 
   // The lookup threw. Showing the forms is still the safer wrong answer; the
   // pairing list is a real choice, where the inbox was an unrelated feed.

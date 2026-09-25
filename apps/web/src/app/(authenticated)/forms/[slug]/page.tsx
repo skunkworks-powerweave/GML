@@ -35,6 +35,7 @@ import {
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
+import { assertSectionGate } from "@/lib/gates";
 import {
   validateResponses,
   audienceAllows,
@@ -42,6 +43,7 @@ import {
   type FormFieldOption,
 } from "@/lib/forms/validate";
 import { formRunnerHref } from "@/lib/forms/catalogue-links";
+import { templateDraftWhere } from "@/lib/forms/drafts";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -259,6 +261,12 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // user could file mentorship feedback against any pairing in the programme.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  // SECTION GATE, asserted in the action for the reason every /mentorship
+  // action asserts it: a server action runs before any layout renders, and a
+  // gate that guards reading and not writing does not meet the requirement.
+  // This form files mentorship feedback and advances the pairing's quarter,
+  // and it lives outside /mentorship, so nothing else asked for the password.
+  await assertSectionGate(actor.id, "mentorship", formRunnerHref(slug, pairingId));
   await assertCanAccessPairing(actor, pairingId);
 
   // Pull the form back so we know which field ids to accept. Drop unknown keys.
@@ -359,10 +367,10 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       .returning({ id: feedbackResponses.id });
     newResponseId = inserted?.id ?? "";
 
-    // Clear the autosave draft for this user+template, if any.
-    await tx
-      .delete(formDrafts)
-      .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)));
+    // Clear the autosave draft for this user, template AND PAIRING. Keyed by
+    // user+template alone, submitting one mentee's form deleted the unfinished
+    // draft about every other mentee of the same mentor.
+    await tx.delete(formDrafts).where(templateDraftWhere(userId, form.id, pairingId));
 
     // ADVANCE THE PAIRING'S QUARTER.
     //
@@ -491,10 +499,29 @@ export default async function FormRunnerPage({
     redirect("/forbidden");
   }
 
+  // A FORM ABOUT A PAIRING IS MENTORSHIP DATA. The runner pre-fills what this
+  // user last wrote about the mentee, and it sat outside /mentorship, whose
+  // layout is where the section password is asked -- so a borrowed session read
+  // a mentor's assessments of every mentee without the password. Asked here,
+  // before anything about the pairing is read, returning to this form once
+  // unlocked. assertCanAccessPairing then 404s a pairing that is malformed,
+  // absent or someone else's, which used to render the whole fillable form
+  // (and, for a truncated id, a Postgres 22P02 as HTTP 500).
+  if (pairingId) {
+    const actor = actorFrom(session);
+    if (!actor) redirect("/login");
+    await assertSectionGate(userId, "mentorship", formRunnerHref(slug, pairingId));
+    await assertCanAccessPairing(actor, pairingId);
+  }
+
+  // THE DRAFT FOR THIS PAIRING. Selected by user+template alone, a mentor's
+  // half-written answers about one mentee loaded -- as "Draft loaded" -- into
+  // the same form for every other mentee, and outranked that mentee's own
+  // prior response below. See lib/forms/drafts.ts.
   const [draft] = await db
     .select({ responses: formDrafts.responses, updatedAt: formDrafts.updatedAt })
     .from(formDrafts)
-    .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)))
+    .where(templateDraftWhere(userId, form.id, pairingId || null))
     .limit(1);
 
   // Spec 131-A — prior-response prefill.
@@ -720,7 +747,7 @@ export default async function FormRunnerPage({
             <MobileFormRunner
               schema={schema}
               initialResponses={initialResponses}
-              draftKey={{ templateId: form.id }}
+              draftKey={{ templateId: form.id, pairingId: pairingId || null }}
               action={submitFormAction}
               formId={form.id}
               slug={slug}
@@ -731,7 +758,7 @@ export default async function FormRunnerPage({
             <FormRenderer
               schema={schema}
               initialResponses={initialResponses}
-              draftKey={{ templateId: form.id }}
+              draftKey={{ templateId: form.id, pairingId: pairingId || null }}
               action={submitFormAction}
               formId={form.id}
               slug={slug}

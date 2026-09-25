@@ -57,10 +57,21 @@ test("spec 074 — runner parses slug as kind-audience-version (no slug column i
   assert.match(src, /eq\(feedbackForms\.active/);
 });
 
-test("spec 074 — runner queries form_drafts for the (user, template) pair", () => {
+// Was "(user, template) pair". That key WAS the defect: a mentor fills the
+// same form once per mentee, so one (user, template) draft was shared by every
+// mentee -- A's answers pre-filled B's form and submitting B deleted A's. The
+// key is (user, template, pairing), built in one place (lib/forms/drafts.ts)
+// that the read and the post-submit delete both use. What the key selects is
+// executed by tests/behaviour/form-drafts-pairing.test.ts.
+test("spec 074 — runner reads and clears form_drafts by (user, template, pairing)", () => {
   const src = read(RUNNER_PATH);
-  assert.match(src, /formDrafts\.userId/);
-  assert.match(src, /formDrafts\.templateId/);
+  assert.match(src, /\bformDrafts\b/);
+  assert.match(src, /templateDraftWhere\(userId, form\.id, pairingId \|\| null\)/);
+  assert.match(src, /\.delete\(formDrafts\)\.where\(templateDraftWhere\(userId, form\.id, pairingId\)\)/);
+  const helper = read("apps/web/src/lib/forms/drafts.ts");
+  assert.match(helper, /formDrafts\.userId/);
+  assert.match(helper, /formDrafts\.templateId/);
+  assert.match(helper, /formDrafts\.pairingId/);
 });
 
 test("spec 074 — runner mounts <FormRenderer> with the required props", () => {
@@ -68,7 +79,8 @@ test("spec 074 — runner mounts <FormRenderer> with the required props", () => 
   assert.match(src, /<FormRenderer/);
   assert.match(src, /schema=\{schema\}/);
   assert.match(src, /initialResponses=\{/);
-  assert.match(src, /draftKey=\{\{\s*templateId:\s*form\.id\s*\}\}/);
+  // The autosave key carries the pairing (see the draft-key test above).
+  assert.match(src, /draftKey=\{\{\s*templateId:\s*form\.id,\s*pairingId:\s*pairingId \|\| null\s*\}\}/);
   assert.match(src, /action=\{submitFormAction\}/);
   assert.match(src, /from\s+"@\/components\/forms\/FormRenderer"/);
 });

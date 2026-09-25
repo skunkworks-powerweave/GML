@@ -7,9 +7,15 @@
 export type DraftKey = {
   templateId?: string;
   observationCycleId?: string;
+  /**
+   * The mentorship pairing a template draft is about. A mentor fills the same
+   * form once per mentee, and a draft keyed by template alone was shared by all
+   * of them. Ignored for an observation-cycle draft.
+   */
+  pairingId?: string | null;
 };
 
-type ScopedKey = { scope: "template" | "cycle"; id: string };
+type ScopedKey = { scope: "template" | "cycle"; id: string; pairingId?: string };
 
 function resolveScope(key: DraftKey): ScopedKey {
   const hasTemplate = typeof key.templateId === "string" && key.templateId.length > 0;
@@ -21,12 +27,13 @@ function resolveScope(key: DraftKey): ScopedKey {
     );
   }
   return hasTemplate
-    ? { scope: "template", id: key.templateId as string }
+    ? { scope: "template", id: key.templateId as string, pairingId: key.pairingId || undefined }
     : { scope: "cycle", id: key.observationCycleId as string };
 }
 
 function url(scoped: ScopedKey): string {
-  return `/api/form-drafts/${encodeURIComponent(scoped.id)}?scope=${scoped.scope}`;
+  const pairing = scoped.pairingId ? `&pairingId=${encodeURIComponent(scoped.pairingId)}` : "";
+  return `/api/form-drafts/${encodeURIComponent(scoped.id)}?scope=${scoped.scope}${pairing}`;
 }
 
 /**
