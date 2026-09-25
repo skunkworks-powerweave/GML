@@ -48,8 +48,23 @@ export const UPLOAD_COMPLETE_GRACE_MINUTES = 10;
  */
 export const UPLOAD_ABANDON_AFTER_HOURS = 24;
 
-/** Storage reports what it holds; allow 1% below what the browser declared. */
+/**
+ * More bytes in Storage than the browser declared.
+ *
+ * The declared size is the one beginUpload checked against the programme's
+ * configured cap, so the cap only holds if the stored size is bounded by it.
+ * There used to be no upper bound at all: a modified client could declare 1 MB
+ * and send up to the bucket's 2 GB limit, and the transcode the cap protects
+ * (one EC2 host's ffmpeg and disk) was queued. A browser declares file.size,
+ * which is exactly what tus sends, so a genuine upload is never over.
+ */
+export function isOversize(storedBytes: number, expectedBytes: number | null): boolean {
+  return expectedBytes != null && storedBytes > expectedBytes;
+}
+
+/** Storage reports what it holds; allow 1% below what the browser declared, and nothing above it. */
 export function isCompleteSize(storedBytes: number, expectedBytes: number | null): boolean {
+  if (isOversize(storedBytes, expectedBytes)) return false;
   return expectedBytes == null || storedBytes >= Math.floor(expectedBytes * 0.99);
 }
 
@@ -67,6 +82,11 @@ export function reconcileDecision(input: {
   storedBytes: number | null;
   expectedBytes: number | null;
 }): ReconcileDecision {
+  // An oversized object is final: a resumable object appears only once its
+  // last byte lands, so waiting cannot make it the size that was declared. And
+  // it must not be finished here, or skipping the completion call would be a
+  // way round the cap.
+  if (input.storedBytes !== null && isOversize(input.storedBytes, input.expectedBytes)) return "fail";
   if (input.storedBytes !== null && isCompleteSize(input.storedBytes, input.expectedBytes)) {
     return input.ageSeconds >= UPLOAD_COMPLETE_GRACE_MINUTES * 60 ? "complete" : "wait";
   }
