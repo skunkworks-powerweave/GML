@@ -1,12 +1,14 @@
 "use client";
 
 // Settings form — 4 sections (Display / Privacy / Language / Account) backed by
-// the locked `user_prefs` schema. Save-on-change with 400ms debounce; only the
-// *delta* (changed fields since initial load) is PUT to `/api/user-prefs`, which
-// keeps the audit log readable (the API records a `user_prefs.update` row with a
-// `keys` metadata array per spec 024).
+// the locked `user_prefs` schema. Save-on-change with 400ms debounce (the
+// language is saved on the tap; see pickLanguage); only the *delta* (changed
+// fields since initial load) is PUT to `/api/user-prefs`, which keeps the audit
+// log readable (the API records a `user_prefs.update` row with a `keys`
+// metadata array per spec 024).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { signOutAction } from "./actions";
 import { ChangePasswordForm } from "./ChangePasswordForm";
@@ -48,10 +50,15 @@ function computeDelta(baseline: SettingsFormValues, current: SettingsFormValues)
 }
 
 export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props) {
+  const router = useRouter();
   const [values, setValues] = useState<SettingsFormValues>(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const baselineRef = useRef<SettingsFormValues>(initial);
+  // The values most recently handed to flush(). The debounce compares against
+  // these rather than the saved baseline, so a save already on its way (the
+  // language, sent on the tap) is not sent a second time 400ms later.
+  const sentRef = useRef<SettingsFormValues>(initial);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef<AbortController | null>(null);
 
@@ -65,6 +72,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
     if (inFlightRef.current) inFlightRef.current.abort();
     const ctrl = new AbortController();
     inFlightRef.current = ctrl;
+    sentRef.current = next;
     setSaveState("saving");
     setErrorMsg(null);
     try {
@@ -80,22 +88,42 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       }
       baselineRef.current = next;
       setSaveState("saved");
+      // The menus, tabs and skip link are rendered by the shared
+      // (authenticated) layout, which the App Router never re-renders on a
+      // soft navigation. Without this the chrome kept the old language on
+      // every page until a hard reload, under a "Saved" badge. refresh()
+      // re-renders the server tree in place, root layout (<html lang>)
+      // included, and fetches no document.
+      if ("uiLanguage" in delta) router.refresh();
       // Auto-clear the "Saved" pill after 1.6s so the form looks idle again.
       setTimeout(() => {
         setSaveState((s) => (s === "saved" ? "idle" : s));
       }, 1600);
     } catch (err) {
       if ((err as Error).name === "AbortError") return; // superseded — silent
+      sentRef.current = baselineRef.current;
       setSaveState("error");
       setErrorMsg((err as Error).message || "Could not save");
     }
-  }, []);
+  }, [router]);
+
+  // The language is saved on the tap, not after the debounce. On a phone this
+  // is the only language control, and the next thing a user does is tap a tab
+  // to see the result: that unmounted the form inside the 400ms window, the
+  // effect cleanup cancelled the timer, and the choice was silently lost.
+  const pickLanguage = (code: UiLanguage) => {
+    const next = { ...values, uiLanguage: code };
+    setValues(next);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    void flush(next);
+  };
 
   // Debounced save effect — runs 400ms after the last change.
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    // Skip the no-op on first mount (values === initial).
-    const isDirty = Object.keys(computeDelta(baselineRef.current, values)).length > 0;
+    // Skip the no-op on first mount (values === initial), and anything
+    // already sent.
+    const isDirty = Object.keys(computeDelta(sentRef.current, values)).length > 0;
     if (!isDirty) return;
     timerRef.current = setTimeout(() => {
       void flush(values);
@@ -104,6 +132,27 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [values, flush]);
+
+  // That cleanup also runs on unmount, so a change made just before tapping a
+  // tab was cancelled with its timer and never saved. Send whatever is still
+  // unsent on the way out; keepalive lets the request outlive the page.
+  const latestRef = useRef(values);
+  useEffect(() => {
+    latestRef.current = values;
+  }, [values]);
+  useEffect(
+    () => () => {
+      const latest = latestRef.current;
+      if (Object.keys(computeDelta(sentRef.current, latest)).length === 0) return;
+      void fetch("/api/user-prefs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(computeDelta(baselineRef.current, latest)),
+        keepalive: true,
+      }).catch(() => undefined);
+    },
+    [],
+  );
 
   const set = useCallback(<K extends keyof SettingsFormValues>(key: K, value: SettingsFormValues[K]) => {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -199,13 +248,13 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
           Used for UI labels and notifications. Content (lesson titles, observation notes) is not auto-translated.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <LangPill active={values.uiLanguage === "en"} onClick={() => set("uiLanguage", "en")}>
+          <LangPill active={values.uiLanguage === "en"} onClick={() => pickLanguage("en")}>
             English
           </LangPill>
-          <LangPill active={values.uiLanguage === "hi"} onClick={() => set("uiLanguage", "hi")}>
+          <LangPill active={values.uiLanguage === "hi"} onClick={() => pickLanguage("hi")}>
             <span style={{ fontFamily: "var(--deva)" }} lang="hi">हिन्दी</span>
           </LangPill>
-          <LangPill active={values.uiLanguage === "bo"} onClick={() => set("uiLanguage", "bo")}>
+          <LangPill active={values.uiLanguage === "bo"} onClick={() => pickLanguage("bo")}>
             <span className="tib" lang="bo">བོད་ཡིག</span>
           </LangPill>
         </div>

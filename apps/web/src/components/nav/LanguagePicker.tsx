@@ -11,10 +11,10 @@
 // This island POSTs (PUT) to /api/user-prefs (spec 024) with the chosen
 // locale, then forces a full document reload so the authenticated layout
 // re-reads user_prefs.uiLanguage and the next-intl provider (spec 125) picks
-// up the new messages bundle on the next paint. We deliberately reload the
-// document rather than relying on router.refresh() because the
-// NextIntlClientProvider tree is rooted at the layout — the messages bundle
-// and the <html lang> attribute both live above any router-mutable subtree.
+// up the new messages bundle on the next paint. This used to claim that
+// router.refresh() could not do it because the provider and <html lang> sit
+// above every routable subtree; a refresh re-renders the whole server tree,
+// root layout included, and the Settings language pills rely on exactly that.
 //
 // Failure modes are surfaced through a small inline status row instead of a
 // toast (we don't want a new dependency just to surface a 400/500); the row
@@ -91,10 +91,10 @@ export default function LanguagePicker({ current, ariaLabel = "Language" }: Prop
           setPending(null);
           return;
         }
-        // Force a full reload so the authenticated layout re-reads
-        // user_prefs.uiLanguage and the NextIntlClientProvider re-mounts
-        // with the new messages bundle. router.refresh() is not enough —
-        // the provider sits ABOVE every routable subtree.
+        // A full reload so the layouts re-resolve the locale and the
+        // NextIntlClientProvider re-mounts with the new messages bundle.
+        // (router.refresh() would also re-render the shared layout -- the
+        // Settings pills use it -- this just predates that.)
         window.location.reload();
       } catch {
         setError("Network error — language not saved.");
