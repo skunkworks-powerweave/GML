@@ -54,6 +54,7 @@ import { requireRole } from "@/lib/guards";
 import { assertSectionGate, getActiveGrant } from "@/lib/gates";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { referenceLabels, referenceOptions, withCurrentValues, type RefContext } from "@/admin/references";
@@ -179,7 +180,8 @@ function buildColumnFilter(
     case "PgUUID":
       // A link to another row: the filter's picker submits its id.
       if (!UUID_RE.test(value)) {
-        note("pick a value from the list");
+        // Past REF_OPTION_LIMIT there is no list to pick from, only a box.
+        note("paste the row's id, shown at the top of its Edit panel");
         return null;
       }
       return eq(col as never, value as never);
@@ -236,7 +238,7 @@ function buildColumnFilter(
 export default async function AdminGridPage({ params, searchParams }: PageProps) {
   const { entity: slug } = await params;
   const sp = await searchParams;
-  const entity = ADMIN_ENTITIES[slug];
+  const entity = lookupOwn(ADMIN_ENTITIES, slug);
   if (!entity) notFound();
 
   // Role gate — readRoles guards the page; mutateRoles enforced in actions.ts.
@@ -526,7 +528,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       ? (lockedReason ?? "That row is locked in its current state and cannot be deleted from the grid.")
       : rawError === "still_referenced" && refEntity
       ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
-      : (GRID_ERRORS[rawError] ?? "That action could not be completed.")
+      : (lookupOwn(GRID_ERRORS, rawError) ?? "That action could not be completed.")
     : null;
 
   return (
@@ -555,6 +557,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               entityLabel={entity.label}
               // `id` too: a row carrying one updates that row (csv.ts importCsv).
               acceptedColumns={["id", ...entity.formFields]}
+              reportsDuplicates={Boolean(entity.duplicateKey)}
             />
           ) : null}
           {canExport ? (
@@ -582,6 +585,13 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               Close
             </Link>
           </div>
+          {/* The row's id, whole and selectable: what another table's UUID box
+              (a link past REF_OPTION_LIMIT) and a CSV id column ask for. The
+              grid shows every link by name and nowhere else shows an id. */}
+          <p className="mb-3 text-xs text-amber-900">
+            Row id:{" "}
+            <code data-testid="edit-row-id" className="select-all font-mono">{String(editRow.id)}</code>
+          </p>
           <RowForm
             entitySlug={slug}
             mode="edit"
@@ -662,7 +672,15 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             } else if (col?.columnType === "PgTimestamp" || col?.columnType === "PgDate" || col?.columnType === "PgDateString") {
               control = <input type="date" name={name} defaultValue={current} className={cls} />;
             } else {
-              control = <input name={name} defaultValue={current} placeholder="contains…" className={cls} />;
+              // A link past REF_OPTION_LIMIT has no list: it takes a whole id.
+              control = (
+                <input
+                  name={name}
+                  defaultValue={current}
+                  placeholder={refs === null ? "paste the row's id" : "contains…"}
+                  className={cls}
+                />
+              );
             }
             return (
               <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">

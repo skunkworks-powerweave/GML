@@ -26,6 +26,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { quizzes, quizSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { lookupOwn } from "@/lib/lookup";
 
 export const dynamic = "force-dynamic";
 
@@ -73,7 +74,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
     attempt_closed:
       "That attempt had already been submitted or closed, so those answers were not recorded again. Your attempts are below.",
   };
-  const historyError = sp.error ? HISTORY_ERRORS[sp.error] ?? null : null;
+  const historyError = sp.error ? lookupOwn(HISTORY_ERRORS, sp.error) ?? null : null;
 
   // Resolve the quiz first so we 404 cleanly for bad slugs (rather than
   // rendering an empty history page for a non-existent quiz).

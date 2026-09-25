@@ -26,6 +26,7 @@ import { DraftTextarea } from "./DraftTextarea";
 import { draftScope } from "@/lib/observation/drafts";
 import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
 import { getDeviceType } from "@/lib/device";
+import { lookupOwn } from "@/lib/lookup";
 import { MobileDetailFrame } from "@/components/shells";
 import {
   submitPreFormAction,
@@ -56,9 +57,10 @@ export default async function CycleDetailPage({
 }) {
   const { cycleId } = await params;
   const sp = (await searchParams) ?? {};
-  const error = (sp.error ?? "").trim();
+  // A repeated ?error=a&error=b arrives as an array, which has no trim().
+  const error = typeof sp.error === "string" ? sp.error.trim() : "";
   // Only a known question's label is echoed back, never the raw parameter.
-  const invalidField = stageFieldLabel((sp.field ?? "").trim());
+  const invalidField = stageFieldLabel(typeof sp.field === "string" ? sp.field.trim() : "");
 
   const CYCLE_ERRORS: Record<string, { message: string; tone: "warn" | "error" }> = {
     invalid_form: {
@@ -85,7 +87,7 @@ export default async function CycleDetailPage({
     cycle_not_found: { message: "That cycle no longer exists.", tone: "error" },
   };
   const cycleError = error
-    ? (CYCLE_ERRORS[error] ?? {
+    ? (lookupOwn(CYCLE_ERRORS, error) ?? {
         message: "That action could not be completed. Please try again.",
         tone: "error" as const,
       })

@@ -221,3 +221,114 @@ test("a file of ids and one column updates that column; an emptied cell clears i
     }
   });
 });
+
+// ── A HAND-MADE ROSTER, UPLOADED AGAIN ───────────────────────────────────────
+//
+// The id round trip above only helps a file that carries ids, which an export
+// does and a roster typed up in a spreadsheet does not. So the ordinary
+// recovery from a partial import -- fix the three rejected rows, upload the
+// whole file again -- inserted every row that had already landed a second
+// time and reported ok:true: 17 teacher rows for 10 people, and the same for
+// learners (children's records) and mentors. Nothing in those tables is
+// unique without a login link. A row added without an id that matches one
+// already on the table (a teacher: school + name, and phone when given; a
+// learner: class + name, and roll number when given; a mentor: name) is now
+// reported against its line, with the existing row's id, and not added.
+
+test("re-uploading a hand-made roster after a partial failure adds only the rows that were missing", { skip }, async () => {
+  const { importCsv } = await import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/csv.ts");
+  await withClient(async (c) => {
+    const t = tag("csv-roster-again");
+    const f = fixture(c, t);
+    try {
+      const school = await place(f, t);
+      const klass = await f.row("classes", { school_id: school, grade: 3, stage: "Primary" });
+      f.defer(`DELETE FROM teachers WHERE full_name LIKE $1`, [`% ${t}`]);
+      f.defer(`DELETE FROM learners WHERE name LIKE $1`, [`% ${t}`]);
+      f.defer(`DELETE FROM mentors WHERE name LIKE $1`, [`% ${t}`]);
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+      const nowhere = "99999999-9999-4999-8999-999999999999";
+      const count = async (sql: string) => (await c.query(sql, [`% ${t}`])).rows[0].n as number;
+
+      // Teachers: 10 people, three of them typed with a school that does not exist.
+      const roster = (schoolFor: (n: number) => string) =>
+        "fullName,schoolId,phone\n" +
+        Array.from({ length: 10 }, (_, i) => `Teacher${i + 1} ${t},${schoolFor(i + 1)},+91 90000 0000${i}`).join("\n") +
+        "\n";
+      const first = await importCsv("teachers", roster((n) => (n > 7 ? nowhere : school)));
+      assert.deepEqual({ inserted: first.inserted, failed: first.errors.map((e) => e.row) }, { inserted: 7, failed: [9, 10, 11] });
+      const again = await importCsv("teachers", roster(() => school));
+      assert.equal(again.inserted, 3, JSON.stringify(again));
+      assert.deepEqual(again.errors.map((e) => e.row), [2, 3, 4, 5, 6, 7, 8], "each row that had landed is reported");
+      const { rows: [teacher1] } = await c.query(`SELECT id FROM teachers WHERE full_name = $1`, [`Teacher1 ${t}`]);
+      assert.match(again.errors[0]!.message, new RegExp(`already.*${teacher1.id}`), "naming the row it matches");
+      assert.equal(await count(`SELECT count(*)::int AS n FROM teachers WHERE full_name LIKE $1`), 10, "ten teachers, once each");
+
+      // Learners: a roster with roll numbers, one grade mistyped.
+      const learners = (grade3: number) =>
+        `name,classId,schoolId,grade,rollNumber\n` +
+        `Dolma ${t},${klass},${school},3,1\nPadma ${t},${klass},${school},3,2\nNamgyal ${t},${klass},${school},${grade3},3\n`;
+      assert.equal((await importCsv("learners", learners(99))).inserted, 2);
+      const learnersAgain = await importCsv("learners", learners(3));
+      assert.deepEqual(
+        { inserted: learnersAgain.inserted, reported: learnersAgain.errors.map((e) => e.row) },
+        { inserted: 1, reported: [2, 3] },
+      );
+      assert.equal(await count(`SELECT count(*)::int AS n FROM learners WHERE name LIKE $1`), 3, "three children, once each");
+
+      // Mentors: one name too short the first time.
+      const mentors = (second: string) => `name,bio\nMentor One ${t},Leh\n${second},Kargil\n`;
+      assert.equal((await importCsv("mentors", mentors("M"))).inserted, 1);
+      const mentorsAgain = await importCsv("mentors", mentors(`Mentor Two ${t}`));
+      assert.deepEqual(
+        { inserted: mentorsAgain.inserted, reported: mentorsAgain.errors.map((e) => e.row) },
+        { inserted: 1, reported: [2] },
+      );
+      assert.equal(await count(`SELECT count(*)::int AS n FROM mentors WHERE name LIKE $1`), 2);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a different person with the same name is still added, and a row repeated in one file is reported", { skip }, async () => {
+  const { importCsv } = await import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/csv.ts");
+  await withClient(async (c) => {
+    const t = tag("csv-roster-same");
+    const f = fixture(c, t);
+    try {
+      const school = await place(f, t);
+      const klass = await f.row("classes", { school_id: school, grade: 4, stage: "Primary" });
+      // By school, not by name: a case/space variant this test expects to be
+      // refused would otherwise be left behind whenever it is not.
+      f.defer(`DELETE FROM teachers WHERE school_id = $1`, [school]);
+      f.defer(`DELETE FROM learners WHERE name LIKE $1`, [`% ${t}`]);
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+
+      await importCsv("teachers", `fullName,schoolId,phone\nTsering Dolma ${t},${school},+91 900\n`);
+      // Same name, same school, a different phone: two people. Case and
+      // surrounding spaces do not make a different person, though.
+      const r = await importCsv(
+        "teachers",
+        `fullName,schoolId,phone\nTsering Dolma ${t},${school},+91 901\n  tsering dolma ${t.toUpperCase()} ,${school},+91 900\n`,
+      );
+      assert.deepEqual({ inserted: r.inserted, reported: r.errors.map((e) => e.row) }, { inserted: 1, reported: [3] });
+      // A roster first uploaded without phones, then again with them: the
+      // phone is compared only where both rows have one, so these are the
+      // same people.
+      await importCsv("teachers", `fullName,schoolId\nNorbu ${t},${school}\n`);
+      const withPhones = await importCsv("teachers", `fullName,schoolId,phone\nNorbu ${t},${school},+91 902\n`);
+      assert.deepEqual({ inserted: withPhones.inserted, reported: withPhones.errors.map((e) => e.row) }, { inserted: 0, reported: [2] });
+
+      // The same child twice in one file: the second line is reported.
+      const twice = await importCsv(
+        "learners",
+        `name,classId,schoolId,grade,rollNumber\nSonam ${t},${klass},${school},4,7\nSonam ${t},${klass},${school},4,7\nSonam ${t},${klass},${school},4,8\n`,
+      );
+      assert.deepEqual({ inserted: twice.inserted, reported: twice.errors.map((e) => e.row) }, { inserted: 2, reported: [3] });
+      assert.match(twice.errors[0]!.message, /line 2/, "pointing at the line it repeats");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});

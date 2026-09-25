@@ -49,11 +49,14 @@ export function ImportCsv({
   entitySlug,
   entityLabel,
   acceptedColumns,
+  reportsDuplicates = false,
 }: {
   entitySlug: string;
   entityLabel: string;
   /** The entity's form fields — what the importer will actually read. */
   acceptedColumns: string[];
+  /** The entity declares a duplicateKey: an id-less row matching a stored record is reported (csv.ts). */
+  reportsDuplicates?: boolean;
 }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -166,7 +169,12 @@ export function ImportCsv({
         <code className="text-[11px]">{acceptedColumns.join(", ")}</code>. Every row is validated
         before it is written; rows that fail are reported and skipped, and the rest still land.
         A row with an <code className="text-[11px]">id</code> (as in an export) updates that row;
-        a row without one is added.
+        a row without one is added
+        {reportsDuplicates ? ", unless it matches a record already on the table: that row is reported, not added again" : ""}.
+        {/* Uploading the whole file again after a partial import used to add
+            every row that had landed a second time. */}
+        {" "}After a partial import, import again only the rows reported as failed, or an export,
+        which carries ids.
       </p>
 
       <input

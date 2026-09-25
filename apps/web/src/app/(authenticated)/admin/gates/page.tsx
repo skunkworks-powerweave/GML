@@ -9,13 +9,13 @@
 // rotation is the single most privileged section-gate action; only the 1-2
 // super_admins in the deployment can rotate).
 //
-// The page is a server component (one db round-trip per render) that hands
+// The page is a server component (a few grouped reads per render) that hands
 // off the per-row rotation/share UX to a single client component
 // (RotateControls). Stats columns (last_rotated, attempts_30d, failures_30d)
 // are computed at render time from section_gates + audit_log so the
 // dashboard tells the truth without a stats table.
 
-import { desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   sectionGates,
@@ -73,56 +73,59 @@ export default async function AdminGatesPage() {
     entityType: "section_gate",
   });
 
-  // Per-gate stats. Three queries per render but each is bounded (5 gates) and
-  // small. We accept the cost for legibility — caching is a future spec.
-  const rows = await Promise.all(
-    GATES.map(async (g) => {
-      const [latest] = await db
-        .select({
-          version: sectionGates.version,
-          rotatedAt: sectionGates.rotatedAt,
-          rotatedByUserId: sectionGates.rotatedByUserId,
-        })
-        .from(sectionGates)
-        .where(eq(sectionGates.slug, g.slug as "mentorship"))
-        .orderBy(desc(sectionGates.version))
-        .limit(1);
-
-      // Window computed by the database, not the app process: this is compared
-      // against DB timestamps, so using now() removes any app/DB clock skew and
-      // keeps an impure clock read out of the render path.
-      const cutoff = sql`now() - interval '30 days'`;
-
-      const [{ activeGrants }] = await db
-        .select({ activeGrants: sql<number>`count(*)::int` })
-        .from(sectionGateGrants)
-        .where(
-          sql`${sectionGateGrants.gateSlug} = ${g.slug} AND ${sectionGateGrants.expiresAt} > now()`,
-        );
-
-      const [{ attempts30d }] = await db
-        .select({ attempts30d: sql<number>`count(*)::int` })
-        .from(auditLog)
-        .where(
-          sql`${auditLog.action} IN ('gate.attempt.success', 'gate.attempt.fail', 'gate_pass', 'gate_fail') AND ${auditLog.entityId} = ${g.slug} AND ${auditLog.createdAt} > ${cutoff}`,
-        );
-
-      const [{ failures30d }] = await db
-        .select({ failures30d: sql<number>`count(*)::int` })
-        .from(auditLog)
-        .where(
-          sql`${auditLog.action} IN ('gate.attempt.fail', 'gate_fail') AND ${auditLog.entityId} = ${g.slug} AND ${auditLog.createdAt} > ${cutoff}`,
-        );
-
-      return {
-        ...g,
-        latest,
-        activeGrants: Number(activeGrants ?? 0),
-        attempts30d: Number(attempts30d ?? 0),
-        failures30d: Number(failures30d ?? 0),
-      };
-    }),
-  );
+  // Per-gate stats: ONE grouped query per table for all the gates, run
+  // together. This was four queries per gate chained one after another --
+  // twelve round trips per render, and two separate 30-day counts per gate
+  // over audit_log, re-reading the same gate-attempt rows six times on a
+  // table that only grows. The grouped count uses the same
+  // (action, created_at) index; failures are a FILTER of the same scan.
+  const slugs = GATES.map((g) => g.slug as "mentorship");
+  // Window computed by the database, not the app process: this is compared
+  // against DB timestamps, so using now() removes any app/DB clock skew and
+  // keeps an impure clock read out of the render path.
+  const cutoff = sql`now() - interval '30 days'`;
+  const [latestRows, grantRows, attemptRows] = await Promise.all([
+    db
+      .selectDistinctOn([sectionGates.slug], {
+        slug: sectionGates.slug,
+        version: sectionGates.version,
+        rotatedAt: sectionGates.rotatedAt,
+        rotatedByUserId: sectionGates.rotatedByUserId,
+      })
+      .from(sectionGates)
+      .where(inArray(sectionGates.slug, slugs))
+      .orderBy(sectionGates.slug, desc(sectionGates.version)),
+    db
+      .select({ slug: sectionGateGrants.gateSlug, activeGrants: sql<number>`count(*)::int` })
+      .from(sectionGateGrants)
+      .where(and(inArray(sectionGateGrants.gateSlug, slugs), sql`${sectionGateGrants.expiresAt} > now()`))
+      .groupBy(sectionGateGrants.gateSlug),
+    db
+      .select({
+        slug: auditLog.entityId,
+        attempts30d: sql<number>`count(*)::int`,
+        failures30d: sql<number>`(count(*) filter (where ${auditLog.action} IN ('gate.attempt.fail', 'gate_fail')))::int`,
+      })
+      .from(auditLog)
+      .where(
+        and(
+          sql`${auditLog.action} IN ('gate.attempt.success', 'gate.attempt.fail', 'gate_pass', 'gate_fail')`,
+          inArray(auditLog.entityId, slugs),
+          sql`${auditLog.createdAt} > ${cutoff}`,
+        ),
+      )
+      .groupBy(auditLog.entityId),
+  ]);
+  const latestBySlug = new Map(latestRows.map((r) => [r.slug as string, r]));
+  const grantsBySlug = new Map(grantRows.map((r) => [r.slug as string, r.activeGrants]));
+  const attemptsBySlug = new Map(attemptRows.map((r) => [r.slug ?? "", r]));
+  const rows = GATES.map((g) => ({
+    ...g,
+    latest: latestBySlug.get(g.slug),
+    activeGrants: Number(grantsBySlug.get(g.slug) ?? 0),
+    attempts30d: Number(attemptsBySlug.get(g.slug)?.attempts30d ?? 0),
+    failures30d: Number(attemptsBySlug.get(g.slug)?.failures30d ?? 0),
+  }));
 
   // Build the share-recipient picker dataset — admins + mentors with a phone
   // number on file. Anything without a phone can't receive a WhatsApp deep

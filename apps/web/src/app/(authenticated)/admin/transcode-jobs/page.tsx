@@ -36,6 +36,7 @@ import { transcodeJobs, videoSubmissions } from "@gml/db/schema";
 import { deadJobs, transcodeQueueDepthOrNull, type DeadJob } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 import { retryTranscodeJobAction, dropTranscodeJobAction } from "./actions";
 import { loadSubmissionStates, verbsFor } from "./state";
 
@@ -160,7 +161,7 @@ export default async function TranscodeJobsAdminPage({
     submission_not_failed:
       "That video is no longer failed — it has been retried or has become ready since. Reload to see it.",
   };
-  const dlqError = sp.error ? DLQ_ERRORS[sp.error] ?? "That action could not be completed." : null;
+  const dlqError = sp.error ? lookupOwn(DLQ_ERRORS, sp.error) ?? "That action could not be completed." : null;
 
   // Audit the surface view itself — DLQ inspection is a programme-admin
   // oversight tool, same as /admin/whatsapp-log.

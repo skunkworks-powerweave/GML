@@ -47,8 +47,10 @@ export type RefContext = {
 
 /**
  * A select stays usable up to about this many options on a phone on a slow
- * link; past it the field falls back to a UUID box (with the current value's
- * name shown), rather than shipping an unbounded list with every page.
+ * link; past it the field falls back to a UUID box, rather than shipping an
+ * unbounded list with every page. The box takes the row's id, which the grid
+ * shows at the top of that row's Edit panel (and the CSV export first); it
+ * does not show the current value's name.
  */
 export const REF_OPTION_LIMIT = 1000;
 

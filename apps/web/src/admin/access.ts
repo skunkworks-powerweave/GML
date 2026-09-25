@@ -44,11 +44,18 @@ export async function entityGateOpen(entity: AdminEntity, userId: string): Promi
   return Boolean(await getActiveGrant(userId, entity.gate));
 }
 
-/** The entity's database-backed field errors for a zod-valid row, or null. */
+/**
+ * The entity's database-backed field errors for a zod-valid row, or null.
+ * `before` is the stored row an update replaces (absent on create); `conn` is
+ * the transaction when the caller holds that row locked, so the check does not
+ * wait on a second pool connection.
+ */
 export async function entityRowProblems(
   entity: AdminEntity,
   row: Record<string, unknown>,
+  before?: Record<string, unknown>,
+  conn: AdminDb = db as unknown as AdminDb,
 ): Promise<Record<string, string> | null> {
   if (!entity.validate) return null;
-  return entity.validate(db as unknown as AdminDb, row);
+  return entity.validate(conn, row, before);
 }

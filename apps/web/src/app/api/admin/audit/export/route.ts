@@ -11,6 +11,7 @@
 //   GET (no session)               → 401 unauthenticated
 //   GET (role not in allow-list)   → 403 forbidden
 //   GET (no admin section grant)   → 403 gate_required  (and an audit row)
+//   GET (bad ?userId / ?from / ?to)→ 400 invalid_user_id / invalid_from / invalid_to
 //   GET (>10k rows match)          → 413 too_many_rows  (with narrowing hint)
 //   POST                           → 405 method_not_allowed
 //
@@ -22,6 +23,9 @@
 //   ?entityType   exact-match on audit_log.entity_type
 //   ?from         ISO timestamp; audit_log.created_at >= from
 //   ?to           ISO timestamp; audit_log.created_at <  to
+//                 Read strictly, as the admin grid reads dates
+//                 (admin/dates.ts parseAdminDate): an instant with its zone,
+//                 or a date / date-time without one, meant in IST.
 //
 // CSV columns: timestamp, action, actor_user_id, entity_type, entity_id, ip,
 // user_agent, metadata (metadata is JSON-stringified).
@@ -49,6 +53,7 @@ import { NextResponse } from "next/server";
 import Papa from "papaparse";
 import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
 import { AUDIT_EXPORT_ROW_CAP } from "@/admin/audit-export";
+import { parseAdminDate } from "@/admin/dates";
 import { and, desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
@@ -135,13 +140,25 @@ export async function GET(req: Request) {
     filters.push(sql`${auditLog.userId} = ${userIdParam}`);
   }
   if (entityTypeParam) filters.push(sql`${auditLog.entityType} = ${entityTypeParam}`);
+  // A bound that is given must be readable. `new Date(param)` with the bound
+  // dropped when it did not parse exported a typo'd window (2026-13-01,
+  // "yesterday") as if unbounded -- extra rows nobody asked for -- while the
+  // audit row below recorded the typo as a filter the query never applied.
+  // And JS Date guessed where it did parse: 01/09/2026 as 9 January, and
+  // 2026-02-30 as 2 March.
   if (fromParam) {
-    const from = new Date(fromParam);
-    if (!Number.isNaN(from.getTime())) filters.push(gte(auditLog.createdAt, from));
+    const from = parseAdminDate(fromParam);
+    if (Number.isNaN(from.getTime())) {
+      return NextResponse.json({ error: "invalid_from" }, { status: 400 });
+    }
+    filters.push(gte(auditLog.createdAt, from));
   }
   if (toParam) {
-    const to = new Date(toParam);
-    if (!Number.isNaN(to.getTime())) filters.push(lt(auditLog.createdAt, to));
+    const to = parseAdminDate(toParam);
+    if (Number.isNaN(to.getTime())) {
+      return NextResponse.json({ error: "invalid_to" }, { status: 400 });
+    }
+    filters.push(lt(auditLog.createdAt, to));
   }
   const whereExpr =
     filters.length === 0 ? sql`true` : and(...filters);

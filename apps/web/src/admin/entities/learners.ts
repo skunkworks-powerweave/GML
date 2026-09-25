@@ -38,5 +38,8 @@ export const learnersEntity: AdminEntity = {
     active: z.boolean().default(true),
   }),
   formFields: ["classId", "schoolId", "grade", "name", "age", "guardian", "rollNumber", "section", "attendancePct", "active"],
+  // A class list re-uploaded after a partial import (csv.ts); the roll number
+  // tells two children of one name apart when both rows have it.
+  duplicateKey: ["classId", "name", "rollNumber"],
   describeRow: (r) => `learner:${r.name ?? r.id}`,
 };

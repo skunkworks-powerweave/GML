@@ -13,6 +13,7 @@ import { and, asc, eq, isNull, like } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, schools, subjects, teachers, users } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
+import { lookupOwn } from "@/lib/lookup";
 import { cycleCodePrefix, nextCycleCode } from "@/lib/observation/cycle-code";
 import { nominateCycleAction } from "./actions";
 
@@ -90,8 +91,8 @@ export default async function NominateCyclePage({
     codeRows.map((r) => r.code),
   );
 
-  const error = sp.error && ERRORS[sp.error] ? ERRORS[sp.error] : null;
-  const badField = sp.field && FIELD_NAMES[sp.field] ? FIELD_NAMES[sp.field] : null;
+  const error = lookupOwn(ERRORS, sp.error) ?? null;
+  const badField = lookupOwn(FIELD_NAMES, sp.field) ?? null;
   const missing =
     teacherRows.length === 0
       ? { what: "teachers", href: "/admin/data/teachers", label: "Admin → Teachers" }

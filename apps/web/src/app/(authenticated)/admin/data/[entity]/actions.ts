@@ -19,12 +19,14 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { entityRowProblems } from "@/admin/access";
+import type { AdminDb } from "@/admin/types";
 import { auditRowLabel, deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
 import { describeWriteError } from "@/admin/db-errors";
 import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 
 export type AdminActionState = {
   ok?: boolean;
@@ -35,7 +37,7 @@ export type AdminActionState = {
 };
 
 function getEntityOrThrow(slug: string) {
-  const entity = ADMIN_ENTITIES[slug];
+  const entity = lookupOwn(ADMIN_ENTITIES, slug);
   if (!entity) throw new Error(`Unknown admin entity: ${slug}`);
   return entity;
 }
@@ -81,13 +83,7 @@ function writeErrorState(
 }
 
 /** Field errors from the entity's database-backed rules, as an action state. */
-async function rowProblemsState(
-  entity: ReturnType<typeof getEntityOrThrow>,
-  raw: Record<string, unknown>,
-  data: Record<string, unknown>,
-): Promise<AdminActionState | null> {
-  const problems = await entityRowProblems(entity, data);
-  if (!problems) return null;
+function problemsState(raw: Record<string, unknown>, problems: Record<string, string>): AdminActionState {
   const [field, message] = Object.entries(problems)[0]!;
   return {
     ok: false,
@@ -95,6 +91,13 @@ async function rowProblemsState(
     fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
     fieldErrors: problems,
   };
+}
+
+/** Thrown inside the update's transaction when the entity's rules refuse the row. */
+class RowProblems extends Error {
+  constructor(readonly problems: Record<string, string>) {
+    super(Object.entries(problems).map(([field, message]) => `${field}: ${message}`).join("; "));
+  }
 }
 
 /**
@@ -179,8 +182,8 @@ export async function createRowAction(
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
   }
-  const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
-  if (refused) return refused;
+  const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
+  if (problems) return problemsState(raw, problems);
 
   const audited = withAudit(
     async () => {
@@ -238,15 +241,15 @@ export async function updateRowAction(
   if (!parse.success) {
     return shapeZodError(raw, parse.error.issues);
   }
-  const refused = await rowProblemsState(entity, raw, parse.data as Record<string, unknown>);
-  if (refused) return refused;
-
   // READ, GUARD, WRITE, in one transaction. This used to be a blind UPDATE by
   // id: it could not enforce a rule that depends on the row's current state
   // (a signed-off observation cycle keeping its teacher -- see the entity's
   // guardMutation) and had no previous value to audit, so after an edit the
   // append-only log could not say what the record had been. The row is locked
-  // FOR UPDATE so the guard judges the state the write actually replaces.
+  // FOR UPDATE so the guard judges the state the write actually replaces --
+  // and so do the entity's database-backed rules, which used to run before
+  // the read and so re-judged every stored value, changed or not (a cycle
+  // whose observer had since been deactivated could not have its topic fixed).
   const next = parse.data as Record<string, unknown>;
   const audited = withAudit(
     async () =>
@@ -263,6 +266,8 @@ export async function updateRowAction(
         const write = keepStoredPrecision(before, next);
         const reason = entity.guardMutation?.("update", before, { ...before, ...write });
         if (reason) throw new MutationRefused(reason);
+        const problems = await entityRowProblems(entity, next, before, tx as unknown as AdminDb);
+        if (problems) throw new RowProblems(problems);
         await tx
           .update(entity.table as never)
           .set(write as never)
@@ -286,6 +291,7 @@ export async function updateRowAction(
     await audited();
   } catch (err) {
     if (err instanceof MutationRefused) return { ok: false, error: err.message };
+    if (err instanceof RowProblems) return problemsState(raw, err.problems);
     console.error("[admin.row.update] failed", err);
     return writeErrorState(entity, raw, err);
   }

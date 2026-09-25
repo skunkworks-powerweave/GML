@@ -28,6 +28,7 @@ import { db } from "@gml/db";
 import { videoSubmissions, auditLog, files } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 import { whatsappHealth } from "@/lib/health";
 import { resendTranscodeAction, retryWhatsAppFetchAction } from "./actions";
 
@@ -232,7 +233,7 @@ export default async function WhatsappIngestLogPage({
           data-testid="action-error"
           role="alert"
         >
-          {ACTION_ERRORS[sp.error] ?? "That action could not be completed."}
+          {lookupOwn(ACTION_ERRORS, sp.error) ?? "That action could not be completed."}
         </p>
       ) : null}
 

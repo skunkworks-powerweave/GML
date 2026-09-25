@@ -47,5 +47,7 @@ export const mentorsEntity: AdminEntity = {
     userId: { label: "Login account", userRoles: ["mentor"] },
   },
   formFields: ["name", "bio", "photoUrl", "expertiseAreas", "active", "userId"],
+  // A mentor list re-uploaded after a partial import (csv.ts).
+  duplicateKey: ["name"],
   describeRow: (r) => `mentor:${r.name ?? r.id}`,
 };

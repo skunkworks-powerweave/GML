@@ -36,6 +36,7 @@ import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
+import { lookupOwn } from "@/lib/lookup";
 import { QUARTER_TO_KIND, quarterlyVersionByKind } from "@/lib/forms/quarterly";
 import { MobileDetailFrame } from "@/components/shells";
 import {
@@ -120,7 +121,7 @@ export default async function PairingDetailPage({
     meeting_has_recording: "That meeting has a recording attached, so it was kept.",
   };
   const pairingError = sp.error
-    ? (PAIRING_ERRORS[sp.error] ?? "That action could not be completed. Please try again.")
+    ? (lookupOwn(PAIRING_ERRORS, sp.error) ?? "That action could not be completed. Please try again.")
     : null;
 
   // OWNERSHIP GATE. auth() above only established that SOMEONE is signed in.

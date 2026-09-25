@@ -42,10 +42,15 @@ type Props = {
   options?: Record<string, Option[] | null>;
 };
 
-/** The value a defaulted enum takes when left alone ("" when it has none). */
-function enumDefault(zodType: Parameters<typeof isOptionalField>[0]): string {
+/**
+ * The value a defaulted enum or yes/no field takes when left alone, as the
+ * form value ("" when it has none). The yes/no select used to fall back to
+ * "true" whatever the schema said -- right for the `active` fields, wrong for
+ * sessions.observed, so every session added from the grid was marked observed.
+ */
+function fieldDefault(zodType: Parameters<typeof isOptionalField>[0]): string {
   const r = zodType?.safeParse(undefined);
-  return r?.success && typeof r.data === "string" ? r.data : "";
+  return r?.success && (typeof r.data === "string" || typeof r.data === "boolean") ? String(r.data) : "";
 }
 
 const inputClass = (invalid: boolean) =>
@@ -143,12 +148,12 @@ export function RowForm({
             ) : choices ? (
               <select
                 name={field}
-                defaultValue={initial || enumDefault(shape[field])}
+                defaultValue={initial || fieldDefault(shape[field])}
                 aria-invalid={fieldError ? "true" : undefined}
                 className={inputClass(Boolean(fieldError))}
               >
                 {/* A defaulted enum starts on its default and needs no blank. */}
-                {enumDefault(shape[field]) ? null : (
+                {fieldDefault(shape[field]) ? null : (
                   <option value="">{optional ? "— none —" : "Choose…"}</option>
                 )}
                 {choices.map((c) => (
@@ -160,9 +165,13 @@ export function RowForm({
             ) : kind === "boolean" ? (
               <select
                 name={field}
-                defaultValue={initial || "true"}
+                defaultValue={initial || fieldDefault(shape[field])}
                 className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
               >
+                {/* With no default, the operator must choose: no silent "yes". */}
+                {fieldDefault(shape[field]) ? null : (
+                  <option value="">{optional ? "— none —" : "Choose…"}</option>
+                )}
                 <option value="true">yes</option>
                 <option value="false">no</option>
               </select>
@@ -187,7 +196,12 @@ export function RowForm({
                 />
                 {refs === null ? (
                   <span className="text-[10px] text-neutral-500">
-                    Too many rows to list here: paste the id from that table&apos;s grid.
+                    {/* The grid shows links by name, never an id, so "paste the id
+                        from that table's grid" pointed at nothing (page.tsx now
+                        shows it in the Edit panel). */}
+                    Too many rows to list here: paste the row&apos;s id: it is shown at the top of that
+                    row&apos;s Edit panel in its own table, and is the first column of that table&apos;s
+                    Export CSV.
                   </span>
                 ) : null}
               </>
