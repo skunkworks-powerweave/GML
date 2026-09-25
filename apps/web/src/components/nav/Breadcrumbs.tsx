@@ -77,6 +77,82 @@ const SEGMENT_LABEL: Record<string, string> = {
   "teach-back": "Teach-back",
 };
 
+/**
+ * Every page under app/(authenticated), dynamic segments as [param]: a crumb
+ * links only when its path matches one. tests/behaviour/breadcrumbs.test.ts
+ * compares this list with the directory tree, so a route added without it
+ * fails there rather than rendering a crumb that 404s or hides a real page.
+ *
+ * It replaces a guess from the shape of the NEXT segment ("a uuid follows, so
+ * this is not a page"), which was wrong both ways: /admin/data, /quizzes and
+ * /rtt/online were linked and have no page, while /videos, /observation,
+ * /mentorship, /admin/forms, /admin/quizzes and the /repo/class/<id> and
+ * /repo/resource/<id> "Details" crumbs are pages and were plain text.
+ */
+export const ROUTABLE: readonly string[] = [
+  "/admin",
+  "/admin/audit",
+  "/admin/data/[entity]",
+  "/admin/forms",
+  "/admin/forms/[id]",
+  "/admin/gates",
+  "/admin/quizzes",
+  "/admin/quizzes/[id]",
+  "/admin/system-settings",
+  "/admin/transcode-jobs",
+  "/admin/users",
+  "/admin/whatsapp-log",
+  "/dashboard",
+  "/forms",
+  "/forms/[slug]",
+  "/forms/[slug]/thanks",
+  "/inbox",
+  "/mentorship",
+  "/mentorship/[pairingId]",
+  "/mentorship/[pairingId]/responses",
+  "/observation",
+  "/observation/[cycleId]",
+  "/observation/new",
+  "/quizzes/[slug]",
+  "/quizzes/[slug]/history",
+  "/quizzes/[slug]/result/[submissionId]",
+  "/repo",
+  "/repo/class/[id]",
+  "/repo/class/[id]/learners",
+  "/repo/mentor/[id]",
+  "/repo/mentors",
+  "/repo/outline/[id]",
+  "/repo/outlines",
+  "/repo/resource/[id]",
+  "/repo/resource/[id]/view",
+  "/repo/resources",
+  "/repo/school/[id]",
+  "/repo/schools",
+  "/repo/session/[id]",
+  "/repo/sessions",
+  "/repo/students",
+  "/repo/subject/[id]",
+  "/repo/subjects",
+  "/repo/teacher/[id]",
+  "/repo/teachers",
+  "/rtt",
+  "/rtt/online/asynchronous",
+  "/rtt/online/synchronous",
+  "/rtt/progress",
+  "/rtt/subject/[id]",
+  "/rtt/teach-back",
+  "/settings",
+  "/uploads",
+  "/videos",
+  "/videos/[id]",
+];
+
+const ROUTE_PATTERNS = ROUTABLE.map((r) => new RegExp(`^${r.replace(/\[[^\]]+\]/g, "[^/]+")}$`));
+
+function isPage(path: string): boolean {
+  return ROUTE_PATTERNS.some((re) => re.test(path));
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function titleCase(segment: string): string {
@@ -94,25 +170,22 @@ export function buildCrumbs(pathname: string): Crumb[] {
 
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i];
+    const href = "/" + segments.slice(0, i + 1).join("/");
+    // Linked only if that path is a page (ROUTABLE): `/repo/teacher` and
+    // `/admin/users` look alike in a URL but only one of them is a page, and
+    // linking blind manufactures 404s in the chrome.
+    const link = isPage(href) ? href : null;
 
     // An id is not a name. The raw uuid is noise, and dropping it silently
     // would make /repo/teacher/<id> read as though it were the teacher LIST.
     // A plain "Details" crumb instead: never ungrammatical, whatever the parent
     // segment is ("Teacher > Details", "Quizzes > Details").
-    //
-    // The parent also stops being a link. `/repo/teacher` and `/admin/users`
-    // look alike in a URL but only one of them is a page -- several of these
-    // segments exist solely to hold a `[id]` route, so linking them blind would
-    // manufacture 404s in the chrome.
     if (UUID_RE.test(seg) || /^\d+$/.test(seg)) {
-      const parent = out[out.length - 1];
-      if (parent) parent.href = null;
-      out.push({ label: "Details", href: null });
+      out.push({ label: "Details", href: link });
       continue;
     }
 
-    const href = "/" + segments.slice(0, i + 1).join("/");
-    out.push({ label: SEGMENT_LABEL[seg] ?? titleCase(seg), href });
+    out.push({ label: SEGMENT_LABEL[seg] ?? titleCase(seg), href: link });
   }
 
   // The page you are already on is not somewhere to navigate to.
