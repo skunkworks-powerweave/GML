@@ -88,3 +88,23 @@ test("paging keeps the status filter", { skip }, async () => {
     assert.match(html, /href="\/mentorship\?status=active&amp;page=2"|href="\/mentorship\?status=active&page=2"/);
   });
 });
+
+// ── W3-32 ────────────────────────────────────────────────────────────────────
+//
+// A ?page= past the end -- a stale link after pairings were removed or changed
+// status -- rendered "Showing 0–950 of 87" and "No pairings match this filter."
+// (though 87 did), with a "← Previous" to another empty page. The page number
+// was held to 1..1000 and never checked against the page count. /observation
+// had the same defect and falls back to its last page (lib/observation/list.ts).
+test("a page past the end shows the last page, not an impossible range", { skip }, async () => {
+  await withManyPairings(async (_w, all) => {
+    assert.equal(all.length, 87, "precondition: 87 pairings, two pages");
+    const last = await listPage({ page: "2" });
+    const stale = await listPage({ page: "9" });
+    assert.match(stale, /Showing 51–87 of 87/);
+    assert.doesNotMatch(stale, /No pairings match/, "87 pairings match; the page number was stale");
+    assert.deepEqual(cardIds(stale), cardIds(last), "the last page's cards");
+    assert.match(stale, /href="\/mentorship"[^>]*>\s*← Previous/, "Previous goes to page 1 from the last page");
+    assert.doesNotMatch(stale, /Next →/);
+  });
+});
