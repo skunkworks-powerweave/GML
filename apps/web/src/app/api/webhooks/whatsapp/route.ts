@@ -28,6 +28,7 @@ import {
   videoSubmissions,
   observationCycles,
   mentorMeetings,
+  mentorPairings,
   users,
   teachers,
 } from "@gml/db/schema";
@@ -36,6 +37,7 @@ import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { BUCKETS } from "@gml/shared/storage/buckets";
 import { recordAudit } from "@/lib/audit";
+import { cycleVisibility, pairingVisibility, type Actor } from "@/lib/visibility";
 import { parseCaption } from "@gml/shared/whatsapp/caption";
 import {
   WHATSAPP_FETCH_JOB,
@@ -331,7 +333,39 @@ async function acceptVideoMessage(
   // column null, exactly as before -- the submission is still ingested, because
   // refusing video from a teacher whose phone number has a different format on
   // file would lose programme evidence to a data-entry mismatch.
-  const submittedByUserId = await resolveSenderUserId(msg.from);
+  const sender = await resolveSender(msg.from);
+  const submittedByUserId = sender?.id ?? null;
+
+  // AUTHORISATION. The signature proves Meta delivered this, not who sent it,
+  // and the caption is the sender's claim about where it goes. Routing on the
+  // caption alone let anyone attach a clip to any teacher's cycle (codes are
+  // sequential) or any meeting, where authz then showed it to that cycle's
+  // teacher, observer and mentors; and it let a teacher who mistyped a code
+  // send her classroom to someone else's. The direct upload path has always
+  // refused this (uploads/actions.ts, assertContextAllowed); this applies the
+  // same visibility rules lib/authz.ts uses. A refused or unattributable clip
+  // is still ingested, as 'generic' -- admin-and-sender only -- with the
+  // caption kept, so nothing is lost and an admin can attach it.
+  if (contextType !== "generic") {
+    const refusal = await refusalFor(sender, contextType, contextId);
+    if (refusal) {
+      void recordAudit({
+        action: "whatsapp.context.forbidden",
+        entityType: "video_submission",
+        metadata: {
+          msgId: msg.id,
+          caption,
+          from: msg.from,
+          senderUserId: sender?.id ?? null,
+          attemptedContextType: contextType,
+          attemptedContextId: contextId,
+          reason: refusal,
+        },
+      });
+      contextType = "generic";
+      contextId = null;
+    }
+  }
 
   // THE DURABLE RECORD: file, submission and fetch job, in one transaction, so
   // there is never a submission with no job to fetch it or a job with no row
@@ -491,31 +525,74 @@ async function acceptVideoMessage(
  * and a match is accepted ONLY when exactly one user answers to that number.
  * Two people sharing a handset attributes to neither rather than to the wrong
  * one.
+ *
+ * Returns the role too, because the answer now also decides what the sender may
+ * attach the video to (refusalFor). For the same reason a database error is no
+ * longer swallowed into "nobody": that would quietly quarantine a real
+ * teacher's video. It propagates, the webhook answers 500, and Meta redelivers.
  */
-async function resolveSenderUserId(from: string): Promise<string | null> {
+async function resolveSender(from: string): Promise<Actor | null> {
   const digits = (from ?? "").replace(/\D/g, "");
   if (digits.length < 10) return null;
   const tail = "%" + digits.slice(-10);
-  try {
-    const rows = await db
-      .selectDistinct({ id: users.id })
-      .from(users)
-      .leftJoin(teachers, eq(teachers.userId, users.id))
-      .where(
-        and(
-          eq(users.active, true),
-          isNull(users.deletedAt),
-          or(
-            sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') LIKE ${tail}`,
-            sql`regexp_replace(coalesce(${teachers.phone}, ''), '[^0-9]', '', 'g') LIKE ${tail}`,
-          ),
+  const rows = await db
+    .selectDistinct({ id: users.id, role: users.role })
+    .from(users)
+    .leftJoin(teachers, eq(teachers.userId, users.id))
+    .where(
+      and(
+        eq(users.active, true),
+        isNull(users.deletedAt),
+        or(
+          sql`regexp_replace(coalesce(${users.phone}, ''), '[^0-9]', '', 'g') LIKE ${tail}`,
+          sql`regexp_replace(coalesce(${teachers.phone}, ''), '[^0-9]', '', 'g') LIKE ${tail}`,
         ),
-      )
-      .limit(2);
-    return rows.length === 1 ? rows[0]!.id : null;
-  } catch {
-    return null;
+      ),
+    )
+    .limit(2);
+  return rows.length === 1 ? { id: rows[0]!.id, role: rows[0]!.role } : null;
+}
+
+/**
+ * Why this sender may NOT attach a video to this target, or null if they may.
+ *
+ * The same rules as the rest of the app, through the same predicates
+ * (lib/visibility.ts, which lib/authz.ts binds):
+ *
+ *   observation_cycle  the cycle's teacher or observer, a mentor actively
+ *                      paired with its teacher, or an admin
+ *   mentor_meeting     a member of the meeting's pairing, or an admin
+ *   teach_back         any registered sender. A teach-back is the uploader's
+ *                      own work and has no owning row to check -- the upload
+ *                      path accepts it from any signed-in user the same way.
+ *
+ * An unrecognised number may attach to nothing: without a sender there is no
+ * one to check, and a stranger's clip must not reach a cycle's reviewers or
+ * every mentor's teach-back queue.
+ */
+async function refusalFor(
+  sender: Actor | null,
+  contextType: "observation_cycle" | "teach_back" | "mentor_meeting",
+  contextId: string | null,
+): Promise<string | null> {
+  if (!sender) return "sender_unregistered";
+  if (!contextId) return "no_target";
+  if (contextType === "teach_back") return null;
+  if (contextType === "observation_cycle") {
+    const [ok] = await db
+      .select({ id: observationCycles.id })
+      .from(observationCycles)
+      .where(and(eq(observationCycles.id, contextId), await cycleVisibility(db, sender)))
+      .limit(1);
+    return ok ? null : "observation_cycle.not_permitted";
   }
+  const [ok] = await db
+    .select({ id: mentorMeetings.id })
+    .from(mentorMeetings)
+    .innerJoin(mentorPairings, eq(mentorPairings.id, mentorMeetings.pairingId))
+    .where(and(eq(mentorMeetings.id, contextId), await pairingVisibility(db, sender)))
+    .limit(1);
+  return ok ? null : "mentor_meeting.not_permitted";
 }
 
 
