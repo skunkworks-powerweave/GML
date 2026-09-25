@@ -285,7 +285,7 @@ export default async function UploadsPage({
   // What an unlinked video of hers can still be attached to: the same open
   // cycles, meetings and quarterly slots the chooser offers.
   const attachOptions = rows.some((r) => r.contextType === "generic")
-    ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: o.title }))
+    ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: `${o.title} · ${o.detail}` }))
     : [];
   const attachNotice = sp.attach ? (ATTACH_NOTICE[sp.attach] ?? null) : null;
 
@@ -356,7 +356,7 @@ export default async function UploadsPage({
               <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0", display: "grid", gap: 8 }}>
                 {(choices?.options ?? []).map((o) => (
                   <li key={o.href}>
-                    <Link href={o.href} className="btn" style={{ textDecoration: "none" }}>
+                    <Link href={o.href} className="btn" style={{ textDecoration: "none", minHeight: 44 }}>
                       {o.title}
                     </Link>
                     <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>{o.detail}</span>
