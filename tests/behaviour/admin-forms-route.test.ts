@@ -105,10 +105,16 @@ test("F95: a schema the runners cannot draw is refused with 400, and nothing is 
     ]) {
       const res = await putSchema(form.id, bad);
       assert.equal(res.status, 400, `${bad} -> ${await res.clone().text()}`);
-      const body = (await res.json()) as { error: string; issues?: unknown[] };
+      const body = (await res.json()) as { error: string; issues?: unknown[]; message?: string };
       assert.equal(body.error, "invalid_schema");
       assert.ok(Array.isArray(body.issues) && body.issues.length > 0, "the editor is told what is wrong");
+      // The editor (admin/forms/[id]/parts.tsx) shows body.message || body.error:
+      // without a message the administrator read only "invalid_schema".
+      assert.equal(typeof body.message, "string", `a sentence the editor shows, for ${bad}`);
+      assert.match(body.message!, /^The form definition was not saved: /);
     }
+    const slider = (await (await putSchema(form.id, JSON.stringify({ fields: [{ name: "a", kind: "slider" }] }))).json()) as { message?: string };
+    assert.match(slider.message ?? "", /fields\.0\.kind/, "names the path that is wrong");
     const [row] = await w.q<{ version: string; title: string }>(`SELECT version, schema->>'title' AS title FROM feedback_forms WHERE id = $1`, [form.id]);
     assert.deepEqual(row, { version: `${w.T}-9001`, title: good.title }, "nothing was stored and no version was used up");
   });

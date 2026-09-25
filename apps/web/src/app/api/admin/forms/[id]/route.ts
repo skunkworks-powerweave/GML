@@ -108,12 +108,25 @@ export async function PUT(
   // A SCHEMA THE RUNNERS CAN DRAW. Parsing was the only check, so
   // `{"fields": {...}}` was stored and every open of the form was a 500 for
   // every user, and `42` stored a form with no questions that still
-  // submitted. Refused before anything is locked or a version is used up; the
-  // issues tell the editor which path is wrong. lib/forms/schema.ts.
+  // submitted. Refused before anything is locked or a version is used up.
+  // `message` names the first few wrong paths in a sentence: the editor
+  // (admin/forms/[id]/parts.tsx) shows body.message || body.error, so with
+  // `issues` alone the administrator read only "invalid_schema".
+  // lib/forms/schema.ts.
   const checked = FormSchemaSchema.safeParse(parsed);
   if (!checked.success) {
+    const issues = checked.error.issues;
+    const listed = issues
+      .slice(0, 3)
+      .map((i) => `${i.path.length > 0 ? i.path.join(".") : "(the whole definition)"}: ${i.message}`)
+      .join("; ");
+    const more = issues.length > 3 ? ` (and ${issues.length - 3} more)` : "";
     return NextResponse.json(
-      { error: "invalid_schema", issues: checked.error.issues.slice(0, 20) },
+      {
+        error: "invalid_schema",
+        message: `The form definition was not saved: ${listed}${more}.`,
+        issues: issues.slice(0, 20),
+      },
       { status: 400 },
     );
   }
