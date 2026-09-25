@@ -152,9 +152,11 @@ test("spec 162 — page renders live queue depth from Postgres, not from BullMQ"
   // domain ledger this page renders, `jobs` is the transport -- but they are
   // now consistent by construction rather than by luck.
   const src = read(PAGE_PATH);
+  // Among other names: since F145 the page also reads the dead jobs of every
+  // queue from @/lib/queue.
   assert.match(
     src,
-    /import\s*\{\s*transcodeQueueDepthOrNull\s*\}\s*from\s*"@\/lib\/queue"/,
+    /import\s*\{[^}]*\btranscodeQueueDepthOrNull\b[^}]*\}\s*from\s*"@\/lib\/queue"/,
     "page must import transcodeQueueDepthOrNull from @/lib/queue",
   );
   assert.match(

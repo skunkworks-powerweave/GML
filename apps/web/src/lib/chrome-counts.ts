@@ -245,9 +245,10 @@ export type QueueDepth = {
   failed: number;
 };
 
-export const loadQueueDepth = cache(async function loadQueueDepth(): Promise<QueueDepth> {
+export const loadQueueDepth = cache(async function loadQueueDepth(role: RoleName): Promise<QueueDepth> {
   try {
-    const counts = await transcodeQueueDepth();
+    // Programme-wide numbers: zeros (no chip, no query) unless `role` is an admin.
+    const counts = await transcodeQueueDepth(role);
     return { active: counts.running, waiting: counts.queued, failed: counts.dead };
   } catch (err) {
     // Render nothing rather than a wrong number. The chip is decoration; the

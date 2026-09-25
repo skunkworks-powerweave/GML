@@ -33,7 +33,7 @@ import Link from "next/link";
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions } from "@gml/db/schema";
-import { transcodeQueueDepthOrNull } from "@/lib/queue";
+import { deadJobs, transcodeQueueDepthOrNull, type DeadJob } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { retryTranscodeJobAction, dropTranscodeJobAction } from "./actions";
@@ -235,6 +235,14 @@ export default async function TranscodeJobsAdminPage({
   // ./state.ts): the same rule the actions enforce.
   const states = await loadSubmissionStates(db, submissionIds);
 
+  // What the QUEUE holds that needs a human, every queue, with the error it
+  // recorded -- including jobs with no ledger row, which the table below
+  // (transcode attempts) cannot show. Empty rather than failing the page.
+  const dead: DeadJob[] = await deadJobs().catch((err) => {
+    console.error("[transcode-jobs] deadJobs failed", err);
+    return [];
+  });
+
   const depth = await loadDlqDepth();
   // Spec 168 — explicit "Redis unreachable" flag drives the banner
   // ABOVE the table. loadDlqDepth already returns null on error; this
@@ -309,6 +317,67 @@ export default async function TranscodeJobsAdminPage({
               <dd className="font-mono font-semibold">{depth.failed}</dd>
             </div>
           </dl>
+        )}
+      </section>
+
+      <section
+        aria-label="dead jobs"
+        data-testid="dlq-dead-jobs"
+        className="rounded-lg border border-neutral-200 bg-white p-3 text-sm"
+      >
+        <h2 className="font-semibold">Dead jobs, every queue ({dead.length})</h2>
+        <p className="text-xs text-neutral-500">
+          Jobs whose attempts are exhausted, with the error the queue recorded. To
+          retry a dead transcode, use Retry on the video&apos;s latest failed
+          attempt below. A dead retention sweep runs again the next day by itself.
+        </p>
+        {dead.length === 0 ? (
+          <p className="mt-2 text-xs text-neutral-500">None.</p>
+        ) : (
+          <table className="mt-2 w-full text-xs">
+            <thead className="text-left uppercase tracking-wide text-neutral-500">
+              <tr>
+                <th className="py-1 pr-3">Queue</th>
+                <th className="py-1 pr-3">Job</th>
+                <th className="py-1 pr-3">Attempts</th>
+                <th className="py-1 pr-3">Died</th>
+                <th className="py-1">Last error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dead.map((j) => {
+                // The verdict is at the END of an error (ffmpeg's last lines, the
+                // reaper's note), so the preview shows the tail.
+                const err = (j.lastError ?? "").trim();
+                const tail = err.length > 120 ? `…${err.slice(-120)}` : err || "—";
+                return (
+                  <tr key={j.id} className="border-t border-neutral-100" data-dead-job-id={j.id}>
+                    <td className="py-1 pr-3">
+                      <span className="chip">{j.queue}</span>
+                    </td>
+                    <td className="py-1 pr-3 font-mono">
+                      {j.videoSubmissionId ? (
+                        <Link href={`/videos/${j.videoSubmissionId}`} className="underline">
+                          {j.name} {j.videoSubmissionId.slice(0, 10)}
+                        </Link>
+                      ) : (
+                        j.name
+                      )}
+                    </td>
+                    <td className="py-1 pr-3 font-mono">
+                      {j.attempts}/{j.maxAttempts}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {j.completedAt?.toISOString().slice(0, 19).replace("T", " ") ?? "—"}
+                    </td>
+                    <td className="py-1" title={err}>
+                      {tail}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </section>
 
