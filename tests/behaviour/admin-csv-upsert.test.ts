@@ -299,8 +299,9 @@ test("a different person with the same name is still added, and a row repeated i
     try {
       const school = await place(f, t);
       const klass = await f.row("classes", { school_id: school, grade: 4, stage: "Primary" });
-      f.defer(`DELETE FROM teachers WHERE full_name LIKE $1`, [`% ${t}`]);
-      f.defer(`DELETE FROM teachers WHERE full_name LIKE $1`, [`% ${t.toUpperCase()}`]);
+      // By school, not by name: a case/space variant this test expects to be
+      // refused would otherwise be left behind whenever it is not.
+      f.defer(`DELETE FROM teachers WHERE school_id = $1`, [school]);
       f.defer(`DELETE FROM learners WHERE name LIKE $1`, [`% ${t}`]);
       actAs(await f.user("super_admin", "sadmin"), "super_admin");
 
