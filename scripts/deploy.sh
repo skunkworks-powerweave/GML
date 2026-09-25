@@ -350,7 +350,7 @@ docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
 
 # ── 5. Verify ────────────────────────────────────────────────────────────────
 log "verifying auth configuration"
-docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 
 # Seed and verify-auth have both succeeded: this host now holds data a backup
 # can capture and a restore drill can check, so from the next deploy on the

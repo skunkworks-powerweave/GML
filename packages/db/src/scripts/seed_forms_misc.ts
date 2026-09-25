@@ -20,6 +20,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { and, eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import { feedbackForms, feedbackResponses } from "../schema/mentorship.js";
+import { poolConfig } from "../client.js";
 import { repairDecision } from "./seed_forms_misc_repair.js";
 import { FORM_FIELD_KINDS, OPTION_BEARING_FIELD_KINDS } from "../formFieldKinds.js";
 
@@ -328,7 +329,8 @@ export async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS; a bare connection string negotiated none.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   let inserted = 0;

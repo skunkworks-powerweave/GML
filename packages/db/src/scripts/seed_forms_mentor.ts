@@ -12,6 +12,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { and, eq } from "drizzle-orm";
 import { feedbackForms } from "../schema/mentorship.js";
+import { poolConfig } from "../client.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true" || process.env.DRY_RUN === "true";
 
@@ -361,7 +362,8 @@ export async function main() {
     process.exit(1);
   }
 
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS; a bare connection string negotiated none.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   console.log(`[seed-forms-mentor] starting (DRY_RUN=${DRY_RUN}) — ${FORMS.length} mentor forms to consider`);

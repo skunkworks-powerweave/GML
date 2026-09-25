@@ -16,6 +16,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import * as schema from "../schema/index.js";
+import { poolConfig } from "../client.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -25,7 +26,9 @@ export async function main() {
     console.error("DATABASE_URL not set");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS, not a bare connection string: this session reads
+  // auth.users and writes the gate hashes and the super_admin profile.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   // Spec 103 — super_admin bootstrap (runs first, idempotent, independent of district seed).

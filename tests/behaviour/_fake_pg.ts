@@ -16,7 +16,7 @@
 // behind needsDatabase().
 //
 // Protocol coverage (PostgreSQL frontend/backend protocol v3):
-//   startup      SSLRequest -> 'N', StartupMessage -> AuthenticationOk + ReadyForQuery
+//   startup      SSLRequest -> 'N' (counted), StartupMessage -> AuthenticationOk + ReadyForQuery
 //   extended     Parse/Bind/Describe/Execute answered on Sync (or Flush)
 //   simple       Query -> empty RowDescription + CommandComplete + ReadyForQuery
 //   Terminate    closes the socket
@@ -28,6 +28,12 @@ export type FakePg = {
   url: string;
   /** Every SQL statement received, in arrival order. */
   queries: string[];
+  /**
+   * How many connections opened with an SSLRequest. This server has no TLS
+   * and answers 'N', so a client that insists on TLS stops right there -- and a
+   * client that never asks shows up here as 0.
+   */
+  readonly sslRequests: number;
   close(): Promise<void>;
 };
 
@@ -62,6 +68,7 @@ const SELECT_0 = msg("C", cstr("SELECT 0"));
 export async function startFakePg(): Promise<FakePg> {
   const queries: string[] = [];
   const sockets = new Set<Socket>();
+  let sslRequests = 0;
 
   const server = createServer((sock) => {
     sockets.add(sock);
@@ -83,6 +90,7 @@ export async function startFakePg(): Promise<FakePg> {
           const code = buf.readInt32BE(4);
           buf = buf.subarray(len);
           if (code === SSL_REQUEST_CODE) {
+            sslRequests += 1;
             sock.write("N");
             continue;
           }
@@ -162,6 +170,9 @@ export async function startFakePg(): Promise<FakePg> {
   return {
     url: `postgres://fake:fake@127.0.0.1:${port}/fake`,
     queries,
+    get sslRequests() {
+      return sslRequests;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const s of sockets) s.destroy();

@@ -9,6 +9,7 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { feedbackForms } from "../schema/index.js";
+import { poolConfig } from "../client.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -476,7 +477,8 @@ export async function main() {
     console.error("[seed:forms-mentee] DATABASE_URL not set");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS; a bare connection string negotiated none.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   console.log(`[seed:forms-mentee] planning ${ROWS.length} mentee feedback templates`);

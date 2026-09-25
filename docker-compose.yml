@@ -250,11 +250,19 @@ services:
       # matters: can it still reach the queue? A worker that is running but
       # cannot claim looks identical to an idle one, and previously the
       # container had no healthcheck at all -- a crash-loop was invisible.
+      #
+      # Through @gml/db's own pool, so it probes the connection the worker
+      # actually uses, TLS and CA included. It was a bare
+      # `new Client({connectionString})`, which negotiated no TLS: plaintext to
+      # the pooler every 60 s, and permanently unhealthy once Supabase enforces
+      # SSL. tsx because client.ts is TypeScript; the image runs on it anyway.
       test:
         - CMD
         - node
+        - --import
+        - tsx
         - -e
-        - "const{Client}=require('pg');const c=new Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:4000});c.connect().then(()=>c.query('select 1 from jobs limit 1')).then(()=>c.end()).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+        - "import('@gml/db/client').then(({getPool})=>getPool().query('select 1 from jobs limit 1')).then(()=>process.exit(0),()=>process.exit(1))"
       interval: 60s
       timeout: 10s
       retries: 3

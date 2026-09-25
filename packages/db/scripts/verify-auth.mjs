@@ -4,7 +4,10 @@
 // things that are silently broken rather than loudly broken -- the failures
 // that leave the dashboard looking correct while nobody can sign in.
 //
-//   docker compose run --rm migrate node scripts/verify-auth.mjs
+//   docker compose run --rm migrate pnpm exec tsx scripts/verify-auth.mjs
+//
+// Through tsx, not plain `node`, because it builds its connection from
+// ../src/client.ts (TypeScript) -- see the connection below.
 //
 // Every check is read-only except the last, which creates a throwaway account,
 // exercises it, and deletes it. It touches no existing data.
@@ -18,6 +21,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import pg from "pg";
+import { poolConfig } from "../src/client.ts";
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const ANON = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -49,7 +53,10 @@ const bad = (label, detail, fix) => {
 const admin = createClient(URL, SECRET, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
-const c = new pg.Client({ connectionString: DB });
+// client.ts's TLS. This was `new pg.Client({ connectionString: DB })`, which
+// for the documented DATABASE_URL (no sslmode) negotiated none: the check that
+// runs on every deploy spoke to the pooler in plaintext.
+const c = new pg.Client(poolConfig());
 await c.connect();
 const q = async (sql, params = []) => (await c.query(sql, params)).rows;
 

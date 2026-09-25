@@ -90,7 +90,7 @@ docker compose up -d                        # migrate runs first and gates the r
 docker compose logs migrate                 # why the schema step failed
 docker compose run --rm --no-deps migrate pnpm exec tsx scripts/migrate.ts
 docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
-docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 ```
 
 Doing this by hand bypasses the SM-5 restore-drill gate. Only do it on a host
@@ -304,7 +304,7 @@ calls:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs`. |
+| Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs`. |
 | `/api/health` returns 503 | Read which of `db`, `storage`, `migrations` is false | `docker compose logs migrate` first — it is usually that. |
 | Worker unhealthy, videos stuck transcoding | It cannot reach the database, or ffmpeg failed | Check `DATABASE_URL` uses the session pooler (5432); then `/admin/transcode-jobs`. |
 | WhatsApp videos not arriving | `WHATSAPP_APP_SECRET` unset or wrong | Unset: the webhook answers 503 `whatsapp_not_configured` and logs `WhatsApp ingest is OFF` once. Wrong: it answers 401 and audits `whatsapp.signature_failed`. Check `docker compose logs app`. |

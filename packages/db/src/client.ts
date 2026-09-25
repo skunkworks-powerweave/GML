@@ -10,7 +10,19 @@ import * as schema from "./schema";
 let _pool: Pool | null = null;
 let _db: NodePgDatabase<typeof schema> | null = null;
 
-function poolConfig(): PoolConfig {
+/**
+ * The connection settings every Postgres client in this repository uses.
+ *
+ * Exported so that the connections which are NOT this module's pool -- the
+ * migrate runner, the seeds, verify-auth.mjs, the worker's healthcheck -- are
+ * built from it instead of from a bare connection string. Each of those used to
+ * say `new Pool({ connectionString })`, which negotiates no TLS for the
+ * documented DATABASE_URL (see sslConfig below): the whole deploy, owner-role
+ * DDL included, crossed to the pooler in plaintext, and with Supabase's
+ * "Enforce SSL" switched on it could not connect at all.
+ * tests/governance/test_db_tls_one_config.test.mjs refuses any other shape.
+ */
+export function poolConfig(): PoolConfig {
   const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error(

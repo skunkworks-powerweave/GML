@@ -353,7 +353,7 @@ This asymmetry is why schema changes should **add** a column in one release and
 
 ```bash
 # Auth wiring, end to end. Creates a throwaway account, exercises it, deletes it.
-docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 
 # Health. 503 until db, storage AND migrations all pass.
 curl -s https://$DOMAIN/api/health | jq

@@ -11,8 +11,7 @@
 
 import "dotenv/config";
 import { lt, sql } from "drizzle-orm";
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDb, getPool } from "../client.js";
@@ -33,25 +32,24 @@ const RATE_LIMIT_RETAIN_HOURS = 24;
 
 /**
  * Delete notifications older than RETAIN_DAYS (90) days. Returns the number
- * of rows deleted. Opens and closes its own pg.Pool — callable both from the
- * direct CLI entry point and from the BullMQ retention worker (spec 107).
+ * of rows deleted. Callable both from the direct CLI entry point and from the
+ * worker's retention job (spec 107).
+ *
+ * It used to open and close a pool of its own, `new Pool({ connectionString })`,
+ * which negotiated no TLS for the documented DATABASE_URL -- the one sibling of
+ * pruneRateLimits (below) that still had the hazard its comment describes -- and
+ * which, with Supabase's "Enforce SSL" on, failed every run before
+ * pruneRateLimits was reached. It now takes the same shared handle, with the
+ * same ownership rule: the worker keeps that pool, main() closes it.
  */
-export async function deleteOldNotifications(): Promise<number> {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    throw new Error("DATABASE_URL not set");
-  }
-  const pool = new Pool({ connectionString: url });
-  const db = drizzle(pool);
+export async function deleteOldNotifications(
+  db: Pick<NodePgDatabase<Record<string, unknown>>, "delete"> = getDb(),
+): Promise<number> {
   const cutoff = new Date(Date.now() - RETAIN_DAYS * 24 * 60 * 60 * 1000);
-  try {
-    const result = await db.delete(notifications).where(lt(notifications.createdAt, cutoff));
-    const rowCount = result.rowCount ?? 0;
-    console.log(`[SM-8] deleted notifications older than ${cutoff.toISOString()}: ${rowCount} rows`);
-    return rowCount;
-  } finally {
-    await pool.end();
-  }
+  const result = await db.delete(notifications).where(lt(notifications.createdAt, cutoff));
+  const rowCount = result.rowCount ?? 0;
+  console.log(`[SM-8] deleted notifications older than ${cutoff.toISOString()}: ${rowCount} rows`);
+  return rowCount;
 }
 
 /**
@@ -72,7 +70,7 @@ export async function deleteOldNotifications(): Promise<number> {
  *
  * ── WHICH CONNECTION ─────────────────────────────────────────────────────────
  *
- * Unlike deleteOldNotifications() this does not open a pool of its own. By
+ * Like deleteOldNotifications() this does not open a pool of its own. By
  * default it uses @gml/db's shared handle -- the same `db` the worker already
  * holds -- because that is the one client.ts configures TLS for; a bare
  * `new Pool({ connectionString })` would carry IP-bearing rows over whatever
@@ -100,8 +98,8 @@ export async function main(): Promise<void> {
     await deleteOldNotifications();
     await pruneRateLimits();
   } finally {
-    // pruneRateLimits() borrows the shared pool; without this the CLI lingers
-    // until the pool's idle timeout instead of exiting.
+    // Both sweeps borrow the shared pool; without this the CLI lingers until
+    // the pool's idle timeout instead of exiting.
     await getPool().end();
   }
 }
