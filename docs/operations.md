@@ -213,7 +213,11 @@ Stated so nobody assumes otherwise:
   anchor) and 20 MB × 5 for `caddy`, about 190 MB across the stack, and needs
   no operator action. With no alerting and no metrics these logs are the only
   forensic record. Caddy writes one JSON access line per request (client IP,
-  method, path, status, duration; cookies and Authorization redacted) -- about
+  method, URI with its query string, status, duration; cookies and
+  Authorization redacted, and so are the `hub.verify_token`, `code` and
+  `token_hash` query parameters, in its error lines too -- a new
+  secret-bearing query parameter must be added to `query_secrets` in
+  `docker/Caddyfile`) -- about
   1 KB each, so its 100 MB holds on the order of 100,000 requests, roughly one
   to two weeks for fifty users. Read them with
   `docker compose logs caddy | grep '"logger":"http.log.access'`; raise the
