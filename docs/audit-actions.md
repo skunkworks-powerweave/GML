@@ -99,6 +99,12 @@ applied or lifted the sign-in ban.
 | `quiz.submit` | A learner's attempt was scored via `/quizzes/[slug]`. Graded server-side against the quiz's questions (spec 146); the `quiz_submissions` row is written in the same transaction that closes the learner's open `quiz_attempts` row. `entity_type` `quiz_submission`, `entity_id` the submission id, `user_id` the learner | `quizSlug`, `score` (percent), `passed` (boolean), `questionCount`, `answeredCount` |
 | `quiz.attempt.expired` | A submission arrived after the quiz's time limit plus the 30 s grace; the attempt was closed and nothing was scored. `entity_type` `quiz` (singular), `entity_id` the quiz id, `user_id` the learner | `quizSlug`, `limitSeconds` |
 
+## scorm.* — SCORM 1.2 packages (`/admin/scorm`, `/scorm/[id]`)
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `scorm.attempt.finish` | A learner's SCO called `LMSFinish` and its final commit reached `POST /api/scorm/attempts/[id]`. The many `LMSCommit`s of a session are not audited. The values are what the SCO REPORTED; the stored record keeps the learner's best status (`lib/scorm/store.ts`). `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the learner | `lessonStatus`, `scoreRaw` (0-100 or null), `sessionTimeCs` (centiseconds) |
+
 ## whatsapp.* — webhook ingest pipeline
 
 The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each video and queues its media fetch before it answers Meta; the worker (`apps/worker/src/whatsapp-fetch.ts`) fetches the media, queues the transcode and replies to the sender. Worker rows carry no `user_id` or `ip`: there is no request. `/admin/whatsapp-log` lists every WhatsApp submission, including ones still waiting for or refused by the fetch, with the reason. These rows are what this table says they are, checked by `tests/behaviour/whatsapp-observability.test.ts`.
