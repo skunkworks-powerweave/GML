@@ -14,8 +14,7 @@
 // records by any other path (grid edit, CSV import).
 //
 // A plain module taking the database, so tests/behaviour can run it on a
-// rolled-back transaction; the "use server" action file cannot be loaded there
-// without Supabase.
+// rolled-back transaction (and createUserAction itself with Supabase stubbed).
 
 import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";

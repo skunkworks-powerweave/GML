@@ -15,15 +15,17 @@
 // gap let a CSV or grid edit link two teacher rows to one login, after which
 // teacherIdFor's LIMIT 1 picked one arbitrarily.
 //
-// createUserAction itself needs Supabase Auth to run; the link step it calls
-// is executed here, on a rolled-back transaction, together with the index.
+// The link step is executed on a rolled-back transaction, together with the
+// index; then createUserAction itself, with Supabase Auth stubbed, loses the
+// race and must undo the account it made.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
-import "./_ui.js";
+import { request, stubSupabaseServer } from "./_ui.js";
 import { needsDatabase, withClient, tag } from "./_harness.js";
+import { actAs, fixture, form } from "./_admin-fixture.js";
 
 const skip = needsDatabase();
 const linkModule = () => import("../../apps/web/src/app/(authenticated)/admin/users/link.ts");
@@ -82,6 +84,62 @@ test("the database refuses a second teacher or mentor record on one login", { sk
       await assert.rejects(c.query(`INSERT INTO mentors (name, user_id) VALUES ('M2', $1)`, [u]), /duplicate key|unique/i);
     } finally {
       await c.query("ROLLBACK");
+    }
+  });
+});
+
+// ── THE ACTION, NOT ONLY ITS LINK STEP ───────────────────────────────────────
+//
+// The compare-and-set above only matters if createUserAction uses it and
+// undoes the account it has just made when it loses. Supabase is stubbed
+// (stubSupabaseServer, ../_ui.ts): the fake records what the action asks
+// Supabase Auth to do, and nothing leaves the machine.
+test("createUserAction refuses a record linked meanwhile, and removes the account it made", { skip }, async () => {
+  stubSupabaseServer();
+  const { createUserAction } = await import("../../apps/web/src/app/(authenticated)/admin/users/actions.ts");
+  await withClient(async (c) => {
+    const t = tag("link-race");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const first = await f.user("teacher", "first");
+      // Linked by another admin after this admin's form was rendered.
+      const teacher = await f.row("teachers", { school_id: school, full_name: `Tsering ${t}`, user_id: first });
+      actAs(await f.user("programme_admin", "padmin"), "programme_admin");
+
+      const newId = randomUUID();
+      f.defer(`DELETE FROM users WHERE id = $1`, [newId]);
+      const calls: string[] = [];
+      request.supabaseAdmin = {
+        auth: {
+          admin: {
+            createUser: async (o: { email: string }) => {
+              calls.push(`createUser ${o.email}`);
+              return { data: { user: { id: newId } }, error: null };
+            },
+            deleteUser: async (id: string) => {
+              calls.push(`deleteUser ${id}`);
+              return { data: {}, error: null };
+            },
+          },
+        },
+      };
+
+      const email = `second.${t}@example.test`;
+      const r = await createUserAction(
+        undefined,
+        form({ email, name: "Second", role: "teacher", password: "long enough", linkKind: "teacher", linkId: teacher }),
+      );
+      assert.match(r.error ?? "", /already linked/, JSON.stringify(r));
+      const { rows: [still] } = await c.query(`SELECT user_id FROM teachers WHERE id = $1`, [teacher]);
+      assert.equal(still.user_id, first, "the new login took over a teacher record another login holds");
+      const { rows: profile } = await c.query(`SELECT 1 FROM users WHERE id = $1`, [newId]);
+      assert.equal(profile.length, 0, "the new profile row must be removed");
+      assert.deepEqual(calls, [`createUser ${email}`, `deleteUser ${newId}`], "and its Supabase account deleted");
+    } finally {
+      await f.cleanup();
     }
   });
 });

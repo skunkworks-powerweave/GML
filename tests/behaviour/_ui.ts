@@ -37,6 +37,12 @@
 //   - @/lib/supabase/browser
 //                        reads the session from document.cookie; the upload
 //                        module only takes a bearer token from it.
+//   - @/lib/supabase/server, ONLY in a test file that calls
+//                        stubSupabaseServer() before importing the code under
+//                        test: supabaseAdmin() then returns the fake on
+//                        `request.supabaseAdmin`, so an action that creates
+//                        or deletes an auth account (admin/users) runs as far
+//                        as the database without reaching Supabase Auth.
 //
 // ── MECHANICS ────────────────────────────────────────────────────────────────
 //
@@ -87,6 +93,18 @@ const STUB_BY_APP_PATH: Array<[RegExp, string]> = [
   [/\/apps\/web\/src\/lib\/supabase\/browser\.ts$/, "supabase-browser.ts"],
 ];
 
+/** Replaced only once a test asks (stubSupabaseServer); see the header. */
+const SUPABASE_SERVER = /\/apps\/web\/src\/lib\/supabase\/server\.ts$/;
+let supabaseServerStubbed = false;
+
+/**
+ * From now on, in this test process, @/lib/supabase/server resolves to
+ * _stubs/supabase-server.ts. Call it before importing the module under test.
+ */
+export function stubSupabaseServer(): void {
+  supabaseServerStubbed = true;
+}
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const direct = STUB_BY_SPECIFIER[specifier];
@@ -102,6 +120,9 @@ registerHooks({
         return { url: new URL(stub, STUBS_URL).href, shortCircuit: true };
       }
     }
+    if (supabaseServerStubbed && SUPABASE_SERVER.test(normalised)) {
+      return { url: new URL("supabase-server.ts", STUBS_URL).href, shortCircuit: true };
+    }
     return resolved;
   },
 });
@@ -114,6 +135,8 @@ type RequestState = {
   session?: { user: { id: string; email: string | null; name: string | null; image: string | null; role: string } } | null;
   /** Paths passed to the next/cache stub's revalidatePath(). */
   revalidated?: string[];
+  /** What the (opt-in) @/lib/supabase/server stub's supabaseAdmin() returns. */
+  supabaseAdmin?: unknown;
 };
 
 /**
@@ -132,6 +155,7 @@ export function resetRequest(): void {
   request.headers = {};
   request.session = null;
   request.revalidated = [];
+  request.supabaseAdmin = undefined;
 }
 
 /** Sign the fake request in as `role` (the id should be a real users.id). */
