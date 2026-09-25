@@ -147,29 +147,25 @@ test("spec 127 — teacher variant scopes counts to session.user.id with the fou
   );
 });
 
-test("spec 127 — teacher open-quizzes filter uses NOT IN subquery against quiz_submissions", () => {
+// The count moved into lib/rtt/assessments.ts (F33): the dashboard counted
+// every active quiz, including ones no learner page offers, and linked the
+// to-do to /rtt, which listed none. The page and /rtt now share one
+// definition; tests/behaviour/rtt-assessments.test.ts runs it and checks the
+// count against the list. What stays pinned here is the page using it and the
+// definition's two halves: active quizzes, less this user's submissions.
+test("spec 127 — teacher open-quizzes count is the shared per-user open-assessment count", () => {
   const src = read(PAGE_PATH);
-  // Active quizzes filter is the first half of the open-quizzes count.
   assert.match(
     src,
-    /eq\(quizzes\.active,\s*true\)/,
-    "open-quizzes count must filter on quizzes.active = true",
+    /countOpenAssessments\(db,\s*\{\s*id:\s*userId/,
+    "the teacher's open-quizzes count must be lib/rtt/assessments.ts countOpenAssessments for this user",
   );
-  // NOT IN subquery against quiz_submissions for this user.
+  const lib = read("apps/web/src/lib/rtt/assessments.ts");
+  assert.match(lib, /eq\(quizzes\.active,\s*true\)/, "open quizzes must be active");
   assert.match(
-    src,
-    /NOT IN\s*\(/i,
-    "open-quizzes count must use NOT IN to exclude quizzes the user has already submitted",
-  );
-  assert.match(
-    src,
-    /quizSubmissions\.quizId/,
-    "open-quizzes subquery must select quizSubmissions.quizId so the NOT IN filter is correctly scoped",
-  );
-  assert.match(
-    src,
-    /quizSubmissions\.userId/,
-    "open-quizzes subquery must filter on quizSubmissions.userId so the exclusion is per-user",
+    lib,
+    /NOT EXISTS[\s\S]*quizSubmissions\.quizId[\s\S]*quizSubmissions\.userId/,
+    "open quizzes must exclude the ones this user has already submitted",
   );
 });
 

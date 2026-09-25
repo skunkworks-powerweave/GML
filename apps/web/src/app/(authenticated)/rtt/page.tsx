@@ -1,8 +1,11 @@
 // /rtt — phase index + subjects matrix.
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { db } from "@gml/db";
 import { phases, terms, rttSubjects } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { listOpenAssessments } from "@/lib/rtt/assessments";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +19,17 @@ const SUBJECT_PALETTE = [
 ] as const;
 
 export default async function RttIndexPage() {
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const viewer = { id: session.user.id, role: session.user.role };
+
   const phaseRows = await db.select().from(phases).orderBy(phases.sequence);
   const termRows = await db.select().from(terms);
   const subjectRows = await db.select().from(rttSubjects);
+  // The dashboard's "N open quizzes" to-do links here and counts exactly this
+  // list (lib/rtt/assessments.ts). /rtt used to list no quizzes at all, so the
+  // to-do led nowhere.
+  const openAssessments = await listOpenAssessments(db, viewer);
 
   return (
     <div>
@@ -50,6 +61,44 @@ export default async function RttIndexPage() {
       </div>
 
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        {openAssessments.length > 0 ? (
+          <section className="card card-hi" aria-labelledby="open-assessments">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div id="open-assessments" style={{ fontWeight: 600, fontSize: 13 }}>
+                Open assessments ({openAssessments.length})
+              </div>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Published quizzes you have not taken yet.
+              </div>
+            </div>
+            <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+              {openAssessments.map((q, i) => (
+                <li
+                  key={q.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 0",
+                    borderTop: i ? "1px solid var(--line)" : "none",
+                  }}
+                >
+                  <div>
+                    <div>{q.title}</div>
+                    <Link href={`/rtt/subject/${q.subjectId}`} style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      {q.subjectName}
+                    </Link>
+                  </div>
+                  <Link href={`/quizzes/${q.slug}`} className="btn btn-sm btn-primary" style={{ textDecoration: "none" }}>
+                    Start
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
         {phaseRows.length === 0 ? (
           <p style={{ color: "var(--ink-3)" }}>No phases seeded yet. Run the spec 086 seed script.</p>
         ) : (

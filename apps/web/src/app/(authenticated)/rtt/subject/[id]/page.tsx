@@ -1,8 +1,8 @@
 // /rtt/subject/[id] — RTT subject drill-in: modules + sessions + readings.
 
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auth } from "@/auth";
 import {
@@ -13,8 +13,8 @@ import {
   rttReadings,
   terms,
   phases,
-  quizzes,
 } from "@gml/db/schema";
+import { listSubjectAssessments } from "@/lib/rtt/assessments";
 
 export const dynamic = "force-dynamic";
 
@@ -68,29 +68,20 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
     .orderBy(rttSessions.sequence);
   const readings = await db.select().from(rttReadings).where(eq(rttReadings.rttSubjectId, id)).orderBy(rttReadings.sequence);
 
-  // DO THE ASSESSMENT QUIZZES EXIST?
-  //
-  // The two links below were hardcoded to /quizzes/mid-unit and
-  // /quizzes/endline. The runner calls notFound() for a slug with no active
-  // quiz, so on a programme that has not created them -- which is every new
-  // deployment, since nothing seeds quizzes -- "Start" was a 404 on every
-  // subject page in the product. A missing quiz is a normal state, not an
-  // error, so it now reads as "not published yet" instead of pretending to be
-  // a working link.
-  const assessmentSlugs = ["mid-unit", "endline"];
-  const publishedQuizzes = await db
-    .select({ slug: quizzes.slug })
-    .from(quizzes)
-    .where(and(inArray(quizzes.slug, assessmentSlugs), eq(quizzes.active, true)));
-  const hasQuiz = new Set(publishedQuizzes.map((q) => q.slug));
-
   // Where an empty card points an administrator. Modules, lessons and readings
   // had no write path anywhere in the product; they are admin grid tables now,
   // and an empty card that says where to fill it reads as "not loaded yet"
   // rather than "broken".
   const session = await auth();
+  if (!session?.user?.id) redirect("/login");
   const viewerIsAdmin =
     session?.user?.role === "programme_admin" || session?.user?.role === "super_admin";
+
+  // THIS SUBJECT'S ASSESSMENTS: the active quizzes bound to it. They were
+  // looked up by the fixed slugs "mid-unit" and "endline" with no subject
+  // predicate, so one programme-wide "mid-unit" quiz ran on every subject and
+  // a quiz under any other slug was offered nowhere (lib/rtt/assessments.ts).
+  const assessments = await listSubjectAssessments(db, id, session.user.id);
 
   // Spec 119 — wire the JSX-prototype "Resume" CTA to the first module by
   // sequence (anchor jump on this same page). When no modules exist, the
@@ -425,62 +416,61 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
             )}
           </article>
 
-          {/* Spec 119: Assessment card — Start/Locked CTAs port the JSX
-              prototype (rtt.jsx lines 236-251). Mid-unit links to
-              /quizzes/mid-unit?subjectId=... only when that quiz is published;
-              endline is an inert "Locked" chip (see the note on it below). */}
+          {/* Assessment card: one row per active quiz bound to this subject,
+              with the learner's own best result. Release is the quiz's
+              `active` flag at /admin/quizzes; there is no sequencing rule (an
+              endline locked until a mid-unit is passed) because nothing in the
+              programme defines one, so none is pretended here. */}
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
             </div>
-            <div style={{ padding: 14, fontSize: 13 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "12px 0",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <span>Mid-unit check</span>
-                {hasQuiz.has("mid-unit") ? (
-                  <Link
-                    href={`/quizzes/mid-unit?subjectId=${id}`}
-                    className="btn btn-sm btn-primary"
-                    style={{ textDecoration: "none" }}
+            {assessments.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No assessments published yet.
+                {viewerIsAdmin ? (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    Create and activate one for this subject at <Link href="/admin/quizzes">Admin → Quizzes</Link>.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+                {assessments.map((q, i) => (
+                  <li
+                    key={q.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "12px 0",
+                      borderTop: i ? "1px solid var(--line)" : "none",
+                    }}
                   >
-                    Start
-                  </Link>
-                ) : (
-                  <span className="chip" title="No active quiz with the address mid-unit">
-                    Not published yet
-                  </span>
-                )}
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  paddingTop: 12,
-                }}
-              >
-                <span style={{ color: "var(--ink-3)" }}>Endline assessment</span>
-                {/* NOT A LINK. This was a <Link> to the endline quiz runner with
-                    only aria-disabled="true", which is a hint to assistive
-                    technology and does not stop navigation; `.chip` sets no
-                    pointer-events guard. It looked inert and navigated, and the
-                    runner 404s a slug with no active quiz. A span says what
-                    aria-disabled was trying to, like the mid-unit fallback.
-                    Whether endline should open once published is a programme
-                    decision (a sequencing rule nothing implements yet), so the
-                    fetched "endline" slug above stays deliberately unread. */}
-                <span className="chip" title="Unlocks after the mid-unit check">
-                  Locked
-                </span>
-              </div>
-            </div>
+                    <div>
+                      <div>{q.title}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                        {q.attempts === 0
+                          ? `Pass mark ${q.passThreshold}%`
+                          : `Best ${q.bestScore}% · ${q.attempts} ${q.attempts === 1 ? "attempt" : "attempts"}`}
+                        {q.maxAttempts !== null ? ` · ${q.maxAttempts} allowed` : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {q.passed ? <span className="chip chip-lichen">Passed</span> : null}
+                      <Link
+                        href={q.href}
+                        className={q.attempts === 0 ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                        style={{ textDecoration: "none" }}
+                      >
+                        {q.spent ? "Results" : q.attempts === 0 ? "Start" : "Retake"}
+                      </Link>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </article>
         </div>
       </section>

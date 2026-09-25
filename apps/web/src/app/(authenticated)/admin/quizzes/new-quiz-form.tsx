@@ -59,8 +59,7 @@ export function NewQuizForm({
         <input name="slug" maxLength={60} style={field} placeholder="mid-unit" pattern="[a-z0-9]+(-[a-z0-9]+)*" />
         <span style={{ fontSize: 10, color: "var(--ink-3)" }}>
           Appears in the link learners open: /quizzes/&lt;address&gt;. Left blank, it is taken
-          from the title. The RTT subject pages expect <code>mid-unit</code> and{" "}
-          <code>endline</code>.
+          from the title. The chosen RTT subject&apos;s page lists the quiz once it is active.
         </span>
       </label>
 
