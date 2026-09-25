@@ -26,6 +26,7 @@ import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 
 export type AdminActionState = {
   ok?: boolean;
@@ -36,7 +37,7 @@ export type AdminActionState = {
 };
 
 function getEntityOrThrow(slug: string) {
-  const entity = ADMIN_ENTITIES[slug];
+  const entity = lookupOwn(ADMIN_ENTITIES, slug);
   if (!entity) throw new Error(`Unknown admin entity: ${slug}`);
   return entity;
 }

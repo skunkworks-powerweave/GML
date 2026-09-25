@@ -17,6 +17,7 @@ import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 
 /**
  * Bind parameters per INSERT statement. Postgres' wire protocol allows
@@ -33,7 +34,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ID_LOOKUP_CHUNK = 10_000;
 
 function getEntityOrThrow(slug: string) {
-  const e = ADMIN_ENTITIES[slug];
+  const e = lookupOwn(ADMIN_ENTITIES, slug);
   if (!e) throw new Error(`Unknown admin entity: ${slug}`);
   return e;
 }

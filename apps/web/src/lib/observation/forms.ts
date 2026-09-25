@@ -19,6 +19,7 @@ import { eq, sql } from "drizzle-orm";
 import { observationForms, users } from "@gml/db/schema";
 import { validateResponses, type FormField } from "../forms/validate";
 import type { Db } from "../visibility";
+import { lookupOwn } from "../lookup";
 
 export type StageKind = "pre" | "observer" | "post";
 
@@ -103,7 +104,9 @@ export function parseStageResponses(kind: StageKind, formData: FormData): StageP
 
 /** The question a field name belongs to, for an error message. */
 export function stageFieldLabel(name: string): string | null {
-  return LABELS[name] ?? null;
+  // Own keys only: ?field=__proto__ read back Object.prototype, and the cycle
+  // page printed it as the question's name (lib/lookup.ts).
+  return lookupOwn(LABELS, name) ?? null;
 }
 
 const LABELS: Record<string, string> = Object.fromEntries(

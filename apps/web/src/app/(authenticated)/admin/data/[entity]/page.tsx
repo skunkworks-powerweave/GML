@@ -54,6 +54,7 @@ import { requireRole } from "@/lib/guards";
 import { assertSectionGate, getActiveGrant } from "@/lib/gates";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
 import { referenceLabels, referenceOptions, withCurrentValues, type RefContext } from "@/admin/references";
@@ -236,7 +237,7 @@ function buildColumnFilter(
 export default async function AdminGridPage({ params, searchParams }: PageProps) {
   const { entity: slug } = await params;
   const sp = await searchParams;
-  const entity = ADMIN_ENTITIES[slug];
+  const entity = lookupOwn(ADMIN_ENTITIES, slug);
   if (!entity) notFound();
 
   // Role gate — readRoles guards the page; mutateRoles enforced in actions.ts.
@@ -526,7 +527,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       ? (lockedReason ?? "That row is locked in its current state and cannot be deleted from the grid.")
       : rawError === "still_referenced" && refEntity
       ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
-      : (GRID_ERRORS[rawError] ?? "That action could not be completed.")
+      : (lookupOwn(GRID_ERRORS, rawError) ?? "That action could not be completed.")
     : null;
 
   return (

@@ -21,6 +21,7 @@ import type { RoleName } from "@gml/shared/auth/roles";
 import { formCatalogueLinks, UNLOCK_FORMS_HREF, type PairingChoice } from "@/lib/forms/catalogue-links";
 import { actorFrom, mentorshipAccess } from "@/lib/visibility";
 import { formTitle } from "@/lib/forms/quarterly";
+import { lookupOwn } from "@/lib/lookup";
 
 export const dynamic = "force-dynamic";
 
@@ -64,7 +65,7 @@ export default async function FormsIndexPage({
   searchParams?: Promise<{ error?: string }>;
 } = {}) {
   const sp = (await searchParams) ?? {};
-  const submitError = sp.error ? (SUBMIT_ERRORS[sp.error] ?? null) : null;
+  const submitError = sp.error ? (lookupOwn(SUBMIT_ERRORS, sp.error) ?? null) : null;
   const session = await auth();
   if (!session) redirect("/login?next=%2Fforms");
 
