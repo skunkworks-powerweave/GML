@@ -9,8 +9,11 @@
 // the single most likely fault a real user hits, and a blank page is the worst
 // possible presentation of a transient one.
 //
-// `reset()` re-renders the segment without a full navigation, so a transient
-// failure recovers in place and the user keeps their scroll position.
+// "Try again" calls `unstable_retry()`, which re-fetches the segment from the
+// server and then re-renders it, without a full navigation -- so a transient
+// failure that has cleared recovers in place. This used to be `reset()`,
+// which only re-renders from the payload the client already holds: for a
+// server failure that payload is the error, so it could never recover.
 //
 // `error.digest` is the ONLY detail shown. Next strips server error messages
 // from production bundles deliberately -- they carry connection strings, host
@@ -23,10 +26,10 @@ import Link from "next/link";
 
 export default function RouteError({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
   useEffect(() => {
     // Structured so a log processor can find it. console.error is the only
@@ -49,7 +52,7 @@ export default function RouteError({
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={reset}
+          onClick={() => unstable_retry()}
           className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white"
         >
           Try again
