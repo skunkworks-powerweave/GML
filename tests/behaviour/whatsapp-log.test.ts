@@ -109,6 +109,66 @@ test("F93: a dead-lettered fetch shows its reason and can be queued again once t
   );
 });
 
+// ── F98: who sent it ─────────────────────────────────────────────────────────
+//
+// The page recovered the sender from audit rows joined on entity_id, which the
+// webhook never set, so the column read "—" for every row -- and for a video
+// from a number on file for nobody, the sender is the operator's only clue.
+
+test("F98: the ingest log shows who sent each video", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { POST } = await route();
+      const id = w.wamid();
+      const stranger = "447700900" + String(Math.floor(Math.random() * 900) + 100);
+      assert.equal((await POST(signed(envelope([videoMessage({ id, from: stranger, caption: "lesson" })])))).status, 200);
+      const sub = await w.submission(id);
+      signIn("programme_admin");
+      const { default: Page } = await page();
+      const html = await render(await Page({ searchParams: Promise.resolve({ parsing: "unmatched" }) }));
+      const at = html.indexOf(String(sub!.id).slice(0, 10));
+      assert.ok(at > 0, "the submission is listed");
+      const row = html.slice(html.lastIndexOf("<tr", at), html.indexOf("</tr>", at));
+      assert.ok(row.includes(stranger), `the sender's number must be shown on the row: ${row.slice(0, 400)}`);
+
+      // The header must not send the operator to a re-link control that does
+      // not exist anywhere in the app.
+      assert.doesNotMatch(html, /re-link it there/);
+    }),
+  );
+});
+
+test("F98: a row from before the sender was stored still shows it, from the audit row's message id", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const id = w.wamid();
+      const from = "447700900" + String(Math.floor(Math.random() * 900) + 100);
+      const q = async (sql: string, p: unknown[]) => (await w.c.query(sql, p)).rows[0]?.id as string;
+      // The shape the old webhook wrote: no whatsapp_from, and a received-audit
+      // row with no entity_id.
+      const fileId = await q(
+        `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored') RETURNING id`,
+        [`whatsapp/${id}.mp4`],
+      );
+      const subId = await q(
+        `INSERT INTO video_submissions (file_id, source, status, context_type, caption_raw, whatsapp_message_id)
+         VALUES ($1, 'whatsapp', 'failed', 'generic', 'old', $2) RETURNING id`,
+        [fileId, id],
+      );
+      await w.c.query(
+        `INSERT INTO audit_log (action, entity_type, metadata) VALUES ('whatsapp.message.received', 'video_submission', $1)`,
+        [JSON.stringify({ msgId: id, from })],
+      );
+      signIn("programme_admin");
+      const { default: Page } = await page();
+      const html = await render(await Page({ searchParams: Promise.resolve({ parsing: "unmatched" }) }));
+      const at = html.indexOf(subId.slice(0, 10));
+      const row = html.slice(html.lastIndexOf("<tr", at), html.indexOf("</tr>", at));
+      assert.ok(row.includes(from), "the audit row still names the sender, by the message id it carries");
+    }),
+  );
+});
+
 test("F93: Resend transcode refuses a row whose media was never fetched", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {

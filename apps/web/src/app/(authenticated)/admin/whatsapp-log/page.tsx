@@ -8,9 +8,10 @@
 // grade view that:
 //
 //   - lists every video_submission whose source='whatsapp',
-//   - shows the original sender phone (pulled from the matching
-//     audit_log row's metadata.from field — webhook records it under
-//     action='whatsapp.message.received'),
+//   - shows the original sender phone (video_submissions.whatsapp_from;
+//     for rows older than migration 0031, the matching
+//     'whatsapp.message.received' audit row's metadata.from, found by
+//     message id),
 //   - shows the truncated caption (video_submissions.caption_raw),
 //     parsed context (matched / unmatched, color-coded), submission
 //     status chip, and a /videos/<id> deep link,
@@ -127,6 +128,8 @@ export default async function WhatsappIngestLogPage({
       createdAt: videoSubmissions.createdAt,
       processingLog: videoSubmissions.processingLog,
       mediaId: videoSubmissions.whatsappMediaId,
+      whatsappFrom: videoSubmissions.whatsappFrom,
+      whatsappMessageId: videoSubmissions.whatsappMessageId,
       fileStatus: files.status,
       // The webhook records a submission BEFORE its media is fetched, so a row
       // can be waiting on the worker's fetch. Its latest error is the one thing
@@ -142,52 +145,56 @@ export default async function WhatsappIngestLogPage({
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(PAGE_LIMIT);
 
-  // Pull the matching whatsapp.message.received audit rows to recover the
-  // sender phone from metadata.from. Single round-trip indexed on
-  // (action, createdAt) per audit_log_action_created_idx (spec 010).
-  const submissionIds = rows.map((r) => r.id);
+  // WHO SENT IT. The webhook writes the sender onto the submission
+  // (video_submissions.whatsapp_from, migration 0031), and that is read first.
+  //
+  // This used to come only from the 'whatsapp.message.received' audit rows,
+  // joined on audit_log.entity_id -- which the webhook never set, because it
+  // wrote that row before the submission existed. The join could not match, so
+  // the column read "—" for every row, including the unmatched videos from
+  // numbers on file for nobody, where the sender is the operator's only clue.
+  //
+  // Rows from before 0031 have no whatsapp_from; for those the audit row is
+  // still the only record, and it is found by the message id it DOES carry.
   const phoneBySubmissionId = new Map<string, string>();
+  const needAudit = new Map<string, string>(); // whatsapp_message_id -> submission id
+  for (const r of rows) {
+    if (r.whatsappFrom) phoneBySubmissionId.set(r.id, r.whatsappFrom);
+    else if (r.whatsappMessageId) needAudit.set(r.whatsappMessageId, r.id);
+  }
 
-  if (submissionIds.length > 0) {
+  if (needAudit.size > 0) {
     const audits = await db
-      .select({
-        entityId: auditLog.entityId,
-        metadata: auditLog.metadata,
-      })
+      .select({ metadata: auditLog.metadata })
       .from(auditLog)
       .where(
         and(
           eq(auditLog.action, "whatsapp.message.received"),
-          inArray(auditLog.entityId, submissionIds),
+          inArray(sql<string>`${auditLog.metadata} ->> 'msgId'`, [...needAudit.keys()]),
         ),
       )
-      .limit(submissionIds.length * 2);
+      .limit(needAudit.size * 2);
 
-    // The webhook fires whatsapp.message.received with entityType="video_submission"
-    // BEFORE it knows the submission id — so the action might not always
-    // carry entityId for older rows. We pre-populate from the latest set
-    // that does include it; rows without a hit fall back to "—".
     for (const a of audits) {
-      if (!a.entityId) continue;
       const md = (a.metadata ?? {}) as Record<string, unknown>;
       const from = typeof md.from === "string" ? md.from : null;
-      if (from) phoneBySubmissionId.set(a.entityId, from);
+      const submissionId = typeof md.msgId === "string" ? needAudit.get(md.msgId) : undefined;
+      if (from && submissionId) phoneBySubmissionId.set(submissionId, from);
     }
   }
-
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
       <header>
         <h1 className="text-2xl font-semibold">WhatsApp ingest log</h1>
         <p className="text-sm text-neutral-500">
-          Every video sent to the GML WhatsApp number. Captions starting
-          with OBS- / TB- / MM- link the upload to an observation cycle,
-          teach-back, or mentor meeting; everything else is parked as a
-          generic submission. The operator can find it in the video library at
-          /videos and re-link it there -- /admin/data/videos, which this page
-          used to name, is not one of the registered admin entities and has
-          never existed.
+          Every video sent to the GML WhatsApp number. A caption carrying
+          OBS- / TB- / MM- and a code the sender may use links the upload to
+          that observation cycle, teach-back, or mentor meeting; everything
+          else is kept as a generic submission, visible to admins and the
+          sender, with its caption and sender shown here. The app has no
+          control yet for attaching a generic video to a cycle afterwards:
+          ask the teacher to send it again with the cycle code as the caption.
         </p>
       </header>
 
