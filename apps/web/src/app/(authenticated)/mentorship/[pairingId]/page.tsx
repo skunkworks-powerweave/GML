@@ -241,8 +241,11 @@ export default async function PairingDetailPage({
         <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
           ← All pairings
         </Link>
+        {/* The row wraps, so a phone puts the buttons under the name. The name
+            breaks lines at 240 px and shrinks, so on a desktop a long name
+            wraps inside it and the buttons stay beside it. */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
-          <div>
+          <div style={{ flex: "1 1 240px", minWidth: 0 }}>
             <div className="label">Pairing</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4, lineHeight: 1.15 }}>
               {mentor?.name ?? "—"}{" "}
@@ -789,16 +792,20 @@ export default async function PairingDetailPage({
             {/* The text on a row of its own, who / due / Add beneath it. This
                 was one "1fr 90px 70px auto" row: 90 + 70 px of fixed columns
                 and the button left the text box a few pixels on a phone, and
-                pushed the row past the right edge. */}
+                pushed the row past the right edge. Beneath it the Add button
+                keeps its label's width and the due box takes what is left: a
+                "90px 70px 1fr" track left the button 34 px on a 360 px phone.
+                One minmax(0, 1fr) column: an implicit one is as wide as the
+                row's content, which counts the due box at its default ~20
+                characters, and that pushed the page 16 px past the edge. */}
             <form
               action={addCommitmentAction}
               style={{
                 display: "grid",
-                gridTemplateColumns: "90px 70px minmax(0, 1fr)",
+                gridTemplateColumns: "minmax(0, 1fr)",
                 gap: 6,
                 padding: "10px 12px",
                 borderTop: "1px solid var(--line)",
-                alignItems: "center",
               }}
             >
               <input type="hidden" name="pairingId" value={pairingId} />
@@ -812,7 +819,6 @@ export default async function PairingDetailPage({
                 placeholder="Add a commitment…"
                 aria-label="New commitment"
                 style={{
-                  gridColumn: "1 / -1",
                   width: "100%",
                   padding: "6px 8px",
                   border: "1px solid var(--line-2)",
@@ -821,48 +827,54 @@ export default async function PairingDetailPage({
                   background: "var(--card)",
                 }}
               />
-              <select
-                name="who"
-                defaultValue="mentee"
-                aria-label="Whose commitment"
-                style={{
-                  padding: "6px 4px",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: 6,
-                  fontSize: 11,
-                  background: "var(--card)",
-                }}
-              >
-                <option value="mentee">mentee</option>
-                <option value="mentor">mentor</option>
-              </select>
-              <input
-                name="due"
-                maxLength={40}
-                placeholder="Wk 8"
-                aria-label="Due"
-                style={{
-                  padding: "6px 6px",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: 6,
-                  fontSize: 11,
-                  background: "var(--card)",
-                }}
-              />
-              <button
-                type="submit"
-                style={{
-                  padding: "6px 12px",
-                  border: "none",
-                  borderRadius: 6,
-                  background: "var(--ink)",
-                  color: "var(--paper)",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
-              >
-                Add
-              </button>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <select
+                  name="who"
+                  defaultValue="mentee"
+                  aria-label="Whose commitment"
+                  style={{
+                    flex: "0 0 90px",
+                    padding: "6px 4px",
+                    border: "1px solid var(--line-2)",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    background: "var(--card)",
+                  }}
+                >
+                  <option value="mentee">mentee</option>
+                  <option value="mentor">mentor</option>
+                </select>
+                <input
+                  name="due"
+                  maxLength={40}
+                  placeholder="Wk 8"
+                  aria-label="Due"
+                  style={{
+                    flex: "1 1 0",
+                    minWidth: 0,
+                    padding: "6px 6px",
+                    border: "1px solid var(--line-2)",
+                    borderRadius: 6,
+                    fontSize: 11,
+                    background: "var(--card)",
+                  }}
+                />
+                <button
+                  type="submit"
+                  style={{
+                    flex: "none",
+                    padding: "6px 12px",
+                    border: "none",
+                    borderRadius: 6,
+                    background: "var(--ink)",
+                    color: "var(--paper)",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  Add
+                </button>
+              </div>
             </form>
           </div>
         </div>

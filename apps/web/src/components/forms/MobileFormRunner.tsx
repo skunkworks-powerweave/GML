@@ -470,9 +470,13 @@ function BigRating({
   value: unknown;
   onChange: (v: number) => void;
 }) {
-  // Large tappable star row — each star is a 56x56 tap target (well above
-  // the 44px floor) so the user can pick a rating with their thumb without
-  // mis-hitting the neighbour.
+  // Large tappable star row. The stars share one line and split it evenly,
+  // square, from 56 px down to the 44 px touch floor: five of those and
+  // their 2 px gaps are the 228 px a 360 px phone leaves this row. Five fixed
+  // 56 px stars needed 312 px: the runner clipped the fourth and fifth, and
+  // a wrapping row of them read "3 stars, then 2", which hides the length and
+  // order of the scale. The row still wraps, but only when the stars cannot
+  // fit at 44 px: a longer scale (the schema allows 10) or a narrower screen.
   const max = field.starsMax ?? 5;
   // Same string-vs-number problem as Likert above.
   const current = coerceScaleValue(value) ?? 0;
@@ -481,9 +485,7 @@ function BigRating({
       data-testid="mobile-rating"
       role="group"
       aria-label={field.label}
-      // Wraps: five 56 px stars and their gaps are 312 px, wider than the
-      // screen's content box on a 360 px phone, so the fifth sat off screen.
-      style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}
+      style={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "flex-start", justifyContent: "flex-start" }}
     >
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const on = current >= n;
@@ -497,8 +499,10 @@ function BigRating({
             aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
             data-testid={`mobile-star-${field.name}-${n}`}
             style={{
-              width: 56,
-              height: 56,
+              flex: "1 1 0",
+              minWidth: TOUCH_TARGET,
+              maxWidth: 56,
+              aspectRatio: "1 / 1",
               borderRadius: "var(--r-2)",
               fontSize: 28,
               lineHeight: 1,
