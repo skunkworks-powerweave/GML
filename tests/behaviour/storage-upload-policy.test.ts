@@ -52,15 +52,28 @@ const storagePolicySql = () =>
     .map((f) => readFileSync(join(POST_DIR, f), "utf8"))
     .filter((sql) => /ON storage\.objects/.test(sql));
 
-/** The parts of Supabase's storage and auth schemas the upload policy uses. */
+/**
+ * The parts of Supabase's storage and auth schemas the upload policy uses,
+ * each created only if it is missing. Other suites commit a bare `auth` schema
+ * of their own (tests/behaviour/_fake_gotrue.ts, for auth.sessions) and may do
+ * so while this runs, so the schemas are created under a savepoint that
+ * tolerates losing that race.
+ */
+const STAND_IN_SCHEMAS = ["CREATE SCHEMA IF NOT EXISTS storage", "CREATE SCHEMA IF NOT EXISTS auth"];
 const STAND_IN = `
   DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+    IF to_regprocedure('auth.uid()') IS NULL THEN
+      CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $f$
+        SELECT coalesce(
+          nullif(current_setting('request.jwt.claim.sub', true), ''),
+          (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+        )::uuid
+      $f$;
+    END IF;
   END $$;
-  CREATE SCHEMA storage;
-  CREATE SCHEMA auth;
-  CREATE TABLE storage.buckets (
+  CREATE TABLE IF NOT EXISTS storage.buckets (
     id text PRIMARY KEY, name text NOT NULL UNIQUE, owner uuid, public boolean DEFAULT false,
     file_size_limit bigint, allowed_mime_types text[], created_at timestamptz DEFAULT now(),
     updated_at timestamptz DEFAULT now()
@@ -79,12 +92,6 @@ const STAND_IN = `
     SELECT string_to_array(name, '/') INTO _parts;
     RETURN _parts[1 : array_length(_parts, 1) - 1];
   END $f$;
-  CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $f$
-    SELECT coalesce(
-      nullif(current_setting('request.jwt.claim.sub', true), ''),
-      (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
-    )::uuid
-  $f$;
   GRANT USAGE ON SCHEMA storage, auth TO anon, authenticated;
   GRANT ALL ON storage.objects TO anon, authenticated;
 `;
@@ -133,7 +140,20 @@ test(
       await c.query("BEGIN");
       try {
         const real = (await c.query(`SELECT to_regclass('storage.objects') IS NOT NULL AS real`)).rows[0].real;
-        if (!real) await c.query(STAND_IN);
+        if (!real) {
+          for (const sql of STAND_IN_SCHEMAS) {
+            await c.query("SAVEPOINT schema");
+            try {
+              await c.query(sql);
+              await c.query("RELEASE SAVEPOINT schema");
+            } catch (err) {
+              // Another suite created it between the check and the insert.
+              await c.query("ROLLBACK TO SAVEPOINT schema");
+              if (!["23505", "42P06"].includes(String((err as { code?: unknown }).code))) throw err;
+            }
+          }
+          await c.query(STAND_IN);
+        }
         for (const sql of storagePolicySql()) await c.query(sql);
 
         const teacher = randomUUID();
