@@ -47,10 +47,18 @@ test("schools index queries schools + zones + districts and aggregates counts", 
   for (const tbl of ["schools", "zones", "districts", "teachers", "classes", "sessions"]) {
     assert.match(src, new RegExp(`\\b${tbl}\\b`), `index must reference ${tbl}`);
   }
-  // Aggregates must be correlated subqueries.
-  assert.match(src, /teacher_counts/);
-  assert.match(src, /class_counts/);
-  assert.match(src, /session_counts/);
+  // Aggregates must be correlated subqueries. This pinned the names of three
+  // derived tables (teacher_counts, class_counts, session_counts), which were
+  // not correlated: each GROUPed its whole table on every load (W3-15). What
+  // is pinned now is the correlation to the listed school;
+  // tests/behaviour/repo-index-counts.test.ts checks the plan.
+  for (const tbl of ["teachers", "classes", "classroomSessions"]) {
+    assert.match(
+      src,
+      new RegExp(`\\(select count\\(\\*\\)::int from \\$\\{${tbl}\\} where \\$\\{${tbl}\\.schoolId\\} = \\$\\{schools\\.id\\}`),
+      `the ${tbl} count must be correlated to the listed school`,
+    );
+  }
   // District filter must come from searchParams.
   assert.match(src, /searchParams/);
   assert.match(src, /district/);

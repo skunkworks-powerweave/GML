@@ -6,7 +6,7 @@
 // already URL-driven via <Link>, but the row narrowing happened in JS via
 // a post-fetch .filter() call. Now the WHERE clause is built up against
 // districts.code so Postgres returns the visible set directly. Counts
-// come from a single GROUP BY round-trip.
+// come from correlated subqueries in the same round-trip.
 
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -84,35 +84,17 @@ export default async function RepoSchoolsIndexPage({
   const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
   const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
-  // Inline correlated counts so the index hits the DB in one round-trip.
-  const teacherCounts = db
-    .select({
-      schoolId: teachers.schoolId,
-      teachersTotal: sql<number>`count(*)::int`.as("teachers_total"),
-    })
-    .from(teachers)
-    .where(eq(teachers.active, true))
-    .groupBy(teachers.schoolId)
-    .as("teacher_counts");
-
-  const classCounts = db
-    .select({
-      schoolId: classes.schoolId,
-      classesTotal: sql<number>`count(*)::int`.as("classes_total"),
-    })
-    .from(classes)
-    .where(eq(classes.active, true))
-    .groupBy(classes.schoolId)
-    .as("class_counts");
-
-  const sessionCounts = db
-    .select({
-      schoolId: classroomSessions.schoolId,
-      sessionsTotal: sql<number>`count(*)::int`.as("sessions_total"),
-    })
-    .from(classroomSessions)
-    .groupBy(classroomSessions.schoolId)
-    .as("session_counts");
+  // Inline counts, correlated to the listed school, so the index still hits
+  // the DB in one round-trip but counts only the schools it shows (sessions
+  // from sessions_school_date_idx). They were derived tables GROUPing every
+  // active teacher, every active class and the whole sessions table, LEFT
+  // JOINed; Postgres cannot push the join condition into a GROUP BY, so even
+  // ?q=<one school> aggregated every session ever logged. The unfiltered view
+  // lists nearly every school, so it gains little: the saving is on the
+  // district and ?q= views.
+  const teachersTotal = sql<number>`(select count(*)::int from ${teachers} where ${teachers.schoolId} = ${schools.id} and ${eq(teachers.active, true)})`;
+  const classesTotal = sql<number>`(select count(*)::int from ${classes} where ${classes.schoolId} = ${schools.id} and ${eq(classes.active, true)})`;
+  const sessionsTotal = sql<number>`(select count(*)::int from ${classroomSessions} where ${classroomSessions.schoolId} = ${schools.id})`;
 
   // Spec 129 — build the district WHERE clause server-side. Accept either
   // the JSX-prototype's "kgl" code or the longer "kargil" canonical form so
@@ -152,16 +134,13 @@ export default async function RepoSchoolsIndexPage({
       zoneName: zones.name,
       districtName: districts.name,
       districtCode: districts.code,
-      teachersTotal: teacherCounts.teachersTotal,
-      classesTotal: classCounts.classesTotal,
-      sessionsTotal: sessionCounts.sessionsTotal,
+      teachersTotal,
+      classesTotal,
+      sessionsTotal,
     })
     .from(schools)
     .leftJoin(zones, eq(schools.zoneId, zones.id))
     .leftJoin(districts, eq(zones.districtId, districts.id))
-    .leftJoin(teacherCounts, eq(teacherCounts.schoolId, schools.id))
-    .leftJoin(classCounts, eq(classCounts.schoolId, schools.id))
-    .leftJoin(sessionCounts, eq(sessionCounts.schoolId, schools.id))
     .where(whereCond)
     .orderBy(asc(schools.name))
     .limit(200);

@@ -74,6 +74,10 @@ export default async function CycleDetailPage({
       tone: "error",
     },
     empty_note: { message: "Note text can't be empty.", tone: "warn" },
+    note_too_long: {
+      message: `A note can be at most ${MAX_TEXT_LENGTH.toLocaleString("en-IN")} characters, so this one was not added. Please shorten it and add it again.`,
+      tone: "warn",
+    },
     submit_failed: {
       message:
         "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
@@ -122,8 +126,14 @@ export default async function CycleDetailPage({
   const evidence = await db.select().from(observationEvidence).where(eq(observationEvidence.cycleId, cycleId));
   const notes = parseNotes(cycle.remark);
   // What each textarea keeps if a submit is refused, keyed to this viewer and
-  // this version of the cycle (lib/observation/drafts.ts).
-  const drafts = { userId: actor.id, cycleId, version: String(cycle.updatedAt.getTime()) };
+  // to a version of ITS OWN form (lib/observation/drafts.ts). A stage form's
+  // version is the cycle's status: only that form landing moves it, and the
+  // form is shown at that status alone. The note's is the number of entries:
+  // a saved note always adds one. Both used to be the cycle's updated_at, which
+  // every write moves, so saving a note emptied an unsent rubric and saving
+  // the rubric emptied an unsent note.
+  const drafts = { userId: actor.id, cycleId, version: cycle.status };
+  const noteDraftVersion = String(notes.length);
 
   const currentStageIdx = CYCLE_STAGES.findIndex((s) => s.id === cycle.status);
 
@@ -441,9 +451,11 @@ export default async function CycleDetailPage({
           <DraftTextarea
             name="note"
             draftScope={draftScope(drafts.userId, drafts.cycleId, "note")}
-            draftVersion={drafts.version}
+            draftVersion={noteDraftVersion}
             rows={3}
             required
+            // The cap addNoteAction enforces (note_too_long).
+            maxLength={MAX_TEXT_LENGTH}
             className="text"
             // Named: a placeholder is not a label, and vanishes as you type.
             aria-label="New note"
@@ -482,6 +494,7 @@ function StageFields({
   drafts,
 }: {
   kind: StageKind;
+  /** version: the cycle's status (see `drafts` above). */
   drafts: { userId: string; cycleId: string; version: string };
 }) {
   return (

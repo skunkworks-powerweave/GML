@@ -10,9 +10,10 @@
 // an uncontrolled textarea came back empty after a refusal too. A controlled
 // one keeps its text (React keeps its defaultValue in step with the value).
 //
-// What is shown: the text typed against THIS version of the cycle, else the
-// draft saved for it. A new version -- the one thing that means the text was
-// saved -- therefore shows the (absent) draft for the new version: an empty box.
+// What is shown: the text typed against THIS version of the field's form, else
+// the draft saved for it. A new version -- the one thing that means this
+// form's text was saved -- therefore shows the (absent) draft for the new
+// version: an empty box.
 // The saved draft is read through useSyncExternalStore, whose server snapshot
 // is null, so the server render and hydration agree and the draft appears
 // straight after.
@@ -23,7 +24,7 @@ import { readDraft, saveDraft } from "@/lib/observation/drafts";
 type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "defaultValue" | "onChange"> & {
   /** draftScope(userId, cycleId, field) */
   draftScope: string;
-  /** The cycle's updated_at, as a string. */
+  /** Moves only when THIS field's form is saved (lib/observation/drafts.ts). */
   draftVersion: string;
 };
 

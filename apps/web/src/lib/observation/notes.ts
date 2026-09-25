@@ -13,6 +13,11 @@
 // column: it splits it on the separator and renders each entry's author as
 // markup of its own, so whatever a body says stays inside its author's entry.
 //
+// Remarks written before this format kept their blank lines, so the split
+// would have trusted their header-shaped lines too. They were marked once, at
+// deploy, as a single block that matches no header
+// (packages/db/src/migrations/_post/010_observation_legacy_remarks.sql).
+//
 // No "server-only": tests/behaviour imports it.
 
 const ROLES = "teacher|mentor|observer|programme_admin|super_admin";
