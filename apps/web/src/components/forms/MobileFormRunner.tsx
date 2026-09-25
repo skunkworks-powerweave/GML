@@ -51,7 +51,7 @@ import {
   type FormSchema,
 } from "./FormRenderer";
 import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
-import { failureMessage, keepLocalCopy, readLocalCopy, useDraftAutosave } from "./draft-resilience";
+import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -82,6 +82,17 @@ export type MobileFormRunnerProps = {
   schema: FormSchema;
   initialResponses?: Record<string, unknown>;
   draftKey?: DraftKey;
+  /**
+   * The signed-in user. The copy of unsaved answers kept on this device is
+   * theirs alone (draft-resilience.ts); with no user, none is kept.
+   */
+  userId?: string;
+  /**
+   * When the server last wrote what `initialResponses` hold (ms since the
+   * epoch): the draft's updatedAt, or the prior answer's submittedAt; null
+   * when it holds neither. A device copy is restored only if it is newer.
+   */
+  serverSavedAt?: number | null;
   submitLabel?: string;
   action?: (formData: FormData) => Promise<void> | void;
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
@@ -512,6 +523,8 @@ export function MobileFormRunner({
   schema,
   initialResponses,
   draftKey,
+  userId,
+  serverSavedAt,
   submitLabel,
   action,
   onSubmit,
@@ -564,7 +577,7 @@ export function MobileFormRunner({
 
   // A failed save is kept on the device and, when trying again can help,
   // tried again -- it used to say "retrying" and do nothing (draft-resilience.ts).
-  const { saveState, failure: saveFailure, flushSave, cancelRetry } = useDraftAutosave(draftKey, autosaveEnabled, valuesRef);
+  const { saveState, failure: saveFailure, flushSave, cancelRetry } = useDraftAutosave(draftKey, autosaveEnabled, valuesRef, userId);
 
   const scheduleSave = useCallback(() => {
     if (!autosaveEnabled) return;
@@ -579,13 +592,13 @@ export function MobileFormRunner({
   }, []);
 
   // Answers this device kept because the server never got them come back on
-  // the next visit, and go to the server with the next save.
+  // the next visit, if newer than the server's, and go to the server at once
+  // (see FormRenderer).
   useEffect(() => {
     if (!autosaveEnabled || !draftKey) return;
-    const kept = readLocalCopy(draftKey);
+    const kept = takeNewerLocalCopy(userId, draftKey, serverSavedAt ?? null);
     if (!kept) return;
-    // From a timer, once hydration has painted the server's copy: the device
-    // copy is the newer one, and goes straight to the server.
+    // From a timer, once hydration has painted the server's copy.
     const t = setTimeout(async () => {
       valuesRef.current = { ...valuesRef.current, ...kept };
       setValues((prev) => ({ ...prev, ...kept }));
@@ -601,7 +614,7 @@ export function MobileFormRunner({
       setValues((prev) => ({ ...prev, [name]: raw }));
       // Onto the device at once (see FormRenderer.setField).
       valuesRef.current = { ...valuesRef.current, [name]: raw };
-      if (autosaveEnabled && draftKey) keepLocalCopy(draftKey, valuesRef.current);
+      if (autosaveEnabled && draftKey) keepLocalCopy(userId, draftKey, valuesRef.current);
       setErrors((prev) => {
         if (!prev[name]) return prev;
         const { [name]: _ignored, ...rest } = prev;
@@ -609,7 +622,7 @@ export function MobileFormRunner({
       });
       scheduleSave();
     },
-    [autosaveEnabled, draftKey, scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave, userId],
   );
 
   const totalSteps = fields.length + 1; // +1 for the review screen

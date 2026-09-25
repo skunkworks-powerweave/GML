@@ -66,9 +66,10 @@ export async function saveDraft(
     body: JSON.stringify({ responses: args.responses }),
   });
   if (!res.ok) {
-    // The status travels with the error: the runners retry a 5xx, but not a
-    // 401 (session expired) or a 403 (section locked), which repeating cannot
-    // fix. A network failure rejects from fetch() itself, with no status.
+    // The status travels with the error: the runners retry a 5xx or a 429,
+    // but no other 4xx (a 401 session expired, a 403 section locked, a 400 or
+    // 413 refusal), which repeating cannot fix. A network failure rejects from
+    // fetch() itself, with no status.
     throw Object.assign(new Error(`saveDraft: ${res.status} ${await res.text()}`), { status: res.status });
   }
 }

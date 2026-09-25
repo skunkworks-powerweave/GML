@@ -60,18 +60,36 @@ function allElements(node: unknown, out: El[] = []): El[] {
 
 type Runner = "FormRenderer" | "MobileFormRunner";
 
-async function mountRunner(which: Runner) {
+const USER = "33333333-3333-4333-8333-333333333333";
+
+type MountOpts = {
+  /** Whose device copy (the runner page passes the signed-in user). */
+  userId?: string;
+  /** When the server last wrote what initialResponses hold (ms), or null. */
+  serverSavedAt?: number | null;
+  initialResponses?: Record<string, unknown>;
+  /** Run effects: the restore-on-mount and the `online` listener live there. */
+  effects?: boolean;
+};
+
+async function mountRunner(which: Runner, opts: MountOpts = {}) {
   const mod =
     which === "FormRenderer"
       ? await import("../../apps/web/src/components/forms/FormRenderer.tsx")
       : await import("../../apps/web/src/components/forms/MobileFormRunner.tsx");
   const component = (mod as Record<string, unknown>)[which] as (p: unknown) => unknown;
-  const m = mount(component, {
-    schema: { fields: [{ name: "note", label: "Note", kind: "textarea" }] },
-    initialResponses: {},
-    draftKey: KEY,
-    action: async () => undefined,
-  });
+  const m = mount(
+    component,
+    {
+      schema: { fields: [{ name: "note", label: "Note", kind: "textarea" }] },
+      initialResponses: opts.initialResponses ?? {},
+      draftKey: KEY,
+      userId: opts.userId ?? USER,
+      serverSavedAt: opts.serverSavedAt ?? null,
+      action: async () => undefined,
+    },
+    { effects: opts.effects },
+  );
   // The textarea is drawn by a child component (TextArea / BigTextArea), which
   // mount() leaves unexpanded; its element carries the runner's onChange.
   const type = (text: string) => {
@@ -86,7 +104,38 @@ async function mountRunner(which: Runner) {
         (el) => el.props["data-saved-indicator"] !== undefined || el.props["data-testid"] === "mobile-save-state",
       ),
     );
-  return { m, type, indicator };
+  const note = () => {
+    const box = allElements(m.rerender()).find(
+      (el) => (el.props.field as { name?: string } | undefined)?.name === "note" && "value" in el.props,
+    )!;
+    return box.props.value;
+  };
+  return { m, type, indicator, note };
+}
+
+/** PUT bodies' `note`, and a fetch that answers each call with `status(n)`. */
+function recordPuts(status: (n: number) => number | "offline" = () => 200) {
+  const notes: unknown[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+    notes.push((JSON.parse(init?.body ?? "{}") as { responses?: { note?: unknown } }).responses?.note);
+    const st = status(notes.length);
+    if (st === "offline") throw new TypeError("Failed to fetch");
+    return new Response("{}", { status: st });
+  }) as typeof fetch;
+  return notes;
+}
+
+/**
+ * Leave a copy on this device the way a real failure does: the answer is
+ * typed, the save is refused for good (401), and the tab is closed.
+ */
+async function leaveDeviceCopy(which: Runner, text: string, userId = USER) {
+  recordPuts(() => 401);
+  const first = await mountRunner(which, { userId });
+  first.type(text);
+  await sleep(1300);
+  first.m.unmount();
+  assert.match([...storage.map.values()].join(""), new RegExp(text), "precondition: a copy is on the device");
 }
 
 test("FormRenderer: a retry pending when Submit is pressed never lands after the POST", async () => {
@@ -149,5 +198,117 @@ for (const which of ["FormRenderer", "MobileFormRunner"] as const) {
     await sleep(2500);
     assert.equal(calls, 1, "a 401 will not succeed by being repeated");
     assert.match([...storage.map.values()].join(""), /still typing/);
+  });
+}
+
+// ── F58 (review): the device copy, on the next visit ─────────────────────────
+//
+// The copy was restored over whatever the server handed the page, and PUT at
+// once, without comparing its time with the server's: a stale copy on one
+// phone (saves failed there, the work went on and was saved elsewhere)
+// silently replaced the newer draft. Its key had no user in it, so on a shared
+// school phone one teacher's copy was restored into another's form. And a
+// 400, 404 or 413 was retried forever.
+
+for (const which of ["FormRenderer", "MobileFormRunner"] as const) {
+  test(`${which}: a device copy newer than the server's draft is restored and sent`, async () => {
+    await leaveDeviceCopy(which, "typed offline, never saved");
+    const puts = recordPuts();
+    const r = await mountRunner(which, {
+      initialResponses: { note: "the server's older draft" },
+      serverSavedAt: Date.now() - 60_000,
+      effects: true,
+    });
+    try {
+      await sleep(50);
+      assert.equal(r.note(), "typed offline, never saved", "the newer copy is what the form shows");
+      assert.deepEqual(puts, ["typed offline, never saved"], "and it goes to the server at once");
+      assert.equal(storage.map.size, 0, "once the server has it, the device copy is cleared");
+    } finally {
+      r.m.unmount();
+    }
+  });
+
+  test(`${which}: a device copy older than the server's draft is dropped, not restored`, async () => {
+    await leaveDeviceCopy(which, "stale, from before the other device");
+    const puts = recordPuts();
+    const r = await mountRunner(which, {
+      initialResponses: { note: "saved later on another device" },
+      serverSavedAt: Date.now() + 60_000,
+      effects: true,
+    });
+    try {
+      await sleep(50);
+      assert.equal(r.note(), "saved later on another device", "the newer server draft stands");
+      assert.deepEqual(puts, [], "nothing overwrites it");
+      assert.equal(storage.map.size, 0, "the stale copy is removed from the device");
+    } finally {
+      r.m.unmount();
+    }
+  });
+
+  test(`${which}: one user's device copy is never restored into another user's form`, async () => {
+    await leaveDeviceCopy(which, "teacher one's answer", "44444444-4444-4444-8444-444444444444");
+    const puts = recordPuts();
+    const r = await mountRunner(which, { userId: USER, effects: true });
+    try {
+      await sleep(50);
+      assert.notEqual(r.note(), "teacher one's answer");
+      assert.deepEqual(puts, []);
+    } finally {
+      r.m.unmount();
+    }
+  });
+
+  test(`${which}: coming back online sends the waiting copy at once`, async () => {
+    const win = new EventTarget();
+    g.window = win;
+    try {
+      const puts = recordPuts((n) => (n === 1 ? "offline" : 200));
+      const r = await mountRunner(which, { effects: true });
+      try {
+        r.type("typed on a dead link");
+        await sleep(1300); // debounce -> the PUT, which fails; a retry is due in 2 s
+        assert.equal(puts.length, 1);
+        r.m.rerender();
+        win.dispatchEvent(new Event("online"));
+        await sleep(50);
+        assert.deepEqual(puts, ["typed on a dead link", "typed on a dead link"], "sent on 'online', not at the next backoff");
+        assert.equal(storage.map.size, 0);
+      } finally {
+        r.m.unmount();
+      }
+    } finally {
+      delete g.window;
+    }
+  });
+
+  test(`${which}: a 4xx refusal is not retried; a 429 or 5xx is`, async () => {
+    // With effects, so unmount() stops any retry left scheduled.
+    const refused = recordPuts(() => 400);
+    const a = await mountRunner(which, { effects: true });
+    try {
+      a.type("too long, say");
+      await sleep(1300);
+      assert.match(a.indicator(), /kept on this device/i);
+      assert.doesNotMatch(a.indicator(), /retrying/i, "a 400 will not succeed by being repeated");
+      await sleep(2500);
+      assert.equal(refused.length, 1);
+    } finally {
+      a.m.unmount();
+    }
+
+    storage.map.clear();
+    const busy = recordPuts((n) => (n === 1 ? 429 : 200));
+    const b = await mountRunner(which, { effects: true });
+    try {
+      b.type("busy server");
+      await sleep(1300);
+      assert.match(b.indicator(), /retrying/i);
+      await sleep(2500);
+      assert.equal(busy.length, 2, "a 429 is tried again");
+    } finally {
+      b.m.unmount();
+    }
   });
 }

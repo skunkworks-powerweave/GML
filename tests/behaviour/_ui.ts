@@ -203,14 +203,18 @@ export async function withIntl(child: unknown, locale: RequestState["locale"]): 
 // returned tree, invokes its real handler, and re-renders.
 //
 // Scope, deliberately narrow: ONE component's own hooks. Child components are
-// left as unexpanded elements. Effects do not run (none of the handlers under
-// test depend on them). It reaches into React's documented-as-internal
-// dispatcher slot, so a React major upgrade will break it LOUDLY -- `mount`
-// throws if the slot is missing rather than silently rendering nothing.
+// left as unexpanded elements. Effects do not run unless the test asks for
+// them (`{ effects: true }`): then useEffect/useLayoutEffect bodies run after
+// each render whose deps changed, as React's commit would, and unmount() runs
+// their cleanups -- which a test using them must call, or a timer an effect
+// started keeps the process alive. It reaches into React's
+// documented-as-internal dispatcher slot, so a React major upgrade will break
+// it LOUDLY -- `mount` throws if the slot is missing rather than silently
+// rendering nothing.
 
 type AnyElement = { type: unknown; props: Record<string, unknown> };
 
-export function mount<P>(component: (props: P) => unknown, props: P) {
+export function mount<P>(component: (props: P) => unknown, props: P, opts: { effects?: boolean } = {}) {
   const internals = (React as unknown as Record<string, { H: unknown } | undefined>)
     .__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
   if (!internals || !("H" in internals)) {
@@ -222,6 +226,23 @@ export function mount<P>(component: (props: P) => unknown, props: P) {
     const k = cursor++;
     if (!(k in slots)) slots[k] = init();
     return [k, slots[k] as T];
+  };
+  // Effects, keyed by hook position like state; only with opts.effects.
+  type EffectSlot = { deps: readonly unknown[] | undefined; cleanup: (() => void) | undefined };
+  const effectSlots = new Map<number, EffectSlot>();
+  let pendingEffects: Array<() => void> = [];
+  const effect = (fn: () => unknown, deps?: readonly unknown[]) => {
+    const k = cursor++;
+    if (!opts.effects) return;
+    const prev = effectSlots.get(k);
+    const unchanged =
+      prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, i) => Object.is(d, prev.deps![i]));
+    if (unchanged) return;
+    pendingEffects.push(() => {
+      prev?.cleanup?.();
+      const cleanup = fn();
+      effectSlots.set(k, { deps, cleanup: typeof cleanup === "function" ? (cleanup as () => void) : undefined });
+    });
   };
   const dispatcher = {
     useState<T>(initial: T | (() => T)) {
@@ -238,8 +259,8 @@ export function mount<P>(component: (props: P) => unknown, props: P) {
     useRef<T>(initial: T) {
       return slot(() => ({ current: initial }))[1];
     },
-    useEffect() { cursor++; },
-    useLayoutEffect() { cursor++; },
+    useEffect: effect,
+    useLayoutEffect: effect,
     useInsertionEffect() { cursor++; },
     useCallback<T>(fn: T) { cursor++; return fn; },
     useMemo<T>(fn: () => T) { cursor++; return fn(); },
@@ -259,16 +280,26 @@ export function mount<P>(component: (props: P) => unknown, props: P) {
     const previous = internals.H;
     internals.H = dispatcher;
     cursor = 0;
+    let out: AnyElement;
     try {
-      return component(props) as AnyElement;
+      out = component(props) as AnyElement;
     } finally {
       internals.H = previous;
     }
+    const run = pendingEffects;
+    pendingEffects = [];
+    for (const e of run) e();
+    return out;
   };
   let tree = renderOnce();
   return {
     get tree() { return tree; },
     rerender() { tree = renderOnce(); return tree; },
+    /** Run every effect's cleanup, as unmounting would. */
+    unmount() {
+      for (const e of effectSlots.values()) e.cleanup?.();
+      effectSlots.clear();
+    },
   };
 }
 

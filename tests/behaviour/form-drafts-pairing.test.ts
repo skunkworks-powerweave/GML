@@ -166,3 +166,51 @@ test("a draft about a pairing needs the mentorship section, and the caller's own
     assert.equal(n, 0);
   });
 });
+
+// F58 (review): a copy of unsaved answers kept on the device is restored only
+// when it is newer than what the server handed the page, and only for the
+// user who typed it. The runners can compare only what the page tells them:
+// the time the draft (or, without one, the prior answer) was written, and who
+// is signed in.
+test("the runner tells the renderer who is signed in and when the server wrote what it starts from", { skip }, async () => {
+  await withMentor(async (w, form) => {
+    const { default: FormRunnerPage } = await import("../../apps/web/src/app/(authenticated)/forms/[slug]/page.tsx");
+    const rendererProps = async (pairingId: string) => {
+      const r = await outcome(() =>
+        FormRunnerPage({ params: Promise.resolve({ slug: form.slug }), searchParams: Promise.resolve({ pairingId }) }),
+      );
+      assert.equal(r.kind, "value", describe(r));
+      const found: Array<Record<string, unknown>> = [];
+      const walk = (n: unknown): void => {
+        if (Array.isArray(n)) return n.forEach(walk);
+        if (!n || typeof n !== "object" || !("props" in n)) return;
+        const el = n as { type: unknown; props: Record<string, unknown> };
+        if (typeof el.type === "function" && /^(FormRenderer|MobileFormRunner)$/.test((el.type as { name: string }).name)) {
+          found.push(el.props);
+        }
+        walk(el.props.children);
+      };
+      walk((r as { value: unknown }).value);
+      assert.equal(found.length, 1, "one renderer");
+      return found[0]!;
+    };
+
+    // A draft: its updatedAt.
+    assert.equal((await putDraft(form.id, w.pairingA, { notes: "draft" })).status, 200);
+    const [d] = await w.q<{ updated_at: Date }>(
+      `SELECT updated_at FROM form_drafts WHERE user_id = $1 AND pairing_id = $2`,
+      [w.mentor.id, w.pairingA],
+    );
+    const withDraft = await rendererProps(w.pairingA);
+    assert.equal(withDraft.userId, w.mentor.id);
+    assert.equal(withDraft.serverSavedAt, new Date(d!.updated_at).getTime());
+
+    // No draft, a prior answer: its submittedAt.
+    await w.q(
+      `INSERT INTO feedback_responses (form_id, pairing_id, respondent_user_id, responses) VALUES ($1, $2, $3, '{"notes":"sent"}'::jsonb)`,
+      [form.id, w.pairingB, w.mentor.id],
+    );
+    const [p] = await w.q<{ submitted_at: Date }>(`SELECT submitted_at FROM feedback_responses WHERE pairing_id = $1`, [w.pairingB]);
+    assert.equal((await rendererProps(w.pairingB)).serverSavedAt, new Date(p!.submitted_at).getTime());
+  });
+});

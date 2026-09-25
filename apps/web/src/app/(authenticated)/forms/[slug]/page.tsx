@@ -564,9 +564,10 @@ export default async function FormRunnerPage({
   // are indexable on feedback_responses; ordering by submittedAt DESC + limit
   // 1 picks the most recent canonical answer if multiple exist (re-takes).
   let priorResponses: Record<string, unknown> | null = null;
+  let priorSubmittedAt: Date | null = null;
   if (pairingId) {
     const [prior] = await db
-      .select({ responses: feedbackResponses.responses })
+      .select({ responses: feedbackResponses.responses, submittedAt: feedbackResponses.submittedAt })
       .from(feedbackResponses)
       .where(
         and(
@@ -578,6 +579,7 @@ export default async function FormRunnerPage({
       .orderBy(desc(feedbackResponses.submittedAt))
       .limit(1);
     priorResponses = (prior?.responses as Record<string, unknown> | undefined) ?? null;
+    priorSubmittedAt = prior?.submittedAt ?? null;
   }
 
   const schema = readSchema(form);
@@ -616,6 +618,13 @@ export default async function FormRunnerPage({
     draftResponses ??
     priorResponses ??
     {};
+  // When the server wrote what the form starts from. A copy of unsaved answers
+  // kept on the device is restored only if it is newer (draft-resilience.ts).
+  const serverSavedAt = draft
+    ? new Date(draft.updatedAt).getTime()
+    : priorSubmittedAt
+      ? new Date(priorSubmittedAt).getTime()
+      : null;
 
   // Layer prefill UNDER baseResponses so a draft / prior response always wins
   // — prefill is a starting hint, never an override of work the user has
@@ -791,6 +800,8 @@ export default async function FormRunnerPage({
               schema={schema}
               initialResponses={initialResponses}
               draftKey={{ templateId: form.id, pairingId: pairingId || null }}
+              userId={userId}
+              serverSavedAt={serverSavedAt}
               action={submitFormAction}
               formId={form.id}
               slug={slug}
@@ -802,6 +813,8 @@ export default async function FormRunnerPage({
               schema={schema}
               initialResponses={initialResponses}
               draftKey={{ templateId: form.id, pairingId: pairingId || null }}
+              userId={userId}
+              serverSavedAt={serverSavedAt}
               action={submitFormAction}
               formId={form.id}
               slug={slug}

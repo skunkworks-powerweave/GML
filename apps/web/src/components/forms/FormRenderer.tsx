@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearDraft, type DraftKey } from "@/lib/form-draft";
-import { failureMessage, keepLocalCopy, readLocalCopy, useDraftAutosave } from "./draft-resilience";
+import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
 import {
   MAX_TEXT_LENGTH,
   validateResponses,
@@ -98,6 +98,17 @@ type FormRendererProps = {
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
   action?: (formData: FormData) => Promise<void> | void;
   draftKey?: DraftKey;
+  /**
+   * The signed-in user. The copy of unsaved answers kept on this device is
+   * theirs alone (draft-resilience.ts); with no user, none is kept.
+   */
+  userId?: string;
+  /**
+   * When the server last wrote what `initialResponses` hold (ms since the
+   * epoch): the draft's updatedAt, or the prior answer's submittedAt; null
+   * when it holds neither. A device copy is restored only if it is newer.
+   */
+  serverSavedAt?: number | null;
   submitLabel?: string;
   formId?: string;
   slug?: string;
@@ -626,6 +637,8 @@ export function FormRenderer({
   onSubmit,
   draftKey,
   submitLabel,
+  userId,
+  serverSavedAt,
   action,
   formId,
   slug,
@@ -697,6 +710,7 @@ export function FormRenderer({
     draftKey,
     autosaveEnabled,
     valuesRef,
+    userId,
   );
 
   const scheduleSave = useCallback(() => {
@@ -722,14 +736,14 @@ export function FormRenderer({
   }, []);
 
   // Answers this device kept because the server never got them (the tab was
-  // closed offline, the session expired) come back on the next visit, and go
-  // to the server with the next save.
+  // closed offline, the session expired) come back on the next visit -- if
+  // they are newer than what the server handed the page -- and go to the
+  // server at once. An older copy is dropped (takeNewerLocalCopy).
   useEffect(() => {
     if (!autosaveEnabled || !draftKey) return;
-    const kept = readLocalCopy(draftKey);
+    const kept = takeNewerLocalCopy(userId, draftKey, serverSavedAt ?? null);
     if (!kept) return;
-    // From a timer, once hydration has painted the server's copy: the device
-    // copy is the newer one, and goes straight to the server.
+    // From a timer, once hydration has painted the server's copy.
     const t = setTimeout(async () => {
       valuesRef.current = { ...valuesRef.current, ...kept };
       setValues((prev) => ({ ...prev, ...kept }));
@@ -751,7 +765,7 @@ export function FormRenderer({
       // only after commit) so the copy and the next save are never a keystroke
       // behind.
       valuesRef.current = { ...valuesRef.current, [name]: raw };
-      if (autosaveEnabled && draftKey) keepLocalCopy(draftKey, valuesRef.current);
+      if (autosaveEnabled && draftKey) keepLocalCopy(userId, draftKey, valuesRef.current);
       // Clear any prior error on this field optimistically; full validation re-runs on submit.
       setErrors((prev) => {
         if (!prev[name]) return prev;
@@ -760,7 +774,7 @@ export function FormRenderer({
       });
       scheduleSave();
     },
-    [autosaveEnabled, draftKey, scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave, userId],
   );
 
   // Spec 142 — client-callback submit path (`onSubmit`).
