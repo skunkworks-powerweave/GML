@@ -94,11 +94,11 @@ function explainerCards(whatsappPhone: string | null) {
           {
             icon: "wa",
             title: "Forward via WhatsApp",
-            desc: `Send your video to ${whatsappPhone} with the caption for your active cycle ID. Fastest on 2G/3G.`,
+            desc: `Send your video to ${whatsappPhone} with your cycle code as the caption, e.g. OBS-2026-009. Fastest on 2G/3G.`,
             accent: "var(--lichen)",
             primary: true,
             cta: "Open WhatsApp",
-            href: `https://wa.me/${dialable}?text=${encodeURIComponent("#cycle- ")}`,
+            href: `https://wa.me/${dialable}?text=${encodeURIComponent("OBS-")}`,
           },
         ]
       : []),

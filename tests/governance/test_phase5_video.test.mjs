@@ -81,10 +81,15 @@ test("WhatsApp webhook has GET verify + POST ingestion + signature check", () =>
 });
 
 test("WhatsApp webhook parses OBS-/TB-/MM- caption prefixes", () => {
-  const src = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
+  // F129: the parser moved to packages/shared so it can be executed without
+  // Next (tests/behaviour/whatsapp-caption.test.ts drives it, and the
+  // webhook, with the captions teachers really type). The route must use it.
+  const src = read("packages/shared/src/whatsapp/caption.ts");
   for (const tag of ["OBS", "TB", "MM"]) {
     assert.match(src, new RegExp(`tag === "${tag}"`));
   }
+  const route = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
+  assert.match(route, /import\s*\{\s*parseCaption\s*\}\s*from\s*"@gml\/shared\/whatsapp\/caption"/);
 });
 
 test("WhatsApp webhook uses dotted-notation audit actions", () => {

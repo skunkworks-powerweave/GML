@@ -58,7 +58,7 @@ type MobileUploadRunnerProps = {
    *  Same env-var contract as UploadModal (spec 132). */
   whatsappPhone?: string | null;
   /** Optional active observation cycle code to prefill the caption
-   *  ("OBS-c2026-004"). When unset the caption starts blank. */
+   *  ("2026-004", captioned OBS-2026-004). When unset the caption starts blank. */
   activeCycleCode?: string | null;
 };
 
@@ -319,9 +319,13 @@ export function MobileUploadRunner({
     };
   }, []);
 
-  const waHref = whatsappPhone
-    ? `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(
-        activeCycleCode ? `#${activeCycleCode}` : "#cycle-",
+  // wa.me takes the number as digits only; "+91..." is not a valid path there.
+  // The pre-fill is the caption the webhook reads: the cycle code, or its
+  // "OBS-" prefix for the teacher to finish. "#cycle-" was never recognised.
+  const waDigits = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : "";
+  const waHref = waDigits
+    ? `https://wa.me/${waDigits}?text=${encodeURIComponent(
+        activeCycleCode ? `OBS-${activeCycleCode}` : "OBS-",
       )}`
     : null;
 
@@ -535,7 +539,7 @@ export function MobileUploadRunner({
             data-testid="caption-textarea"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="OBS-c2026-004"
+            placeholder="OBS-2026-004"
             rows={3}
             style={{
               width: "100%",
@@ -689,7 +693,7 @@ export function MobileUploadRunner({
                   fontFamily: "var(--mono)",
                 }}
               >
-                wa.me/{whatsappPhone}
+                wa.me/{waDigits}
               </a>
             </div>
           ) : null}
