@@ -242,3 +242,54 @@ test("every mentorship, forms and inbox page has its own title", { skip }, async
     seen.set(t, r);
   }
 });
+
+// ── one main landmark ────────────────────────────────────────────────────────
+
+// Both shells wrap every page in <main id="main-content">, the skip link's
+// target. /forms rendered a <main> of its own inside it: invalid HTML, and two
+// "main" landmarks for a screen reader to choose between. A page's own markup
+// has no <main>. (The pairing page on a phone sits in MobileDetailFrame, whose
+// <main> is that component's, so it is checked on a desktop here.)
+test("no mentorship, forms or inbox page puts a second <main> inside the shell's", { skip }, async () => {
+  await withWorld("a11ymain", async (w) => {
+    const form = await w.form("baseline", "mentor", {
+      title: `Baseline ${w.T}`,
+      fields: [{ name: "summary", label: "Summary", kind: "text" }],
+    });
+    const { default: Forms } = await import(`${APP}/forms/page.tsx`);
+    const { default: Runner } = await import(`${APP}/forms/[slug]/page.tsx`);
+    const { default: Thanks } = await import(`${APP}/forms/[slug]/thanks/page.tsx`);
+    const { default: List } = await import(`${APP}/mentorship/page.tsx`);
+    const { default: Pairing } = await import(`${APP}/mentorship/[pairingId]/page.tsx`);
+    const { default: Responses } = await import(`${APP}/mentorship/[pairingId]/responses/page.tsx`);
+    const { default: Inbox } = await import(`${APP}/inbox/page.tsx`);
+    // An observer has no forms: /forms says so from a branch of its own.
+    const observer: Person = { ...w.admin, role: "observer" };
+    const forForm = { params: Promise.resolve({ slug: form.slug }), searchParams: Promise.resolve({ pairingId: w.pairingA }) };
+
+    const pages: Array<[string, Person, () => Promise<unknown>, ("desktop" | "mobile")[]]> = [
+      ["/forms as the mentor", w.mentor, () => Forms({ searchParams: Promise.resolve({}) }), ["desktop", "mobile"]],
+      ["/forms as an administrator", w.admin, () => Forms({ searchParams: Promise.resolve({}) }), ["desktop", "mobile"]],
+      ["/forms as an observer", observer, () => Forms({ searchParams: Promise.resolve({}) }), ["desktop", "mobile"]],
+      ["/forms/[slug]", w.mentor, () => Runner(forForm), ["desktop", "mobile"]],
+      ["/forms/[slug]/thanks", w.mentor, () => Thanks(forForm), ["desktop", "mobile"]],
+      ["/mentorship", w.mentor, () => List({ searchParams: Promise.resolve({}) }), ["desktop", "mobile"]],
+      [
+        "/mentorship/[pairingId]",
+        w.mentor,
+        () => Pairing({ params: Promise.resolve({ pairingId: w.pairingA }), searchParams: Promise.resolve({}) }),
+        ["desktop"],
+      ],
+      ["/mentorship/[pairingId]/responses", w.mentor, () => Responses({ params: Promise.resolve({ pairingId: w.pairingA }) }), ["desktop", "mobile"]],
+      ["/inbox", w.teacherA, () => Inbox({ searchParams: Promise.resolve({}) }), ["desktop", "mobile"]],
+    ];
+    const found: string[] = [];
+    for (const [where, who, run, devices] of pages) {
+      for (const device of devices) {
+        const mains = [...walk(parseMarkup(await page(who, run, device)))].filter((e) => e.tag === "main").length;
+        if (mains > 0) found.push(`${where} on a ${device}: ${mains} <main>`);
+      }
+    }
+    assert.deepEqual(found, [], "a page renders a <main> of its own inside the shell's");
+  });
+});
