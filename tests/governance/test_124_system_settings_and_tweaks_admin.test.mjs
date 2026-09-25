@@ -265,18 +265,23 @@ test("spec 124 — page disables 720p and 1080p quality options with tooltips", 
   );
 });
 
-test("spec 124 — page queries audit_log for backup.* and restore.* status rows", () => {
+// This pinned `action LIKE 'backup.%'` / `'restore.%'`, which was the defect
+// (F108): under the database's en_US.UTF-8 collation a btree cannot serve a
+// LIKE prefix, so each lookup scanned the whole never-pruned audit_log on every
+// render, and `backup.failed` counted as the last successful backup. The
+// invariant now: the page takes its status from the exact reserved success
+// actions, looked up by equality. tests/behaviour/admin-audit-lookups.test.ts
+// counts the rows the lookup reads.
+test("spec 124 — page reads backup/restore status from the exact backup.complete / restore.complete rows", () => {
   const src = read(PAGE);
-  assert.match(
-    src,
-    /backup\.%/,
-    "page must query audit_log for action LIKE 'backup.%'",
-  );
-  assert.match(
-    src,
-    /restore\.%/,
-    "page must query audit_log for action LIKE 'restore.%'",
-  );
+  assert.match(src, /lastAuditAt\("backup"\)/, "page must look up the last backup status");
+  assert.match(src, /lastAuditAt\("restore"\)/, "page must look up the last restore-drill status");
+  const lookups = read("apps/web/src/admin/audit-lookups.ts");
+  assert.match(lookups, /backup:\s*"backup\.complete"/, "the backup status is the reserved backup.complete action");
+  assert.match(lookups, /restore:\s*"restore\.complete"/, "the restore status is the reserved restore.complete action");
+  // Comments stripped: the lookup's own comment quotes the old LIKE.
+  const code = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  assert.doesNotMatch(code(src + lookups), /\bLIKE\b/, "no LIKE prefix over audit_log.action");
 });
 
 test("spec 124 — /admin index no longer renders the 'Lands in spec 071' placeholder", () => {

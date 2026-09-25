@@ -23,12 +23,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { desc, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
-import { systemSettings, SYSTEM_SETTINGS_ID, auditLog } from "@gml/db/schema";
+import { systemSettings, SYSTEM_SETTINGS_ID } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { lastAuditAt } from "@/admin/audit-lookups";
 import { NOTIFICATION_CATEGORIES, NOTIFICATION_KEYS } from "@/lib/notification-kinds";
 
 export const dynamic = "force-dynamic";
@@ -131,23 +132,14 @@ export default async function SystemSettingsPage({
     .where(eq(systemSettings.id, SYSTEM_SETTINGS_ID))
     .limit(1);
 
-  // Status display — query the latest "backup" / "restore" audit log row. The
-  // backup.sh script does not yet emit audit rows (it writes /backups/last-backup.txt
-  // on the host), so until that ships these queries return null and the UI shows
-  // "never" — better than fabricating a timestamp.
-  const [lastBackup] = await db
-    .select({ at: auditLog.createdAt })
-    .from(auditLog)
-    .where(sql`${auditLog.action} LIKE 'backup.%'`)
-    .orderBy(desc(auditLog.createdAt))
-    .limit(1);
-
-  const [lastRestore] = await db
-    .select({ at: auditLog.createdAt })
-    .from(auditLog)
-    .where(sql`${auditLog.action} LIKE 'restore.%'`)
-    .orderBy(desc(auditLog.createdAt))
-    .limit(1);
+  // Status display — the latest backup.complete / restore.complete audit row,
+  // one index probe each (admin/audit-lookups.ts). Neither backup.sh nor
+  // restore.sh writes those rows yet: each records its last run on the host
+  // (last-backup.txt, workspace/last_restore_drill.json). Until they report
+  // here, the panel says so and points there -- it used to say "never", which
+  // reads as "no backup has ever run" on a box whose nightly backups pass.
+  const lastBackupAt = await lastAuditAt("backup");
+  const lastRestoreAt = await lastAuditAt("restore");
 
   const settings = row ?? {
     programmeName: "Goldenmile RTT",
@@ -340,9 +332,9 @@ export default async function SystemSettingsPage({
               Last successful backup
             </dt>
             <dd className="font-mono">
-              {lastBackup?.at
-                ? new Date(lastBackup.at).toISOString().slice(0, 16).replace("T", " ")
-                : "never (no backup.* audit rows yet)"}
+              {lastBackupAt
+                ? lastBackupAt.toISOString().slice(0, 16).replace("T", " ")
+                : "not reported to the app — see last-backup.txt on the host"}
             </dd>
           </div>
           <div>
@@ -350,17 +342,20 @@ export default async function SystemSettingsPage({
               Last restore drill
             </dt>
             <dd className="font-mono">
-              {lastRestore?.at
-                ? new Date(lastRestore.at).toISOString().slice(0, 16).replace("T", " ")
-                : "never (no restore.* audit rows yet)"}
+              {lastRestoreAt
+                ? lastRestoreAt.toISOString().slice(0, 16).replace("T", " ")
+                : "not reported to the app — see last_restore_drill.json on the host"}
             </dd>
           </div>
         </dl>
         <p className="text-xs text-neutral-500">
-          Sources: latest <code className="font-mono">backup.*</code> and{" "}
-          <code className="font-mono">restore.*</code> rows in audit_log. The
-          backup script writes <code className="font-mono">/backups/last-backup.txt</code> on
-          the host; an admin route can surface that file when audit emission lands.
+          Sources: the latest <code className="font-mono">backup.complete</code> and{" "}
+          <code className="font-mono">restore.complete</code> rows in audit_log.
+          scripts/backup.sh and scripts/restore.sh do not write them yet; each
+          records its last run on the host instead, in{" "}
+          <code className="font-mono">/var/lib/gml/backups/last-backup.txt</code> and{" "}
+          <code className="font-mono">workspace/last_restore_drill.json</code> (the
+          stamp deploy.sh&rsquo;s restore-drill gate reads).
         </p>
       </section>
     </main>
