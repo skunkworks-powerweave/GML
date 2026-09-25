@@ -12,10 +12,10 @@
 
 export default function GlobalError({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
   // lang="en" is deliberate and correct HERE, unlike the root layout it
   // replaces: every string on this page is hardcoded English (it cannot load
@@ -47,7 +47,7 @@ export default function GlobalError({
           This is a fault in the deployment itself, not in the page you requested. Please
           report it to your programme administrator.
         </p>
-        {/* A plain anchor, not only the reset() button. Next prerenders this
+        {/* A plain anchor, not only the Try again button. Next prerenders this
             convention to a static _global-error.html, whose inline scripts
             carry no nonce and are therefore refused by the CSP proxy.ts
             issues -- so on the static shell React never hydrates and an
@@ -75,9 +75,13 @@ export default function GlobalError({
         >
           Reload
         </a>
+        {/* unstable_retry, not reset: reset re-renders the payload that just
+            failed without asking the server again. Where React has hydrated,
+            this refreshes and re-renders the root; on the static shell above
+            the link is what works. */}
         <button
           type="button"
-          onClick={reset}
+          onClick={() => unstable_retry()}
           style={{
             border: "1px solid #d4d4d4",
             borderRadius: 6,

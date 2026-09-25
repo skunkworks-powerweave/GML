@@ -9,7 +9,7 @@
 // (mobile real-estate is tight) and tolerate `counts` being absent.
 
 import Link from "next/link";
-import { getTranslations } from "next-intl/server";
+import { getLocale, getTranslations } from "next-intl/server";
 import { TABS_BY_ROLE } from "@/config/nav";
 import type { NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
@@ -39,6 +39,24 @@ const TAB_KEY: Record<string, string> = {
   "uploads": "uploads",
 };
 
+/**
+ * Tab id → the id of the sidebar item that leads to the same page, so the tab
+ * carries the same data-help-anchor (`nav-<id>`). The first-run tour targets
+ * those anchors; a phone renders no sidebar, so without them every step but
+ * the last had nothing to point at. The two shells never render together, so
+ * no anchor appears twice on a page. `inbox` has no sidebar item.
+ */
+const TAB_HELP_ANCHOR: Record<string, string> = {
+  home: "dashboard",
+  learn: "rtt",
+  observe: "observation",
+  pairings: "mentorship",
+  repo: "repo",
+  uploads: "uploads",
+  data: "tbl-all",
+  audit: "audit",
+};
+
 // id → resolver matching the same convention as the sidebar (chrome-counts.ts).
 // Mobile tab ids ("observe", "pairings", "inbox") differ from sidebar nav ids
 // so we keep the mapping local.
@@ -51,6 +69,12 @@ const TAB_BADGE: Record<string, (c: NavCounts, unread: number) => number | undef
 export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: BottomTabsProps) {
   const tabs = TABS_BY_ROLE[role] ?? TABS_BY_ROLE.teacher;
   const tNav = await getTranslations("nav");
+  // Label size per script. 10px was set for every locale, which is small but
+  // legible in Latin and not in Tibetan, whose stacked glyphs need both more
+  // size and more line height; Devanagari's matras sit between the two.
+  const locale = await getLocale();
+  const label =
+    locale === "bo" ? { fontSize: 12, lineHeight: 1.4 } : locale === "hi" ? { fontSize: 11, lineHeight: 1.3 } : { fontSize: 10 };
   return (
     <nav
       className="m-bottomnav"
@@ -85,6 +109,7 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
           <Link
             key={tab.id}
             href={tab.href}
+            data-help-anchor={TAB_HELP_ANCHOR[tab.id] ? `nav-${TAB_HELP_ANCHOR[tab.id]}` : undefined}
             // The 3px bar and the weight change are visual only.
             aria-current={isActive ? "page" : undefined}
             style={{
@@ -95,7 +120,7 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
               gap: 3,
               padding: "8px 0 10px",
               color: isActive ? "var(--ink)" : "var(--ink-3)",
-              fontSize: 10,
+              ...label,
               fontWeight: isActive ? 500 : 400,
               textDecoration: "none",
               position: "relative",

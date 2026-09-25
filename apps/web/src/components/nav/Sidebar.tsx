@@ -20,7 +20,7 @@ import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { NetworkStatus } from "./NetworkStatus";
+import { NetworkStatusServer } from "./NetworkStatusServer";
 import { Icon } from "./Icon";
 
 type SidebarProps = {
@@ -41,28 +41,23 @@ const SECTION_KEY: Record<string, string> = {
   "Data": "data",
   "System": "system",
   "Resources": "resources",
+  // The section config/nav.ts appends for every role without /settings.
+  "Your account": "yourAccount",
 };
 
 /**
- * Nav item id → `nav.*` key. Items not in the map fall back to item.label.
+ * Nav item id → `nav.*` key, for ids whose label is the same for every role.
  *
  * FOUR IDS ARE DELIBERATELY ABSENT: observation, mentorship, rtt and videos.
- *
- * NAV_BY_ROLE reuses those ids across roles with DIFFERENT labels by design --
- * `videos` is "Video library" for an admin and "Pending review" for a mentor;
- * `observation` is "Classroom Observation", "Observation cycles" or "My
- * observations" depending on who is looking. This map is keyed by id alone, so
- * whichever single translation existed overwrote all of them: a mentor's
- * sidebar said "Video library" and "Mentorship" instead of "Pending review" and
- * "My mentees". Not a translation bug -- it showed the wrong label in English
- * too, which is how it went unnoticed in a programme whose default locale is
- * English.
- *
- * Falling back to item.label restores the role-specific wording everywhere.
- * The cost is that those four are not translated: fixing that properly needs
- * per-role keys in the dictionaries (nav.videos.mentor and so on), which is a
- * content change across en/hi/bo, not a code change. Showing the right label
- * untranslated beats showing the wrong one in three languages.
+ * NAV_BY_ROLE reuses them across roles with DIFFERENT labels -- `videos` is
+ * "Video library" for an admin and "Pending review" for a mentor -- and a map
+ * keyed by id alone once made a mentor's sidebar say "Video library" and
+ * "Mentorship" instead of "Pending review" and "My mentees", in every locale.
+ * Those items name their own key (NavItem.labelKey, next to the role-specific
+ * label it translates). They used to fall back to the English literal
+ * instead, so in Hindi and Bhoti the four most important items of every
+ * sidebar stayed English although nav.myPhase, nav.pendingReview and the rest
+ * were translated all along.
  */
 const ITEM_KEY: Record<string, string> = {
   "dashboard": "dashboard",
@@ -82,6 +77,8 @@ const ITEM_KEY: Record<string, string> = {
   "forms": "forms",
   "settings": "settings",
   "uploads": "uploads",
+  "tbl-all": "allTables",
+  "users": "users",
 };
 
 export async function Sidebar({ role, activeId, counts }: SidebarProps) {
@@ -92,8 +89,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
   const sections = counts ? applyNavCounts(baseSections, counts) : baseSections;
   const tNav = await getTranslations("nav");
   const tSection = await getTranslations("navSection");
-  const tStatus = await getTranslations("status");
   const tBrand = await getTranslations("brand");
+  const tRole = await getTranslations("role");
+  const tGate = await getTranslations("gate");
 
   return (
     <aside
@@ -126,7 +124,9 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
           {tBrand("name")}
         </div>
         <div style={{ fontSize: 11, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-          {tBrand("subtitle")} · {role.replace("_", " ")}
+          {/* The role by name, in the user's language -- this printed the
+              raw slug ("teacher", "super admin") in every locale. */}
+          {tBrand("subtitle")} · {tRole(role)}
         </div>
       </div>
 
@@ -152,7 +152,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
           <nav aria-label={sectionLabel} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
             {section.items.map((item) => {
               const isActive = activeId === item.id;
-              const itemKey = ITEM_KEY[item.id];
+              const itemKey = item.labelKey ?? ITEM_KEY[item.id];
               const itemLabel = itemKey ? tNav(itemKey) : item.label;
               return (
                 <Link
@@ -179,8 +179,11 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                   <Icon name={item.icon} size={14} />
                   <span style={{ flex: 1 }}>{itemLabel}</span>
                   {item.gate ? (
+                    // The tooltip names the section as the gate page does
+                    // (gate.<slug>Title). It was English in every locale, and
+                    // gave the raw slug: "Section gate: mentorship".
                     <span
-                      title={`Section gate: ${item.gate}`}
+                      title={`${tGate("title")}: ${tGate(`${item.gate}Title`)}`}
                       style={{
                         fontSize: 9,
                         padding: "1px 5px",
@@ -225,14 +228,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
       })}
 
       {/* Network status -- a real probe, not a green dot. See NetworkStatus.tsx. */}
-      <NetworkStatus
-        labelOnline={tStatus("online")}
-        labelOffline={tStatus("offline")}
-        labelChecking={tStatus("checking")}
-        hintOnline={tStatus("onlineHint")}
-        hintOffline={tStatus("offlineHint")}
-        hintChecking={tStatus("checkingHint")}
-      />
+      <NetworkStatusServer variant="sidebar" />
     </aside>
   );
 }

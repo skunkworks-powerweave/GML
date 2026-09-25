@@ -38,3 +38,12 @@ export async function getTranslations(
 export async function getLocale(): Promise<string> {
   return normalizeLocale(state().locale);
 }
+
+/**
+ * next-intl's own getRequestConfig is the identity function: it only brands
+ * the callback src/i18n/request.ts exports. The same here, so a test can call
+ * the app's REAL request config and read the locale it resolves.
+ */
+export function getRequestConfig<T>(createRequestConfig: T): T {
+  return createRequestConfig;
+}

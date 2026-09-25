@@ -5,17 +5,14 @@
 // Spec 125 — copy translates via next-intl. The gate page lives outside the
 // (authenticated) route group (it ships before the shell so users can clear
 // the gate without the shell chrome flashing locked sections), so it can't
-// rely on the layout's NextIntlClientProvider. Instead we read the user's
-// language from user_prefs ourselves and render an inline provider for the
-// (small) interactive sub-tree.
+// rely on the layout's NextIntlClientProvider. Instead we resolve the user's
+// language ourselves (user_prefs, via i18n/resolve.ts) and render an inline
+// provider for the (small) interactive sub-tree.
 
-import { eq } from "drizzle-orm";
 import { getTranslations } from "next-intl/server";
 import { NextIntlClientProvider } from "next-intl";
-import { db } from "@gml/db";
-import { userPrefs } from "@gml/db/schema";
-import { auth } from "@/auth";
-import { loadMessages, normalizeLocale, LOCALE_FONT_FAMILY } from "@/i18n/config";
+import { loadMessages, LOCALE_FONT_FAMILY } from "@/i18n/config";
+import { resolveUiLocale } from "@/i18n/resolve";
 import { GateForm } from "./gate-form";
 
 // The form below routes through the `verifyGate` server action (see
@@ -47,19 +44,12 @@ export default async function GatePage({
 }) {
   const { slug } = await params;
   const { next } = await searchParams;
-  const session = await auth();
-
-  // Resolve the viewer's UI language. Anonymous viewers (shouldn't happen —
-  // middleware redirects to /login first — but defensive) get English.
-  const userId = session?.user?.id ?? null;
-  const [prefRow] = userId
-    ? await db
-        .select({ uiLanguage: userPrefs.uiLanguage })
-        .from(userPrefs)
-        .where(eq(userPrefs.userId, userId))
-        .limit(1)
-    : [undefined];
-  const locale = normalizeLocale(prefRow?.uiLanguage);
+  // The viewer's UI language: their saved user_prefs.uiLanguage, else the
+  // pre-auth cookie -- the same per-request answer the root layout's
+  // <html lang> uses (i18n/resolve.ts). This read the row alone, so with
+  // nothing saved and Hindi picked at sign-in the gate was English under
+  // lang="hi".
+  const locale = await resolveUiLocale();
   const messages = loadMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];
 

@@ -24,11 +24,16 @@
 
 import { openHelp } from "@/components/help/HelpPanel";
 
-export function MobileHelpFAB() {
+/**
+ * `label` is the accessible name, translated by the (server) shell like the
+ * desktop HelpButton's: it was the literal "Help" in every locale, so a
+ * Hindi or Bhoti screen-reader user heard English for the one way into help.
+ */
+export function MobileHelpFAB({ label }: { label: string }) {
   return (
     <button
       type="button"
-      aria-label="Help"
+      aria-label={label}
       data-help-anchor="topbar-help"
       onClick={() => openHelp(null)}
       style={{

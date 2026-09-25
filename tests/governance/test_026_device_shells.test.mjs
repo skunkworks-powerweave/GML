@@ -52,7 +52,11 @@ test("Sidebar + BottomTabs + Topbar exist", () => {
 test("DesktopShell + MobileShell exist and accept children", () => {
   for (const shell of ["DesktopShell", "MobileShell"]) {
     const src = read(`apps/web/src/components/shells/${shell}.tsx`);
-    assert.match(src, new RegExp(`export function ${shell}`));
+    // `(async )?`: MobileShell became an async server component (F134) so its
+    // own header controls can be translated with getTranslations(), as
+    // BottomTabs, Sidebar and Topbar already are. The invariant is that the
+    // shell is an exported component taking children, not that it is sync.
+    assert.match(src, new RegExp(`export (async )?function ${shell}`));
     assert.match(src, /children/);
   }
 });
