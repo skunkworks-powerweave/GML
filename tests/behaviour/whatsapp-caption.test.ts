@@ -19,23 +19,12 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
 import { randomUUID } from "node:crypto";
 import { needsDatabase, DATABASE_URL } from "./_harness.js";
 import { render, request, resetRequest, withAppRouter } from "./_ui.js";
 import { envelope, route, SECRET, signed, videoMessage, withEnv, withWorld, type World } from "./_whatsapp.js";
 
 const skip = needsDatabase();
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const resolved = nextResolve(specifier, context);
-    if (/\/tests\/behaviour\/_stubs\/auth\.ts$/.test(resolved.url.replace(/\\/g, "/"))) {
-      return { url: new URL("./_stubs/auth-session.ts", import.meta.url).href, shortCircuit: true };
-    }
-    return resolved;
-  },
-});
 
 after(async () => {
   if (!DATABASE_URL) return;

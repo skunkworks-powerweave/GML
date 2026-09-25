@@ -9,7 +9,7 @@
 //
 //   - lists every video_submission whose source='whatsapp',
 //   - shows the original sender phone (video_submissions.whatsapp_from;
-//     for rows older than migration 0031, the matching
+//     for rows older than migration 0036, the matching
 //     'whatsapp.message.received' audit row's metadata.from, found by
 //     message id),
 //   - shows the truncated caption (video_submissions.caption_raw),
@@ -158,7 +158,7 @@ export default async function WhatsappIngestLogPage({
   };
 
   // WHO SENT IT. The webhook writes the sender onto the submission
-  // (video_submissions.whatsapp_from, migration 0031), and that is read first.
+  // (video_submissions.whatsapp_from, migration 0036), and that is read first.
   //
   // This used to come only from the 'whatsapp.message.received' audit rows,
   // joined on audit_log.entity_id -- which the webhook never set, because it
@@ -166,7 +166,7 @@ export default async function WhatsappIngestLogPage({
   // the column read "—" for every row, including the unmatched videos from
   // numbers on file for nobody, where the sender is the operator's only clue.
   //
-  // Rows from before 0031 have no whatsapp_from; for those the audit row is
+  // Rows from before 0036 have no whatsapp_from; for those the audit row is
   // still the only record, and it is found by the message id it DOES carry.
   const phoneBySubmissionId = new Map<string, string>();
   const needAudit = new Map<string, string>(); // whatsapp_message_id -> submission id

@@ -22,7 +22,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { registerHooks } from "node:module";
 import { randomUUID } from "node:crypto";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 import { render, request, resetRequest } from "./_ui.js";
@@ -41,16 +40,6 @@ import {
 } from "./_whatsapp.js";
 
 const skip = needsDatabase();
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const resolved = nextResolve(specifier, context);
-    if (/\/tests\/behaviour\/_stubs\/auth\.ts$/.test(resolved.url.replace(/\\/g, "/"))) {
-      return { url: new URL("./_stubs/auth-session.ts", import.meta.url).href, shortCircuit: true };
-    }
-    return resolved;
-  },
-});
 
 after(async () => {
   if (!DATABASE_URL) return;
@@ -205,9 +194,6 @@ test("F139: docs/audit-actions.md documents every whatsapp.* row the code writes
       const { retryWhatsAppFetchAction } = await import("../../apps/web/src/app/(authenticated)/admin/whatsapp-log/actions.ts");
       const fd = new FormData();
       fd.set("submissionId", String((await w.submission(bad.id))!.id));
-      const { createRequire } = await import("node:module");
-      (createRequire(new URL("../../apps/web/package.json", import.meta.url))("next/cache") as { revalidatePath: () => void }).revalidatePath =
-        () => undefined;
       await retryWhatsAppFetchAction(fd).catch(() => undefined); // ends in redirect()
 
       await collect(w.c, `created_at >= $1 AND (metadata->>'msgId' LIKE $2 OR user_agent = $3)`, [since, `wamid.${w.T}%`, ua]);

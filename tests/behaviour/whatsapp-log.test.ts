@@ -2,32 +2,19 @@
 // "I sent it on WhatsApp", and its two actions.
 //
 // The page and the actions are the real modules, rendered and called the way
-// Next calls them, with only the session supplied (see _stubs/auth-session.ts)
-// and revalidatePath() -- which needs Next's request store -- made a no-op.
-// redirect() is Next's thrown digest, read back by `outcome`.
+// Next calls them, with only the session supplied (the @/auth stub in _ui.ts
+// answers with globalThis.__gmlTestSession) and revalidatePath() recorded by
+// the next/cache stub. redirect() is Next's thrown digest, read back by
+// `outcome`.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire, registerHooks } from "node:module";
 import { randomUUID } from "node:crypto";
 import { needsDatabase, DATABASE_URL } from "./_harness.js";
 import { render } from "./_ui.js";
 import { envelope, route, SECRET, signed, videoMessage, withEnv, withWorld } from "./_whatsapp.js";
 
 const skip = needsDatabase();
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const resolved = nextResolve(specifier, context);
-    // _ui.ts maps @/auth to a stub with no session; these tests need one.
-    if (/\/tests\/behaviour\/_stubs\/auth\.ts$/.test(resolved.url.replace(/\\/g, "/"))) {
-      return { url: new URL("./_stubs/auth-session.ts", import.meta.url).href, shortCircuit: true };
-    }
-    return resolved;
-  },
-});
-const webRequire = createRequire(new URL("../../apps/web/package.json", import.meta.url));
-(webRequire("next/cache") as { revalidatePath: () => void }).revalidatePath = () => undefined;
 
 const actions = () => import("../../apps/web/src/app/(authenticated)/admin/whatsapp-log/actions.ts");
 const page = () => import("../../apps/web/src/app/(authenticated)/admin/whatsapp-log/page.tsx");

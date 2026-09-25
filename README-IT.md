@@ -177,11 +177,11 @@ below, all from Meta, and one webhook registration.
      **Retry fetch**.
 
 A sender is recognised by the last ten digits of their number, matched
-against the teacher record (or the account's own phone, where one is on
-file). A video from a number that matches nobody, or captioned with a cycle the
-sender may not add to, is kept for an admin rather than attached. Mentors and
-observers have no phone field in the admin screens yet, so a video one of them
-sends arrives as "not registered" and is kept for an admin.
+against the teacher record (`/admin/data/teachers`) or the phone on the
+account itself (`/admin/users`), which is where a mentor's or an observer's
+number goes: they have no teacher record. A video from a number that matches
+nobody, or captioned with a cycle the sender may not add to, is kept for an
+admin rather than attached.
 
 ## Day-to-day
 

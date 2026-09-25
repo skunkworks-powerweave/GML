@@ -97,12 +97,12 @@ test("F138: a caption names a target; only someone who may write to it gets the 
   );
 });
 
-// F141 (not fixed here): mentors and observers have no phone field anywhere in
-// the product -- only teachers.phone is editable (/admin/data/teachers), and
-// users.phone has no writer -- so their WhatsApp videos cannot be attributed.
-// The WhatsApp side is ready for the day a phone field exists: this pins that a
-// mentor whose ACCOUNT carries a number is credited, and may attach a recording
-// to a meeting of their own pairing.
+// F141: mentors and observers have no teacher record, so the only number that
+// can attribute their WhatsApp videos is the one on their ACCOUNT. users.phone
+// had no writer; /admin/users now records it (setPhoneAction, admin package,
+// tests/behaviour/admin-user-phone.test.ts). This pins the WhatsApp half: a
+// mentor whose account carries a number is credited, and may attach a
+// recording to a meeting of their own pairing.
 test("F141: a mentor whose account has a phone is credited and may attach to their pairing's meeting", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {

@@ -615,9 +615,10 @@ async function acceptVideoMessage(
  *     teachers  total 10  with_phone 10
  *
  * Phone numbers are entered against TEACHERS -- that is where the seed puts
- * them, and /admin/data/teachers is the only surface that edits one. There is
- * no users entity in the admin registry and /admin/users has no phone field,
- * so users.phone cannot be populated through the product at all.
+ * them, and /admin/data/teachers edits them. users.phone had no writer at all
+ * when this was written; /admin/users can now record a staff account's number
+ * (setPhoneAction), and that is how a mentor's or an observer's video, who
+ * have no teacher record, is attributed. Both columns are matched.
  *
  * The result was that every inbound WhatsApp video -- the programme's PRIMARY
  * ingest path -- would have been attributed to nobody, no matter how correctly
