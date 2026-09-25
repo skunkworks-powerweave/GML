@@ -1,10 +1,16 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { signInWithPassword } from "@/auth";
+import { signInWithPassword, type SignInError } from "@/auth";
 import { safeInternalPath } from "@/lib/safe-redirect";
 
-export type LoginState = { error?: string };
+/**
+ * A code, rendered by ./login-error.tsx in the user's language. The English
+ * sentences this used to carry were shown verbatim on the Hindi and Bhoti
+ * login screens.
+ */
+export type LoginErrorCode = SignInError | "missing_fields";
+export type LoginState = { error?: LoginErrorCode };
 
 
 export async function loginAction(
@@ -14,7 +20,7 @@ export async function loginAction(
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   if (!email || !password) {
-    return { error: "Enter your email and password." };
+    return { error: "missing_fields" };
   }
 
   const { error } = await signInWithPassword(email, password);

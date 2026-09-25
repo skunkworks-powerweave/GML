@@ -24,6 +24,7 @@ import { loginAction, type LoginState } from "./actions";
 import type { LoginShellProps } from "./shell-props";
 import { EmailLinkForm } from "./email-link-form";
 import { LoginLanguagePicker } from "./language-picker";
+import { LoginError } from "./login-error";
 
 export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
@@ -243,9 +244,8 @@ export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
                   }}
                 />
               </label>
-              {state?.error ? (
-                <p style={{ fontSize: 12, color: "var(--rust)" }} role="alert">{state.error}</p>
-              ) : null}
+              <LoginError code={state?.error} />
+
               <button
                 type="submit"
                 disabled={pending}

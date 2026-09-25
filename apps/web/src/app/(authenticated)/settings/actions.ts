@@ -69,6 +69,15 @@ export async function changePasswordAction(
   if (!email) return { error: "This account has no email address on file." };
 
   const verify = await signInWithPassword(email, current);
+  // Only a credential failure means the password was wrong. Telling someone
+  // throttled, or caught by an outage, that they mistyped it is the misreport
+  // the login page used to make.
+  if (verify.error === "rate_limited") {
+    return { error: "Too many attempts. Wait a few minutes and try again." };
+  }
+  if (verify.error === "unavailable") {
+    return { error: "Your current password cannot be checked right now. Try again in a few minutes." };
+  }
   if (verify.error) return { error: "That is not your current password." };
 
   const supabase = await createSupabaseServerClient();

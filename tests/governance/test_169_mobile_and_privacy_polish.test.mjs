@@ -308,11 +308,26 @@ test("spec 169 — HelpPanel hides the WhatsApp action row when contact phone is
 // pages are ever localised: wire getTranslations/useTranslations in the page
 // first, then add keys whose copy matches what the page actually says.
 // tests/behaviour/ui-i18n.test.ts checks the general rule for every namespace.
+//
+// UPDATED (F90). The login page's sign-in errors are now localised the way this
+// comment prescribes: app/login/login-error.tsx reads useTranslations("login")
+// and renders login.error.* (tests/behaviour/ui-login-errors.test.ts renders it
+// in Hindi and Bhoti). So a `login` namespace exists again, READ. What stays
+// pinned is the part that was dead: login.forgot.* / login.reset.* and
+// forbidden.*, whose pages still hardcode their copy.
 test("spec 169 §D (superseded) — the dead login / forbidden namespaces stay deleted from every bundle", () => {
   for (const [name, path] of [["en", EN_JSON], ["hi", HI_JSON], ["bo", BO_JSON]]) {
     const bundle = readJson(path);
-    assert.equal(bundle.login, undefined, `${name}.json must not re-declare the unread login.* namespace`);
+    assert.equal(bundle.login?.forgot, undefined, `${name}.json must not re-declare the unread login.forgot.* namespace`);
+    assert.equal(bundle.login?.reset, undefined, `${name}.json must not re-declare the unread login.reset.* namespace`);
     assert.equal(bundle.forbidden, undefined, `${name}.json must not re-declare the unread forbidden.* namespace`);
+  }
+  if (readJson(EN_JSON).login !== undefined) {
+    assert.match(
+      read("apps/web/src/app/login/login-error.tsx"),
+      /useTranslations\("login"\)/,
+      "a login namespace is only allowed while the login page reads it",
+    );
   }
 });
 

@@ -98,10 +98,22 @@ test("spec 141 — sign-in failures are indistinguishable to the caller", () => 
   // is wrong, the caller gets one string. The single exception is the
   // hook-refused case, which is safe: reaching it requires already holding the
   // correct password.
+  //
+  // UPDATED SHAPE, same invariant. signInWithPassword now returns a CODE that
+  // the login page translates (the English literal reached Hindi and Bhoti
+  // screens untranslated), so the single shared answer is the fallback code
+  // "invalid_credentials". GoTrue's user_banned must NOT get a code of its
+  // own: GoTrue checks the ban before the password, so a distinct answer
+  // would tell anyone which addresses are deactivated accounts.
   assert.match(
     src,
-    /return \{ error: "Incorrect email or password\." \};/,
-    "the generic credential failure must be a single shared string",
+    /return "invalid_credentials";\s*\}/,
+    "the generic credential failure must be a single shared code, returned as the fallback",
+  );
+  assert.doesNotMatch(
+    stripComments(src),
+    /user_banned/,
+    "a banned account must not be distinguishable from a wrong password",
   );
 });
 

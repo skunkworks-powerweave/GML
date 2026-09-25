@@ -203,42 +203,73 @@ const currentRole = cache(async (id: string): Promise<RoleName | null> => {
 });
 
 /**
+ * Why a password sign-in failed. A CODE, not a sentence: the login page renders
+ * it in the user's language (login.error.* in the locale bundles), and the
+ * English literals this used to return reached Hindi and Bhoti screens as-is.
+ */
+export type SignInError =
+  | "invalid_credentials"
+  | "inactive"
+  | "email_not_confirmed"
+  | "rate_limited"
+  | "unavailable";
+
+/**
  * Sign in with email + password.
  *
- * Returns an error string rather than throwing, and the string is deliberately
- * the same for every failure mode. Distinguishing "no such account" from "wrong
- * password" -- which the old AccountLockedError path did -- hands an attacker a
+ * Returns an error code rather than throwing. "No such account", "wrong
+ * password" and "deactivated" deliberately share one code: distinguishing them
+ * -- which the old AccountLockedError path did -- hands an attacker a
  * membership oracle for an organisation whose email addresses are guessable.
+ * The other codes are safe because of WHEN they can occur (see
+ * signInErrorCode).
  */
 export async function signInWithPassword(
   email: string,
   password: string,
-): Promise<{ error: string | null }> {
+): Promise<{ error: SignInError | null }> {
   const allowed = await signInAllowed(email);
-  if (allowed === "unavailable") {
-    return { error: "Sign-in is temporarily unavailable. Try again in a few minutes." };
-  }
-  if (allowed === "limited") {
-    return { error: "Too many sign-in attempts. Wait a few minutes and try again." };
-  }
+  if (allowed === "unavailable") return { error: "unavailable" };
+  if (allowed === "limited") return { error: "rate_limited" };
 
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (!error) return { error: null };
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error ? signInErrorCode(error) : null };
+  } catch {
+    return { error: "unavailable" };
+  }
+}
 
-  // A 403 from the access-token hook means the credentials were RIGHT but the
-  // account is not permitted a token -- inactive, soft-deleted, or never
-  // invited. Saying "incorrect password" to someone whose password was correct
-  // sends them to reset it, which will not help. This distinction is safe to
-  // surface: the caller already proved they hold the password.
-  const status = (error as { status?: number }).status;
-  if (status === 403) {
-    return { error: "This account is not active. Contact your administrator." };
-  }
-  if (status === 429) {
-    return { error: "Too many sign-in attempts. Wait a few minutes and try again." };
-  }
-  return { error: "Incorrect email or password." };
+/**
+ * Map GoTrue's answer to what the person at the keyboard should be told.
+ *
+ * Everything used to collapse to "Incorrect email or password." except 403 and
+ * 429, so an outage and an unconfirmed address both sent people to reset a
+ * password that was fine.
+ *
+ *   unavailable          no answer, or a 5xx: nothing to do with the account.
+ *   rate_limited         GoTrue's own limit.
+ *   email_not_confirmed  GoTrue checks this AFTER verifying the password, so
+ *                        only someone holding it can see it.
+ *   inactive             a 403 from the access-token hook, which runs after a
+ *                        successful password check: the credentials were right
+ *                        and the profile is inactive or missing.
+ *   invalid_credentials  everything else -- INCLUDING user_banned, which is how
+ *                        a deactivated account answers. GoTrue checks the ban
+ *                        BEFORE the password, so user_banned comes back for any
+ *                        password at all; a distinct message would tell anyone
+ *                        which addresses are deactivated accounts. Instead the
+ *                        shared message says to contact the administrator if the
+ *                        person is sure of their password.
+ */
+function signInErrorCode(error: unknown): SignInError {
+  const e = error as { status?: number; code?: string; name?: string };
+  if (e.status === 429 || e.code === "over_request_rate_limit") return "rate_limited";
+  if (e.name === "AuthRetryableFetchError" || !e.status || e.status >= 500) return "unavailable";
+  if (e.code === "email_not_confirmed") return "email_not_confirmed";
+  if (e.status === 403) return "inactive";
+  return "invalid_credentials";
 }
 
 // ── Sign-in throttle ──────────────────────────────────────────────────────────

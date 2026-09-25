@@ -114,5 +114,15 @@
     "bhoti": "བོད་ཡིག",
     "pickerLabel": "Language",
     "ladakhi": "Ladakhi"
+  },
+  "login": {
+    "error": {
+      "missing_fields": "Enter your email and password.",
+      "invalid_credentials": "Incorrect email or password. If you are sure both are right, your account may have been deactivated: contact your programme administrator.",
+      "inactive": "This account is not active. Contact your programme administrator.",
+      "email_not_confirmed": "This email address has not been confirmed yet. Ask your programme administrator to confirm it.",
+      "rate_limited": "Too many sign-in attempts. Wait a few minutes and try again.",
+      "unavailable": "Sign-in is temporarily unavailable. Try again in a few minutes."
+    }
   }
 }
