@@ -221,6 +221,12 @@ services:
       context: .
       dockerfile: docker/worker.Dockerfile
     restart: unless-stopped
+    # Time between SIGTERM and SIGKILL on `up -d`, `stop` and rollbacks. With
+    # none set, Docker's 10 s applied while the worker's drain waited 30 s, so
+    # every deploy during a transcode was a SIGKILL. The worker now interrupts
+    # and hands its job back in seconds, and gives up by itself at 20 s
+    # (DRAIN_DEADLINE_MS in apps/worker/src/index.ts); this must stay above it.
+    stop_grace_period: 30s
     logging: *default-logging
     environment:
       NODE_ENV: production

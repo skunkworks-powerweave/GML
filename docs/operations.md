@@ -101,13 +101,19 @@ expired leases".
 
 ## Disk filling up
 
-`/var/lib/gml` holds ffmpeg scratch and local dumps. Scratch is cleaned up in a
-`finally` block after every transcode; dumps are pruned after 14 days by
-`scripts/backup.sh`.
+`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`.
+ffmpeg scratch is NOT there: it is the worker's `/tmp`, the `worker_scratch`
+named volume (under `/var/lib/docker`, on the root disk). Scratch is removed
+after every transcode, including one interrupted by a deploy or `docker
+compose stop` -- the worker hands its job back to the queue and exits within
+seconds of SIGTERM (its `stop_grace_period` is 30 s). A worker killed hard
+enough to skip that (OOM, SIGKILL, the box losing power) leaves its scratch
+behind, and the next worker to start removes any that has not changed for 15
+minutes.
 
-If scratch is growing anyway, a worker is being killed hard enough to skip its
-cleanup — check for OOM kills (`dmesg -T | grep -i oom`). The likely cause is
-`WORKER_CONCURRENCY` above 1.
+If scratch is growing anyway, a worker is being killed repeatedly — check for
+OOM kills (`dmesg -T | grep -i oom`). The likely cause is `WORKER_CONCURRENCY`
+above 1.
 
 ---
 

@@ -17,6 +17,11 @@ export type FakeStorage = {
   /** What to give the worker as NEXT_PUBLIC_SUPABASE_URL. */
   url: string;
   put(bucket: string, key: string, body: Buffer, contentType?: string): void;
+  /**
+   * Make downloads of this object never finish: headers, then a byte every
+   * 200 ms for as long as the client stays -- a source on a very slow link.
+   */
+  stall(bucket: string, key: string): void;
   get(bucket: string, key: string): StoredObject | undefined;
   /** Every key in a bucket under a prefix, sorted. */
   keys(bucket: string, prefix?: string): string[];
@@ -34,6 +39,7 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 
 export async function startFakeStorage(): Promise<FakeStorage> {
   const objects = new Map<string, StoredObject>();
+  const stalled = new Set<string>();
   const id = (bucket: string, key: string) => `${bucket}/${key}`;
 
   const server = createServer(async (req, res) => {
@@ -66,6 +72,12 @@ export async function startFakeStorage(): Promise<FakeStorage> {
       const obj = objects.get(id(bucket, key));
       if (!obj) return notFound();
       if (req.method === "POST") return json(200, { signedURL: `/object/sign/${bucket}/${key}?token=fake` });
+      if (stalled.has(id(bucket, key))) {
+        res.writeHead(200, { "content-type": obj.contentType });
+        const drip = setInterval(() => res.write(Buffer.from([0])), 200);
+        res.on("close", () => clearInterval(drip));
+        return;
+      }
       res.writeHead(200, { "content-type": obj.contentType, "content-length": obj.body.length });
       return res.end(obj.body);
     }
@@ -123,12 +135,20 @@ export async function startFakeStorage(): Promise<FakeStorage> {
     url: `http://127.0.0.1:${port}`,
     put: (bucket, key, body, contentType = "application/octet-stream") =>
       objects.set(id(bucket, key), { body, contentType }),
+    stall: (bucket, key) => {
+      stalled.add(id(bucket, key));
+      if (!objects.has(id(bucket, key))) objects.set(id(bucket, key), { body: Buffer.alloc(0), contentType: "video/mp4" });
+    },
     get: (bucket, key) => objects.get(id(bucket, key)),
     keys: (bucket, prefix = "") =>
       [...objects.keys()]
         .filter((k) => k.startsWith(`${bucket}/${prefix}`))
         .map((k) => k.slice(bucket.length + 1))
         .sort(),
-    close: () => new Promise((r) => server.close(() => r())),
+    close: () =>
+      new Promise((r) => {
+        server.closeAllConnections();
+        server.close(() => r());
+      }),
   };
 }

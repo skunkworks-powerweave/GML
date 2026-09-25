@@ -132,12 +132,18 @@ export async function repairReapedTranscodes(tx: QueueTx, reaped: ReapedJob[]): 
  * admin.", an invitation to re-upload for hours on 2G -- while the queue was
  * about to try again by itself. With a retry to come the video stays 'queued',
  * which the page shows as in progress.
+ *
+ * `signal` aborts the attempt when the worker is shutting down: the download,
+ * ffmpeg and the uploads stop, the attempt is recorded 'cancelled' rather than
+ * failed, the video goes back to 'queued', and scratch is removed -- the caller
+ * then hands the job back to the queue (see runJob).
  */
 export async function transcode480p(
   input: TranscodeJobInput,
-  opts: { finalAttempt: boolean } = { finalAttempt: true },
+  opts: { finalAttempt: boolean; signal?: AbortSignal } = { finalAttempt: true },
 ): Promise<void> {
   const { videoSubmissionId, objectKey } = input;
+  const { signal } = opts;
 
   // EVERYTHING after the ledger row exists is inside the try, and so is the
   // ledger insert. The 'transcoding' write and mkdtemp used to run before it,
@@ -176,14 +182,14 @@ export async function transcode480p(
       .set({ status: "transcoding" })
       .where(eq(videoSubmissions.id, videoSubmissionId));
 
-    workDir = await mkdtemp(join(tmpdir(), "gml-transcode-"));
+    workDir = await mkdtemp(join(tmpdir(), SCRATCH_PREFIX));
     const localInput = join(workDir, "input");
     const localOut = join(workDir, "out");
     const localPoster = join(workDir, "poster.jpg");
 
     // ── 1. Source to disk, streamed ──────────────────────────────────────────
     const src = await getObjectStream(sb, BUCKETS.videosOriginal, objectKey);
-    await pipeline(Readable.fromWeb(src.body as never), createWriteStream(localInput));
+    await pipeline(Readable.fromWeb(src.body as never), createWriteStream(localInput), { signal });
     const srcStat = await stat(localInput);
     if (srcStat.size === 0) throw new Error("source object is empty");
 
@@ -194,7 +200,7 @@ export async function transcode480p(
 
     // ── 3. Transcode ─────────────────────────────────────────────────────────
     // The encoder settings are in encode.ts, where they can be tested.
-    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe));
+    await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal);
 
     // ffmpeg exiting 0 proves it wrote something, not that a phone can play
     // it. Refuse an undecodable rendition here, before anything is uploaded or
@@ -211,7 +217,7 @@ export async function transcode480p(
     let posterUploaded = false;
     try {
       const at = probe.durationSec && probe.durationSec > 2 ? probe.durationSec * 0.1 : 0;
-      await runFfmpeg(posterArgs(localInput, localPoster, at));
+      await runFfmpeg(posterArgs(localInput, localPoster, at), signal);
       await putObject(
         sb,
         BUCKETS.posters,
@@ -229,6 +235,7 @@ export async function transcode480p(
     const outFiles = (await readdir(localOut)).sort();
     let bytes = 0;
     for (const fname of outFiles) {
+      signal?.throwIfAborted();
       const body = await readFile(join(localOut, fname));
       bytes += body.byteLength;
       await putObject(
@@ -287,6 +294,25 @@ export async function transcode480p(
         `${probe.width ?? "?"}x${probe.height ?? "?"}`,
     );
   } catch (err) {
+    if (signal?.aborted) {
+      // Not a failure of this video: the worker is going away and the job goes
+      // back to the queue untouched. 'cancelled' is what the ledger's CHECK
+      // has for exactly this.
+      console.warn(`[transcode] ${videoSubmissionId} interrupted by worker shutdown; handing it back`);
+      if (jobRowId) {
+        await db
+          .update(transcodeJobs)
+          .set({ status: "cancelled", endedAt: new Date(), error: "interrupted: the worker was shut down" })
+          .where(eq(transcodeJobs.id, jobRowId))
+          .catch(() => undefined);
+      }
+      await db
+        .update(videoSubmissions)
+        .set({ status: "queued" })
+        .where(and(eq(videoSubmissions.id, videoSubmissionId), eq(videoSubmissions.status, "transcoding")))
+        .catch(() => undefined);
+      throw err;
+    }
     console.error(`[transcode] ${videoSubmissionId} failed:`, err);
     const msg = String(err).slice(0, 4000);
     if (jobRowId) {
@@ -327,14 +353,17 @@ async function ffprobe(path: string): Promise<Probe> {
   }
 }
 
-function runFfmpeg(args: string[]): Promise<void> {
-  return run("ffmpeg", args).then(() => undefined);
+function runFfmpeg(args: string[], signal?: AbortSignal): Promise<void> {
+  return run("ffmpeg", args, signal).then(() => undefined);
 }
 
-/** Spawn a binary, capture stdout, reject with the tail of stderr on failure. */
-function run(bin: string, args: string[]): Promise<string> {
+/**
+ * Spawn a binary, capture stdout, reject with the tail of stderr on failure.
+ * An aborted `signal` kills the child (SIGTERM) and rejects with an AbortError.
+ */
+function run(bin: string, args: string[], signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], signal });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => {
@@ -352,6 +381,42 @@ function run(bin: string, args: string[]): Promise<string> {
       else reject(new Error(`${bin} exited ${code}\n${stderr}`));
     });
   });
+}
+
+/** Scratch directories this module creates, one per attempt, under tmpdir(). */
+const SCRATCH_PREFIX = "gml-transcode-";
+
+/**
+ * Remove the scratch a hard-killed attempt left behind. Run at startup.
+ *
+ * Scratch is removed in transcode480p's `finally`, which a SIGKILL or an OOM
+ * kill never reaches, and /tmp is the persistent worker_scratch volume -- so
+ * each such kill left the whole source (up to 2 GB) and a partial HLS output
+ * on disk for good, and nothing ever looked for it. A directory counts as
+ * abandoned only when neither it nor anything directly in it has changed for
+ * `olderThanMs` (the lease: past that, the reaper has taken its job back), so a
+ * second worker sharing the volume never loses the directory it is writing.
+ * Returns how many were removed.
+ */
+export async function sweepStaleScratch(olderThanMs: number): Promise<number> {
+  const root = tmpdir();
+  let removed = 0;
+  for (const name of await readdir(root).catch(() => [] as string[])) {
+    if (!name.startsWith(SCRATCH_PREFIX)) continue;
+    const dir = join(root, name);
+    try {
+      let newest = (await stat(dir)).mtimeMs;
+      for (const child of await readdir(dir)) {
+        newest = Math.max(newest, (await stat(join(dir, child))).mtimeMs);
+      }
+      if (Date.now() - newest < olderThanMs) continue;
+      await rm(dir, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      // Gone already, or not ours to read: leave it.
+    }
+  }
+  return removed;
 }
 
 /** Exposed for the retention job: remove a submission's derived output. */

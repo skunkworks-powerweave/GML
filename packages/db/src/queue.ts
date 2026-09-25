@@ -200,6 +200,31 @@ export async function fail(
   return { willRetry };
 }
 
+/**
+ * Hand a claimed job straight back to the queue, as though it had never been
+ * claimed: runnable now, lease cleared, and its attempt NOT counted.
+ *
+ * For a worker that is shutting down (a deploy, a restart, `docker compose
+ * stop`). Without it the job sat 'running' behind its lease for up to fifteen
+ * minutes and the next worker was charged one of its three attempts for an
+ * operator's restart. Fenced on `locked_by`, so it can never touch a job that
+ * has since been reaped and claimed by someone else. True when released.
+ */
+export async function release(
+  db: NodePgDatabase<Record<string, unknown>>,
+  jobId: string,
+  workerId: string,
+): Promise<boolean> {
+  const res = await db.execute(sql`
+    UPDATE jobs
+       SET status = 'queued', attempts = GREATEST(attempts - 1, 0), run_at = now(),
+           lease_expires_at = NULL, locked_by = NULL, updated_at = now()
+     WHERE id = ${jobId}::uuid AND status = 'running' AND locked_by = ${workerId}
+     RETURNING id
+  `);
+  return ((res as unknown as { rows: unknown[] }).rows ?? []).length > 0;
+}
+
 /** A job the reaper took back from a worker that stopped heartbeating. */
 export type ReapedJob = {
   id: string;

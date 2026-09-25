@@ -43,13 +43,14 @@ import {
   heartbeat,
   pruneFinished,
   reapExpiredLeases,
+  release,
   succeed,
   HEARTBEAT_SECONDS,
   LEASE_SECONDS,
   type ClaimedJob,
 } from "@gml/db/queue";
 import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
-import { repairReapedTranscodes, transcode480p } from "./transcode.js";
+import { repairReapedTranscodes, sweepStaleScratch, transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
 import { log } from "./log.js";
 
@@ -81,11 +82,35 @@ const POLL_IDLE_MS = 2000;
 
 const WORKER_ID = `${process.env.HOSTNAME ?? "worker"}-${randomUUID().slice(0, 8)}`;
 
-let shuttingDown = false;
-const inFlight = new Set<Promise<void>>();
+/**
+ * Aborted when shutdown begins. It stops the consumer loops, cuts their idle
+ * sleeps short, and interrupts every job in flight (see runJob).
+ */
+const stopping = new AbortController();
+const shuttingDown = () => stopping.signal.aborted;
 
+/** Ids of the jobs being worked on right now, for the shutdown log line. */
+const inFlight = new Set<string>();
+
+/**
+ * How long a shutdown may take before the process gives up and exits. MUST
+ * stay below the worker's `stop_grace_period` in docker-compose.yml (30 s),
+ * after which Docker sends SIGKILL and nothing below gets to run.
+ */
+const DRAIN_DEADLINE_MS = 20_000;
+
+/** A sleep that ends early when shutdown begins, so a drain is not held up by it. */
 function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(t);
+      stopping.signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    stopping.signal.addEventListener("abort", done);
+    if (stopping.signal.aborted) done();
+  });
 }
 
 /** Dispatch a claimed job to its handler. Throws whatever the handler throws. */
@@ -95,6 +120,7 @@ async function handle(job: ClaimedJob): Promise<void> {
       // The same test fail() uses to decide between a retry and the DLQ.
       await transcode480p(job.payload as unknown as TranscodeJobInput, {
         finalAttempt: job.attempts >= job.maxAttempts,
+        signal: stopping.signal,
       });
       break;
     // The nightly retention sweep. The name predates the second table; it is
@@ -136,8 +162,12 @@ const OUTCOME_WRITE_ATTEMPTS = 3;
  * If the write still fails after a few tries the job is left 'running' with
  * its heartbeat stopped: its lease lapses and reapExpiredLeases() requeues or
  * dead-letters it, the recovery path a hard-killed worker already takes.
+ *
+ * A job that failed BECAUSE shutdown interrupted it has no outcome: it is
+ * handed back to the queue with release(), its attempt uncounted, rather than
+ * recorded as a failure.
  */
-async function runJob(job: ClaimedJob): Promise<void> {
+async function runJob(job: ClaimedJob, lockedBy: string): Promise<void> {
   const hb = setInterval(() => {
     void heartbeat(db, job.id, LEASE_SECONDS).catch((err) =>
       log.warn("heartbeat failed", { job: job.id, err: String(err) }),
@@ -154,10 +184,14 @@ async function runJob(job: ClaimedJob): Promise<void> {
   } finally {
     clearInterval(hb);
   }
+  const interrupted = failure !== null && shuttingDown();
 
   for (let attempt = 1; ; attempt += 1) {
     try {
-      if (failure === null) {
+      if (interrupted) {
+        const released = await release(db, job.id, lockedBy);
+        log.warn("job interrupted by shutdown; handed back to the queue", { id: job.id, name: job.name, released });
+      } else if (failure === null) {
         await succeed(db, job.id);
         log.info("job succeeded", { id: job.id, name: job.name, attempt: job.attempts });
       } else {
@@ -176,7 +210,7 @@ async function runJob(job: ClaimedJob): Promise<void> {
         log.error("could not record job outcome; the lease reaper will requeue it", {
           id: job.id,
           name: job.name,
-          outcome: failure === null ? "succeeded" : "failed",
+          outcome: interrupted ? "released" : failure === null ? "succeeded" : "failed",
           handlerErr: failure === null ? undefined : String(failure.err).slice(0, 500),
           err: String(err).slice(0, 500),
         });
@@ -196,10 +230,11 @@ async function runJob(job: ClaimedJob): Promise<void> {
  * a job nobody will run is worse than no type.
  */
 async function consumer(queue: "transcode" | "retention", slot: number): Promise<void> {
-  while (!shuttingDown) {
+  const lockedBy = `${WORKER_ID}#${queue}#${slot}`;
+  while (!shuttingDown()) {
     let job: ClaimedJob | null = null;
     try {
-      job = await claim(db, queue, `${WORKER_ID}#${queue}#${slot}`);
+      job = await claim(db, queue, lockedBy);
     } catch (err) {
       log.error("claim failed", { err: String(err) });
       await sleep(POLL_IDLE_MS * 5);
@@ -209,10 +244,17 @@ async function consumer(queue: "transcode" | "retention", slot: number): Promise
       await sleep(POLL_IDLE_MS);
       continue;
     }
-    const p = runJob(job);
-    inFlight.add(p);
+    // A claim that was already on its way when shutdown began: hand it
+    // straight back rather than start work that is about to be interrupted.
+    if (shuttingDown()) {
+      await release(db, job.id, lockedBy).catch((err) =>
+        log.warn("could not hand back a job claimed during shutdown", { id: job.id, err: String(err) }),
+      );
+      break;
+    }
+    inFlight.add(job.id);
     try {
-      await p;
+      await runJob(job, lockedBy);
     } catch (err) {
       // runJob does not reject by construction. Should that ever stop being
       // true, this loop must still outlive the job: a consumer that ends
@@ -220,7 +262,7 @@ async function consumer(queue: "transcode" | "retention", slot: number): Promise
       log.error("job runner threw; consumer continuing", { job: job.id, err: String(err).slice(0, 500) });
       await sleep(POLL_IDLE_MS * 5);
     } finally {
-      inFlight.delete(p);
+      inFlight.delete(job.id);
     }
   }
 }
@@ -310,24 +352,33 @@ async function main(): Promise<void> {
   void housekeeping();
   void scheduleDailyWork();
 
-  // SIGTERM handling. Without it `docker compose stop` SIGKILLed the container
-  // mid-ffmpeg, leaving a job claimed and a half-written output; recovery then
-  // depended entirely on the reaper. Draining means the common case — a deploy
-  // — finishes its work instead.
+  // Scratch a hard-killed attempt left on the persistent worker_scratch volume.
+  // Past the lease, the reaper has taken that attempt's job back already.
+  void sweepStaleScratch(LEASE_SECONDS * 1000)
+    .then((n) => n > 0 && log.warn("removed scratch left by killed transcodes", { count: n }))
+    .catch((err) => log.warn("scratch sweep failed", { err: String(err) }));
+
+  // SIGTERM handling -- a deploy, a rollback, `docker compose stop`.
+  //
+  // It used to WAIT up to 30 s for in-flight work. A transcode takes minutes,
+  // and Docker SIGKILLs after the service's stop grace (10 s by default, and
+  // none was set), so every deploy during a transcode hard-killed ffmpeg: the
+  // job stayed 'running' for up to its fifteen-minute lease, the next worker
+  // was charged one of its three attempts, the ledger row was orphaned and
+  // the scratch directory leaked. Now shutdown INTERRUPTS: ffmpeg is killed,
+  // the attempt is recorded 'cancelled' and its scratch removed, and the job
+  // goes straight back to the queue uncounted (runJob, release()) -- all in
+  // seconds, well inside the 30 s stop_grace_period compose now sets.
   const shutdown = (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (shuttingDown()) return;
     log.info("shutting down", { signal, inFlight: inFlight.size });
     for (const t of timers) clearInterval(t);
+    stopping.abort();
     const deadline = setTimeout(() => {
       log.warn("drain timed out; exiting anyway");
       process.exit(1);
-    }, 30_000);
+    }, DRAIN_DEADLINE_MS);
     deadline.unref?.();
-    void Promise.allSettled([...inFlight]).then(() => {
-      log.info("drained");
-      process.exit(0);
-    });
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
@@ -349,12 +400,15 @@ async function main(): Promise<void> {
     ...Array.from({ length: CONCURRENCY }, (_, i) => consumer("transcode", i)),
     consumer("retention", 0),
   ]);
-  // A consumer only returns once shutdown has begun; shutdown() owns the exit
-  // then. Anything else is a loop that ended, and must end the process too.
-  if (!shuttingDown) {
+  // A consumer only returns once shutdown has begun, after handing back
+  // whatever it was running -- so when they have all returned, the drain is
+  // done. Anything else is a loop that ended, and must end the process too.
+  if (!shuttingDown()) {
     log.error("a consumer loop exited without a shutdown; exiting so the container restarts");
     process.exit(1);
   }
+  log.info("drained");
+  process.exit(0);
 }
 
 // Only start when this file IS the process entrypoint. apps/web no longer
