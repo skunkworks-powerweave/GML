@@ -450,7 +450,7 @@ export async function phoneLayoutIssues(html: string, width = PHONE_WIDTH): Prom
       let box: El | null = el.parent;
       while (box && box.tag !== "#root" && !scrolls(box, get)) box = box.parent;
       if (!box || box.tag === "#root") {
-        issues.push(`table has no horizontal scroll container, so the page scrolls: ${describe(el)}`);
+        issues.push(`table has no horizontal scroll container (it widens the page, or is clipped out of reach): ${describe(el)}`);
         continue;
       }
       // The scroll box stops the TABLE, not its min-content width: that still

@@ -203,7 +203,9 @@ export default async function RepoMentorDetailPage({
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                        // min(100%, ...): a 280 px minimum is wider than a
+                        // phone's content box, so the one card overflowed it.
+                        gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
                         gap: 12,
                       }}
                     >

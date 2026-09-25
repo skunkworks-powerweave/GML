@@ -115,14 +115,10 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
         </div>
       </div>
 
-      <div
-        className="page-body"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.6fr 1fr",
-          gap: 18,
-        }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         {/* Main column */}
         <div style={{ display: "grid", gap: 16 }}>
           {/* Learning outcomes */}
@@ -141,7 +137,7 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                     key={i}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "20px 1fr",
+                      gridTemplateColumns: "20px minmax(0, 1fr)",
                       gap: 8,
                       padding: "6px 0",
                       fontSize: 13,
@@ -348,7 +344,9 @@ function SectionCard({
         <div style={{ fontFamily: "var(--serif)", fontSize: 16 }}>{title}</div>
         {sub ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div> : null}
       </header>
-      {children}
+      {/* Scrolls sideways inside the card: a table wider than a phone was
+          otherwise cut off by the card's overflow:hidden. */}
+      <div style={{ overflowX: "auto" }}>{children}</div>
     </section>
   );
 }
@@ -358,7 +356,10 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

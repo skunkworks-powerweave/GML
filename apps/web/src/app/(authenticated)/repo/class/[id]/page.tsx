@@ -107,10 +107,10 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
         </div>
       </div>
 
-      <section
-        className="page-body"
-        style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18, alignItems: "start" }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <section className="page-body grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div style={{ display: "grid", gap: 16 }}>
           {/* Subjects taught at this grade */}
           <SectionCard title={`Subjects (${subjectRows.length})`} sub="Taught at this grade">
@@ -324,7 +324,9 @@ function SectionCard({
           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
         ) : null}
       </header>
-      {children}
+      {/* Scrolls sideways inside the card: a table wider than a phone was
+          otherwise cut off by the card's overflow:hidden. */}
+      <div style={{ overflowX: "auto" }}>{children}</div>
     </div>
   );
 }
@@ -334,7 +336,10 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

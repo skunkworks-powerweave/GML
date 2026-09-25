@@ -192,7 +192,7 @@ export default async function RepoSessionsIndex({
           className="card card-hi"
           style={{ padding: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}
         >
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {filterTabs.map((f) => {
               const active = statusFilter === f.v;
               const qs = new URLSearchParams();

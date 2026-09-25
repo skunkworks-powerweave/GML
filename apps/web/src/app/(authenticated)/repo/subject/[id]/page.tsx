@@ -199,15 +199,13 @@ export default async function RepoSubjectDetailPage({
         </div>
       </div>
 
-      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+      {/* PHONE WIDTH: the stat strip was an inline repeat(4, 1fr) and the
+          readings/teachers pair "1.5fr 1fr", both held at every width.
+          Below 768 px the stats go two a row and the pair stacks; the page
+          column is minmax(0, 1fr) so the tables scroll in their cards. */}
+      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         {/* 4-stat strip */}
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
-            gap: 14,
-          }}
-        >
+        <section className="grid grid-cols-2 gap-[14px] md:grid-cols-4">
           <StatTile label="Grades covered" value={gradesLabel} />
           <StatTile label="Course outlines" value={String(outlinesTotal)} />
           <StatTile label="Sessions" value={String(sessionsTotal)} />
@@ -337,7 +335,7 @@ export default async function RepoSubjectDetailPage({
         </SectionCard>
 
         {/* Two-column: Readings + Teachers */}
-        <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
           <SectionCard title={`Reading material (${readingsTotal})`}>
             <table className="t">
               <thead>
@@ -520,7 +518,9 @@ function SectionCard({
           ) : null}
         </div>
       </div>
-      {children}
+      {/* Scrolls sideways inside the card: a table wider than a phone was
+          otherwise cut off by the card's overflow:hidden. */}
+      <div style={{ overflowX: "auto" }}>{children}</div>
     </div>
   );
 }

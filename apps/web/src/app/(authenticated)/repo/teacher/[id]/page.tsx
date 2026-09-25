@@ -216,15 +216,10 @@ export default async function RepoTeacherDetailPage({
         </div>
       </div>
 
-      <div
-        className="page-body"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.6fr 1fr",
-          gap: 18,
-          alignItems: "start",
-        }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <div className="page-body grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         {/* LEFT: Sessions list */}
         <section className="card card-hi" style={{ overflow: "hidden" }}>
           <div
@@ -256,50 +251,52 @@ export default async function RepoTeacherDetailPage({
               No sessions recorded yet.
             </p>
           ) : (
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Time</th>
-                  <th>Grade</th>
-                  <th>Subject</th>
-                  <th>Topic</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentSessions.map((s) => (
-                  <tr key={s.id}>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
-                        day: "numeric",
-                        month: "short",
-                      })}
-                    </td>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {s.scheduledTime ? s.scheduledTime.slice(0, 5) : "—"}
-                    </td>
-                    <td>{s.classGrade ? `Grade ${s.classGrade}` : "—"}</td>
-                    <td>{s.subjectName ?? "—"}</td>
-                    <td>{s.topic ?? "—"}</td>
-                    <td>
-                      <span
-                        className="mono"
-                        style={{
-                          fontSize: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          color:
-                            SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
-                        }}
-                      >
-                        {s.status.replace("_", " ")}
-                      </span>
-                    </td>
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Grade</th>
+                    <th>Subject</th>
+                    <th>Topic</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {recentSessions.map((s) => (
+                    <tr key={s.id}>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                        })}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {s.scheduledTime ? s.scheduledTime.slice(0, 5) : "—"}
+                      </td>
+                      <td>{s.classGrade ? `Grade ${s.classGrade}` : "—"}</td>
+                      <td>{s.subjectName ?? "—"}</td>
+                      <td>{s.topic ?? "—"}</td>
+                      <td>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 10,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.06em",
+                            color:
+                              SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
+                          }}
+                        >
+                          {s.status.replace("_", " ")}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 
@@ -584,7 +581,10 @@ function KVRow({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

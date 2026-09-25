@@ -209,7 +209,9 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
           </form>
         </div>
 
-        <div className="card" style={{ overflow: "hidden" }}>
+        {/* Scrolls rather than clips: overflow:hidden cut the right-hand
+            columns off on a phone, with no way to reach them. */}
+        <div className="card" style={{ overflowX: "auto" }}>
           <table className="t">
             <thead>
               <tr>

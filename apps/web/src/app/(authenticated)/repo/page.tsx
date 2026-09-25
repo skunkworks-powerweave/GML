@@ -189,9 +189,14 @@ export default async function RepoHomePage() {
         </div>
       </div>
 
-      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+      {/* PHONE WIDTH: these grids were inline repeat(5, 1fr) and "1.4fr 1fr",
+          which hold at every width (114 px stat tiles, a 677 px page on a
+          phone). Below 768 px the stats go two a row and the body stacks; the
+          page column is minmax(0, 1fr) so the sessions table scrolls in its
+          card instead of widening the page. */}
+      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         {/* 5-stat row */}
-        <section style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14 }}>
+        <section className="grid grid-cols-2 gap-[14px] md:grid-cols-5">
           <StatCard label="Schools" value={stats.schools} hint={stats.schools ? "2 districts" : undefined} />
           <StatCard label="Classes" value={stats.classes} />
           <StatCard label="Subjects" value={stats.subjects} hint="Grades 1–10" />
@@ -200,7 +205,7 @@ export default async function RepoHomePage() {
         </section>
 
         {/* 2-column body grid */}
-        <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
+        <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
           {/* This week's sessions */}
           <article className="card">
             <div style={{ display: "flex", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
@@ -216,7 +221,7 @@ export default async function RepoHomePage() {
                 </Link>
               </div>
             </div>
-            <div>
+            <div style={{ overflowX: "auto" }}>
               <table className="t">
                 <thead>
                   <tr>

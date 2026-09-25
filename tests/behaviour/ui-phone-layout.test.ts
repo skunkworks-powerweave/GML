@@ -204,3 +204,84 @@ test("the dashboard fits a phone for a teacher and for an administrator (with th
     await w.cleanup();
   }
 });
+
+// ── /repo ────────────────────────────────────────────────────────────────────
+
+test("every repository page fits a phone, the record pages and the lists alike", { skip }, async () => {
+  const w = await observationWorld("phonerepo");
+  const one = async (q: string, p: unknown[]) => (await w.c.query(q, p)).rows[0].id as string;
+  let subjectId = "";
+  let classId = "";
+  let outlineId = "";
+  let resourceId = "";
+  let sessionId = "";
+  try {
+    subjectId = await one(`INSERT INTO subjects (name, code, grades_min, grades_max) VALUES ($1, $2, 1, 10) RETURNING id`, [
+      `Subject ${w.T}`,
+      w.T.slice(-12),
+    ]);
+    classId = await one(`INSERT INTO classes (school_id, grade, stage, students_count) VALUES ($1, 5, 'primary', 30) RETURNING id`, [w.schoolId]);
+    outlineId = await one(
+      `INSERT INTO course_outlines (subject_id, grade, term, name, owner_teacher_id, sessions_count) VALUES ($1, 5, 1, $2, $3, 4) RETURNING id`,
+      [subjectId, `Outline ${w.T}`, w.teacherId],
+    );
+    resourceId = await one(`INSERT INTO resources (name, kind, external_url) VALUES ($1, 'Guide', 'https://example.test/r.pdf') RETURNING id`, [
+      `Reading ${w.T}`,
+    ]);
+    sessionId = await one(
+      `INSERT INTO sessions (school_id, class_id, subject_id, teacher_id, scheduled_date, scheduled_time, topic, total_count, attended_count)
+       VALUES ($1, $2, $3, $4, current_date, '10:00', 'Fractions on a number line', 30, 28) RETURNING id`,
+      [w.schoolId, classId, subjectId, w.teacherId],
+    );
+    await w.c.query(`INSERT INTO learners (class_id, school_id, grade, name) VALUES ($1, $2, 5, $3)`, [classId, w.schoolId, `Learner ${w.T}`]);
+    // Unlocked, so the gated parts (a mentor's pairings, a teacher's cycles) render too.
+    await w.grant(w.admin.id, "mentorship");
+    await w.grant(w.admin.id, "observation");
+
+    const admin = { id: w.admin.id, role: "super_admin", name: w.admin.name, email: w.admin.email };
+    type Page = (props: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string>> }) => Promise<unknown>;
+    const pages: Array<[string, string | null]> = [
+      ["page.tsx", null],
+      ["schools/page.tsx", null],
+      ["subjects/page.tsx", null],
+      ["outlines/page.tsx", null],
+      ["sessions/page.tsx", null],
+      ["teachers/page.tsx", null],
+      ["mentors/page.tsx", null],
+      ["students/page.tsx", null],
+      ["resources/page.tsx", null],
+      ["school/[id]/page.tsx", w.schoolId],
+      ["class/[id]/page.tsx", classId],
+      ["class/[id]/learners/page.tsx", classId],
+      ["subject/[id]/page.tsx", subjectId],
+      ["outline/[id]/page.tsx", outlineId],
+      ["resource/[id]/page.tsx", resourceId],
+      ["session/[id]/page.tsx", sessionId],
+      ["teacher/[id]/page.tsx", w.teacherId],
+      ["mentor/[id]/page.tsx", w.mentorId],
+    ];
+    const failures: string[] = [];
+    for (const [file, id] of pages) {
+      const { default: page } = (await import(`${APP}/repo/${file}`)) as { default: Page };
+      const html = await asPhone(admin, () =>
+        page({ params: Promise.resolve({ id: id ?? "" }), searchParams: Promise.resolve({}) }),
+      );
+      const route = `/repo/${file.replace(/\/?page\.tsx$/, "")}`;
+      for (const issue of await phoneLayoutIssues(html)) failures.push(`${route}: ${issue}`);
+      // A record page keeps its two columns on a desktop.
+      if (/^(school|class|outline|resource|session|teacher)\/\[id\]\/page/.test(file)) {
+        const body = await templateAt(html, 1280, (e) => (e.attrs.class ?? "").split(" ").includes("page-body"));
+        if (body.length !== 1 || columns(body[0]!) !== 2) failures.push(`${route}: not two columns at 1280px (${body.join(" | ")})`);
+      }
+    }
+    noIssues(failures, "/repo");
+  } finally {
+    await w.c.query(`DELETE FROM learners WHERE school_id = $1`, [w.schoolId]);
+    await w.c.query(`DELETE FROM sessions WHERE school_id = $1`, [w.schoolId]);
+    if (outlineId) await w.c.query(`DELETE FROM course_outlines WHERE id = $1`, [outlineId]);
+    if (resourceId) await w.c.query(`DELETE FROM resources WHERE id = $1`, [resourceId]);
+    await w.c.query(`DELETE FROM classes WHERE school_id = $1`, [w.schoolId]);
+    if (subjectId) await w.c.query(`DELETE FROM subjects WHERE id = $1`, [subjectId]);
+    await w.cleanup();
+  }
+});

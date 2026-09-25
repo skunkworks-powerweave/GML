@@ -82,55 +82,57 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
               No learners on record for this class.
             </p>
           ) : (
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Roll</th>
-                  <th>Name</th>
-                  <th>Section</th>
-                  <th>Age</th>
-                  <th>Guardian</th>
-                  <th>Attendance</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const att = r.attendancePct ?? null;
-                  const attColor =
-                    att == null
-                      ? "var(--ink-3)"
-                      : att >= 90
-                        ? "var(--lichen)"
-                        : att >= 75
-                          ? "var(--ink-2)"
-                          : "var(--rust)";
-                  return (
-                    <tr key={r.id}>
-                      <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                        {r.rollNumber ?? "—"}
-                      </td>
-                      <td style={{ fontWeight: 500 }}>{r.name}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{r.section ?? "—"}</td>
-                      <td style={{ fontSize: 12 }}>{r.age ?? "—"}</td>
-                      <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.guardian ?? "—"}</td>
-                      <td
-                        className="mono"
-                        style={{ fontSize: 12, color: attColor, fontWeight: 600 }}
-                      >
-                        {att == null ? "—" : `${att}%`}
-                      </td>
-                      <td>
-                        <span className={r.active ? "chip chip-lichen" : "chip"}>
-                          <span className={r.active ? "dot dot-green" : "dot dot-gray"} />
-                          {r.active ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Roll</th>
+                    <th>Name</th>
+                    <th>Section</th>
+                    <th>Age</th>
+                    <th>Guardian</th>
+                    <th>Attendance</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const att = r.attendancePct ?? null;
+                    const attColor =
+                      att == null
+                        ? "var(--ink-3)"
+                        : att >= 90
+                          ? "var(--lichen)"
+                          : att >= 75
+                            ? "var(--ink-2)"
+                            : "var(--rust)";
+                    return (
+                      <tr key={r.id}>
+                        <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                          {r.rollNumber ?? "—"}
+                        </td>
+                        <td style={{ fontWeight: 500 }}>{r.name}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{r.section ?? "—"}</td>
+                        <td style={{ fontSize: 12 }}>{r.age ?? "—"}</td>
+                        <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.guardian ?? "—"}</td>
+                        <td
+                          className="mono"
+                          style={{ fontSize: 12, color: attColor, fontWeight: 600 }}
+                        >
+                          {att == null ? "—" : `${att}%`}
+                        </td>
+                        <td>
+                          <span className={r.active ? "chip chip-lichen" : "chip"}>
+                            <span className={r.active ? "dot dot-green" : "dot dot-gray"} />
+                            {r.active ? "Active" : "Inactive"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
