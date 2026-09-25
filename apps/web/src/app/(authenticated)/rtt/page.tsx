@@ -53,8 +53,9 @@ export default async function RttIndexPage({
       : "taught across the programme";
   // The dashboard's "N open quizzes" to-do links here and counts exactly this
   // list (lib/rtt/assessments.ts). /rtt used to list no quizzes at all, so the
-  // to-do led nowhere.
-  const openAssessments = await listOpenAssessments(db, viewer);
+  // to-do led nowhere. A learner's list: to staff it would be every quiz in
+  // the programme, under "you have not taken yet".
+  const openAssessments = scope.isStaff ? [] : await listOpenAssessments(db, viewer);
 
   return (
     <div>

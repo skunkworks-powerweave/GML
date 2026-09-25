@@ -154,6 +154,13 @@ test("F33: /rtt -- where the dashboard's open-quiz to-do lands -- lists the view
     assert.ok(hrefs.includes(`/quizzes/${todo.slug}`), `the open quiz is linked from /rtt: ${JSON.stringify(hrefs)}`);
     assert.ok(!hrefs.includes(`/quizzes/${done.slug}`), "a quiz she has taken is not open");
     assert.ok(!hrefs.includes(`/quizzes/${hidden.slug}`), "an inactive quiz is not offered");
+
+    // It is a learner's list. Staff take no RTT quizzes, and for them it was
+    // every active quiz in the programme under "you have not taken yet".
+    for (const staff of [w.admin, w.mentor, w.observer]) {
+      const html = await renderHub(staff);
+      assert.ok(!text(html).includes("Open assessments"), `${staff.role}: no learner's to-do list`);
+    }
   } finally {
     await w.cleanup();
   }
