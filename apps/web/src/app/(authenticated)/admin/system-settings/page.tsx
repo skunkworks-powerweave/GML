@@ -156,6 +156,7 @@ export default async function SystemSettingsPage({
       "video.transcoded",
       "meeting.scheduled",
       "meeting.cancelled",
+      "pairing.final_submitted",
       "helpdesk.ticket",
     ],
     backupRetentionDays: 14,

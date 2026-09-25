@@ -23,8 +23,9 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
+import { notify } from "@gml/db/notify";
 import {
   feedbackForms,
   feedbackResponses,
@@ -32,6 +33,7 @@ import {
   mentorPairings,
   mentors,
   teachers,
+  users,
   type FeedbackForm,
 } from "@gml/db/schema";
 
@@ -267,7 +269,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // This form files mentorship feedback and advances the pairing's quarter,
   // and it lives outside /mentorship, so nothing else asked for the password.
   await assertSectionGate(actor.id, "mentorship", formRunnerHref(slug, pairingId));
-  await assertCanAccessPairing(actor, pairingId);
+  const pairing = await assertCanAccessPairing(actor, pairingId);
 
   // Pull the form back so we know which field ids to accept. Drop unknown keys.
   const [form] = await db
@@ -355,8 +357,28 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     responses.__context = context;
   }
 
+  // The pairing's FINAL (Q4) form, sent by this respondent for the first
+  // time: the notice after the transaction. The Endline survey borrows kind
+  // 'final' and is not one (lib/forms/quarterly.ts).
+  const isFinalForm = isQuarterlyForm(form.schema) && form.kind === "final";
+  let firstFinal = false;
+
   let newResponseId = "";
   await db.transaction(async (tx) => {
+    if (isFinalForm) {
+      const [earlier] = await tx
+        .select({ id: feedbackResponses.id })
+        .from(feedbackResponses)
+        .where(
+          and(
+            eq(feedbackResponses.formId, form.id),
+            eq(feedbackResponses.pairingId, pairingId),
+            eq(feedbackResponses.respondentUserId, userId),
+          ),
+        )
+        .limit(1);
+      firstFinal = !earlier;
+    }
     const [inserted] = await tx
       .insert(feedbackResponses)
       .values({
@@ -430,9 +452,54 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     },
   });
 
+  if (firstFinal) await notifyFinalSubmitted(pairing, pairingId, actor.id);
+
   // With the pairing, so the thank-you card can link back to it and to its
   // read-only record of submitted feedback.
   redirect(`/forms/${slug}/thanks?pairingId=${encodeURIComponent(pairingId)}`);
+}
+
+/**
+ * THE FINAL FORM IS IN. It is what makes a pairing ready for an administrator
+ * to close (completePairingAction; the form advances no quarter), and nothing
+ * said it had happened: the pairing sat active at Q4 until someone opened it.
+ * The programme admins and the other party on the pairing are told, minus
+ * whoever sent it; the row opens the pairing.
+ *
+ * NOTHING THE SECTION PASSWORD GUARDS goes into the row -- no names, no
+ * answers: /inbox has no gate (see logMeetingAction). And nothing here can
+ * fail the submission, which has already been saved: notify() never throws,
+ * and a failed lookup is logged and dropped.
+ */
+async function notifyFinalSubmitted(
+  pairing: { mentorId: string; teacherId: string },
+  pairingId: string,
+  actorId: string,
+): Promise<void> {
+  try {
+    const [mentor] = await db.select({ userId: mentors.userId }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+    const [mentee] = await db.select({ userId: teachers.userId }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+    const admins = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.active, true), inArray(users.role, ["programme_admin", "super_admin"] as const)));
+    await notify(
+      db,
+      [...admins.map((a) => a.id), mentor?.userId, mentee?.userId]
+        .filter((u): u is string => Boolean(u))
+        .map((userId) => ({
+          userId,
+          kind: "pairing.final_submitted",
+          subject: "Final (Q4) feedback was submitted on a mentorship pairing",
+          body: null,
+          entityType: "mentor_pairing",
+          entityId: pairingId,
+        })),
+      { excludeUserId: actorId },
+    );
+  } catch (err) {
+    console.error("[forms] final-form notification failed", { pairingId, err });
+  }
 }
 
 // ---------------------------------------------------------------------------

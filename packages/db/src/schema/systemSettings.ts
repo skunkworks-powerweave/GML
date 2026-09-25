@@ -51,12 +51,13 @@ export const systemSettings = pgTable(
     // (cancelMeetingAction, the cycle sign-off) then wrote rows that /inbox and
     // the bell hid, while the pairing page told the mentor the mentee "will be
     // told". Every kind the application writes belongs here unless there is a
-    // stated reason it should be off. See _post/010.
+    // stated reason it should be off. See _post/010, and _post/011 for
+    // `pairing.final_submitted`, added with its producer.
     notificationsEnabled: jsonb("notifications_enabled")
       .$type<string[]>()
       .notNull()
       .default(
-        sql`'["helpdesk.ticket","cycle.assigned","cycle.complete","video.transcoded","meeting.scheduled","meeting.cancelled"]'::jsonb`,
+        sql`'["helpdesk.ticket","cycle.assigned","cycle.complete","video.transcoded","meeting.scheduled","meeting.cancelled","pairing.final_submitted"]'::jsonb`,
       ),
     backupRetentionDays: integer("backup_retention_days").notNull().default(14),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

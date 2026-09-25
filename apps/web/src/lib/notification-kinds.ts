@@ -74,6 +74,11 @@ export const NOTIFICATION_CATEGORIES = [
     hint: "Both parties notified of cancellations",
   },
   {
+    key: "pairing.final_submitted",
+    label: "Final feedback in",
+    hint: "Programme admin and the other party notified when a pairing's final (Q4) form is submitted",
+  },
+  {
     key: "digest.weekly",
     label: "Weekly digest",
     hint: "Friday roll-up across all activities",

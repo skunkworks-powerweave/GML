@@ -60,6 +60,20 @@ test("_post/010 turns on meeting.cancelled and cycle.complete beside their compa
   });
 });
 
+// W3-33: pairing.final_submitted is new with its producer (submitFormAction,
+// on a pairing's final form), so its absence was nobody's choice.
+test("_post/011 turns on pairing.final_submitted, once, unless every kind is off", { skip }, async () => {
+  await withClient(async (c) => {
+    const file = "011_final_form_notification_backfill.sql";
+    assert.deepEqual(
+      sorted(await after(c, file, ["helpdesk.ticket", "meeting.scheduled"])),
+      ["helpdesk.ticket", "meeting.scheduled", "pairing.final_submitted"],
+      "added, and a second run adds no duplicate",
+    );
+    assert.deepEqual(await after(c, file, []), [], "every kind switched off stays off");
+  });
+});
+
 test("the column default names every kind the application writes", { skip }, async () => {
   await withClient(async (c) => {
     const { rows } = await c.query(
@@ -67,7 +81,7 @@ test("the column default names every kind the application writes", { skip }, asy
         WHERE table_schema = 'public' AND table_name = 'system_settings' AND column_name = 'notifications_enabled'`,
     );
     const d = String(rows[0]!.d);
-    for (const kind of ["helpdesk.ticket", "cycle.assigned", "cycle.complete", "meeting.scheduled", "meeting.cancelled"]) {
+    for (const kind of ["helpdesk.ticket", "cycle.assigned", "cycle.complete", "meeting.scheduled", "meeting.cancelled", "pairing.final_submitted"]) {
       assert.ok(d.includes(`"${kind}"`), `${kind} is on by default: ${d}`);
     }
   });
