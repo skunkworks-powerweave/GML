@@ -17,9 +17,17 @@
 // ── HOW ──────────────────────────────────────────────────────────────────────
 //
 // The REAL page, through the app's own @gml/db pool, signed in as a mentor.
-// Rows are committed under a unique tag and removed afterwards. Every test that
-// writes teach-back rows lives in this one file, so they run in sequence and
-// cannot disturb each other's programme-wide counts.
+// Rows are committed under a unique tag and removed afterwards.
+//
+// The queue is programme-wide, and this file is not its only writer: node
+// --test runs files concurrently, and others (video-copy, video-gate, ...)
+// commit teach-backs of their own while these tests render. So nothing here
+// assumes the programme's rows are this test's. The tab counts are checked
+// against this test's rows as a floor, and for consistency with each other;
+// lists by the presence and order of this test's own rows. This test's rows
+// are all older than the ones those files write (created now()), so they sort
+// ahead of them in "Pending review" (oldest first) and paging through that tab
+// is exact for them.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -39,7 +47,6 @@ type World = {
   fileId: string;
   /** Insert one teach-back; returns its id. */
   clip: (o: { status?: string; reviewed?: boolean; createdAgo: string }) => Promise<string>;
-  counts: () => Promise<{ all: number; pending: number; reviewed: number }>;
   cleanup: () => Promise<void>;
 };
 
@@ -81,17 +88,6 @@ async function world(prefix: string): Promise<World> {
          RETURNING id`,
         [fileId, status, teacherUserId, `${T} clip`, createdAgo, reviewed, mentorId],
       ),
-    counts: async () => {
-      const r = (
-        await c.query(
-          `SELECT count(*)::int AS all,
-                  count(*) FILTER (WHERE status = 'ready' AND reviewed_at IS NULL)::int AS pending,
-                  count(*) FILTER (WHERE reviewed_at IS NOT NULL)::int AS reviewed
-             FROM video_submissions WHERE context_type = 'teach_back'`,
-        )
-      ).rows[0];
-      return { all: r.all, pending: r.pending, reviewed: r.reviewed };
-    },
     cleanup: async () => {
       await c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [teacherUserId]);
       await c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
@@ -121,6 +117,10 @@ type Rendered = {
   rowIds: string[];
   /** The chip markup of one listed row. */
   chipOf: (id: string) => string | null;
+  /** The numbers on the three tabs. */
+  tabs: { all: number; pending: number; reviewed: number };
+  /** The href of the "Next" link, if there is one. */
+  next: string | null;
 };
 
 async function queue(user: TestUser, sp: Record<string, string>): Promise<Rendered> {
@@ -132,9 +132,14 @@ async function queue(user: TestUser, sp: Record<string, string>): Promise<Render
     inner: m[2]!,
   }));
   const text = decodeEntities(html.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ");
+  const tabs = text.match(/All (\d+) Pending review (\d+) Reviewed (\d+)/);
+  assert.ok(tabs, "the three tabs, with counts");
+  const next = html.match(/<a\b[^>]*href="([^"]*)"[^>]*>\s*Next/);
   return {
     html,
     text,
+    tabs: { all: Number(tabs[1]), pending: Number(tabs[2]), reviewed: Number(tabs[3]) },
+    next: next ? decodeEntities(next[1]!) : null,
     rowIds: rows.map((r) => r.id),
     chipOf: (id) => {
       const inner = rows.find((r) => r.id === id)?.inner;
@@ -150,18 +155,26 @@ const reviewForm = (html: string, id: string) => html.includes(`action="/api/tea
 
 // ── F12: the queue is not a window onto the 80 newest ────────────────────────
 
-test("an unreviewed clip older than 80 newer reviewed ones is still in 'Pending review', and the counts are the database's", { skip }, async () => {
+test("an unreviewed clip older than 80 newer reviewed ones is still in 'Pending review', and the tabs count every teach-back", { skip }, async () => {
   const w = await world("tbq");
   try {
     const old = await w.clip({ createdAgo: "3 days" });
+    const lessOld = await w.clip({ createdAgo: "2 days" });
     await eightyNewerReviewed(w);
-    const db = await w.counts();
 
     const pending = await queue(w.mentor, { status: "review_pending" });
     assert.ok(pending.rowIds.includes(old), "the overdue clip is exactly the one a reviewer must be able to reach");
-    assert.equal(pending.rowIds[0], old, "pending is oldest first: the SLA is on age");
-    assert.match(pending.text, new RegExp(`All ${db.all} Pending review ${db.pending} Reviewed ${db.reviewed}`),
-      `the tabs count every teach-back, not the newest 80 (database: ${JSON.stringify(db)}; page: ${pending.text.match(/All \d+ Pending review \d+ Reviewed \d+/)?.[0]})`);
+    assert.deepEqual(
+      pending.rowIds.filter((id) => id === old || id === lessOld),
+      [old, lessOld],
+      "pending is oldest first: the SLA is on age",
+    );
+    // This test's rows are 2 pending and 80 reviewed. The programme may hold
+    // more at this instant (see the header), never fewer. The defect read
+    // "All 80 Pending review 0": the tabs counted the newest 80 only.
+    const { tabs } = pending;
+    assert.ok(tabs.all >= 82 && tabs.pending >= 2 && tabs.reviewed >= 80, `the tabs count every teach-back, not the newest 80 (${JSON.stringify(tabs)})`);
+    assert.ok(tabs.all >= tabs.pending + tabs.reviewed, `pending and reviewed are disjoint parts of All (${JSON.stringify(tabs)})`);
   } finally {
     await w.cleanup();
   }
@@ -188,27 +201,65 @@ test("?id= opens an old pending clip's review form although it is not on the fir
   }
 });
 
-test("every teach-back is reachable from the All tab, a page at a time", { skip }, async () => {
+/** Follow "Next" from the first page of `sp`: every page's row ids, in order. */
+async function allPages(user: TestUser, sp: Record<string, string>): Promise<{ first: Rendered; pages: string[][] }> {
+  const first = await queue(user, sp);
+  const pages = [first.rowIds];
+  let current = first;
+  while (current.next) {
+    assert.ok(pages.length < 50, "paging terminates");
+    assert.ok(current.rowIds.length <= 80, "a page holds at most 80 rows");
+    current = await queue(user, Object.fromEntries(new URLSearchParams(current.next.replace(/^\?/, ""))));
+    pages.push(current.rowIds);
+  }
+  return { first, pages };
+}
+
+test("every pending teach-back is reachable from 'Pending review', a page at a time, oldest first", { skip }, async () => {
+  const w = await world("tbq");
+  try {
+    // 85 unreviewed, playable clips: more than one page, and older than any
+    // row another file writes, so they are the head of this tab.
+    const ours = (
+      await w.c.query(
+        `INSERT INTO video_submissions
+           (file_id, source, status, context_type, submitted_by_user_id, caption_raw, created_at, hls_master_key, verified_at)
+         SELECT $1, 'direct', 'ready', 'teach_back', $2, $3 || ' pending ' || g,
+                now() - interval '400 days' + make_interval(secs => g), 'hls/test/index.m3u8', now()
+           FROM generate_series(1, 85) g
+         RETURNING id, created_at`,
+        [w.fileId, w.teacherUserId, w.T],
+      )
+    ).rows
+      .sort((a, b) => a.created_at - b.created_at)
+      .map((r) => r.id as string);
+
+    const { first, pages } = await allPages(w.mentor, { status: "review_pending" });
+    assert.ok(first.tabs.pending >= ours.length, JSON.stringify(first.tabs));
+    assert.match(first.text, new RegExp(`Showing 1–80 of ${first.tabs.pending}`), "the list says how much it shows");
+    assert.ok(pages.length >= 2, "the clips past the first 80 are on a later page");
+    const mine = new Set(ours);
+    assert.deepEqual(
+      pages.flat().filter((id) => mine.has(id)),
+      ours,
+      "each clip once, oldest first, none skipped between pages",
+    );
+  } finally {
+    await w.cleanup();
+  }
+});
+
+test("the All tab pages too: a clip older than the newest 80 is on a later page", { skip }, async () => {
   const w = await world("tbq");
   try {
     const old = await w.clip({ createdAgo: "3 days" });
     await eightyNewerReviewed(w);
-    const db = await w.counts();
 
-    const seen: string[] = [];
-    let page = 1;
-    let current = await queue(w.mentor, {});
-    assert.match(current.text, new RegExp(`Showing 1–${current.rowIds.length} of ${db.all}`), "the list says how much it shows");
-    seen.push(...current.rowIds);
-    while (/href="\?page=\d+"[^>]*>\s*Next/.test(current.html)) {
-      page += 1;
-      assert.ok(page < 50, "paging terminates");
-      current = await queue(w.mentor, { page: String(page) });
-      seen.push(...current.rowIds);
-    }
-    assert.ok(seen.includes(old), "the oldest clip is on a later page");
-    assert.equal(seen.length, db.all, `every teach-back appears once across the pages (saw ${seen.length})`);
-    assert.equal(new Set(seen).size, db.all, "no teach-back appears twice");
+    const { first, pages } = await allPages(w.mentor, {});
+    assert.ok(first.tabs.all >= 81, JSON.stringify(first.tabs));
+    assert.match(first.text, new RegExp(`Showing 1–80 of ${first.tabs.all}`), "the list says how much it shows");
+    assert.ok(!pages[0]!.includes(old), "80 newer clips fill the first page");
+    assert.ok(pages.slice(1).some((p) => p.includes(old)), "the oldest clip is on a later page");
   } finally {
     await w.cleanup();
   }
