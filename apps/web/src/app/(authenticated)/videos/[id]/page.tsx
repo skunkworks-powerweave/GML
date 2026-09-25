@@ -103,10 +103,11 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
         </div>
       </div>
 
-      <div
-        className="page-body"
-        style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18 }}
-      >
+      {/* Player above metadata below 768 px, beside it above. This was an
+          inline "1.6fr 1fr", which held on a phone: a 131 px player beside a
+          100 px column whose values SectionCard's overflow:hidden clipped
+          away entirely. */}
+      <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <SectionCard title="Player" sub="Watermarked · streamed">
           <div style={{ padding: 14, position: "relative" }}>
             {video.source === "external_link" && video.externalUrl ? (
@@ -226,7 +227,9 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "100px 1fr",
+        // minmax(0, ...): a bare 1fr column is at least as wide as its
+        // content, and a 36-character video id is wider than a phone's card.
+        gridTemplateColumns: "100px minmax(0, 1fr)",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",
@@ -241,6 +244,7 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
           flexWrap: "wrap",
           gap: 4,
           alignItems: "center",
+          overflowWrap: "anywhere",
         }}
       >
         {children}

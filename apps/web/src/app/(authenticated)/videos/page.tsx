@@ -195,7 +195,7 @@ export default async function VideoLibraryPage({
   return (
     <div>
       <div className="page-header">
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="label">Video library</div>
             <h1 className="serif" style={{ fontSize: 28, marginTop: 4 }}>Submissions &amp; lesson recordings</h1>
@@ -232,7 +232,7 @@ export default async function VideoLibraryPage({
 
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
         <div className="card" style={{ display: "flex", padding: 10, gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {(
               [
                 { v: undefined, l: "All", n: counts.all },
@@ -292,7 +292,10 @@ export default async function VideoLibraryPage({
         {rows.length === 0 ? (
           <div className="card card-hi" style={{ padding: 32, color: "var(--ink-3)" }}>No videos.</div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+          // One card per row on a phone, three on a desktop. An inline
+          // repeat(3, 1fr) held at every width: 104 px cards on a phone,
+          // their status chips clipped.
+          <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-2 md:grid-cols-3">
             {rows.map((v) => (
               <Link
                 key={v.id}

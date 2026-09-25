@@ -26,7 +26,8 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, closeAppDb, type TestUser } from "./_server-actions.js";
 import { render, withAppRouter, request } from "./_ui.js";
-import { needsDatabase } from "./_harness.js";
+import { Client } from "pg";
+import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 import { observationWorld } from "./_observation-world.js";
 import { phoneLayoutIssues, templateAt, PHONE_WIDTH } from "./_phone-layout.js";
 
@@ -129,8 +130,76 @@ test("a cycle page fits a phone: Forms and Evidence stack, the stepper wraps; th
     noIssues(await phoneLayoutIssues(detail), "/observation/[cycleId]");
 
     // The desktop layout is unchanged: Forms and Evidence still side by side.
-    const desktop = await templateAt(detail, 1280, (e) => e.tag === "section" && /Forms|md:grid-cols/.test(e.attrs.class ?? ""));
-    assert.ok(desktop.some((t) => t.split(/\s+(?![^(]*\))/).length === 2), `two columns on a desktop: ${desktop.join(" | ")}`);
+    const desktop = await templateAt(detail, 1280, (e) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? ""));
+    assert.ok(desktop.some((t) => columns(t) === 2), `two columns on a desktop: ${desktop.join(" | ")}`);
+  } finally {
+    await w.cleanup();
+  }
+});
+
+/** Track count of a resolved template ("minmax(0,1.6fr) minmax(0,1fr)" -> 2). */
+function columns(template: string): number {
+  return template.split(/\s+(?![^(]*\))/).filter(Boolean).length;
+}
+
+// ── /videos and a video ──────────────────────────────────────────────────────
+
+test("/videos and a video page fit a phone: one card per row, the player full width, the metadata inside its card", { skip }, async () => {
+  const c = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5000 });
+  await c.connect();
+  const T = tag("phonevid");
+  const userId = (
+    await c.query(`INSERT INTO users (id, email, name, role) VALUES (gen_random_uuid(), $1, $2, 'teacher') RETURNING id`, [`${T}@example.test`, `Teacher ${T}`])
+  ).rows[0].id as string;
+  const fileId = (
+    await c.query(
+      `INSERT INTO files (bucket, object_key, mime_type, kind, status, owner_user_id) VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored', $2) RETURNING id`,
+      [`test/${T}.mp4`, userId],
+    )
+  ).rows[0].id as string;
+  const videoId = (
+    await c.query(
+      `INSERT INTO video_submissions (file_id, source, status, context_type, submitted_by_user_id, hls_master_key, verified_at)
+       VALUES ($1, 'direct', 'ready', 'teach_back', $2, 'hls/test/index.m3u8', now()) RETURNING id`,
+      [fileId, userId],
+    )
+  ).rows[0].id as string;
+  try {
+    const teacher = { id: userId, role: "teacher", name: `Teacher ${T}` };
+    const { default: LibraryPage } = await import(`${APP}/videos/page.tsx`);
+    const library = await asPhone(teacher, () => LibraryPage({ searchParams: Promise.resolve({}) }));
+    assert.match(library, new RegExp(`href="/videos/${videoId}"`), "the video is in the library");
+    noIssues(await phoneLayoutIssues(library), "/videos");
+
+    const { default: PlayerPage } = await import(`${APP}/videos/[id]/page.tsx`);
+    const player = await asPhone(teacher, () => PlayerPage({ params: Promise.resolve({ id: videoId }) }));
+    assert.match(player, new RegExp(videoId), "the metadata card shows the video id");
+    noIssues(await phoneLayoutIssues(player), "/videos/[id]");
+
+    // The desktop keeps the player beside its metadata.
+    const desktop = await templateAt(player, 1280, (e) => (e.attrs.class ?? "").split(" ").includes("page-body"));
+    assert.equal(desktop.length, 1);
+    assert.equal(columns(desktop[0]!), 2, `two columns on a desktop: ${desktop[0]}`);
+  } finally {
+    await c.query(`DELETE FROM video_submissions WHERE id = $1`, [videoId]);
+    await c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+    await c.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    await c.end();
+  }
+});
+
+// ── /dashboard ───────────────────────────────────────────────────────────────
+
+test("the dashboard fits a phone for a teacher and for an administrator (with the field map)", { skip }, async () => {
+  const w = await observationWorld("phonedash");
+  try {
+    await w.grant(w.teacher.id);
+    await w.grant(w.admin.id);
+    const { default: DashboardPage } = await import(`${APP}/dashboard/page.tsx`);
+    for (const user of [w.teacher, w.admin]) {
+      const html = await asPhone(user, () => DashboardPage());
+      noIssues(await phoneLayoutIssues(html), `/dashboard as ${user.role}`);
+    }
   } finally {
     await w.cleanup();
   }

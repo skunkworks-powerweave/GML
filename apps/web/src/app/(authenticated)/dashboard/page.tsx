@@ -778,7 +778,8 @@ export default async function DashboardPage() {
           ))}
         </section>
 
-        <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
+        {/* Stacked below 768 px: an inline "1.4fr 1fr" held on a phone too. */}
+        <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
           <article className="card card-hi">
             <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
               <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
