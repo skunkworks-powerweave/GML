@@ -97,6 +97,46 @@ test("F138: a caption names a target; only someone who may write to it gets the 
   );
 });
 
+// F141 (not fixed here): mentors and observers have no phone field anywhere in
+// the product -- only teachers.phone is editable (/admin/data/teachers), and
+// users.phone has no writer -- so their WhatsApp videos cannot be attributed.
+// The WhatsApp side is ready for the day a phone field exists: this pins that a
+// mentor whose ACCOUNT carries a number is credited, and may attach a recording
+// to a meeting of their own pairing.
+test("F141: a mentor whose account has a phone is credited and may attach to their pairing's meeting", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const one = async (q: string, p: unknown[]) => (await w.c.query(q, p)).rows[0].id as string;
+      const digits = "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
+      const userId = await one(
+        `INSERT INTO users (id, email, name, role, phone) VALUES (gen_random_uuid(), $1, 'Mentor', 'mentor', $2) RETURNING id`,
+        [`mentor.${w.T}@example.test`, `+91 ${digits}`],
+      );
+      const mentorId = await one(`INSERT INTO mentors (user_id, name) VALUES ($1, $2) RETURNING id`, [userId, `Mentor ${w.T}`]);
+      const pairingId = await one(`INSERT INTO mentor_pairings (mentor_id, teacher_id) VALUES ($1, $2) RETURNING id`, [
+        mentorId,
+        w.teacher.teacherId,
+      ]);
+      const meetingId = await one(`INSERT INTO mentor_meetings (pairing_id, scheduled_at) VALUES ($1, now()) RETURNING id`, [pairingId]);
+      try {
+        const { sub } = await send(w, `91${digits}`, `MM-${meetingId}`);
+        assert.equal(sub.submitted_by_user_id, userId);
+        assert.equal(sub.context_type, "mentor_meeting");
+        assert.equal(sub.context_id, meetingId);
+        // The mentee's cycle is visible to an actively paired mentor, so a
+        // mentor may attach an observation recording to it as well.
+        assert.equal((await send(w, `91${digits}`, w.cycleCode)).sub.context_id, w.cycleId);
+      } finally {
+        await w.c.query(`DELETE FROM mentor_meetings WHERE id = $1`, [meetingId]);
+        await w.c.query(`DELETE FROM mentor_pairings WHERE id = $1`, [pairingId]);
+        await w.c.query(`DELETE FROM mentors WHERE id = $1`, [mentorId]);
+        await w.c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [userId]);
+        await w.c.query(`DELETE FROM users WHERE id = $1`, [userId]);
+      }
+    }),
+  );
+});
+
 test("F138: a teach-back needs a registered sender; a stranger's clip is quarantined, not queued for every reviewer", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {
