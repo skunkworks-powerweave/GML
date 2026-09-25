@@ -13,7 +13,7 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { buildWorld, closeAppPool, describe, outcome, signIn, type World } from "./_mentorship.js";
+import { buildWorld, closeAppPool, describe, formData, outcome, signIn, type World } from "./_mentorship.js";
 import { needsDatabase } from "./_harness.js";
 
 const skip = needsDatabase();
@@ -91,5 +91,20 @@ test("the runner, the pairing page and its responses page 404 a malformed or for
       const responses = await outcome(() => PairingResponsesPage({ params: Promise.resolve({ pairingId }) }));
       assert.equal(responses.kind, "notFound", `responses ${pairingId}: ${describe(responses)}`);
     }
+  });
+});
+
+// The submit action's hidden __formId went straight into eq(feedbackForms.id,
+// ...): a tampered or truncated value was a Postgres 22P02 and an HTTP 500.
+test("a malformed form id on submit goes back to /forms with invalid_form_submit, not a 500", { skip }, async () => {
+  await withWorld(async (w) => {
+    const form = await w.form("baseline", "mentee", { title: "Uuid probe", fields: [{ name: "a", kind: "text" }] });
+    const { submitFormAction } = await import("../../apps/web/src/app/(authenticated)/forms/[slug]/page.tsx");
+    for (const formId of ["not-a-uuid", form.id.slice(0, -1)]) {
+      const r = await outcome(() => submitFormAction(formData({ __formId: formId, __slug: form.slug, __pairingId: w.pairingA, a: "x" })));
+      assert.deepEqual(r, { kind: "redirect", to: "/forms?error=invalid_form_submit" }, `${formId}: ${describe(r)}`);
+    }
+    const [{ n }] = await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM feedback_responses WHERE pairing_id = $1`, [w.pairingA]);
+    assert.equal(n, 0);
   });
 });

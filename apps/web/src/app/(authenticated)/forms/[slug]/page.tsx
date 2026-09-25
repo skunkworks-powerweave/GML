@@ -46,6 +46,7 @@ import {
 } from "@/lib/forms/validate";
 import { decodeFormSlug, formRunnerHref } from "@/lib/forms/catalogue-links";
 import { templateDraftWhere } from "@/lib/forms/drafts";
+import { isUuid } from "@/lib/ids";
 import { formTitle, isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
 import { parseFormSchema } from "@/lib/forms/schema";
 import { getDeviceType } from "@/lib/device";
@@ -241,7 +242,9 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // below, prefill the form with another pairing's previously submitted answers.
   const pairingId = String(formData.get("__pairingId") ?? "").trim();
 
-  if (!formId || !slug) {
+  // A uuid too: the hidden __formId goes into eq(feedbackForms.id, ...) below,
+  // and a tampered or truncated one was a Postgres 22P02 and an HTTP 500.
+  if (!formId || !slug || !isUuid(formId)) {
     // To /forms, which shows these errors; /inbox ignored them.
     redirect(`/forms?error=invalid_form_submit`);
   }
