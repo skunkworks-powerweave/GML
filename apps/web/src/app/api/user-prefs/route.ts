@@ -1,5 +1,9 @@
 // GET /api/user-prefs — return current user's prefs (creating defaults if missing)
 // PUT /api/user-prefs — update current user's prefs (audit-on-change)
+//
+// 401 { error: "unauthenticated" } without a session; 400 { error:
+// "invalid_json" } for a body that is not JSON; 400 { error:
+// "validation_failed", issues: [{ path, message }] } for one that is.
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -8,6 +12,7 @@ import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { LOCALE_COOKIE } from "@/i18n/config";
 
 const PrefsSchema = z.object({
@@ -34,7 +39,7 @@ const DEFAULT_PREFS = {
 export async function GET() {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
   const [row] = await db.select().from(userPrefs).where(eq(userPrefs.userId, session.user.id)).limit(1);
   if (row) return NextResponse.json(row);
@@ -45,12 +50,15 @@ export async function GET() {
 export async function PUT(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
-  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const parse = PrefsSchema.safeParse(body);
+  // Not `.catch(() => ({}))`: that read a body that was not JSON as an empty
+  // patch, upserted the defaults, audited an update and answered 200 ok.
+  const read = await readJsonBody(req);
+  if (read.response) return read.response;
+  const parse = PrefsSchema.safeParse(read.body);
   if (!parse.success) {
-    return NextResponse.json({ error: "validation_failed", issues: parse.error.issues }, { status: 400 });
+    return NextResponse.json({ error: "validation_failed", issues: publicIssues(parse.error) }, { status: 400 });
   }
   const patch = parse.data;
   // NULL MUST SURVIVE AS NULL.

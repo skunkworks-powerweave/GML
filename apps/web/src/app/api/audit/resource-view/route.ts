@@ -15,8 +15,11 @@
 //              PdfViewer caller (`body: JSON.stringify({ id: resourceId })`)
 //              keeps working without a UI touch in this run.
 //   - Effect:  recordAudit({ action: "resource.view.client_ping", ... }).
-//   - Status:  204 on success, 400 on bad body, 401 on no session,
-//              429 over the per-user throttle.
+//   - Status:  204 on success; 400 { error: "invalid_json" } for a body that
+//              is not JSON, 400 { error: "validation_failed", issues:
+//              [{ path, message }] } for a bad one; 401 { error:
+//              "unauthenticated" } on no session; 429 over the per-user
+//              throttle.
 //   - NEVER 404: we deliberately do NOT verify the resource exists. This is
 //              telemetry — never block a user-facing flow on a missing row.
 //
@@ -30,6 +33,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { rateLimit } from "@/lib/rate-limit";
 
 // Per user. PdfViewer pings once per document it paints, so this is far more
@@ -58,7 +62,7 @@ const BodySchema = z
 export async function POST(req: Request): Promise<Response> {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
 
   // Fail closed (lib/rate-limit.ts): an unthrottled beacon is the defect this
@@ -81,11 +85,12 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "rate_limit_unavailable" }, { status: 503 });
   }
 
-  const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const parsed = BodySchema.safeParse(raw);
+  const read = await readJsonBody(req);
+  if (read.response) return read.response;
+  const parsed = BodySchema.safeParse(read.body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "validation_failed", issues: parsed.error.issues },
+      { error: "validation_failed", issues: publicIssues(parsed.error) },
       { status: 400 },
     );
   }
