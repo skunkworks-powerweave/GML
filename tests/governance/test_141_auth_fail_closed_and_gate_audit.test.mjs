@@ -216,10 +216,16 @@ test("spec 141 — gate actions.ts never includes plaintext password in audit me
   }
 });
 
-test("spec 141 — docs/audit-actions.md lists both new actions with spec 141 cross-ref", () => {
+test("spec 141 — docs/audit-actions.md lists the live rate-limit outage action with spec 141 cross-ref", () => {
   const src = read(DOCS_PATH);
   assert.match(src, /gate\.rate_limit\.redis_down/);
-  assert.match(src, /auth\.rate_limit\.redis_down/);
+  // CORRECTED (F89). auth.rate_limit.redis_down was required here too, but
+  // nothing has emitted it since sign-in moved to Supabase: a documented
+  // action that cannot occur sends an operator looking for rows that do not
+  // exist. A sign-in limiter fault is refused, not audited (auth.ts
+  // signInAllowed). test_audit_actions_auth_doc.test.mjs now compares the
+  // auth.* rows with the code both ways.
+  assert.doesNotMatch(src, /auth\.rate_limit\.redis_down/);
   assert.match(src, /141/);
 });
 

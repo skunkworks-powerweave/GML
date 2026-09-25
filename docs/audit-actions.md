@@ -27,22 +27,42 @@ prefix's source-of-truth bullet under "Substrate moats" if applicable.
   Pure surface-load events use the noun `surface_viewed` (or
   the generic `view`).
 
-## auth.* — credentials + lockout + reset
+## auth.* — sign-in, sign-out, passwords
+
+Sessions are Supabase Auth's. These rows are written by the application at
+the points it takes part (`app/login/**`, `app/auth/**`, `auth.ts`,
+`/settings`); `ip` is masked as everywhere else. `last_seen_at` on the user
+is stamped with every `auth.sign_in`, which is what `/admin/users` shows.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `auth.rate_limit.redis_down` | The login-rate-limit channel throws (Redis outage); credentials endpoint fails-CLOSED (spec 141) | `method` ("credentials" / "reset"), `ipMasked`, `severity` ("SEVERE"), truncated `error` string |
-| `auth.account.locked_attempt` | Login attempt against an account whose `users.locked_until` is in the future; bcrypt-verify is skipped (spec 161) | `userId`, `ipMasked`, `until` (ISO-8601) |
-| `auth.account.locked` | The failed-credentials counter just crossed 5; a 1-hour lockout is being armed | `userId`, `ipMasked`, `until`, `failedCount` |
-| `auth.account.unlocked` | A `super_admin` invoked `POST /api/admin/users/[id]/unlock` to clear a lockout before its natural expiry | `actorId` (the unlocking admin), `userId` (the cleared account) |
-| `auth.password.reset_requested` | `/api/auth/forgot-password` accepted a form submission (response identical for known and unknown emails — no enumeration oracle) | `emailHashed`, `ipMasked`, `tokenIssued` (boolean — false if email unknown) |
-| `auth.password.reset_failed` | `/api/auth/reset-password` rejected a token — expired, consumed-twice, or signature mismatch | `tokenPrefix` (first 8 chars), `reason` ("expired" / "consumed" / "not_found") |
-| `auth.password.reset_completed` | The new password was successfully set and the token marked consumed | `userId`, `ipMasked` |
+| `auth.sign_in` | A session was established: a password sign-in at `/login`, or an emailed link opened at `/auth/confirm` or `/auth/callback`. `user_id` and `entity_id` are the account | `method` ("password" / "email_link" / "recovery_link") |
+| `auth.sign_in_failed` | A password sign-in reached the credential check and was refused. Throttled and outage-refused attempts write nothing, so this is bounded by the sign-in throttle. `user_id` is null: no account is looked up for a failure | `reason` ("invalid_credentials" / "inactive" / "email_not_confirmed"), `emailHash` (first 16 hex characters of SHA-256 over the lower-cased address, never the address itself) |
+| `auth.sign_out` | Someone signed out of this browser (other devices stay signed in) | none |
+| `auth.password.changed` | The holder changed their own password at `/settings`, after re-entering the current one | `selfService` (true), `otherSessionsEnded` |
+| `auth.password.reset_completed` | A new password was set at `/login/reset` from a recovery link | `otherSessionsEnded` |
 
-Auth.js session events (`login` / `logout`) are emitted by Auth.js
-itself with the Auth.js-canonical action names; they are NOT under
-the `auth.*` prefix above. Search the audit log for `action='login'`
-or `action='logout'` to find them.
+There is no per-account lockout any more, and so no lockout, unlock or
+"rate limit down" rows: sign-in is throttled per account and address
+(`auth.ts`), and a throttled attempt is simply refused. Requests for a reset or
+magic link (`/login/forgot`) are not audited — the form answers identically for
+known and unknown addresses, and a row per request would be a log any stranger
+can fill. Token refreshes are not audited.
+
+## admin.user.* — account administration (`/admin/users`)
+
+`user_id` is the administrator, `entity_id` the account acted on. No password
+is ever recorded, in any form. `sessionsEnded` is true only when the account's
+sessions really were ended, and `sessionsEndedCount` then says how many.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `admin.user.create` | An administrator created an account (with an initial password the holder must replace at first sign-in) | `email`, `role`, `linkKind` ("teacher" / "mentor" / null) |
+| `admin.user.role_change` | An account's role was changed. Losing an administrator role ends the account's sessions | `from`, `to`, `sessionsEnded`, `sessionsEndedCount` |
+| `admin.user.deactivate` | An account was deactivated: profile inactive, sessions ended, sign-in banned | `role`, `sessionsEnded`, `sessionsEndedCount` |
+| `admin.user.activate` | An account was reactivated (its old sessions stay ended) | `role` |
+| `admin.user.password_set` | An administrator set an account's password (the holder must replace it) | `role`, `sessionsEnded`, `sessionsEndedCount` |
+| `admin.user.surface_viewed` | `/admin/users`, which lists every account's email address, was rendered (SM-9 visibility) | none |
 
 ## gate.* — section password flow
 
