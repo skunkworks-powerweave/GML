@@ -8,6 +8,7 @@
 // 80 cycles; now the filter chips submit GET against the same URL so the
 // WHERE clause runs in Postgres, not over an already-fetched mock array.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, eq, sql, type SQL } from "drizzle-orm";
@@ -18,6 +19,8 @@ import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
 import { listCycles, parsePage, videoCell } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Observation cycles" };
 
 const KIND_CHIP: Record<string, string> = {
   baseline: "",
@@ -169,7 +172,7 @@ export default async function ObservationListPage({
   return (
     <div>
       <div className="page-header">
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="label">Classroom observation</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Observation cycles</h1>
@@ -190,18 +193,25 @@ export default async function ObservationListPage({
         </div>
       </div>
 
-      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+      {/* PHONE WIDTH. A teacher opens this list on her phone, and at 360 px it
+          was 770 px wide: the table had nowhere to scroll but the page, and the
+          chip groups could not wrap, so Chrome widened the layout viewport and
+          the fixed bottom tab bar left the screen. The column is
+          minmax(0, 1fr) because an `auto` track grows to the table's
+          min-content width even while the table scrolls inside its card. */}
+      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         <div
           className="card"
           style={{ display: "flex", padding: 10, gap: 16, alignItems: "center", flexWrap: "wrap" }}
         >
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {STATUS_TABS.map((f) => {
               const active = statusFilter === f.v;
               return (
                 <Link
                   key={f.v}
                   href={buildHref(f.v, kindFilter)}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink)" : "transparent",
@@ -218,13 +228,14 @@ export default async function ObservationListPage({
             })}
           </div>
           <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {KIND_TABS.map((f) => {
               const active = kindFilter === f.v;
               return (
                 <Link
                   key={f.v}
                   href={buildHref(statusFilter, f.v)}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink-2)" : "transparent",
@@ -253,69 +264,81 @@ export default async function ObservationListPage({
               ) : null}
             </div>
           ) : (
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Cycle</th>
-                  <th>Teacher</th>
-                  <th>Subject / Topic</th>
-                  <th>Kind</th>
-                  <th>Stage</th>
-                  <th>Date</th>
-                  <th>Video</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c) => (
-                  <tr key={c.id}>
-                    <td className="mono" style={{ fontSize: 11 }}>{c.code}</td>
-                    <td>
-                      <div style={{ fontWeight: 500 }}>{c.teacherName ?? "—"}</div>
-                      {c.teacherHindi ? (
-                        <div className="deva" style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--deva)" }}>
-                          {c.teacherHindi}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <div>{c.subjectName ?? "—"}</div>
-                      {c.topic ? (
-                        <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{c.topic}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>{c.kind}</span>
-                    </td>
-                    <td>
-                      <CycleStage status={c.status} />
-                    </td>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {c.scheduledAt
-                        ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
-                        : <span style={{ color: "var(--ink-4)" }}>—</span>}
-                    </td>
-                    <td>
-                      {/* From the cycle's linked videos (lib/observation/list.ts),
-                          not video_min, which only the demo seed ever wrote. */}
-                      {videoCell(c) === "—" ? (
-                        <span style={{ color: "var(--ink-4)" }}>—</span>
-                      ) : (
-                        <span style={{ fontSize: 12 }}>{videoCell(c)}</span>
-                      )}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <Link
-                        href={`/observation/${c.id}`}
-                        style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
-                      >
-                        ›
-                      </Link>
-                    </td>
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Cycle</th>
+                    <th>Teacher</th>
+                    <th>Subject / Topic</th>
+                    <th>Kind</th>
+                    <th>Stage</th>
+                    <th>Date</th>
+                    <th>Video</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((c) => (
+                    <tr key={c.id}>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {/* A way in at the row's left edge: on a phone the '›'
+                            in the last column starts off screen. */}
+                        <Link href={`/observation/${c.id}`} style={{ color: "var(--ink)" }}>
+                          {c.code}
+                        </Link>
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 500 }}>{c.teacherName ?? "—"}</div>
+                        {c.teacherHindi ? (
+                          <div className="deva" style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--deva)" }}>
+                            {c.teacherHindi}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <div>{c.subjectName ?? "—"}</div>
+                        {c.topic ? (
+                          <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{c.topic}</div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>{c.kind}</span>
+                      </td>
+                      <td>
+                        <CycleStage status={c.status} />
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {c.scheduledAt
+                          ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
+                          : <span style={{ color: "var(--ink-4)" }}>—</span>}
+                      </td>
+                      <td>
+                        {/* From the cycle's linked videos (lib/observation/list.ts),
+                            not video_min, which only the demo seed ever wrote. */}
+                        {videoCell(c) === "—" ? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        ) : (
+                          <span style={{ fontSize: 12 }}>{videoCell(c)}</span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <Link
+                          href={`/observation/${c.id}`}
+                          // The code cell's link is the row's one link for a
+                          // screen reader and the Tab key; this is its mouse twin.
+                          aria-hidden="true"
+                          tabIndex={-1}
+                          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+                        >
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           {total > 0 ? (
             <div

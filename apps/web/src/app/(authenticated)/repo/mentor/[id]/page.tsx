@@ -12,6 +12,7 @@
 // mentorship.ts) so the WHERE clause uses `and(eq(mentors.id, id), eq(mentors.
 // active, true))`. A soft-retired mentor now 404s consistently with the index.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
@@ -24,6 +25,8 @@ import { mentorRoster } from "@/lib/gated-reads";
 import { mentorshipAccess } from "@/lib/visibility";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Mentor" };
 
 const STATUS_ORDER = ["active", "review", "paused", "complete", "ended"] as const;
 type Status = (typeof STATUS_ORDER)[number];
@@ -203,7 +206,9 @@ export default async function RepoMentorDetailPage({
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                        // min(100%, ...): a 280 px minimum is wider than a
+                        // phone's content box, so the one card overflowed it.
+                        gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
                         gap: 12,
                       }}
                     >

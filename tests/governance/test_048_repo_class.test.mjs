@@ -38,7 +38,9 @@ test("Spec 048: detail page queries classes + schools + subjects + sessions + te
 
 test("Spec 048: detail page renders KV details and a 1.6fr / 1fr grid (matches JSX prototype)", () => {
   const src = read(DETAIL);
-  assert.match(src, /gridTemplateColumns:\s*"1\.6fr 1fr"/);
+  // 1.6fr / 1fr from 768 px; one column on a phone (F11: the inline template
+  // this pinned held at every width). Rendered in ui-phone-layout.test.ts.
+  assert.match(src, /grid-cols-1\b[^"]*md:grid-cols-\[minmax\(0,1\.6fr\)_minmax\(0,1fr\)\]/);
   assert.match(src, /Class teacher/);
   assert.match(src, /Stage/);
   assert.match(src, /Sections/);

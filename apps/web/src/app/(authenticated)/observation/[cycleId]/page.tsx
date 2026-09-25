@@ -7,6 +7,7 @@
 // and the video-upload context handle. All status transitions go through
 // guarded server actions in ./actions.ts.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
@@ -34,6 +35,8 @@ import {
 } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Observation cycle" };
 
 const CYCLE_STAGES = [
   { id: "nominated", label: "Nominated" },
@@ -193,7 +196,7 @@ export default async function CycleDetailPage({
 
   const body = (
     <div>
-      <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+      <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
         <div>
           <Link href="/observation" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
             ← All cycles
@@ -264,7 +267,9 @@ export default async function CycleDetailPage({
       {/* Cycle Flow Diagram */}
       <section style={{ marginBottom: 24 }}>
         <div className="card card-hi" style={{ padding: 14 }}>
-          <div className="stepper">
+          {/* flex-wrap: five steps in one row are ~500 px, so on a phone
+              "Post-form" and "Complete" sat off screen. */}
+          <div className="stepper flex-wrap">
             {CYCLE_STAGES.map((stage, i) => {
               const isPast = i < currentStageIdx;
               const isCurrent = i === currentStageIdx;
@@ -283,7 +288,11 @@ export default async function CycleDetailPage({
         </div>
       </section>
 
-      <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+      {/* One column below 768 px, two beside each other above it. This was an
+          inline "1fr 1fr", which holds at every width: on a phone the pre-form
+          textarea was 96 px wide and the Evidence card, with the upload tray
+          teachers use from their phones, was pushed off screen. */}
+      <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <article className="card card-hi" style={{ padding: 16 }}>
           <div className="label" style={{ marginBottom: 6 }}>Forms · {forms.length}</div>
           <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Pre &amp; post-observation</h2>
@@ -423,6 +432,8 @@ export default async function CycleDetailPage({
             rows={3}
             required
             className="text"
+            // Named: a placeholder is not a label, and vanishes as you type.
+            aria-label="New note"
             placeholder="Add a note. Existing notes are kept above."
             style={{ fontSize: 13 }}
           />
@@ -464,8 +475,12 @@ function StageFields({
     <>
       {STAGE_FORMS[kind].fields.map((f) => (
         <Fragment key={f.name}>
-          <label className="label" style={{ fontSize: 11 }}>{f.label}</label>
+          {/* htmlFor/id: the label sat beside the box without naming it, so a
+              screen reader announced only the placeholder, which is gone
+              once anything is typed. */}
+          <label htmlFor={`cycle-${kind}-${f.name}`} className="label" style={{ fontSize: 11 }}>{f.label}</label>
           <DraftTextarea
+            id={`cycle-${kind}-${f.name}`}
             name={f.name}
             draftScope={draftScope(drafts.userId, drafts.cycleId, f.name)}
             draftVersion={drafts.version}

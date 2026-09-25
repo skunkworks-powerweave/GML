@@ -90,7 +90,11 @@ test("school detail queries the per-school joins (school, classes, teachers, ses
 
 test("school detail uses 1.6fr / 1fr two-column body grid (matches JSX prototype)", () => {
   const src = read(DETAIL_PATH);
-  assert.match(src, /gridTemplateColumns:\s*["']1\.6fr 1fr["']/);
+  // From 768 px only (F11). This pinned the inline `gridTemplateColumns:
+  // "1.6fr 1fr"`, which also held on a phone, where the page scrolled
+  // sideways; the columns now collapse to one below the md breakpoint.
+  // tests/behaviour/ui-phone-layout.test.ts renders the page at both widths.
+  assert.match(src, /grid-cols-1\b[^"]*md:grid-cols-\[minmax\(0,1\.6fr\)_minmax\(0,1fr\)\]/);
 });
 
 test("school detail renders Classes table with Grade/Stage/Students/Sections/Class teacher", () => {

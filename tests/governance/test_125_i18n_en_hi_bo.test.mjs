@@ -205,10 +205,18 @@ test("spec 125 — dashboard uses getTranslations() for the greeting + headings 
   const src = read(DASHBOARD);
   assert.match(src, /from\s+["']next-intl\/server["']/);
   assert.match(src, /tDash/, "dashboard must hold a tDash translator handle");
+  // The greeting's key now comes from dashboard/greeting.ts (F132: it picked
+  // the key from the UTC hour inline), so the translation is tDash(<key>) and
+  // the key set lives there. Its behaviour is in dashboard-greeting.test.ts.
   assert.match(
     src,
-    /tDash\("morning"\)/,
-    "dashboard greeting must translate the morning string via tDash",
+    /tDash\(greetingKey\(/,
+    "dashboard greeting must translate its time-of-day key via tDash",
+  );
+  assert.match(
+    read("apps/web/src/app/(authenticated)/dashboard/greeting.ts"),
+    /return "morning"/,
+    "the greeting keys include the morning string",
   );
   assert.match(
     src,

@@ -29,7 +29,9 @@ async function listPage(user: TestUser, sp: Record<string, string>) {
   signIn(user);
   const { default: ObservationListPage } = await import("../../apps/web/src/app/(authenticated)/observation/page.tsx");
   const html = await render(withAppRouter(await ObservationListPage({ searchParams: Promise.resolve(sp) })));
-  const ids = [...html.matchAll(/href="\/observation\/([0-9a-f-]{36})"/g)].map((m) => m[1]!);
+  // One entry per ROW: a row links to its cycle twice (the code, and the '›'
+  // a mouse user clicks), so the ids are de-duplicated in document order.
+  const ids = [...new Set([...html.matchAll(/href="\/observation\/([0-9a-f-]{36})"/g)].map((m) => m[1]!))];
   const text = html.replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
   return { html, ids, text };
 }
