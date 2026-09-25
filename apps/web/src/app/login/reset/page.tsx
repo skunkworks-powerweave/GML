@@ -10,13 +10,20 @@
 // for what was wrong with that endpoint.
 
 import Link from "next/link";
-import { auth } from "@/auth";
+import { redirect } from "next/navigation";
+import { auth, recoverySessionState } from "@/auth";
 import { ResetPasswordForm } from "./ResetPasswordForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function ResetPasswordPage() {
-  const session = await auth();
+  const signedIn = await auth();
+  // Only a session that came from a recovery link, recently, may set a
+  // password without the current one. Anyone else who is signed in is sent to
+  // Settings, which asks for it -- the same door, with the check.
+  const recovery = signedIn ? await recoverySessionState() : "signed_out";
+  if (recovery === "not_recovery") redirect("/settings");
+  const session = recovery === "recovery" ? signedIn : null;
 
   return (
     <div

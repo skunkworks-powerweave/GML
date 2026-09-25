@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { recoverySessionState } from "@/auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type ResetState = { error?: string };
@@ -33,6 +34,20 @@ export async function resetPasswordAction(
   }
   if (password !== confirm) {
     return { error: "Passwords do not match." };
+  }
+
+  // A RECOVERY session, not merely a session. No current password is asked
+  // for here, which is only sound because following the emailed link proved
+  // control of the mailbox; an ordinary signed-in browser proves nothing about
+  // who is sitting at it. See recoverySessionState() in auth.ts.
+  const recovery = await recoverySessionState();
+  if (recovery === "not_recovery") {
+    return {
+      error: "This page only sets a password from a reset link. To change your password, use Settings.",
+    };
+  }
+  if (recovery !== "recovery") {
+    return { error: "This reset link has expired or was already used. Request a new one." };
   }
 
   const supabase = await createSupabaseServerClient();

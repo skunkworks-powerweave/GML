@@ -137,6 +137,46 @@ export async function auth(): Promise<Session | null> {
 
 const ADMIN_ROLES: ReadonlySet<RoleName> = new Set<RoleName>(["programme_admin", "super_admin"]);
 
+/** How long after following a recovery link it may be used to set a password. */
+export const RECOVERY_WINDOW_SECONDS = 15 * 60;
+
+/**
+ * Did the current session come from a password-recovery link, recently?
+ *
+ *   "recovery"      yes, within RECOVERY_WINDOW_SECONDS
+ *   "expired"       yes, but longer ago than that
+ *   "not_recovery"  a session established some other way (a password, a
+ *                   magic link)
+ *   "signed_out"    no session
+ *
+ * WHY /login/reset NEEDS THIS. Setting a password there asks for no current
+ * password, which is only acceptable because following the emailed link
+ * proved control of the mailbox. The page used to accept ANY session, so an
+ * unattended, signed-in school computer was enough to change the owner's
+ * password and -- the action then ends every other session -- lock them out
+ * everywhere. GoTrue records how a session was authenticated in the token's
+ * `amr` claim; a recovery link yields {"method":"recovery","timestamp":...}.
+ * The window bounds the same unattended-computer case for a browser that DID
+ * follow a recovery link and was then left open.
+ */
+export async function recoverySessionState(): Promise<"recovery" | "expired" | "not_recovery" | "signed_out"> {
+  let amr: unknown;
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data, error } = await supabase.auth.getClaims();
+    if (error || !data?.claims) return "signed_out";
+    amr = (data.claims as unknown as Record<string, unknown>).amr;
+  } catch {
+    return "signed_out";
+  }
+  const entry = Array.isArray(amr)
+    ? (amr as Array<{ method?: unknown; timestamp?: unknown }>).find((a) => a?.method === "recovery")
+    : undefined;
+  if (!entry) return "not_recovery";
+  const at = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+  return Date.now() / 1000 - at <= RECOVERY_WINDOW_SECONDS ? "recovery" : "expired";
+}
+
 /**
  * The role public.users holds for `id` now, or null when the profile is
  * missing, inactive or soft-deleted -- the same refusals the access-token hook

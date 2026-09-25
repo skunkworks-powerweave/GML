@@ -94,7 +94,7 @@ export async function fakeGoTrue(options: Options = {}) {
   const users = new Map<string, FakeUser>();
   const sessions = new Map<string, FakeSession>();
   const seen: Seen[] = [];
-  const hashedOtps = new Map<string, { userId: string; type: string }>();
+  const hashedOtps = new Map<string, { userId: string; type: string; ageSeconds: number }>();
   let settings: Record<string, unknown> = { disable_signup: true, mailer_autoconfirm: false, external: { email: true } };
   /** When set, every request except the JWKS is answered with this status (an outage). */
   let outage: number | null = null;
@@ -138,12 +138,12 @@ export async function fakeGoTrue(options: Options = {}) {
     }
   }
 
-  async function newSession(userId: string, method: string): Promise<FakeSession> {
+  async function newSession(userId: string, method: string, ageSeconds = 0): Promise<FakeSession> {
     const s: FakeSession = {
       id: randomUUID(),
       userId,
       refreshToken: randomUUID().replace(/-/g, ""),
-      amr: [{ method, timestamp: Math.floor(Date.now() / 1000) }],
+      amr: [{ method, timestamp: Math.floor(Date.now() / 1000) - ageSeconds }],
     };
     sessions.set(s.id, s);
     if (table) await table.query("INSERT INTO auth.sessions (id, user_id) VALUES ($1, $2)", [s.id, userId]);
@@ -336,7 +336,7 @@ export async function fakeGoTrue(options: Options = {}) {
       if (!entry || entry.type !== body.type) return fail(res, 403, "otp_expired", "Email link is invalid or has expired");
       hashedOtps.delete(hash);
       const u = users.get(entry.userId)!;
-      const s = await newSession(u.id, entry.type === "recovery" ? "recovery" : "otp");
+      const s = await newSession(u.id, entry.type === "recovery" ? "recovery" : "otp", entry.ageSeconds);
       const out = await mint(u, s);
       return send(res, out.status, out.body);
     }
@@ -430,10 +430,14 @@ export async function fakeGoTrue(options: Options = {}) {
     deviceSignIn: (email: string, password: string) => post("/token?grant_type=password", { email, password }),
     /** Refresh as that device would, with the refresh token it holds. */
     deviceRefresh: (refreshToken: string) => post("/token?grant_type=refresh_token", { refresh_token: refreshToken }),
-    /** A recovery/magic-link email's token_hash, as {{ .TokenHash }} renders it. */
-    issueOtp(userId: string, type: "recovery" | "magiclink" | "email"): string {
+    /**
+     * A recovery/magic-link email's token_hash, as {{ .TokenHash }} renders it.
+     * `ageSeconds` back-dates the resulting session's amr timestamp, standing
+     * in for a link that was followed that long ago.
+     */
+    issueOtp(userId: string, type: "recovery" | "magiclink" | "email", ageSeconds = 0): string {
       const hash = createHash("sha256").update(randomUUID()).digest("hex");
-      hashedOtps.set(hash, { userId, type });
+      hashedOtps.set(hash, { userId, type, ageSeconds });
       return hash;
     },
     setSettings: (s: Record<string, unknown>) => void (settings = s),
