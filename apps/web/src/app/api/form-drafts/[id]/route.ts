@@ -50,12 +50,12 @@ async function requireSession(): Promise<Actor | null> {
 /**
  * The pairing a template draft is about, from `?pairingId=`, or null for a
  * form opened without one. A response is returned instead when the caller may
- * not keep a draft about that pairing: 403 while the mentorship section is
- * locked, 404 for a pairing that is malformed, absent or someone else's.
+ * not keep that draft: 403 while the mentorship section is locked -- with or
+ * without a pairing, see pairingDraftAccess -- and 404 for a pairing that is
+ * malformed, absent or someone else's.
  */
 async function draftPairing(req: Request, actor: Actor): Promise<string | null | NextResponse> {
-  const pairingId = new URL(req.url).searchParams.get("pairingId");
-  if (!pairingId) return null;
+  const pairingId = new URL(req.url).searchParams.get("pairingId") || null;
   const access = await pairingDraftAccess(db, actor, pairingId);
   if (access === "locked") return NextResponse.json({ error: "section_locked" }, { status: 403 });
   if (access === "not_found") return NextResponse.json({ error: "not_found" }, { status: 404 });

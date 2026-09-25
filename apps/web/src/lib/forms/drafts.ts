@@ -28,23 +28,31 @@ export function templateDraftWhere(userId: string, templateId: string, pairingId
 }
 
 /**
- * May `actor` keep a draft about this pairing?
+ * May `actor` keep a draft about this pairing -- or, for `pairingId` null, the
+ * draft of a form opened without one?
  *
- *   "ok"         the pairing exists, is the actor's, and the mentorship section
- *                is unlocked
+ *   "ok"         the mentorship section is unlocked and, for a pairing, the
+ *                pairing exists and is the actor's
  *   "locked"     no mentorship grant: a draft about a mentee is mentorship data
  *                and the section password guards it like the rest
  *   "not_found"  malformed, absent, or someone else's -- indistinguishable, as
  *                assertCanAccessPairing makes them
+ *
+ * A draft WITHOUT a pairing needs the password too. Every feedback form is a
+ * mentorship form, and the pairing-less rows include every draft written
+ * before drafts had a pairing -- the one draft a mentor shared across all her
+ * mentees, so in fact about one of them. Unguarded, the bare runner URL and
+ * this API served those to a session that never entered the password.
  */
 export async function pairingDraftAccess(
   db: Db,
   actor: Actor,
-  pairingId: string,
+  pairingId: string | null,
 ): Promise<"ok" | "locked" | "not_found"> {
-  if (!isUuid(pairingId)) return "not_found";
+  if (pairingId !== null && !isUuid(pairingId)) return "not_found";
   const access = await mentorshipAccess(db, actor);
   if (!access.granted) return "locked";
+  if (pairingId === null) return "ok";
   const [row] = await db
     .select({ id: mentorPairings.id })
     .from(mentorPairings)

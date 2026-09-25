@@ -514,15 +514,23 @@ export default async function FormRunnerPage({
   // user last wrote about the mentee, and it sat outside /mentorship, whose
   // layout is where the section password is asked -- so a borrowed session read
   // a mentor's assessments of every mentee without the password. Asked here,
-  // before anything about the pairing is read, returning to this form once
-  // unlocked. assertCanAccessPairing then 404s a pairing that is malformed,
-  // absent or someone else's, which used to render the whole fillable form
-  // (and, for a truncated id, a Postgres 22P02 as HTTP 500).
+  // before any draft or answer is read, returning to this form once unlocked.
+  //
+  // WITH OR WITHOUT A PAIRING. Every feedback form is a mentorship form, and
+  // the draft of one opened without a pairing includes each draft written
+  // before drafts had a pairing: the one a mentor shared across all her
+  // mentees, about one of them. Asked only when the URL named a pairing, the
+  // bare /forms/<slug> showed it with no password. /api/form-drafts asks the
+  // same (lib/forms/drafts.ts pairingDraftAccess).
+  await assertSectionGate(userId, "mentorship", pairingId ? formRunnerHref(slug, pairingId) : `/forms/${slug}`);
+
+  // assertCanAccessPairing 404s a pairing that is malformed, absent or someone
+  // else's, which used to render the whole fillable form (and, for a truncated
+  // id, a Postgres 22P02 as HTTP 500).
   let aboutLine: string | null = null;
   if (pairingId) {
     const actor = actorFrom(session);
     if (!actor) redirect("/login");
-    await assertSectionGate(userId, "mentorship", formRunnerHref(slug, pairingId));
     const pairing = await assertCanAccessPairing(actor, pairingId);
 
     // WHOSE FORM THIS IS. A mentor fills the same form for four or five

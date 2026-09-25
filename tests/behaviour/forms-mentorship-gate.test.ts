@@ -80,6 +80,47 @@ test("without the mentorship password a submission is refused and the quarter do
   });
 });
 
+// ── F51 (review): the bare form URL ─────────────────────────────────────────
+//
+// A draft written before drafts had a pairing (pairing_id NULL) was, in fact,
+// the one draft shared by all of a mentor's mentees -- about one of them. The
+// runner asserted the password only when the URL named a pairing, so the bare
+// /forms/<slug> read that draft with no password ("Draft loaded", the text in
+// the form), and GET /api/form-drafts/<form>?scope=template served it too.
+test("without the mentorship password the bare form URL, and the draft API, do not serve a pairing-less draft", { skip }, async () => {
+  await withWorld(async (w, form) => {
+    await w.q(
+      `INSERT INTO form_drafts (user_id, template_id, pairing_id, responses) VALUES ($1, $2, NULL, $3::jsonb)`,
+      [w.mentor.id, form.id, JSON.stringify({ notes: "legacy draft about some mentee" })],
+    );
+    const { default: FormRunnerPage } = await runner();
+    const open = () => outcome(() => FormRunnerPage({ params: Promise.resolve({ slug: form.slug }), searchParams: Promise.resolve({}) }));
+
+    const locked = await open();
+    assert.equal(locked.kind, "redirect", `expected the gate, got ${describe(locked)}`);
+    const to = (locked as { to: string }).to;
+    assert.ok(to.startsWith("/gate/mentorship?next="), to);
+    assert.equal(new URL(to, "http://x").searchParams.get("next"), `/forms/${form.slug}`, "back to this form once unlocked");
+
+    const { GET, PUT } = await import("../../apps/web/src/app/api/form-drafts/[id]/route.ts");
+    const url = `http://app.test/api/form-drafts/${form.id}?scope=template`;
+    const got = await GET(new Request(url), { params: Promise.resolve({ id: form.id }) });
+    assert.equal(got.status, 403, "section locked");
+    assert.doesNotMatch(await got.text(), /legacy draft about some mentee/);
+    const put = await PUT(
+      new Request(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ responses: { notes: "x" } }) }),
+      { params: Promise.resolve({ id: form.id }) },
+    );
+    assert.equal(put.status, 403, "nor may it be overwritten while locked");
+
+    // Its owner, with the password, still finds it.
+    await w.grant(w.mentor.id);
+    const unlocked = await open();
+    assert.equal(unlocked.kind, "value", describe(unlocked));
+    assert.match(await render((unlocked as { value: unknown }).value), /legacy draft about some mentee/);
+  });
+});
+
 test("without the mentorship password /forms does not list the mentees", { skip }, async () => {
   await withWorld(async (w, form) => {
     const { default: FormsIndexPage } = await import("../../apps/web/src/app/(authenticated)/forms/page.tsx");

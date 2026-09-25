@@ -70,6 +70,9 @@ test("an untitled form is headed readably, not 'baseline · mentor'", { skip }, 
 
 test("a form opened without a pairing goes back to /forms", { skip }, async () => {
   await withWorld(async (w, form) => {
+    // The bare form asks for the mentorship password too: its draft can be one
+    // written before drafts had a pairing (forms-mentorship-gate.test.ts).
+    await w.grant(w.admin.id);
     signIn(w.admin);
     const html = await runnerHtml(form.slug, {});
     assert.match(html, /href="\/forms"[^>]*>← Forms/);

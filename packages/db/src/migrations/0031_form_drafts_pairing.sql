@@ -21,9 +21,11 @@
 -- the index without it and this file is the authority.
 --
 -- Existing drafts keep pairing_id NULL. Which mentee a shared draft was about
--- cannot be recovered from the row, and guessing would re-create the defect;
--- the pairing-bound runner reads only its own pairing's draft, so these rows
--- are simply not offered as anyone's.
+-- cannot be recovered from the row, and guessing would re-create the defect.
+-- The pairing-bound runner reads only its own pairing's draft, so such a row
+-- is offered only on the bare form URL (/forms/<slug>, no pairing), to the
+-- user who wrote it -- and, like every form draft, only once the mentorship
+-- section is unlocked (the runner and /api/form-drafts both ask).
 --
 -- Observation-cycle drafts (observation_cycle_id) are untouched: a cycle is
 -- already one teacher.
