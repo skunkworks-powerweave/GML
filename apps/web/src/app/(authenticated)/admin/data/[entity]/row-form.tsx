@@ -196,7 +196,12 @@ export function RowForm({
                 />
                 {refs === null ? (
                   <span className="text-[10px] text-neutral-500">
-                    Too many rows to list here: paste the id from that table&apos;s grid.
+                    {/* The grid shows links by name, never an id, so "paste the id
+                        from that table's grid" pointed at nothing (page.tsx now
+                        shows it in the Edit panel). */}
+                    Too many rows to list here: paste the row&apos;s id: it is shown at the top of that
+                    row&apos;s Edit panel in its own table, and is the first column of that table&apos;s
+                    Export CSV.
                   </span>
                 ) : null}
               </>

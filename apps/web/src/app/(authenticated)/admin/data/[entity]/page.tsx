@@ -180,7 +180,8 @@ function buildColumnFilter(
     case "PgUUID":
       // A link to another row: the filter's picker submits its id.
       if (!UUID_RE.test(value)) {
-        note("pick a value from the list");
+        // Past REF_OPTION_LIMIT there is no list to pick from, only a box.
+        note("paste the row's id, shown at the top of its Edit panel");
         return null;
       }
       return eq(col as never, value as never);
@@ -584,6 +585,13 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               Close
             </Link>
           </div>
+          {/* The row's id, whole and selectable: what another table's UUID box
+              (a link past REF_OPTION_LIMIT) and a CSV id column ask for. The
+              grid shows every link by name and nowhere else shows an id. */}
+          <p className="mb-3 text-xs text-amber-900">
+            Row id:{" "}
+            <code data-testid="edit-row-id" className="select-all font-mono">{String(editRow.id)}</code>
+          </p>
           <RowForm
             entitySlug={slug}
             mode="edit"
@@ -664,7 +672,15 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             } else if (col?.columnType === "PgTimestamp" || col?.columnType === "PgDate" || col?.columnType === "PgDateString") {
               control = <input type="date" name={name} defaultValue={current} className={cls} />;
             } else {
-              control = <input name={name} defaultValue={current} placeholder="contains…" className={cls} />;
+              // A link past REF_OPTION_LIMIT has no list: it takes a whole id.
+              control = (
+                <input
+                  name={name}
+                  defaultValue={current}
+                  placeholder={refs === null ? "paste the row's id" : "contains…"}
+                  className={cls}
+                />
+              );
             }
             return (
               <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">
