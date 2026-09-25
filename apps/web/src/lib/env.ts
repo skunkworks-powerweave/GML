@@ -108,11 +108,23 @@ function checkEmail(raw: string | undefined, varName: string): EnvCheck {
 }
 
 /**
+ * Rejections this process has already logged.
+ *
+ * assertEnv() runs in the authenticated layout, i.e. on EVERY page render
+ * (twice on /videos), and it used to print its SEVERE block every time: one
+ * typo in a helpdesk number filled the rotated app log with the same lines and
+ * pushed out everything useful. The environment does not change while the
+ * process runs, so each rejection is worth one line, the first time it is seen.
+ */
+const reported = new Set<string>();
+
+/**
  * Validate the optional deployment env vars and return the structured
  * summary downstream consumers read. In production, any SET-but-INVALID
- * variable triggers a SEVERE log line to `console.error` so the operator
- * sees the misconfiguration in the boot logs. We never throw — a typo'd
- * helpdesk phone must not break the authenticated route tree.
+ * variable triggers a SEVERE log line to `console.error` -- once per process,
+ * on the first render that meets it -- so the operator sees the
+ * misconfiguration. We never throw — a typo'd helpdesk phone must not break
+ * the authenticated route tree.
  *
  * The function is safe to call from a server component (process.env is
  * available) and from any other server-side context. Calling it from a
@@ -134,8 +146,9 @@ export function assertEnv(): EnvSummary {
       summary.whatsappNumber.reason,
       summary.helpdeskPhone.reason,
       summary.helpdeskEmail.reason,
-    ].filter((r) => r.length > 0);
+    ].filter((r) => r.length > 0 && !reported.has(r));
     if (failures.length > 0) {
+      for (const f of failures) reported.add(f);
       console.error(
         "[SEVERE][spec169] assertEnv() rejected " +
           failures.length +

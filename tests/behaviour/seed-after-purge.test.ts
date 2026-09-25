@@ -104,7 +104,9 @@ test("seed_forms_observation RETURNS when OBS-2026-001 is gone, so deploy.sh sur
       `const m = await import(${JSON.stringify(pathToFileURL(SEED_OBS).href)});` +
       `await m.main();` +
       `console.log("MAIN_RETURNED");`;
-    const run = await runTsx(["--input-type=module", "-e", code], pg.url);
+    // sslmode=disable: the seeds now negotiate TLS as client.ts does, and this
+    // fake speaks none (tests/behaviour/db-tls.test.ts relies on exactly that).
+    const run = await runTsx(["--input-type=module", "-e", code], `${pg.url}?sslmode=disable`);
     const out = show(run);
 
     // Prove the missing-anchor path is the one that actually ran, not a

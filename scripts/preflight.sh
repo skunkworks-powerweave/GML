@@ -390,6 +390,32 @@ if [ -n "$avail_kb" ]; then
   fi
 fi
 
+# Docker keeps images, build cache and every volume -- the worker's transcode
+# scratch among them, a copy of each source of up to 2 GB plus its HLS output
+# -- under its data root, /var/lib/docker by default: the ROOT volume, sized at
+# 30 GiB in README-deploy.md 2.4. The 100 GiB data volume at /var/lib/gml held
+# only the local dumps, although both runbooks said scratch lived there, and
+# the disk check above looks only at `.`. README-deploy.md 2.5 moves the data
+# root onto the data volume; this checks that it was done. A single large root
+# disk (60 GiB or more) is not a failure: the point is room, not layout.
+docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+if [ -n "${docker_root}" ]; then
+  root_mnt="$(df -Pk / 2>/dev/null | awk 'NR==2{print $6}')"
+  root_kb="$(df -Pk / 2>/dev/null | awk 'NR==2{print $2}')"
+  root_gb=$(( ${root_kb:-0} / 1024 / 1024 ))
+  data_mnt="$(df -Pk "${docker_root}" 2>/dev/null | awk 'NR==2{print $6}')"
+  if [ -z "${data_mnt}" ]; then
+    nb "Docker data root ${docker_root} could not be inspected -- check it is on the data volume (README-deploy.md 2.5)"
+  elif [ "${data_mnt}" != "${root_mnt}" ]; then
+    ok "Docker data root ${docker_root} is on ${data_mnt}, not the root volume"
+  elif [ "${root_gb}" -ge 60 ]; then
+    ok "Docker data root ${docker_root} is on the root volume, which has ${root_gb} GiB"
+  else
+    no "Docker data root ${docker_root} is on the ${root_gb} GiB root volume" \
+      "images, build cache and the worker's transcode scratch will fill it -- move Docker's data root to the data volume (README-deploy.md 2.5)"
+  fi
+fi
+
 # ---- disaster recovery ------------------------------------------------------
 sect "Disaster recovery"
 

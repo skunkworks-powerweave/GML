@@ -25,7 +25,10 @@ test("spec 077: seed script loads dotenv, opens a pg Pool, and uses drizzle node
     "must use drizzle node-postgres adapter",
   );
   assert.match(src, /from\s+"pg"/, "must import pg for Pool");
-  assert.match(src, /new Pool\(\s*\{\s*connectionString:/);
+  // Was /new Pool\(\s*\{\s*connectionString:/ -- which pinned the bare
+  // connection string that negotiated no TLS to the Supabase pooler. The
+  // invariant is a Pool built from client.ts's config.
+  assert.match(src, /new Pool\(\s*poolConfig\(\)\s*\)/);
 });
 
 test("spec 077: seed script checks DATABASE_URL and exits with helpful message if missing", () => {

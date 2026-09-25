@@ -48,6 +48,24 @@ Note: **point-in-time recovery is NOT included in Pro.** It is a separate paid
 add-on. Without it, Supabase's own recovery granularity is "yesterday", which is
 why §7 exists.
 
+**Connection budget.** `DATABASE_URL` is the *session* pooler (§10), which
+admits only as many clients as its **pool size** — 15 by default on the smaller
+computes (Project Settings → Database → Connection pooling) — and every open
+connection holds one. The sixteenth connect fails with "max clients reached":
+pages error, `/api/health` answers 503, the worker cannot claim. The stack is
+sized to fit 15 exactly:
+
+| Who | Connections | Set by |
+|---|---|---|
+| `app` | 8 | `APP_DB_POOL_MAX` in `.env` |
+| `worker` | 4 | `WORKER_DB_POOL_MAX` in `.env` |
+| `migrate`, seed, verify-auth (during a deploy) | 2 | fixed in `docker-compose.yml` |
+| worker healthcheck | 1 | — |
+
+`backup.sh`'s `pg_dump` takes one more at 02:00; do not deploy then. To give
+the app more, raise the pool size in the dashboard first, then
+`APP_DB_POOL_MAX`.
+
 ### 2.2 Manual dashboard steps
 
 None has a SQL equivalent. The application does not work without the first,
@@ -205,7 +223,7 @@ can request.
 | Instance | `m7i-flex.large` (2 vCPU, 8 GiB) — or `t3.large` in **unlimited** credit mode |
 | AMI | Ubuntu Server 24.04 LTS (x86_64). §2.5's commands are written for it. |
 | Root volume | 30 GiB gp3 |
-| Data volume | 100 GiB gp3 mounted at `/var/lib/gml` (ffmpeg scratch + local dumps) |
+| Data volume | 100 GiB gp3 mounted at `/var/lib/gml`: Docker's data root (images, build cache, the worker's ffmpeg scratch — §2.5) and the local dumps |
 | Region | `ap-south-1` |
 | Security group in | 80, 443 from `0.0.0.0/0`; 22 from your admin range **only** |
 | Security group out | 443 (Supabase, Let's Encrypt, Meta) **and 80** — `docker/worker.Dockerfile` installs ffmpeg with apt, and `node:22-slim`'s Debian sources are `http://deb.debian.org` on port 80. With 443 only, the worker image fails to build on the first deploy. |
@@ -240,6 +258,19 @@ sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo usermod -aG docker "$USER"
 
+# Docker's data -- images, build cache and every volume, the worker's ffmpeg
+# scratch among them -- goes on the DATA volume, not the 30 GiB root (§2.4).
+# First make and mount the data volume at /var/lib/gml; `lsblk` names it
+# (usually nvme1n1 on this instance type):
+sudo mkfs.ext4 -L gmldata /dev/nvme1n1
+sudo mkdir -p /var/lib/gml
+echo 'LABEL=gmldata /var/lib/gml ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
+sudo mount /var/lib/gml
+# ...then point Docker at it before anything is built or pulled:
+sudo mkdir -p /var/lib/gml/docker
+echo '{ "data-root": "/var/lib/gml/docker" }' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
+
 # jq: the verification commands in §5 pipe /api/health through it
 sudo apt-get install -y jq
 
@@ -258,6 +289,7 @@ in a new login session; until then every `docker` command fails with
 
 ```bash
 docker compose version    # Docker Compose version v2.x
+docker info --format '{{.DockerRootDir}}'   # /var/lib/gml/docker
 node --version            # v22.x
 pnpm --version            # 10.33.4
 jq --version
@@ -293,8 +325,10 @@ that ports 80 and 443 are free. `deploy.sh` does **not** run it: it fails when
 80 and 443 are already bound, which is true of every later deploy.
 
 `deploy.sh` runs: host-toolchain and `.env` checks → the SM-5 restore-drill
-gate (§7; skipped, loudly, on a host's first deploy) → tag current images as
-`:previous` → build → `up` (migrate gates app/worker) → wait for health through
+gate (§7; skipped, loudly, on a host's first deploy) → build → migrations, on
+their own (nothing serving is touched unless they succeed) → tag the images
+that were serving as `:previous` (only those the build changed, so a re-run of
+the same code keeps the rollback target) → `up` → wait for health through
 Caddy → seed → verify auth → post-deploy smoke.
 
 It is idempotent. Re-running it is the normal upgrade path.
@@ -430,10 +464,13 @@ between (an interrupted session, or `deploy.sh` refusing on a check), finish it
 by re-running `./scripts/deploy.sh`. An up-to-date tree is not evidence that
 the deploy happened.
 
-If a migration fails, `migrate` exits non-zero, `app` and `worker` never start,
-and **the previous containers keep serving**. That is the intended posture:
-a bad schema change degrades to "no deploy happened" rather than "the site is
-down".
+If a migration fails, **the previous containers keep serving**: `deploy.sh`
+runs the migrations on their own (`docker compose run --rm --no-deps migrate`)
+before `docker compose up` touches anything, stops when they fail, and puts
+`:current` back on the running images. That is the intended posture: a bad
+schema change degrades to "no deploy happened" rather than "the site is down".
+(A bare `docker compose up -d` does NOT give you this: it recreates `app` before
+it waits for `migrate`.)
 
 ### Rolling back
 
@@ -442,7 +479,8 @@ down".
 ```
 
 Restarts `app` and `worker` from the `:previous` image. It asks for
-confirmation.
+confirmation, and refuses when `:previous` is the image already running --
+nothing would change.
 
 **It does not touch the database.** Migrations are forward-only and there are no
 down-sections. If a *migration* is the problem, you need §7's restore procedure,
@@ -458,7 +496,7 @@ This asymmetry is why schema changes should **add** a column in one release and
 
 ```bash
 # Auth wiring, end to end. Creates a throwaway account, exercises it, deletes it.
-docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 
 # Health. 503 until db, storage AND migrations all pass.
 curl -s https://$DOMAIN/api/health | jq

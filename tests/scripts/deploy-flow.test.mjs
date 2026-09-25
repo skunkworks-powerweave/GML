@@ -52,6 +52,7 @@ case "$*" in
     exit 0 ;;
   "compose ps -a --format"*) echo "migrate 0" ;;
   "compose ps --format"*) echo "app healthy" ;;
+  *verify-auth.mjs*) exit "\${FAKE_VERIFY_AUTH_EXIT:-0}" ;;
 esac
 exit 0
 `;
@@ -272,6 +273,252 @@ test("a deploy without WhatsApp configured completes, and says WhatsApp ingest i
     const r = sb.run("scripts/deploy.sh", { env: FAST });
     assert.equal(r.status, 0, `WhatsApp is switched on later; it must not block a deploy.\nstderr:\n${r.stderr}`);
     assert.match(`${r.stdout}${r.stderr}`, /WhatsApp ingest is OFF/i, "the operator must be told, not left to discover it");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── The image store: what :current and :previous actually name ──────────────
+//
+// The stubs above answer `image inspect` with a bare exit code. These need the
+// tags to MEAN something, so this docker keeps a small store in the sandbox
+// ($SANDBOX_DIR/images, one file per tag holding an image id):
+//
+//   compose build             every service's :current -> sha256:<FAKE_BUILD>-<svc>
+//   tag SRC DST               DST -> SRC's id (SRC may itself be an id)
+//   image inspect --format {{.Id}} REF    REF's id, or exit 1 if REF is untagged
+//   compose run --rm --no-deps migrate    exits FAKE_MIGRATE_EXIT (default 0)
+//   compose up ...            exits FAKE_UP_EXIT (default 0) -- or 1 when the
+//                             migration fails, as the real one does after it
+//                             has already recreated app and worker
+
+const STORE_DOCKER = `
+store="$SANDBOX_DIR/images"; mkdir -p "$store"
+tagfile() { printf '%s/%s' "$store" "$(printf %s "$1" | tr ':/' '__')"; }
+case "$*" in
+  "image inspect --format {{.Id}} "*)
+    f="$(tagfile "$5")"; [ -f "$f" ] || exit 1; cat "$f"; echo; exit 0 ;;
+  "tag "*)
+    if [ -f "$(tagfile "$2")" ]; then id="$(cat "$(tagfile "$2")")"; else id="$2"; fi
+    printf '%s' "$id" > "$(tagfile "$3")"; exit 0 ;;
+  "compose build"*)
+    for s in app worker migrate; do printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"; done
+    exit 0 ;;
+  "compose run --rm --no-deps migrate") exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
+  "compose up"*) [ "\${FAKE_MIGRATE_EXIT:-0}" = 0 ] || exit 1; exit "\${FAKE_UP_EXIT:-0}" ;;
+  "compose ps --format"*) echo "app healthy" ;;
+esac
+exit 0
+`;
+
+/** A host that has deployed before, serving `serving` with `previous` behind it. */
+function storeSandbox({ serving = "v1", previous = "v0", healthy = true } = {}) {
+  const sb = makeSandbox({ files: ["scripts/deploy.sh"], prefix: "gml-deploy-" });
+  sb.write(".env", ENV_FILE);
+  sb.write("workspace/.deploy-completed", "2026-09-01T00:00:00Z");
+  for (const svc of ["app", "worker", "migrate"]) {
+    if (serving) sb.write(`images/gml-lms-${svc}_current`, `sha256:${serving}-${svc}`);
+    if (previous && svc !== "migrate") sb.write(`images/gml-lms-${svc}_previous`, `sha256:${previous}-${svc}`);
+  }
+  sb.stub("docker", STORE_DOCKER);
+  sb.stub("node", NODE);
+  sb.stub("pnpm", PNPM);
+  sb.stub("curl", caddyCurl(DOMAIN, { healthy }));
+  return sb;
+}
+
+const imageId = (sb, ref) => (sb.exists(`images/${ref.replace(/[:/]/g, "_")}`) ? sb.read(`images/${ref.replace(/[:/]/g, "_")}`) : null);
+
+// A spawn allowance for machines where every stubbed process costs a second.
+const SLOW = 240_000;
+
+test("re-running deploy.sh on unchanged code keeps :previous on the release before it", () => {
+  // v1 is serving. v2 is deployed and fails at health; the runbook says to
+  // re-run deploy.sh. The re-run builds the same v2.
+  const sb = storeSandbox({ serving: "v1", previous: "v0", healthy: false });
+  try {
+    const env = { HEALTH_TIMEOUT_SECONDS: "0", HEALTH_INTERVAL_SECONDS: "1", FAKE_BUILD: "v2" };
+    const first = sb.run("scripts/deploy.sh", { env, timeout: SLOW });
+    assert.notEqual(first.status, 0, "the v2 deploy is meant to fail at health");
+    assert.equal(imageId(sb, "gml-lms-app:current"), "sha256:v2-app");
+    assert.equal(imageId(sb, "gml-lms-app:previous"), "sha256:v1-app", "after the v2 build, :previous is v1");
+
+    const second = sb.run("scripts/deploy.sh", { env, timeout: SLOW });
+    assert.notEqual(second.status, 0);
+    for (const svc of ["app", "worker"]) {
+      assert.equal(
+        imageId(sb, `gml-lms-${svc}:previous`),
+        `sha256:v1-${svc}`,
+        `re-running deploy.sh on the same code moved gml-lms-${svc}:previous onto the release it had just ` +
+          `deployed, so rollback.sh would restart the broken one. :previous must move only when the build ` +
+          `produced a different image.\n${second.stdout}${second.stderr}`,
+      );
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a build that changed the image moves :previous to what was serving", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2" }, timeout: SLOW });
+    assert.equal(r.status, 0, r.stderr);
+    for (const svc of ["app", "worker"]) {
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`);
+      assert.equal(imageId(sb, `gml-lms-${svc}:current`), `sha256:v2-${svc}`);
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── A first deploy that creates no administrator ─────────────────────────────
+//
+// SUPER_ADMIN_* are not REQUIRED, and with them empty the seed skips the
+// bootstrap and succeeds. deploy.sh then wrote the marker that arms SM-5 and
+// printed "done. Sign in at ..." on a system with no account at all -- whose
+// restore drill could never pass, so the gate refused the re-deploy that would
+// have created one. verify-auth now fails that state
+// (tests/behaviour/seed-bootstrap.test.ts); these pin what deploy.sh does.
+
+test("a first deploy with SUPER_ADMIN_* unset says so before it builds anything", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    const out = `${r.stdout}${r.stderr}`;
+    const warned = out.search(/SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD are not both set/);
+    assert.ok(warned >= 0, `the operator must be told no administrator will be created:\n${out}`);
+    assert.ok(warned < out.indexOf("building images"), "and told before the build, not after it");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a first deploy with SUPER_ADMIN_* set does not warn", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    sb.write(".env", `${ENV_FILE}SUPER_ADMIN_EMAIL=it@example.test\nSUPER_ADMIN_INITIAL_PASSWORD=Initial-Pass-4821\n`);
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(`${r.stdout}${r.stderr}`, /not both set/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("when verify-auth fails, the host is not marked deployed and no success is claimed", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_VERIFY_AUTH_EXIT: "1" } });
+    assert.notEqual(r.status, 0);
+    assert.ok(!sb.exists(MARKER), "the SM-5 gate must not be armed on a deploy that failed verification");
+    assert.doesNotMatch(r.stdout, /done\. Sign in/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── A failed migration must leave the serving release alone ─────────────────
+//
+// `docker compose up -d` recreates every service whose image changed in its
+// CREATE phase -- stopping and removing the old container -- and waits on
+// migrate's service_completed_successfully only in its START phase. So with
+// `up` as the first step, a failing migration left no app at all and the whole
+// site answered 502. And `up` exits non-zero in that case, so under set -e the
+// script died on that line: its "migrations FAILED ... still serving" branch
+// never ran. The stub above said "migrate 0" to `compose ps -a`, so neither
+// path had ever executed.
+
+test("a failed migration restarts nothing: the release that was serving keeps serving", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, FAKE_BUILD: "v2", FAKE_MIGRATE_EXIT: "1" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.notEqual(r.status, 0, "a failed migration must fail the deploy");
+    assert.ok(
+      !calls.some((l) => /^docker compose up/.test(l)),
+      "`docker compose up` ran although migrations had not succeeded. Its create phase removes the " +
+        `serving app before migrate even starts, so the site goes 502.\n${calls.join("\n")}`,
+    );
+    assert.ok(calls.includes("docker compose run --rm --no-deps migrate"), "migrations must run on their own, first");
+    assert.match(r.stderr, /migrations FAILED[\s\S]*still serving/);
+    assert.ok(!calls.some((l) => /seed_all\.ts/.test(l)), "nothing may be seeded after a failed migration");
+    for (const svc of ["app", "worker"]) {
+      assert.equal(
+        imageId(sb, `gml-lms-${svc}:current`),
+        `sha256:v1-${svc}`,
+        `gml-lms-${svc}:current must name the release still serving, so a later \`up\` cannot start the unmigrated build`,
+      );
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v0-${svc}`, "the rollback target must not move");
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("migrations are applied before `docker compose up` on a normal deploy", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2" }, timeout: SLOW });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = sb.invocations();
+    const migrate = calls.indexOf("docker compose run --rm --no-deps migrate");
+    const up = calls.findIndex((l) => /^docker compose up/.test(l));
+    assert.ok(migrate >= 0 && up > migrate, `migrate must run before up:\n${calls.join("\n")}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failing `docker compose up` is reported with the container state, not a bare abort", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2", FAKE_UP_EXIT: "1" }, timeout: SLOW });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /'docker compose up' failed/, `the failure must be explained:\n${r.stderr}`);
+    assert.ok(sb.invocations().includes("docker compose ps -a"), "the operator must be shown the container state");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── Disk: what the builds leave behind ───────────────────────────────────────
+//
+// Every deploy builds, and nothing ever pruned: each release's images went
+// dangling at the next deploy and the build cache grew without bound, on the
+// small root volume. deploy.sh now prunes -- dangling images only, so :current
+// and :previous survive -- once the new release is healthy and verified.
+
+test("a completed deploy prunes dangling images and week-old build cache", () => {
+  const sb = deploySandbox();
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = sb.invocations();
+    assert.ok(calls.includes("docker image prune -f"), `dangling images were never pruned:\n${calls.join("\n")}`);
+    assert.ok(
+      calls.includes("docker builder prune -f --filter until=168h"),
+      `the build cache was never pruned:\n${calls.join("\n")}`,
+    );
+    assert.ok(
+      !calls.some((l) => /^docker (image|system) prune .*(-a|--all)/.test(l)),
+      "only DANGLING images may go: an --all prune would delete the tagged :previous rollback target",
+    );
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a deploy that fails prunes nothing", () => {
+  const sb = deploySandbox({ healthy: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { HEALTH_TIMEOUT_SECONDS: "0", HEALTH_INTERVAL_SECONDS: "1" } });
+    assert.notEqual(r.status, 0);
+    assert.ok(!sb.invocations().some((l) => /prune/.test(l)), "keep everything for diagnosis when the deploy failed");
   } finally {
     sb.cleanup();
   }

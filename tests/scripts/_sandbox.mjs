@@ -201,8 +201,16 @@ export function makeSandbox({ files = [], prefix = "gml-sh-" } = {}) {
       }
     },
 
-    /** Run a sandboxed copy of a script. */
-    run(rel, { env = {}, input, timeout = 60_000, args = [] } = {}) {
+    /**
+     * Run a sandboxed copy of a script.
+     *
+     * The default allowance is generous on purpose. Every stubbed command is a
+     * separate sh process, a whole deploy.sh run spawns a few hundred, and on a
+     * loaded Windows machine each can cost most of a second: at 60 s,
+     * deploy-flow's runs failed with a spawn ETIMEDOUT that said nothing about
+     * the script. A hang still fails, just later.
+     */
+    run(rel, { env = {}, input, timeout = 240_000, args = [] } = {}) {
       sb.assertContained(env);
       const r = spawnSync(bashExe(), [join(dir, rel), ...args], {
         cwd: dir,

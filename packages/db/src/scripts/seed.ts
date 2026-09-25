@@ -16,6 +16,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import * as schema from "../schema/index.js";
+import { poolConfig } from "../client.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -25,7 +26,9 @@ export async function main() {
     console.error("DATABASE_URL not set");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS, not a bare connection string: this session reads
+  // auth.users and writes the gate hashes and the super_admin profile.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   // Spec 103 — super_admin bootstrap (runs first, idempotent, independent of district seed).
@@ -277,7 +280,8 @@ export async function main() {
 // nobody can reach. So it has to be seeded.
 //
 // Password source, in order:
-//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION)
+//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION),
+//      when it holds more than whitespace
 //   2. a generated 16-char random password, PRINTED ONCE so the operator can
 //      distribute it. It is not recoverable afterwards -- only the bcrypt hash
 //      is stored -- which is the same contract as the super_admin bootstrap.
@@ -285,7 +289,7 @@ export async function main() {
 // Idempotent: a slug that already has a row is left alone, so re-running seed
 // never rotates a live password out from under its users. Rotation is an
 // explicit admin action (/admin/gates), not a side effect of deployment.
-async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
+export async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
   // 'tkt' and 'ttt' are deliberately NOT seeded: they gate /rtt/tkt and
   // /rtt/ttt, and neither route exists in the app.
   const slugs = ["observation", "mentorship", "admin"] as const;
@@ -303,7 +307,15 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
     }
 
     const envKey = `GATE_PASSWORD_${slug.toUpperCase()}`;
-    const fromEnv = process.env[envKey];
+    // EMPTY MEANS UNSET. docker-compose.yml forwards each of these to the
+    // migrate container as `${GATE_PASSWORD_X:-}`, which for a key .env leaves
+    // out -- the documented default -- is the EMPTY STRING, not undefined. This
+    // was `fromEnv ?? random`, and `??` falls back only on null/undefined, so
+    // every gate was hashed from "" and the log printed a blank GENERATED
+    // PASSWORD. The gate form cannot submit an empty password, so nobody,
+    // super_admin included, could open observation, mentorship or the audit
+    // log -- and a redeploy skips existing gates, so it never repaired itself.
+    const fromEnv = process.env[envKey]?.trim() || undefined;
     const password = fromEnv ?? randomBytes(12).toString("base64url").slice(0, 16);
 
     // Spec 167 — cost 10 mirrors BCRYPT_COST in apps/web/src/lib/password.ts,
@@ -354,11 +366,27 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
 // unverified and refuses password sign-in -- the account would exist, look
 // correct in the dashboard, and simply not work.
 //
-// Idempotent in all four states: no auth user + no profile, auth user but no
-// profile (possible if the trigger was added later), profile but wrong role,
-// and fully-provisioned. Re-running never rotates the password of a live
-// account -- that is an explicit admin action, not a deploy side effect.
-async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
+// ONCE ANY ACTIVE super_admin EXISTS, THIS DOES NOTHING AT ALL. deploy.sh runs
+// the seed on every deploy, and this function used to end, unconditionally, in
+// `ON CONFLICT (id) DO UPDATE SET role='super_admin', active=true,
+// deleted_at=NULL` against whichever account SUPER_ADMIN_EMAIL named. An
+// administrator who demoted, deactivated or offboarded that account -- the
+// founding admin leaving, the IT contractor handing over -- found it an active
+// super_admin again after the next routine deploy, with no audit row, and with
+// the GoTrue ban a deactivation sets still in place, so profile and auth record
+// disagreed. The bootstrap exists to create the FIRST administrator; after that
+// an existing profile is an administrator's decision, not a state to repair,
+// and accounts are managed at /admin/users. "Active super_admin" is the same
+// test /admin/users' last-super-admin guard (wouldStrandTheOrg) applies, so the
+// UI can never produce the state in which this runs again.
+//
+// Before that point it is idempotent in every state a first deploy can leave:
+// no auth user + no profile, auth user but no profile (possible if the trigger
+// was added later), and auth user whose profile the trigger wrote but this
+// function never promoted (a run that failed in between). Re-running never
+// rotates the password of a live account -- that is an explicit admin action,
+// not a deploy side effect.
+export async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
   const email = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
 
@@ -374,6 +402,19 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
       "[seed] ✗ super_admin bootstrap FAILED — NEXT_PUBLIC_SUPABASE_URL and " +
         "SUPABASE_SECRET_KEY are required to create an account. " +
         "Nobody can sign in until this runs.",
+    );
+    return;
+  }
+
+  // `users` is unqualified here and in the promotion below, like every drizzle
+  // statement in this seed, so the check and the write always name one table.
+  const admins = await db.execute(
+    sql`SELECT 1 FROM users WHERE role = 'super_admin' AND active AND deleted_at IS NULL LIMIT 1`,
+  );
+  if (((admins as unknown as { rows?: unknown[] }).rows ?? []).length > 0) {
+    console.log(
+      "[seed] super_admin bootstrap not needed — an active super_admin already exists, so " +
+        "SUPER_ADMIN_* were ignored and no account was changed (manage accounts at /admin/users)",
     );
     return;
   }
@@ -415,7 +456,7 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
   // predating the trigger. Without it the bootstrap would report success on an
   // account that still cannot obtain a token.
   await db.execute(sql`
-    INSERT INTO public.users (id, email, name, role, active, default_locale)
+    INSERT INTO users (id, email, name, role, active, default_locale)
     VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
     ON CONFLICT (id) DO UPDATE
       SET role = 'super_admin',

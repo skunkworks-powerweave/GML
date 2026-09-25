@@ -19,9 +19,10 @@
 #
 # ── WHAT IT DOES NOW ─────────────────────────────────────────────────────────
 #
-#   host toolchain + .env checks + SM-5 restore-drill gate -> tag :previous
-#   -> build -> up (migrate gates app) -> health via caddy -> seed
-#   -> verify auth -> post-deploy smoke
+#   host toolchain + .env checks + SM-5 restore-drill gate -> build
+#   -> migrate (nothing serving is touched until it succeeds)
+#   -> tag :previous (only what the build changed) -> up
+#   -> health via caddy -> seed -> verify auth -> post-deploy smoke
 #
 # It does NOT run scripts/preflight.sh. That script is the read-only,
 # run-it-yourself check before a FIRST deploy (README-deploy.md section 3): it
@@ -250,17 +251,30 @@ else
   log "FIRST DEPLOY ON THIS HOST (no ${DEPLOYED_MARKER}): the SM-5 restore-drill gate is not armed yet -- nothing can have been backed up."
   log "  Before the NEXT deploy run:  bash scripts/backup.sh && bash scripts/restore.sh   (README-deploy.md section 7)."
   log "  From then on a deploy is refused without a passing drill less than 30 days old."
+  # The seed creates the first administrator only from these two, and
+  # verify-auth fails the deploy when no active super_admin exists -- say so
+  # now rather than after the build.
+  if ! grep -qE '^SUPER_ADMIN_EMAIL=.+' .env || ! grep -qE '^SUPER_ADMIN_INITIAL_PASSWORD=.+' .env; then
+    log "WARNING: SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD are not both set in .env. On a database with no administrator yet the seed creates NONE, verify-auth then fails, and this deploy stops before marking the host deployed. Set both unless this database already has an active super_admin."
+  fi
 fi
 
 # ── 1. Build ─────────────────────────────────────────────────────────────────
-# Tag whatever is running now as ':previous' FIRST, so scripts/rollback.sh has
-# something to go back to. Without this step a rollback has no target, which is
-# how the repository ended up with no rollback procedure at all.
-for svc in app worker; do
-  if docker image inspect "gml-lms-${svc}:current" >/dev/null 2>&1; then
-    docker tag "gml-lms-${svc}:current" "gml-lms-${svc}:previous"
-    log "tagged gml-lms-${svc}:current -> :previous"
-  fi
+# scripts/rollback.sh needs a ':previous' to go back to -- without one a
+# rollback has no target, which is how the repository ended up with no rollback
+# procedure at all. So note, BY IMAGE ID, what :current is before the build
+# moves the tag; :previous is moved from it once migrations have succeeded
+# (step 2).
+#
+# :previous MOVES ONLY FOR AN IMAGE THE BUILD ACTUALLY CHANGED. It used to be
+# retagged from :current unconditionally, first thing, on every run -- and the
+# runbook says to re-run this script freely: after a failed health check, after
+# a config change. Each re-run of the SAME code tagged the release it had just
+# deployed as :previous, the release before it lost its last tag, and
+# rollback.sh then "rolled back" to the very image it was rolling back from.
+declare -A was_current=()
+for svc in app worker migrate; do
+  was_current[${svc}]="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
 done
 
 log "building images"
@@ -280,22 +294,60 @@ log "building images"
 # box, which is why rollback.sh always aborted with ":previous does not exist".
 docker compose build
 
-# ── 2. Up ────────────────────────────────────────────────────────────────────
-# `migrate` runs first and `app`/`worker` block on it exiting 0. If the schema
-# change fails, the new containers never start and the PREVIOUS ones keep
-# serving — that is the rollback posture, and it is why this is safe to run
-# against a live box.
-log "starting stack (migrate runs first and gates app/worker)"
-docker compose up -d --remove-orphans
-
-# Surface the migration outcome explicitly rather than leaving it in the logs.
-migrate_exit="$(docker compose ps -a --format '{{.Service}} {{.ExitCode}}' 2>/dev/null | awk '$1=="migrate"{print $2}' | head -1)"
-if [ -n "${migrate_exit}" ] && [ "${migrate_exit}" != "0" ]; then
-  echo "[deploy] migrations FAILED (exit ${migrate_exit}). The previous app container is still serving." >&2
-  docker compose logs --no-color --tail 40 migrate >&2
+# ── 2. Migrate, then up ──────────────────────────────────────────────────────
+# Migrations run BEFORE anything that is serving is touched.
+#
+# This used to be `docker compose up -d` alone, trusting migrate's depends_on
+# to keep the old app serving if a migration failed. Compose does not work that
+# way: its create phase recreates every service whose image changed -- stopping
+# and removing the old container -- and only its start phase waits for migrate
+# to complete. So a failing migration left NO app (Caddy answering 502 for the
+# whole site), every deploy had a 502 window of migrate's runtime plus app
+# start, and `up` itself exits non-zero then -- so under `set -e` the script
+# died on that line, and the "migrations FAILED ... the previous app container
+# is still serving" branch after it could never run, and would not have been
+# true if it had.
+#
+# A one-off migrate first makes that promise true. `up` then re-runs migrate as
+# the no-op its two ledgers make it, and only then recreates app and worker.
+log "applying migrations (nothing that is serving is touched until they succeed)"
+if ! docker compose run --rm --no-deps migrate; then
+  # Put :current back on what is still serving, so a later `docker compose up`
+  # cannot start the images whose migration just failed, and the next deploy
+  # compares its build with the release that is really running. :previous has
+  # not moved yet (below), so the rollback target is untouched too.
+  for svc in app worker migrate; do
+    if [ -n "${was_current[${svc}]}" ]; then
+      docker tag "${was_current[${svc}]}" "gml-lms-${svc}:current"
+    fi
+  done
+  echo "[deploy] migrations FAILED (their output is above). Nothing was restarted: the previous containers are still serving." >&2
+  echo "[deploy] Fix the migration and re-run this script." >&2
   exit 1
 fi
 log "migrations applied"
+
+# Only now, with the new release about to replace the serving one, does the
+# serving one become :previous (see step 1).
+for svc in app worker; do
+  built="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
+  if [ -z "${was_current[${svc}]}" ]; then
+    log "gml-lms-${svc}: first build on this host -- no :previous to keep yet"
+  elif [ "${was_current[${svc}]}" != "${built}" ]; then
+    docker tag "${was_current[${svc}]}" "gml-lms-${svc}:previous"
+    log "tagged the release that was serving as gml-lms-${svc}:previous"
+  else
+    log "gml-lms-${svc}: the build is unchanged -- :previous left where it was"
+  fi
+done
+
+log "starting stack"
+if ! docker compose up -d --remove-orphans; then
+  echo "[deploy] 'docker compose up' failed. Container state and recent logs:" >&2
+  docker compose ps -a >&2 || true
+  docker compose logs --no-color --tail 40 migrate app worker >&2 || true
+  exit 1
+fi
 
 # ── 3. Health ────────────────────────────────────────────────────────────────
 # The app container's own healthcheck verdict: healthy | unhealthy | starting.
@@ -350,7 +402,7 @@ docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
 
 # ── 5. Verify ────────────────────────────────────────────────────────────────
 log "verifying auth configuration"
-docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 
 # Seed and verify-auth have both succeeded: this host now holds data a backup
 # can capture and a restore drill can check, so from the next deploy on the
@@ -358,6 +410,21 @@ docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
 mkdir -p workspace
 date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOYED_MARKER}"
 log "marked this host as deployed (${DEPLOYED_MARKER}); the next deploy requires a passing restore drill"
+
+# Reclaim what the builds leave behind. Every deploy builds, and nothing ever
+# removed the results: each release's old images went dangling at the next
+# deploy, and the build cache (pnpm install layers, the next build output) grew
+# without bound -- on the root volume unless README-deploy.md 2.5's data-root
+# step was done, where a full disk takes Docker, the next deploy and the next
+# backup down together. Only now, with the new release healthy and verified:
+#   image prune    DANGLING images only. :current and :previous are tagged and
+#                  survive, so the rollback target is never removed.
+#   builder prune  build cache nobody has used for a week; recent layers stay,
+#                  so the next build is still incremental.
+# Failure to prune is not a failed deploy.
+log "reclaiming disk: dangling images, and build cache unused for 7 days"
+docker image prune -f >/dev/null || log "WARNING: docker image prune failed -- continuing"
+docker builder prune -f --filter until=168h >/dev/null || log "WARNING: docker builder prune failed -- continuing"
 
 # ── 6. Smoke ─────────────────────────────────────────────────────────────────
 # Drives the deployment that was just made, over real HTTP, through Caddy. It

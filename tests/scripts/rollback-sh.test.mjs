@@ -14,9 +14,16 @@ import { caddyCurl, makeSandbox } from "./_sandbox.mjs";
 
 const DOMAIN = "lms.example.test";
 
+// `image inspect --format {{.Id}}` answers a distinct id per tag -- or, with
+// FAKE_SAME_IMAGE, the same id for :previous and :current, which is what a
+// re-run of deploy.sh on unchanged code used to leave behind.
 const DOCKER = `
-case "$1" in
-  images) printf 'gml-lms-app:previous\\t2026-09-20\\ngml-lms-worker:previous\\t2026-09-20\\n' ;;
+case "$*" in
+  images*) printf 'gml-lms-app:previous\\t2026-09-20\\ngml-lms-worker:previous\\t2026-09-20\\n' ;;
+  "image inspect --format {{.Id}} "*)
+    ref="$5"
+    [ -n "\${FAKE_SAME_IMAGE:-}" ] && ref="\${ref%:*}"
+    echo "sha256:$(printf %s "$ref" | tr ':' '-')" ;;
 esac
 exit 0
 `;
@@ -70,6 +77,25 @@ test("rollback.sh asks before doing anything, and aborts without the word", () =
     assert.ok(
       !sb.invocations().some((l) => /^docker (tag|compose up)/.test(l)),
       "nothing may be retagged or restarted without confirmation",
+    );
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("rollback.sh refuses when :previous is the image already running", () => {
+  // deploy.sh used to retag :current -> :previous on every run, so a re-run of
+  // the same code left both naming one image -- and this script retagged it
+  // onto itself, restarted the release it was meant to leave, and reported a
+  // rollback.
+  const sb = rollbackSandbox();
+  try {
+    const r = sb.run("scripts/rollback.sh", { env: { ...FAST, FAKE_SAME_IMAGE: "1" }, input: "rollback\n", timeout: 200_000 });
+    assert.notEqual(r.status, 0, `a rollback onto the running image must be refused:\n${r.stdout}`);
+    assert.match(r.stderr, /already running/);
+    assert.ok(
+      !sb.invocations().some((l) => /^docker (tag|compose up)/.test(l)),
+      `nothing may be retagged or restarted:\n${sb.invocations().join("\n")}`,
     );
   } finally {
     sb.cleanup();

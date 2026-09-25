@@ -64,16 +64,18 @@ curl -s https://$DOMAIN/api/health | jq
 ```
 
 Step 4 runs: the host-toolchain and `.env` checks, the SM-5 restore-drill gate
-(skipped, loudly, on a host's first deploy; see Backups below), tag the running
-images `:previous`, build, `docker compose up -d`, wait for health through
+(skipped, loudly, on a host's first deploy; see Backups below), build, run the
+migrations on their own, tag the images that were serving `:previous` (only
+those the build changed), `docker compose up -d`, wait for health through
 Caddy, seed, verify auth, post-deploy smoke. It does **not** run
 `preflight.sh`; that is step 3.5, by hand. Preflight fails when ports 80 and 443
 are in use, which is true of every later deploy.
 
-**Migrations are not a separate step.** The `migrate` service runs them and
-gates `app` and `worker` through `depends_on: service_completed_successfully`.
-If a migration fails, the new containers never start and the previous ones keep
-serving. Write down the section-gate passwords the seed prints — they are shown
+**Migrations are not a separate step you run.** `deploy.sh` runs the `migrate`
+service on its own before `docker compose up`, so if a migration fails nothing
+is restarted and the previous containers keep serving. (`app` and `worker` also
+wait on it through `depends_on`, but a bare `docker compose up -d` recreates
+them first -- which is why the script does not rely on that.) Write down the section-gate passwords the seed prints — they are shown
 once.
 
 Upgrading is the same command: `git pull && ./scripts/deploy.sh`. Rolling the
@@ -86,11 +88,10 @@ from the `:previous` image and does **not** touch the database. See
 When `deploy.sh` aborts and you want to take it apart by hand:
 
 ```bash
-docker compose up -d                        # migrate runs first and gates the rest
-docker compose logs migrate                 # why the schema step failed
-docker compose run --rm --no-deps migrate pnpm exec tsx scripts/migrate.ts
+docker compose run --rm --no-deps migrate   # migrations FIRST; nothing serving is touched
+docker compose up -d                        # only once they succeeded: recreates app and worker
 docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
-docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs
+docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 ```
 
 Doing this by hand bypasses the SM-5 restore-drill gate. Only do it on a host
@@ -120,12 +121,12 @@ this is only the operator-facing subset.
 | `WHATSAPP_APP_SECRET` | Optional until WhatsApp is switched on. While empty, the webhook refuses **all** traffic (503 `whatsapp_not_configured`) and deploy/preflight report WhatsApp ingest as OFF; everything else works. |
 | `WHATSAPP_VERIFY_TOKEN` | A random string you choose; must match what you type into the Meta dashboard during webhook setup. See "WhatsApp Business setup" below. |
 | `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` | From Meta. The access token must be a **permanent system-user token**: the dashboard's temporary one expires in 24 hours, and without a valid token videos are recorded but cannot be fetched. See "WhatsApp Business setup" below. |
-| `GML_WHATSAPP_NUMBER` | Display E.164 shown on the upload pages as the "send your clip here" hint. |
-| `GML_HELPDESK_PHONE` | wa.me-ready E.164 without the plus, for the in-product Help button. |
+| `GML_WHATSAPP_NUMBER` | E.164 **with** the leading `+`, e.g. `+919419100001`. Shown on the upload pages as the "send your clip here" hint. |
+| `GML_HELPDESK_PHONE` | E.164 **with** the leading `+`, e.g. `+919419100001`, for the in-product Help button's WhatsApp link. Without the `+` the app rejects the value (a SEVERE line in its log) and hides that contact for everyone. |
 | `GML_HELPDESK_EMAIL` | mailto target for the same Help button. |
 | `WORKER_CONCURRENCY` | **1.** One ffmpeg at `-preset veryfast` saturates both vCPUs; a second starves the web tier sharing the box. |
 | `TZ` | IANA zone, `Asia/Kolkata`. Pins the worker's sweeps and audit-log timestamp interpretation. |
-| `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_INITIAL_PASSWORD` | Used once, by the seed, to create the first usable account. |
+| `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_INITIAL_PASSWORD` | **Required on the first deploy**: without them no account exists at all, and `verify-auth` fails the deploy saying so. Read by the seed only while the database has no active `super_admin`: on the first deploy they create the first usable account. Once any active super admin exists they are ignored, so demoting or deactivating that account in `/admin/users` survives every later deploy. Clear `SUPER_ADMIN_INITIAL_PASSWORD` from `.env` after the first deploy. |
 
 ## WhatsApp Business setup
 
@@ -369,7 +370,7 @@ calls:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs`. |
+| Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs`. |
 | `/api/health` returns 503 | Read which of `db`, `storage`, `migrations` is false | `docker compose logs migrate` first — it is usually that. |
 | Worker unhealthy, videos stuck transcoding | It cannot reach the database, or ffmpeg failed | Check `DATABASE_URL` uses the session pooler (5432); then `/admin/transcode-jobs`. |
 | WhatsApp videos not arriving | The integration is off or partly configured, or a secret or token is wrong | `/api/health` reports `whatsapp: off / partial / on` (its `details` name the missing variables), and `/admin/whatsapp-log` says the same. Secret unset: 503 `whatsapp_not_configured` and one `WhatsApp ingest is OFF` log line. Secret wrong: 401, `whatsapp.signature_failed` rows and a log line naming `WHATSAPP_APP_SECRET`. Access token missing or expired: the videos are listed on `/admin/whatsapp-log` as awaiting media, with the reason; fix the token, then **Retry fetch**. Check `docker compose logs app worker`. |

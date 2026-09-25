@@ -6,6 +6,7 @@ import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { poolConfig } from "../src/client.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
@@ -66,7 +67,11 @@ async function main() {
     console.error("DATABASE_URL not set. Aborting.");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // TLS exactly as the app's own pool negotiates it. This was a bare
+  // `new Pool({ connectionString: url })`: with the documented DATABASE_URL
+  // (no sslmode) every DDL statement, run as the owner role, went to the
+  // pooler in plaintext, and the CA mounted into this container was never read.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
   const migrationsFolder = resolve(__dirname, "..", "src", "migrations");
   console.log(`[migrate] applying drizzle migrations from ${migrationsFolder} ...`);

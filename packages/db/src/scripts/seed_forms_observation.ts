@@ -23,6 +23,7 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { and, eq, like } from "drizzle-orm";
 import { observationCycles, observationForms, teachers } from "../schema/index.js";
+import { poolConfig } from "../client.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 const CANONICAL_CYCLE_CODE = "OBS-2026-001";
@@ -339,7 +340,8 @@ export async function main() {
     console.error("[seed:forms:obs] DATABASE_URL not set");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS; a bare connection string negotiated none.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   try {

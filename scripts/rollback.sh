@@ -50,9 +50,20 @@ docker images --format '{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}' \
 # `previous` is the tag deploy.sh leaves behind. Without it there is nothing to
 # roll back TO, and saying so is better than starting containers from whatever
 # `latest` happens to point at.
+#
+# And it must be a DIFFERENT image from the one running. deploy.sh used to
+# overwrite :previous with :current on every run, so after a re-run of the same
+# code the two named one image, and this script retagged it onto itself,
+# restarted the release it was meant to leave and reported a rollback.
+# deploy.sh no longer does that; this refuses the state anyway rather than
+# performing a rollback that changes nothing.
 for svc in ${SERVICES}; do
-  docker image inspect "gml-lms-${svc}:previous" >/dev/null 2>&1 \
+  prev_id="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:previous" 2>/dev/null || true)"
+  [ -n "${prev_id}" ] \
     || fail "gml-lms-${svc}:previous does not exist. Nothing to roll back to — this deploy was the first, or the previous image has been pruned."
+  cur_id="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
+  [ "${prev_id}" != "${cur_id}" ] \
+    || fail "gml-lms-${svc}:previous is the image already running (:current is the same ${prev_id}). A rollback would restart the same release. Check out the release you want and run ./scripts/deploy.sh instead."
 done
 
 log "confirming"

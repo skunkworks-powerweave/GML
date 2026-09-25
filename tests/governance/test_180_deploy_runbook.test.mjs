@@ -216,11 +216,21 @@ test("log rotation is described as compose configures it, and nobody is told to 
   const size = compose.match(/max-size:\s*"(\d+)m"/)[1];
   const files = compose.match(/max-file:\s*"(\d+)"/)[1];
   for (const [name, md] of [["README-deploy.md", DEPLOY], ["README-IT.md", IT], ["docs/operations.md", OPS]]) {
-    assert.doesNotMatch(md, /daemon\.json/, `${name}: daemon.json log-opts are overridden by every compose service`);
+    // NARROWED. This forbade any mention of daemon.json, and below of
+    // restarting Docker. The defect it pinned is daemon.json LOG settings,
+    // which every compose service overrides. README-deploy 2.5 now uses
+    // daemon.json for something only the daemon can set -- its data-root, so
+    // images, build cache and the worker's scratch land on the data volume --
+    // and that does need a restart. What stays forbidden is logging there.
+    assert.doesNotMatch(
+      md,
+      /log-opts|"log-driver"|daemon\.json[^\n]*\b(?:log|max-size|max-file)\b/,
+      `${name}: daemon.json log-opts are overridden by every compose service`,
+    );
     assert.doesNotMatch(md, /50 ?MB\s*[×x]\s*5/, `${name}: rotation is ${size} MB × ${files}, per compose`);
     assert.doesNotMatch(md, /grow(s)? without bound/i, `${name}: compose caps every service's logs`);
   }
-  assert.doesNotMatch(DEPLOY, /systemctl restart docker/);
+  assert.doesNotMatch(section(DEPLOY, "### Logs"), /systemctl restart docker|daemon\.json/);
   assert.match(section(DEPLOY, "### Logs"), new RegExp(`${size} ?MB\\s*[×x]\\s*${files}`));
   assert.match(OPS, new RegExp(`${size} ?MB\\s*[×x]\\s*${files}`));
 });

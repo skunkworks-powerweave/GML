@@ -10,7 +10,19 @@ import * as schema from "./schema";
 let _pool: Pool | null = null;
 let _db: NodePgDatabase<typeof schema> | null = null;
 
-function poolConfig(): PoolConfig {
+/**
+ * The connection settings every Postgres client in this repository uses.
+ *
+ * Exported so that the connections which are NOT this module's pool -- the
+ * migrate runner, the seeds, verify-auth.mjs, the worker's healthcheck -- are
+ * built from it instead of from a bare connection string. Each of those used to
+ * say `new Pool({ connectionString })`, which negotiates no TLS for the
+ * documented DATABASE_URL (see sslConfig below): the whole deploy, owner-role
+ * DDL included, crossed to the pooler in plaintext, and with Supabase's
+ * "Enforce SSL" switched on it could not connect at all.
+ * tests/governance/test_db_tls_one_config.test.mjs refuses any other shape.
+ */
+export function poolConfig(): PoolConfig {
   const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error(
@@ -20,11 +32,26 @@ function poolConfig(): PoolConfig {
   return {
     connectionString: url,
     ssl: sslConfig(url),
-    // Conservative defaults — tune per env if needed.
-    max: 10,
+    // Connections per process. Each holds a Supabase session-pooler slot for
+    // as long as it is open, and in session mode the slots ARE the pool size
+    // (15 by default on the smaller computes), so the containers' ceilings have
+    // to add up: this was a fixed 10 in app AND worker, enough between them to
+    // exhaust the pooler, after which every new connect fails. docker-compose.yml
+    // sets DB_POOL_MAX per container; README-deploy.md 2.1 has the arithmetic.
+    max: poolMax(),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
   };
+}
+
+/** DB_POOL_MAX as a whole number from 1 to 100; unset or unusable, 10. */
+function poolMax(): number {
+  const raw = process.env.DB_POOL_MAX?.trim();
+  if (!raw) return 10;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 1 && n <= 100) return n;
+  console.warn(`[db] DB_POOL_MAX=${JSON.stringify(raw)} is not a whole number from 1 to 100 -- using 10`);
+  return 10;
 }
 
 /**

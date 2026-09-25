@@ -115,9 +115,19 @@ rows; the job's next attempt, or for a dead job that sweep, fixes them.
 
 ## Disk filling up
 
-`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`.
-ffmpeg scratch is NOT there: it is the worker's `/tmp`, the `worker_scratch`
-named volume (under `/var/lib/docker`, on the root disk). Scratch is removed
+`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`,
+and -- once README-deploy.md 2.5's data-root step is done -- Docker's data root,
+`/var/lib/gml/docker`: images, build cache and the volumes, including the
+worker's `/tmp` (the `worker_scratch` volume, its ffmpeg scratch). Without that
+step all of it sits under `/var/lib/docker` on the 30 GiB root disk, and
+`bash scripts/preflight.sh` FAILs saying so. Check with
+`docker info --format '{{.DockerRootDir}}'` and `docker system df`.
+
+Each successful `deploy.sh` removes dangling images (never `:current` or
+`:previous`) and build cache unused for a week. Nothing else prunes them; after
+many failed deploys, `docker image prune -f` is safe to run by hand.
+
+Scratch is removed
 after every transcode, including one interrupted by a deploy or `docker
 compose stop` -- the worker hands its job back to the queue and exits within
 seconds of SIGTERM (its `stop_grace_period` is 30 s). A worker killed hard
@@ -156,11 +166,15 @@ Stated so nobody assumes otherwise:
 - There are no application metrics — no request rates, no latency histograms, no
   queue-depth time series. `/admin/transcode-jobs` shows an instantaneous depth.
 - Log aggregation is `docker compose logs`. Rotation is configured in
-  `docker-compose.yml` (its `x-logging` anchor) at 10 MB × 3 files per service,
-  about 120 MB across the stack, and needs no operator action. With no alerting
-  and no metrics these logs are the only forensic record, and 30 MB of Caddy
-  access lines is a few days on a busy week; raise `max-size` / `max-file` in
-  that anchor if more history is wanted.
+  `docker-compose.yml` at 10 MB × 3 files per service (its `x-logging`
+  anchor) and 20 MB × 5 for `caddy`, about 190 MB across the stack, and needs
+  no operator action. With no alerting and no metrics these logs are the only
+  forensic record. Caddy writes one JSON access line per request (client IP,
+  method, path, status, duration; cookies and Authorization redacted) -- about
+  1 KB each, so its 100 MB holds on the order of 100,000 requests, roughly one
+  to two weeks for fifty users. Read them with
+  `docker compose logs caddy | grep '"logger":"http.log.access'`; raise the
+  caddy service's `max-size` / `max-file` if more history is wanted.
 
 For a single-instance internal tool with fifty users this is a defensible
 position. It is a position, not an oversight, and it should be revisited if the

@@ -4,7 +4,10 @@
 // things that are silently broken rather than loudly broken -- the failures
 // that leave the dashboard looking correct while nobody can sign in.
 //
-//   docker compose run --rm migrate node scripts/verify-auth.mjs
+//   docker compose run --rm migrate pnpm exec tsx scripts/verify-auth.mjs
+//
+// Through tsx, not plain `node`, because it builds its connection from
+// ../src/client.ts (TypeScript) -- see the connection below.
 //
 // Every check is read-only except the last, which creates a throwaway account,
 // exercises it, and deletes it. It touches no existing data.
@@ -18,6 +21,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import pg from "pg";
+import { poolConfig } from "../src/client.ts";
 import { checkAuthSettings, probePassword } from "./auth-settings.mjs";
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -50,7 +54,10 @@ const bad = (label, detail, fix) => {
 const admin = createClient(URL, SECRET, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
-const c = new pg.Client({ connectionString: DB });
+// client.ts's TLS. This was `new pg.Client({ connectionString: DB })`, which
+// for the documented DATABASE_URL (no sslmode) negotiated none: the check that
+// runs on every deploy spoke to the pooler in plaintext.
+const c = new pg.Client(poolConfig());
 await c.connect();
 const q = async (sql, params = []) => (await c.query(sql, params)).rows;
 
@@ -68,6 +75,28 @@ const stale = ["password_hash", "failed_login_count", "locked_until", "email_ver
 stale.length
   ? bad("public.users is a profile table", `still has ${stale.join(", ")}`, "apply _post/003")
   : ok("public.users is a profile table");
+
+// ── 1b. Somebody can administer this system ──────────────────────────────────
+// The seed creates the first administrator only when SUPER_ADMIN_EMAIL and
+// SUPER_ADMIN_INITIAL_PASSWORD are set; otherwise it logs "skipped" and
+// succeeds. Nothing here asked, so a first deploy with them empty passed this
+// script, deploy.sh marked the host deployed -- arming the SM-5 restore-drill
+// gate -- and printed "Sign in at ...", with no account in existence. The drill
+// then failed ("no users restored") and the armed gate refused the very
+// re-deploy that would have created the administrator. Failing here stops
+// deploy.sh before that marker. `users` unqualified, resolved through the
+// search_path like every query the application makes.
+const admins = await q(
+  `SELECT count(*)::int AS n FROM users
+    WHERE role = 'super_admin' AND active AND deleted_at IS NULL`,
+);
+(admins[0]?.n ?? 0) > 0
+  ? ok("an active super_admin exists", `${admins[0].n}`)
+  : bad(
+      "an active super_admin exists",
+      "none -- nobody can sign in to administer this system",
+      "set SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD in .env and re-run ./scripts/deploy.sh; the seed creates the account",
+    );
 
 const fk = await q(
   `SELECT confdeltype FROM pg_constraint WHERE conname='users_id_auth_fkey'`,
