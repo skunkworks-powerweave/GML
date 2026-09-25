@@ -36,7 +36,9 @@ import { enqueue } from "@gml/db/queue";
 import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { BUCKETS } from "@gml/shared/storage/buckets";
-import { recordAudit } from "@/lib/audit";
+import { maskIp, recordAudit } from "@/lib/audit";
+import { rateLimit } from "@/lib/rate-limit";
+import { clientIpFrom, UNKNOWN_IP } from "@/lib/request-ip";
 import { cycleVisibility, pairingVisibility, type Actor } from "@/lib/visibility";
 import { parseCaption } from "@gml/shared/whatsapp/caption";
 import {
@@ -76,10 +78,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "whatsapp_not_configured" }, { status: 503 });
   }
 
-  const raw = await req.text();
+  // No signature header: refused before the body is read, since there is
+  // nothing to verify it against.
   const signature = req.headers.get("x-hub-signature-256") ?? "";
-  if (!verifySignature(raw, signature)) {
-    void recordAudit({ action: "whatsapp.signature_failed", entityType: "webhook" });
+  const raw = signature ? await req.text() : "";
+  if (!signature || !verifySignature(raw, signature)) {
+    await auditSignatureFailure(req, signature !== "");
     return NextResponse.json({ error: "signature_failed" }, { status: 401 });
   }
 
@@ -595,6 +599,49 @@ async function refusalFor(
   return ok ? null : "mentor_meeting.not_permitted";
 }
 
+
+/**
+ * Signature failures audited per source per minute, at most.
+ *
+ * This endpoint is public by necessity and audit_log is append-only by trigger
+ * (_post/001), so a row per failed POST let any script on the internet grow
+ * the one table nobody can clean, and bury the events /admin/audit exists to
+ * show. Meta signs everything it sends, so a legitimate delivery never lands
+ * here; a handful of rows per source per minute is enough to see an attack, or
+ * a wrongly configured secret, without letting either write gigabytes.
+ */
+const SIGNATURE_FAILURE_AUDITS_PER_MINUTE = 5;
+
+/**
+ * Record a failed signature -- a bounded number of times per masked source
+ * (the /24, or the /64 for IPv6), counted atomically in rate_limits so a
+ * concurrent burst cannot slip past the way a read-then-insert dedup would.
+ * The rows now say where the failures came from and whether a signature was
+ * even offered, which docs/audit-actions.md promised and nothing wrote.
+ */
+async function auditSignatureFailure(req: Request, signatureProvided: boolean): Promise<void> {
+  const ip = clientIpFrom(req.headers);
+  const ipMasked = maskIp(ip === UNKNOWN_IP ? undefined : ip) ?? "unknown";
+  try {
+    const slot = await rateLimit({
+      bucket: "wa-sig-audit",
+      id: ipMasked,
+      limit: SIGNATURE_FAILURE_AUDITS_PER_MINUTE,
+      windowMs: 60_000,
+    });
+    if (!slot.ok) return;
+  } catch (err) {
+    // The request is refused either way; a counter we cannot reach must not
+    // turn into an unbounded write.
+    console.error("[whatsapp] signature-failure counter unavailable; not auditing this one", err);
+    return;
+  }
+  void recordAudit({
+    action: "whatsapp.signature_failed",
+    entityType: "webhook",
+    metadata: { ipMasked, signatureProvided },
+  });
+}
 
 let warnedUnconfigured = false;
 function warnUnconfiguredOnce(): void {
