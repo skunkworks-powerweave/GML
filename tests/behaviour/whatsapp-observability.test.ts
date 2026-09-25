@@ -164,7 +164,8 @@ test("F139: docs/audit-actions.md documents every whatsapp.* row the code writes
       request.headers = { "user-agent": ua };
       const { POST } = await route();
       // signature_failed
-      await POST(new Request("http://x/api/webhooks/whatsapp", { method: "POST", headers: { "x-real-ip": "10.250.250.1" }, body: "{}" }));
+      const sourceIp = `10.${1 + Math.floor(Math.random() * 250)}.${1 + Math.floor(Math.random() * 250)}.1`;
+      await POST(new Request("http://x/api/webhooks/whatsapp", { method: "POST", headers: { "x-real-ip": sourceIp }, body: "{}" }));
       // received + fetch.enqueued, then replay_ignored
       const linked = w.wamid();
       const body = envelope([videoMessage({ id: linked, from: w.teacher.phone, caption: w.cycleCode })]);

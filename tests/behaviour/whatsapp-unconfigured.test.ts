@@ -32,10 +32,15 @@ const UA = tag("wa-unconfigured");
 request.headers = { "user-agent": UA };
 
 const BODY = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
+// A source address of this run's own: signature failures are audited a bounded
+// number of times per masked source per minute, so re-running this file must
+// not find the budget already spent by the previous run.
+const SOURCE_IP = `10.${1 + Math.floor(Math.random() * 250)}.${1 + Math.floor(Math.random() * 250)}.3`;
+
 const post = (headers: Record<string, string> = {}) =>
   new Request("http://127.0.0.1:3100/api/webhooks/whatsapp", {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", "x-real-ip": SOURCE_IP, ...headers },
     body: BODY,
   });
 
