@@ -45,11 +45,18 @@ export const systemSettings = pgTable(
     // up unseen in the inbox. See _post/006 for the same fix applied to rows
     // already written, and apps/web/src/lib/notification-kinds.ts for the
     // catalogue this must remain a subset of.
+    //
+    // `meeting.cancelled` and `cycle.complete` were missing for the same
+    // reason: the list was chosen before anything wrote them. Their producers
+    // (cancelMeetingAction, the cycle sign-off) then wrote rows that /inbox and
+    // the bell hid, while the pairing page told the mentor the mentee "will be
+    // told". Every kind the application writes belongs here unless there is a
+    // stated reason it should be off. See _post/010.
     notificationsEnabled: jsonb("notifications_enabled")
       .$type<string[]>()
       .notNull()
       .default(
-        sql`'["helpdesk.ticket","cycle.assigned","video.transcoded","meeting.scheduled"]'::jsonb`,
+        sql`'["helpdesk.ticket","cycle.assigned","cycle.complete","video.transcoded","meeting.scheduled","meeting.cancelled"]'::jsonb`,
       ),
     backupRetentionDays: integer("backup_retention_days").notNull().default(14),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

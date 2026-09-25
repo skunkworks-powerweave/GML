@@ -18,7 +18,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, outcome, form, closeAppDb } from "./_server-actions.js";
-import { render, withAppRouter } from "./_ui.js";
+import { decodeEntities, render, withAppRouter } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { observationWorld, type ObservationWorld } from "./_observation-world.js";
 
@@ -110,6 +110,19 @@ test("signing a cycle off notifies every other party that it is complete", { ski
       "the teacher and the observer are told; the mentor who signed is not told about his own act",
     );
     assertNothingGated(await inbox(w, cyc.id), { code: new RegExp(cyc.code), teacher: /Teacher Row/ });
+
+    // W3-03: the rows above were written and then HIDDEN -- cycle.complete was
+    // not in the default notifications_enabled, which /inbox and the bell
+    // filter on. Under the database's own settings, the teacher must see it.
+    const [row] = (
+      await w.c.query(`SELECT subject FROM notifications WHERE entity_id = $1 AND user_id = $2`, [cyc.id, w.teacher.id])
+    ).rows as { subject: string }[];
+    const { default: InboxPage } = await import("../../apps/web/src/app/(authenticated)/inbox/page.tsx");
+    signIn(w.teacher);
+    const page = await outcome(() => InboxPage({ searchParams: Promise.resolve({}) }));
+    assert.equal(page.kind, "returned", "the inbox renders for the teacher");
+    const html = decodeEntities(await render((page as { value: unknown }).value));
+    assert.ok(html.includes(row!.subject), `the teacher's inbox shows the sign-off notice "${row!.subject}"`);
   } finally {
     await w.cleanup();
   }

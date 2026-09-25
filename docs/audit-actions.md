@@ -184,7 +184,7 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `mentor.meeting.logged` | A mentor logged a meeting against an active pairing | `pairingId`, `actorId`, `meetingId`, `durationMin` |
-| `mentor.meeting.cancelled` | A mentor / admin cancelled an upcoming meeting (the other party is notified); entity is the meeting | `pairingId`, `scheduledAt` |
+| `mentor.meeting.cancelled` | A mentor / admin cancelled an upcoming meeting (the other party is notified in the app while the "Meeting cancelled" notification kind is enabled, which is the default); entity is the meeting | `pairingId`, `scheduledAt` |
 | `mentor.meeting.removed` | A mentor / admin removed a meeting whose time had passed (a mistaken entry; nobody is notified); entity is the meeting | `pairingId`, `scheduledAt` |
 | `mentor.pairing.completed` | A pairing was marked complete (all required meetings logged) | `pairingId`, `actorId` |
 | `mentor.commitment.toggled` | A commitment checkbox on a pairing was toggled on/off | `pairingId`, `actorId`, `commitmentId`, `now` (boolean) |

@@ -141,6 +141,48 @@ test("the mentor can cancel an upcoming meeting: it goes, the counters follow, t
   });
 });
 
+// ── W3-03: the cancellation was written, and then hidden ─────────────────────
+//
+// The test above reads the notifications TABLE, which is why it passed while
+// the mentee never saw the notice: /inbox and the bell show only the kinds in
+// system_settings.notifications_enabled, and meeting.cancelled was not in its
+// default. She saw "a meeting was logged" and not that it was called off --
+// while the cancel confirmation told the mentor "will be told". This test runs
+// under the database's own (default) settings and reads what the mentee is
+// shown: the /inbox page and its unread count, which the bell shares.
+
+async function inboxAs(who: Person): Promise<string> {
+  const { render, decodeEntities } = await import("./_ui.js");
+  const { default: InboxPage } = await import("../../apps/web/src/app/(authenticated)/inbox/page.tsx");
+  signIn(who);
+  const r = await outcome(() => InboxPage({ searchParams: Promise.resolve({}) }));
+  assert.equal(r.kind, "value", describe(r));
+  return decodeEntities(await render((r as { value: unknown }).value));
+}
+
+test("under the default settings the mentee's inbox and bell show the cancellation", { skip }, async () => {
+  await withWorld(async (w) => {
+    const { logMeetingAction, cancelMeetingAction } = await actions();
+    const at = new Date(Date.now() + 7 * DAY_MS).toISOString();
+    assert.equal((await as(w.mentor, () => logMeetingAction(formData({ pairingId: w.pairingA, scheduledAt: at })))).kind, "redirect");
+    const [m] = await w.q<{ id: string }>(`SELECT id FROM mentor_meetings WHERE pairing_id = $1`, [w.pairingA]);
+    const r = await as(w.mentor, () => cancelMeetingAction(formData({ pairingId: w.pairingA, meetingId: m!.id, confirm: "1" })));
+    assert.equal(r.kind, "redirect", describe(r));
+
+    const [cancelled] = await w.q<{ subject: string }>(
+      `SELECT subject FROM notifications WHERE user_id = $1 AND kind = 'meeting.cancelled'`,
+      [w.teacherA.id],
+    );
+    assert.ok(cancelled, "the row is written");
+    const inbox = await inboxAs(w.teacherA);
+    assert.ok(inbox.includes(cancelled.subject), `the mentee's inbox shows "${cancelled.subject}"`);
+
+    // The header count is the bell's predicate (notificationKindFilter), which
+    // the harness cannot load directly: it stubs lib/chrome-counts.ts.
+    assert.match(inbox.replace(/<!-- -->/g, ""), /2 unread · 2 total/, "the logged notice AND the cancellation are counted");
+  });
+});
+
 // ── F60 (review): one tap deleted a meeting for good ─────────────────────────
 //
 // "Cancel meeting" was a one-button form: a single tap on a phone removed the
@@ -223,6 +265,38 @@ test("the pairing page asks the mentor to confirm before cancelling or removing,
 
     const mentee = await html(w.teacherA, { confirmCancel: upcoming.id });
     assert.doesNotMatch(mentee, /Cancel meeting|>Remove<|Yes, cancel it|name="confirm"/);
+  });
+});
+
+// W3-03, the other half: an administrator can switch "Meeting cancelled" off
+// in /admin/system-settings, and the notice is then written and hidden. The
+// confirmation must not promise the mentor that the mentee "will be told".
+//
+// This briefly edits the shared settings row. Safe here: no other file reads
+// whether meeting.cancelled is shown, and the tests in this file run one at a
+// time. The row is put back in `finally`.
+test("with meeting-cancelled notices switched off, the confirmation says nobody will be told", { skip }, async () => {
+  await withWorld(async (w) => {
+    const { upcoming } = await seedMeetings(w);
+    const { render, decodeEntities } = await import("./_ui.js");
+    const { default: PairingDetailPage } = await import("../../apps/web/src/app/(authenticated)/mentorship/[pairingId]/page.tsx");
+    const [before] = await w.q<{ on: boolean }>(`SELECT notifications_enabled ? 'meeting.cancelled' AS on FROM system_settings`);
+    await w.q(`UPDATE system_settings SET notifications_enabled = notifications_enabled - 'meeting.cancelled'`);
+    try {
+      signIn(w.mentor);
+      const r = await outcome(() =>
+        PairingDetailPage({ params: Promise.resolve({ pairingId: w.pairingA }), searchParams: Promise.resolve({ confirmCancel: upcoming.id }) }),
+      );
+      assert.equal(r.kind, "value", describe(r));
+      const ask = decodeEntities(await render((r as { value: unknown }).value));
+      assert.match(ask, /Yes, cancel it/, "cancelling is still offered");
+      assert.doesNotMatch(ask, /on this pairing will be told/, "no promise the settings do not keep");
+      assert.match(ask, /nobody will be told in the app/);
+    } finally {
+      if (before?.on) {
+        await w.q(`UPDATE system_settings SET notifications_enabled = notifications_enabled || '["meeting.cancelled"]'::jsonb`);
+      }
+    }
   });
 });
 

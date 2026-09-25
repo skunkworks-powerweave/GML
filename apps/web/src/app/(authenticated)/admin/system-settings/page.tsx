@@ -148,12 +148,14 @@ export default async function SystemSettingsPage({
     academicYear: "2026-27",
     videoDefaultQuality: "480p" as const,
     videoMaxUploadMb: 500,
-    // helpdesk.ticket is on by default because it is the only kind the
-    // application emits; omitting it would leave the bell at zero out of the box.
+    // The column default (packages/db/src/schema/systemSettings.ts): every
+    // kind the application writes. A kind left out here is written and hidden.
     notificationsEnabled: [
       "cycle.assigned",
+      "cycle.complete",
       "video.transcoded",
       "meeting.scheduled",
+      "meeting.cancelled",
       "helpdesk.ticket",
     ],
     backupRetentionDays: 14,

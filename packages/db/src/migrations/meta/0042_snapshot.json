@@ -5776,7 +5776,7 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true,
-          "default": "'[\"helpdesk.ticket\",\"cycle.assigned\",\"video.transcoded\",\"meeting.scheduled\"]'::jsonb"
+          "default": "'[\"helpdesk.ticket\",\"cycle.assigned\",\"cycle.complete\",\"video.transcoded\",\"meeting.scheduled\",\"meeting.cancelled\"]'::jsonb"
         },
         "backup_retention_days": {
           "name": "backup_retention_days",
