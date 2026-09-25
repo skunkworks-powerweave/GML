@@ -86,3 +86,31 @@ test("D7: the mobile shell's main content is a skip target too", async () => {
   const firstFocusable = html.match(/<(a|button|input|select|textarea)\b[^>]*>/)![0];
   assert.equal(attr(firstFocusable, "href"), "#main-content");
 });
+
+// ── F136: the connection status on a phone ───────────────────────────────────
+//
+// NetworkStatus ("Offline — not saving") was mounted only in the desktop
+// Sidebar. A phone gets MobileShell, which had no indicator of any kind, so
+// the phone-heavy, 2G-bound audience it was built for never saw it: a teacher
+// filling a form learnt the server was unreachable only when a save failed.
+
+test("F136: the phone shell shows the connection status in its header, translated", async () => {
+  const { MobileShell } = await import("../../apps/web/src/components/shells/MobileShell.tsx");
+  request.locale = "hi";
+  const html = await render(withAppRouter(await withIntl(h(MobileShell, { user: USER }, h("p", null, "x")), "hi")));
+  const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+  const tags = openingTags(header, "div").filter((t) => attr(t, "data-testid") === "network-status");
+  assert.equal(tags.length, 1, "the sticky header carries the indicator, so it stays in view while scrolling");
+  const [tag] = tags;
+  assert.equal(attr(tag, "role"), "status");
+  assert.equal(attr(tag, "aria-live"), "polite");
+  assert.equal(attr(tag, "data-status"), "checking", "server-rendered as checking, as on desktop");
+  assert.equal(attr(tag, "title"), (loadMessages("hi").status as Record<string, string>).checkingHint);
+  assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1, "once per page");
+});
+
+test("F136: the desktop sidebar keeps exactly one indicator", async () => {
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const html = await render(h(Sidebar, { role: "teacher" }));
+  assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1);
+});

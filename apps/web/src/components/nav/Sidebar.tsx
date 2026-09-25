@@ -20,7 +20,7 @@ import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { NetworkStatus } from "./NetworkStatus";
+import { NetworkStatusServer } from "./NetworkStatusServer";
 import { Icon } from "./Icon";
 
 type SidebarProps = {
@@ -89,7 +89,6 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
   const sections = counts ? applyNavCounts(baseSections, counts) : baseSections;
   const tNav = await getTranslations("nav");
   const tSection = await getTranslations("navSection");
-  const tStatus = await getTranslations("status");
   const tBrand = await getTranslations("brand");
   const tRole = await getTranslations("role");
 
@@ -225,14 +224,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
       })}
 
       {/* Network status -- a real probe, not a green dot. See NetworkStatus.tsx. */}
-      <NetworkStatus
-        labelOnline={tStatus("online")}
-        labelOffline={tStatus("offline")}
-        labelChecking={tStatus("checking")}
-        hintOnline={tStatus("onlineHint")}
-        hintOffline={tStatus("offlineHint")}
-        hintChecking={tStatus("checkingHint")}
-      />
+      <NetworkStatusServer variant="sidebar" />
     </aside>
   );
 }

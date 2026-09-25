@@ -16,6 +16,7 @@ import type { RoleName } from "@gml/shared/auth/roles";
 import { signOut } from "@/auth";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { BottomTabs } from "@/components/nav/BottomTabs";
+import { NetworkStatusServer } from "@/components/nav/NetworkStatusServer";
 import { ConfidentialityFooter } from "@/components/ConfidentialityFooter";
 import { MobileHelpFAB } from "@/components/MobileHelpFAB";
 import type { NavCounts } from "@/lib/chrome-counts";
@@ -63,6 +64,11 @@ export async function MobileShell({
         <div>
           <div style={{ fontSize: 10, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>GML LMS</div>
           {title ? <h1 style={{ fontFamily: "var(--serif)", fontSize: 18, fontWeight: 600, marginTop: 2 }}>{title}</h1> : null}
+          {/* The connection indicator, in the sticky header so it stays in
+              view. It lived in the desktop sidebar only: on a phone on 2G --
+              the case it exists for -- a teacher learnt the server was
+              unreachable only when a save failed. */}
+          <NetworkStatusServer variant="compact" />
         </div>
         {/* ACCOUNT CONTROLS. These did not exist on mobile at all.
             The avatar was an inert <span> and BottomTabs carries no settings
