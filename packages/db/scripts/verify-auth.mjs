@@ -75,6 +75,28 @@ stale.length
   ? bad("public.users is a profile table", `still has ${stale.join(", ")}`, "apply _post/003")
   : ok("public.users is a profile table");
 
+// ── 1b. Somebody can administer this system ──────────────────────────────────
+// The seed creates the first administrator only when SUPER_ADMIN_EMAIL and
+// SUPER_ADMIN_INITIAL_PASSWORD are set; otherwise it logs "skipped" and
+// succeeds. Nothing here asked, so a first deploy with them empty passed this
+// script, deploy.sh marked the host deployed -- arming the SM-5 restore-drill
+// gate -- and printed "Sign in at ...", with no account in existence. The drill
+// then failed ("no users restored") and the armed gate refused the very
+// re-deploy that would have created the administrator. Failing here stops
+// deploy.sh before that marker. `users` unqualified, resolved through the
+// search_path like every query the application makes.
+const admins = await q(
+  `SELECT count(*)::int AS n FROM users
+    WHERE role = 'super_admin' AND active AND deleted_at IS NULL`,
+);
+(admins[0]?.n ?? 0) > 0
+  ? ok("an active super_admin exists", `${admins[0].n}`)
+  : bad(
+      "an active super_admin exists",
+      "none -- nobody can sign in to administer this system",
+      "set SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD in .env and re-run ./scripts/deploy.sh; the seed creates the account",
+    );
+
 const fk = await q(
   `SELECT confdeltype FROM pg_constraint WHERE conname='users_id_auth_fkey'`,
 );

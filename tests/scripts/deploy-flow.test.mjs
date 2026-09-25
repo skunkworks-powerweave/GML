@@ -52,6 +52,7 @@ case "$*" in
     exit 0 ;;
   "compose ps -a --format"*) echo "migrate 0" ;;
   "compose ps --format"*) echo "app healthy" ;;
+  *verify-auth.mjs*) exit "\${FAKE_VERIFY_AUTH_EXIT:-0}" ;;
 esac
 exit 0
 `;
@@ -365,6 +366,52 @@ test("a build that changed the image moves :previous to what was serving", () =>
       assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`);
       assert.equal(imageId(sb, `gml-lms-${svc}:current`), `sha256:v2-${svc}`);
     }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── A first deploy that creates no administrator ─────────────────────────────
+//
+// SUPER_ADMIN_* are not REQUIRED, and with them empty the seed skips the
+// bootstrap and succeeds. deploy.sh then wrote the marker that arms SM-5 and
+// printed "done. Sign in at ..." on a system with no account at all -- whose
+// restore drill could never pass, so the gate refused the re-deploy that would
+// have created one. verify-auth now fails that state
+// (tests/behaviour/seed-bootstrap.test.ts); these pin what deploy.sh does.
+
+test("a first deploy with SUPER_ADMIN_* unset says so before it builds anything", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    const out = `${r.stdout}${r.stderr}`;
+    const warned = out.search(/SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD are not both set/);
+    assert.ok(warned >= 0, `the operator must be told no administrator will be created:\n${out}`);
+    assert.ok(warned < out.indexOf("building images"), "and told before the build, not after it");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a first deploy with SUPER_ADMIN_* set does not warn", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    sb.write(".env", `${ENV_FILE}SUPER_ADMIN_EMAIL=it@example.test\nSUPER_ADMIN_INITIAL_PASSWORD=Initial-Pass-4821\n`);
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(`${r.stdout}${r.stderr}`, /not both set/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("when verify-auth fails, the host is not marked deployed and no success is claimed", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_VERIFY_AUTH_EXIT: "1" } });
+    assert.notEqual(r.status, 0);
+    assert.ok(!sb.exists(MARKER), "the SM-5 gate must not be armed on a deploy that failed verification");
+    assert.doesNotMatch(r.stdout, /done\. Sign in/);
   } finally {
     sb.cleanup();
   }

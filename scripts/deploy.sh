@@ -250,6 +250,12 @@ else
   log "FIRST DEPLOY ON THIS HOST (no ${DEPLOYED_MARKER}): the SM-5 restore-drill gate is not armed yet -- nothing can have been backed up."
   log "  Before the NEXT deploy run:  bash scripts/backup.sh && bash scripts/restore.sh   (README-deploy.md section 7)."
   log "  From then on a deploy is refused without a passing drill less than 30 days old."
+  # The seed creates the first administrator only from these two, and
+  # verify-auth fails the deploy when no active super_admin exists -- say so
+  # now rather than after the build.
+  if ! grep -qE '^SUPER_ADMIN_EMAIL=.+' .env || ! grep -qE '^SUPER_ADMIN_INITIAL_PASSWORD=.+' .env; then
+    log "WARNING: SUPER_ADMIN_EMAIL and SUPER_ADMIN_INITIAL_PASSWORD are not both set in .env. On a database with no administrator yet the seed creates NONE, verify-auth then fails, and this deploy stops before marking the host deployed. Set both unless this database already has an active super_admin."
+  fi
 fi
 
 # ── 1. Build ─────────────────────────────────────────────────────────────────

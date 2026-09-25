@@ -36,11 +36,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -60,6 +61,8 @@ process.env.DOTENV_CONFIG_PATH = join(mkdtempSync(join(tmpdir(), "seed-bootstrap
 
 type SeedWorld = {
   schema: string;
+  /** A DATABASE_URL whose search_path resolves to this world first. */
+  url: string;
   q<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<R[]>;
   /** Run `fn` with a drizzle handle whose search_path resolves to this world. */
   withDb<T>(fn: (db: ReturnType<typeof drizzle>) => Promise<T>): Promise<T>;
@@ -94,7 +97,7 @@ async function withSeedWorld(tables: string[], body: (w: SeedWorld) => Promise<v
   };
 
   try {
-    await body({ schema, q, withDb });
+    await body({ schema, url, q, withDb });
   } finally {
     await admin.query(`DELETE FROM auth.users WHERE email LIKE $1`, [`${schema}%`]).catch(() => undefined);
     if (!rel) await admin.query(`DROP TABLE IF EXISTS auth.users`);
@@ -269,3 +272,84 @@ test(
     });
   },
 );
+
+// ── verify-auth: a deploy that leaves nobody able to sign in must not pass ───
+//
+// SUPER_ADMIN_* are not REQUIRED in .env, and with them empty the seed logs
+// "super_admin bootstrap skipped" and succeeds. deploy.sh then ran
+// verify-auth -- which never asked whether anyone could administer the system
+// -- wrote the marker that arms the SM-5 restore-drill gate, and printed
+// "done. Sign in at ...". No account existed at all (the super admin is the
+// only one the seed creates), the next step in the runbook -- backup.sh &&
+// restore.sh -- failed with "no users restored", and the armed gate then
+// refused the very re-deploy that would have created the administrator.
+//
+// verify-auth runs as deploy.sh runs it, against a scratch schema whose `users`
+// holds exactly what each test puts there. It is read only up to its schema
+// checks: past them it calls Supabase, which here is an address nothing
+// listens on.
+
+const VERIFY_AUTH = fileURLToPath(new URL("../../packages/db/scripts/verify-auth.mjs", import.meta.url));
+const TSX_LOADER = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+
+/** verify-auth.mjs as deploy.sh runs it (through tsx), against a world. */
+function verifyAuthIn(w: SeedWorld): Promise<string> {
+  const cwd = mkdtempSync(join(tmpdir(), "verify-auth-"));
+  return new Promise((done, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", TSX_LOADER, VERIFY_AUTH],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          DATABASE_URL: w.url,
+          NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:9",
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "test-dummy",
+          SUPABASE_SECRET_KEY: "test-dummy",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let out = "";
+    child.stdout.on("data", (d) => (out += String(d)));
+    child.stderr.on("data", (d) => (out += String(d)));
+    const timer = setTimeout(() => child.kill(), 90_000);
+    child.on("error", reject);
+    child.on("close", () => {
+      clearTimeout(timer);
+      rmSync(cwd, { recursive: true, force: true });
+      done(out);
+    });
+  });
+}
+
+test("verify-auth FAILS a deploy that leaves no active super_admin", { skip }, async () => {
+  await withSeedWorld(["users"], async (w) => {
+    // What a first deploy with SUPER_ADMIN_* empty leaves: nobody, or at most
+    // accounts that cannot administer anything.
+    await w.q(
+      `INSERT INTO ${w.schema}.users (id, email, role, active) VALUES
+         (gen_random_uuid(), $1, 'teacher', false),
+         (gen_random_uuid(), $2, 'super_admin', false)`,
+      [`${w.schema}.inert@example.invalid`, `${w.schema}.deactivated@example.invalid`],
+    );
+    const out = await verifyAuthIn(w);
+    assert.match(
+      out,
+      /FAIL\s+an active super_admin exists/,
+      "verify-auth passed a system nobody can administer; deploy.sh then marks the host deployed and " +
+        `arms a restore drill that can never pass.\n--- verify-auth\n${out.slice(0, 3000)}`,
+    );
+  });
+});
+
+test("verify-auth passes the check once an active super_admin exists", { skip }, async () => {
+  await withSeedWorld(["users"], async (w) => {
+    await w.q(`INSERT INTO ${w.schema}.users (id, email, role, active) VALUES (gen_random_uuid(), $1, 'super_admin', true)`, [
+      `${w.schema}.admin@example.invalid`,
+    ]);
+    const out = await verifyAuthIn(w);
+    assert.match(out, /PASS\s+an active super_admin exists/, `--- verify-auth\n${out.slice(0, 3000)}`);
+  });
+});
