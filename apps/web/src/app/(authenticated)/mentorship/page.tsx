@@ -170,7 +170,9 @@ export default async function MentorshipListPage({
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            // min(100%, ...): a 320 px minimum is wider than a phone's content
+            // box, so each card overflowed it and the page scrolled sideways.
+            gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))",
             gap: 14,
           }}
         >

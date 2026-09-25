@@ -150,6 +150,9 @@ export default async function FormThanksPage({
         style={{
           marginTop: 26,
           display: "flex",
+          // Side by side the two buttons are ~320 px: past a phone's content
+          // box once the first reads "Back to mentorship".
+          flexWrap: "wrap",
           gap: 12,
           justifyContent: "center",
         }}

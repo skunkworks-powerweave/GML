@@ -238,7 +238,7 @@ export default async function PairingDetailPage({
         <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
           ← All pairings
         </Link>
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
           <div>
             <div className="label">Pairing</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4, lineHeight: 1.15 }}>
@@ -321,7 +321,9 @@ export default async function PairingDetailPage({
             style={{ padding: 14, marginTop: 12, background: "var(--paper-2)", display: "grid", gap: 10 }}
           >
             <input type="hidden" name="pairingId" value={pairingId} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 10 }}>
+            {/* "When" stacks above "Duration" below 640 px: beside a 120 px
+                column the date-and-time picker was ~75 px wide on a phone. */}
+            <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-[minmax(0,1fr)_120px]">
               <label style={{ fontSize: 12 }}>
                 <div className="label" style={{ marginBottom: 4 }}>When *</div>
                 <input
@@ -381,8 +383,15 @@ export default async function PairingDetailPage({
           </form>
         ) : null}
 
-        {/* Quarterly progress strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 18 }}>
+        {/* Quarterly progress strip. One quarter per row on a phone, two from
+            640 px, four from 768 px. It was an inline repeat(4, 1fr), which
+            holds at every width: ~80 px cards, with Q3 and Q4 -- and the
+            "Fill progress form" link -- off the right edge of a phone. */}
+        <div
+          data-testid="quarter-strip"
+          className="grid grid-cols-1 gap-[10px] sm:grid-cols-2 md:grid-cols-4"
+          style={{ marginTop: 18 }}
+        >
           {QUARTERS.map((q, i) => {
             const qNum = i + 1;
             const state = currentQuarter >= qNum ? (qNum < currentQuarter ? "done" : "current") : "future";
@@ -496,7 +505,10 @@ export default async function PairingDetailPage({
         </div>
       </div>
 
-      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
+      {/* Meetings above feedback and commitments below 768 px, beside them
+          above. This was an inline "1.5fr 1fr", which held on a phone: a
+          ~130 px right-hand column holding the whole commitment register. */}
+      <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div style={{ display: "grid", gap: 14 }}>
           <div className="card card-hi">
             <div
@@ -533,7 +545,9 @@ export default async function PairingDetailPage({
                       key={m.id}
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "60px 1fr",
+                        // minmax(0, ...): a bare 1fr is at least as wide as its
+                        // content, so a pasted link in the notes widened the page.
+                        gridTemplateColumns: "60px minmax(0, 1fr)",
                         gap: 14,
                         padding: 16,
                         borderTop: i ? "1px solid var(--line)" : "none",
@@ -553,7 +567,7 @@ export default async function PairingDetailPage({
                           ) : null}
                         </div>
                         {m.notes ? (
-                          <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 6, lineHeight: 1.5 }}>
+                          <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 6, lineHeight: 1.5, overflowWrap: "anywhere" }}>
                             {m.notes}
                           </p>
                         ) : null}
@@ -716,7 +730,9 @@ export default async function PairingDetailPage({
                     action={toggleCommitmentAction}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "20px 1fr 60px",
+                      // minmax(0, ...) and overflow-wrap below: as with the
+                      // meeting notes, one long word was as wide as the column.
+                      gridTemplateColumns: "20px minmax(0, 1fr) 60px",
                       gap: 10,
                       padding: "8px 12px",
                       borderTop: i ? "1px solid var(--line)" : "none",
@@ -742,7 +758,7 @@ export default async function PairingDetailPage({
                         padding: 0,
                       }}
                     />
-                    <div>
+                    <div style={{ overflowWrap: "anywhere" }}>
                       <div
                         style={{
                           color: c.done ? "var(--ink-3)" : "var(--ink)",
@@ -758,7 +774,7 @@ export default async function PairingDetailPage({
                     </div>
                     <span
                       className="mono"
-                      style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right" }}
+                      style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right", overflowWrap: "anywhere" }}
                     >
                       {c.done ? "done" : (c.due ?? "")}
                     </span>
@@ -767,11 +783,15 @@ export default async function PairingDetailPage({
               )}
             </div>
 
+            {/* The text on a row of its own, who / due / Add beneath it. This
+                was one "1fr 90px 70px auto" row: 90 + 70 px of fixed columns
+                and the button left the text box a few pixels on a phone, and
+                pushed the row past the right edge. */}
             <form
               action={addCommitmentAction}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 90px 70px auto",
+                gridTemplateColumns: "90px 70px minmax(0, 1fr)",
                 gap: 6,
                 padding: "10px 12px",
                 borderTop: "1px solid var(--line)",
@@ -785,6 +805,8 @@ export default async function PairingDetailPage({
                 maxLength={500}
                 placeholder="Add a commitment…"
                 style={{
+                  gridColumn: "1 / -1",
+                  width: "100%",
                   padding: "6px 8px",
                   border: "1px solid var(--line-2)",
                   borderRadius: 6,

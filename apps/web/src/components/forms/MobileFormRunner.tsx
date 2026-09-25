@@ -481,7 +481,9 @@ function BigRating({
       data-testid="mobile-rating"
       role="group"
       aria-label={field.label}
-      style={{ display: "flex", gap: 8, justifyContent: "flex-start" }}
+      // Wraps: five 56 px stars and their gaps are 312 px, wider than the
+      // screen's content box on a 360 px phone, so the fifth sat off screen.
+      style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}
     >
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const on = current >= n;
