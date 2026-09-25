@@ -39,9 +39,11 @@ import { MobileUploadRunner } from "@/components/video/MobileUploadRunner";
 import { getDeviceType } from "@/lib/device";
 import { assertEnv } from "@/lib/env";
 import { uploadLimitBytes } from "@/lib/video/upload";
+import { attachUploadAction } from "./actions";
 import {
   assertContextAllowed,
   describeUploadTarget,
+  encodeTarget,
   openUploadContexts,
   uploadHref,
   type GatedSection,
@@ -96,6 +98,14 @@ const CONTEXT_LABEL: Record<string, string> = {
 };
 
 const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation", mentorship: "Mentorship" };
+
+/** What attachUploadAction redirected back with. Unknown codes show nothing. */
+const ATTACH_NOTICE: Record<string, { text: string; ok: boolean }> = {
+  done: { text: "Attached. The video now shows where you chose.", ok: true },
+  invalid: { text: "Choose what to attach the video to.", ok: false },
+  refused: { text: "The video could not be attached there. Choose another place.", ok: false },
+  not_attachable: { text: "Only your own videos that are not linked yet can be attached.", ok: false },
+};
 
 /**
  * Built per request, because these cards were lying about the product.
@@ -186,7 +196,7 @@ function formatIST(d: Date | null): string {
 export default async function UploadsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ context?: string; contextId?: string; quarter?: string }>;
+  searchParams?: Promise<{ context?: string; contextId?: string; quarter?: string; attach?: string }>;
 } = {}) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -272,6 +282,13 @@ export default async function UploadsPage({
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(50);
 
+  // What an unlinked video of hers can still be attached to: the same open
+  // cycles, meetings and quarterly slots the chooser offers.
+  const attachOptions = rows.some((r) => r.contextType === "generic")
+    ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: o.title }))
+    : [];
+  const attachNotice = sp.attach ? (ATTACH_NOTICE[sp.attach] ?? null) : null;
+
   return (
     <div>
       <div className="page-header">
@@ -290,6 +307,14 @@ export default async function UploadsPage({
       </div>
 
       <div className="page-body">
+        {attachNotice ? (
+          <p
+            role={attachNotice.ok ? "status" : "alert"}
+            style={{ fontSize: 13, margin: "0 0 12px", color: attachNotice.ok ? "var(--ink-2)" : "var(--rust)" }}
+          >
+            {attachNotice.text}
+          </p>
+        ) : null}
         <section
           id="upload-target"
           data-testid="upload-target"
@@ -622,6 +647,32 @@ export default async function UploadsPage({
                           style={{ color: "var(--ink-2)" }}
                         >
                           {linkedTo}
+                          {/* An unlinked video can still be put where it
+                              belongs, instead of sent again (attachUploadAction). */}
+                          {r.contextType === "generic" && attachOptions.length > 0 ? (
+                            <form action={attachUploadAction} style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                              <input type="hidden" name="submissionId" value={r.id} />
+                              <select
+                                name="target"
+                                defaultValue=""
+                                required
+                                aria-label={`Attach ${filename} to`}
+                                style={{ fontSize: 11, maxWidth: 220 }}
+                              >
+                                <option value="" disabled>
+                                  Attach to…
+                                </option>
+                                {attachOptions.map((o) => (
+                                  <option key={o.value} value={o.value}>
+                                    {o.title}
+                                  </option>
+                                ))}
+                              </select>
+                              <button type="submit" className="btn btn-sm" style={{ fontSize: 11 }}>
+                                Attach
+                              </button>
+                            </form>
+                          ) : null}
                         </td>
                         <td
                           className="mono"

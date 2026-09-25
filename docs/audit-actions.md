@@ -156,6 +156,7 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | `resource.pdf.view` | A PDF resource was opened in the canvas-renderer surface `/repo/resource/[id]/view` (spec 087) — both the initial server-side render and subsequent client pings | `resourceId`, `userId`, `pageOpened` (initial render only) |
 | `resource.view.client_ping` | A client-side ping from a PDF viewer kept-alive over the wire — same surface as above, sent ~every 60 s of active dwell | `resourceId`, `userId`, `dwellSec` |
 | `video.view` | A user landed on `/videos/[id]` and the HLS player started loading | `videoId`, `userId`, `quality` ("480p" / "720p") |
+| `video.context.attached` | The uploader attached one of her own unlinked (`generic`) videos to a cycle, meeting or quarterly slot from `/uploads`. `entity_type` `video_submission` | `contextType`, `contextId`, `quarter` (quarterly videos only, else null) |
 
 ## observation.* — cycle lifecycle (spec 059)
 

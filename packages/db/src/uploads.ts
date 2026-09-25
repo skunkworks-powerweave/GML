@@ -109,6 +109,7 @@ export type FinalizeUploadInput = {
   objectKey: string;
   /** What Storage actually holds, not what the browser claimed. */
   storedBytes: number;
+  /** As the caller read them. What is linked is the claimed row's own context. */
   contextType: string;
   contextId: string | null;
   /** The uploader's note, when the browser sent one: kept on the submission and on a cycle's evidence row. */
@@ -167,6 +168,46 @@ export async function linkSubmissionToContext(tx: AnyDb, link: ContextLink): Pro
 }
 
 /**
+ * Give one of the uploader's own 'generic' submissions a context, and link it
+ * if its bytes are already stored. The caller has authorised the target (the
+ * web's assertContextAllowed); this only moves a row that is still generic and
+ * still the uploader's, so it cannot take a video off the evidence it is on or
+ * move someone else's. A submission whose bytes have not arrived yet is linked
+ * by its own finalize, which reads the context from the row.
+ *
+ * Returns false when there was nothing to move.
+ */
+export async function attachSubmissionToContext(
+  db: AnyDb,
+  a: { submissionId: string; userId: string; contextType: string; contextId: string; quarter: number | null },
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [moved] = await tx
+      .update(videoSubmissions)
+      .set({ contextType: a.contextType, contextId: a.contextId, contextQuarter: a.quarter })
+      .where(
+        and(
+          eq(videoSubmissions.id, a.submissionId),
+          eq(videoSubmissions.submittedByUserId, a.userId),
+          eq(videoSubmissions.contextType, "generic"),
+        ),
+      )
+      .returning({ id: videoSubmissions.id, fileId: videoSubmissions.fileId, captionRaw: videoSubmissions.captionRaw });
+    if (!moved) return false;
+    const [file] = await tx.select({ status: files.status }).from(files).where(eq(files.id, moved.fileId)).limit(1);
+    if (file?.status === "stored") {
+      await linkSubmissionToContext(tx as unknown as AnyDb, {
+        submissionId: moved.id,
+        contextType: a.contextType,
+        contextId: a.contextId,
+        caption: moved.captionRaw,
+      });
+    }
+    return true;
+  });
+}
+
+/**
  * Move a verified upload to 'queued', link it to what it is for, and queue the
  * transcode -- atomically.
  *
@@ -200,8 +241,9 @@ export async function finalizeUpload(db: AnyDb, u: FinalizeUploadInput): Promise
           ),
         ),
       )
-      .returning({ id: videoSubmissions.id });
-    if (claimed.length === 0) return { finalized: false };
+      .returning({ id: videoSubmissions.id, contextType: videoSubmissions.contextType, contextId: videoSubmissions.contextId });
+    const sub = claimed[0];
+    if (!sub) return { finalized: false };
 
     await tx.update(files).set({ status: "stored", sizeBytes: u.storedBytes }).where(eq(files.id, u.fileId));
 
@@ -221,11 +263,14 @@ export async function finalizeUpload(db: AnyDb, u: FinalizeUploadInput): Promise
     // LINK THE VIDEO TO WHAT IT IS FOR. Written here, when the bytes are known
     // to exist, so an abandoned upload never leaves a row promising evidence
     // that was never delivered. The claim above is what keeps this from
-    // double-inserting.
+    // double-inserting. The context is the claimed row's own, read under its
+    // lock: an upload attached to a cycle while its bytes were still arriving
+    // (attachSubmissionToContext) is linked to that cycle, not to what the
+    // caller read before.
     await linkSubmissionToContext(tx as unknown as AnyDb, {
       submissionId: u.submissionId,
-      contextType: u.contextType,
-      contextId: u.contextId,
+      contextType: sub.contextType,
+      contextId: sub.contextId,
       caption: u.caption,
     });
 

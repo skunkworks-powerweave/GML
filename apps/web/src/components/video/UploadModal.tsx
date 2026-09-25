@@ -272,7 +272,8 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                   ingest log". No screen re-links a video; the log says so. */}
               <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 8 }}>
                 A video whose caption has no code, or one you may not use, still arrives, but linked to nothing: only
-                you and programme administrators can see it. To attach it, send it again with the right code.
+                you and programme administrators can see it. Attach it from My uploads, or send it again with the
+                right code.
               </p>
             </section>
             ) : null}

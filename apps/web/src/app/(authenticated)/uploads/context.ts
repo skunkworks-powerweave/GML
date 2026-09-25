@@ -248,7 +248,24 @@ export async function describeUploadTarget(
   }
 }
 
-export type UploadOption = { href: string; title: string; detail: string };
+export type UploadOption = { target: UploadTarget; href: string; title: string; detail: string };
+
+/**
+ * A target as one form value, "type|id|quarter" -- what the attach control on
+ * /uploads posts. decodeTarget answers null for anything malformed; the value
+ * is still only a claim, which assertContextAllowed checks.
+ */
+export function encodeTarget(t: UploadTarget): string {
+  return `${t.contextType}|${t.contextId ?? ""}|${t.quarter ?? ""}`;
+}
+
+export function decodeTarget(value: string): { contextType: string; contextId: string | null; quarter: number | null } | null {
+  const parts = value.split("|");
+  if (parts.length !== 3 || !parts[0]) return null;
+  const quarter = parts[2] ? Number(parts[2]) : null;
+  if (quarter !== null && !Number.isInteger(quarter)) return null;
+  return { contextType: parts[0], contextId: parts[1] || null, quarter };
+}
 
 export function uploadHref(t: { contextType: string; contextId?: string | null; quarter?: number | null }): string {
   const q = new URLSearchParams({ context: t.contextType });
@@ -286,8 +303,10 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         .orderBy(desc(observationCycles.scheduledAt))
         .limit(20);
       for (const c of cycles) {
+        const target: UploadTarget = { contextType: "observation_cycle", contextId: c.id, quarter: null };
         options.push({
-          href: uploadHref({ contextType: "observation_cycle", contextId: c.id }),
+          target,
+          href: uploadHref(target),
           title: `Lesson video for ${c.code}${c.topic ? ` · ${c.topic}` : ""}`,
           detail: actor.role === "teacher" ? `Cycle ${c.status.replace(/_/g, " ")}` : c.teacherName,
         });
@@ -307,8 +326,10 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
       for (const p of pairings) {
         const quarter = (p.currentQuarter ?? 1) === 4 ? 4 : (p.currentQuarter ?? 1) === 1 ? 1 : null;
         if (!quarter) continue;
+        const target: UploadTarget = { contextType: "mentee_quarterly", contextId: p.id, quarter };
         options.push({
-          href: uploadHref({ contextType: "mentee_quarterly", contextId: p.id, quarter }),
+          target,
+          href: uploadHref(target),
           title: `${QUARTER_NAME[quarter]} video for your mentor`,
           detail: p.mentorName,
         });
@@ -330,8 +351,10 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         .orderBy(desc(mentorMeetings.scheduledAt))
         .limit(10);
       for (const m of meetings) {
+        const target: UploadTarget = { contextType: "mentor_meeting", contextId: m.id, quarter: null };
         options.push({
-          href: uploadHref({ contextType: "mentor_meeting", contextId: m.id }),
+          target,
+          href: uploadHref(target),
           title: `Recording of your meeting on ${dateIn(m.scheduledAt)}`,
           detail: m.teacherName,
         });

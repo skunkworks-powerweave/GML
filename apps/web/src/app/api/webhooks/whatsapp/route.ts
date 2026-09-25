@@ -389,8 +389,9 @@ async function acceptVideoMessage(
   // typo never blocks the upload -- the raw caption is kept on the submission
   // (caption_raw) and the unmatched case is audited as
   // whatsapp.context.unmatched, so an operator can see on /admin/whatsapp-log
-  // what was sent and by whom. The app has no control yet for attaching a
-  // generic video to its cycle afterwards; the sender resends it with the code.
+  // what was sent and by whom. A sender whose number matched a user can attach
+  // the generic video afterwards from her own /uploads (attachUploadAction);
+  // an unattributed one is resent with the code.
   let contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly" | "generic" = ctx.type;
   let contextId: string | null = null;
   // Only for a quarterly video (migration 0039).

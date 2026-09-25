@@ -7,13 +7,17 @@
 // actually landed before anything is queued. Everything in between happens
 // between the browser and Supabase Storage.
 
+import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
+import { db } from "@gml/db";
+import { attachSubmissionToContext } from "@gml/db/uploads";
 import { auth } from "@/auth";
-import { actorFrom } from "@/lib/authz";
+import { actorFrom, isUuid } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { beginUpload, completeUpload } from "@/lib/video/upload";
 import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
-import { assertContextAllowed } from "./context";
+import { assertContextAllowed, decodeTarget } from "./context";
 
 export type BeginUploadState =
   | {
@@ -117,8 +121,8 @@ export type CompleteUploadState = { ok: boolean; error?: string; retryable?: boo
 
 export async function completeUploadAction(
   submissionId: string,
-  // The uploader's note. Stored on the observation_evidence row, which is what
-  // the observer reads on the cycle page.
+  // The uploader's note. Kept on the submission and, for a cycle, on the
+  // observation_evidence row the observer reads on the cycle page.
   caption?: string,
 ): Promise<CompleteUploadState> {
   const session = await auth();
@@ -153,4 +157,48 @@ export async function completeUploadAction(
   });
 
   return { ok: true };
+}
+
+/**
+ * Attach one of the uploader's own GENERIC videos to a cycle, a meeting or a
+ * quarterly slot, from its row on /uploads.
+ *
+ * Until /uploads asked what a video was for, every upload made there was
+ * generic, and so is every WhatsApp video whose caption named nothing the
+ * sender may use. Generic is visible to the uploader and administrators only,
+ * and nothing could change it afterwards, so a lesson video filed that way
+ * stayed off its cycle's Evidence and out of its observer's and mentor's
+ * reach for good; the only way out was to send the whole video again.
+ *
+ * The target is a claim from the browser like any other: it goes through the
+ * reservation's own check (assertContextAllowed -- a target this user may not
+ * see is a 404), and the move itself only touches a row that is still
+ * generic and still this user's (attachSubmissionToContext), so a linked video
+ * is never taken off its evidence and nobody else's is moved.
+ */
+export async function attachUploadAction(formData: FormData): Promise<void> {
+  const session = await auth();
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+
+  const submissionId = String(formData.get("submissionId") ?? "").trim();
+  const target = decodeTarget(String(formData.get("target") ?? ""));
+  if (!isUuid(submissionId) || !target || target.contextType === "generic") redirect("/uploads?attach=invalid");
+
+  const allowed = await assertContextAllowed(actor, target);
+  if (!allowed.ok || !allowed.target.contextId) redirect("/uploads?attach=refused");
+  const { contextType, quarter } = allowed.target;
+  const contextId = allowed.target.contextId;
+
+  const moved = await attachSubmissionToContext(db, { submissionId, userId: actor.id, contextType, contextId, quarter });
+  if (!moved) redirect("/uploads?attach=not_attachable");
+
+  void recordAudit({
+    action: "video.context.attached",
+    entityType: "video_submission",
+    entityId: submissionId,
+    metadata: { contextType, contextId, quarter },
+  });
+  revalidatePath("/uploads");
+  redirect("/uploads?attach=done");
 }
