@@ -21,7 +21,7 @@
 //
 //   BullMQ Worker            -> claim() with FOR UPDATE SKIP LOCKED
 //   stalled-job detection    -> lease + heartbeat + reapExpiredLeases()
-//   attempts/backoff         -> fail() (same exponential-from-5s cadence)
+//   attempts/backoff         -> fail() (exponential from one minute, not 5 s)
 //   removeOnComplete/Fail    -> pruneFinished()
 //   repeat: { pattern }      -> a setInterval in this file
 //
@@ -92,7 +92,10 @@ function sleep(ms: number): Promise<void> {
 async function handle(job: ClaimedJob): Promise<void> {
   switch (job.name) {
     case "transcode":
-      await transcode480p(job.payload as unknown as TranscodeJobInput);
+      // The same test fail() uses to decide between a retry and the DLQ.
+      await transcode480p(job.payload as unknown as TranscodeJobInput, {
+        finalAttempt: job.attempts >= job.maxAttempts,
+      });
       break;
     // The nightly retention sweep. The name predates the second table; it is
     // kept because scheduleDailyWork() enqueues it and its dedupe key is what

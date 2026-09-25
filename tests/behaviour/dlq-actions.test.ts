@@ -167,6 +167,51 @@ test("F63: Retry on the latest attempt of a failed video still works", { skip },
   });
 });
 
+/** A retry the queue is holding for the submission: queued with a backoff, or already running. */
+async function seedLiveJob(w: World, status: "queued" | "running"): Promise<string> {
+  const [j] = await w.q<{ id: string }>(
+    `INSERT INTO jobs (queue, name, payload, status, dedupe_key, attempts, max_attempts, run_at, lease_expires_at, locked_by)
+       VALUES ('transcode', 'transcode', '{}', $1::text, $2, 1, 3,
+               now() + interval '10 minutes',
+               CASE WHEN $1::text = 'running' THEN now() + interval '15 minutes' END,
+               CASE WHEN $1::text = 'running' THEN 'a-live-worker' END)
+     RETURNING id`,
+    [status, `submission:${w.submissionId}`],
+  );
+  return j!.id;
+}
+
+// ── F09: Drop is final ──────────────────────────────────────────────────────
+
+test("F09: Drop on a video whose retry is pending cancels that retry", { skip }, async () => {
+  await withSubmission({ status: "queued", attempts: ["failed"] }, async (w) => {
+    const retry = await seedLiveJob(w, "queued");
+    const { dropTranscodeJobAction } = await actions();
+    const res = await act(() => dropTranscodeJobAction(form(w.attempts[0]!)));
+    assert.equal(res.completed, true, `Drop was refused: ${JSON.stringify(res)}`);
+
+    // Drop used to rewrite the ledger and the submission and never touch the
+    // queue, so the pending retry ran anyway and flipped the video back to
+    // transcoding -- overriding the operator's decision within seconds.
+    const [job] = await w.q<{ status: string }>(`SELECT status FROM jobs WHERE id = $1`, [retry]);
+    assert.equal(job?.status, "dead", "the pending retry is still claimable");
+    assert.equal(await statusOf(w), "failed");
+    assert.deepEqual(await ledgerOf(w), ["dropped"]);
+  });
+});
+
+test("F09: Drop is refused while a retry is already running", { skip }, async () => {
+  await withSubmission({ status: "queued", attempts: ["failed"] }, async (w) => {
+    const running = await seedLiveJob(w, "running");
+    const { dropTranscodeJobAction } = await actions();
+    const res = await act(() => dropTranscodeJobAction(form(w.attempts[0]!)));
+    assert.match(res.redirect ?? "", /error=job_live/, `a running transcode was dropped: ${JSON.stringify(res)}`);
+    const [job] = await w.q<{ status: string }>(`SELECT status FROM jobs WHERE id = $1`, [running]);
+    assert.equal(job?.status, "running");
+    assert.deepEqual(await ledgerOf(w), ["failed"]);
+  });
+});
+
 test("F63: the DLQ offers Retry and Drop only on a submission's latest, still-failed attempt", { skip }, async () => {
   await withSubmission({ status: "ready", attempts: ["failed", "succeeded"] }, async (stale) => {
     await withSubmission({ status: "failed", attempts: ["failed", "failed"] }, async (live) => {

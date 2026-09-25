@@ -16,22 +16,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { needsDatabase } from "./_harness.js";
-import { withWorkerWorld, waitFor, type WorkerWorld } from "./_worker.js";
+import { withWorkerWorld, waitFor, seedJob, seedSubmission, type WorkerWorld } from "./_worker.js";
 
 const skip = needsDatabase();
 
 type Ledger = { id: string; status: string; ended: boolean; error: string | null };
 type Video = { status: string; processing_log: string | null };
 type Job = { status: string; attempts: number; completed: boolean };
-
-async function seedSubmission(w: WorkerWorld, status: string): Promise<string> {
-  const [v] = await w.q<{ id: string }>(
-    `INSERT INTO ${w.schema}.video_submissions (file_id, source, status, context_type)
-       VALUES (gen_random_uuid(), 'direct', $1, 'generic') RETURNING id`,
-    [status],
-  );
-  return v!.id;
-}
 
 async function seedLedger(w: WorkerWorld, submissionId: string): Promise<string> {
   const [r] = await w.q<{ id: string }>(
@@ -40,29 +31,6 @@ async function seedLedger(w: WorkerWorld, submissionId: string): Promise<string>
     [submissionId],
   );
   return r!.id;
-}
-
-/** The transport row, exactly as the producers write it. */
-async function seedJob(
-  w: WorkerWorld,
-  submissionId: string,
-  s: { status: "running" | "queued"; attempts: number; maxAttempts: number },
-): Promise<string> {
-  const payload = {
-    videoSubmissionId: submissionId,
-    fileId: submissionId,
-    bucket: "videos-original",
-    objectKey: `test/${submissionId}.mp4`,
-  };
-  const [j] = await w.q<{ id: string }>(
-    `INSERT INTO ${w.schema}.jobs (queue, name, payload, status, attempts, max_attempts, dedupe_key, locked_by, lease_expires_at)
-       VALUES ('transcode', 'transcode', $1, $2::text, $3, $4, 'submission:' || $5::text,
-               CASE WHEN $2::text = 'running' THEN 'a-worker-that-was-killed' END,
-               CASE WHEN $2::text = 'running' THEN now() - interval '1 minute' END)
-     RETURNING id`,
-    [JSON.stringify(payload), s.status, s.attempts, s.maxAttempts, submissionId],
-  );
-  return j!.id;
 }
 
 const ledger = async (w: WorkerWorld, submissionId: string) =>
@@ -209,6 +177,53 @@ test(
       const v = await video(w, sub);
       assert.equal(v.status, "failed", `a dead job's video said '${v.status}' -- "Transcoding in progress", forever`);
       assert.match(v.processing_log ?? "", /read-only/);
+    });
+  },
+);
+
+// ── F09 ──────────────────────────────────────────────────────────────────────
+
+test(
+  "F09: an attempt that fails with retries left leaves the video 'queued' (retrying), not 'failed'",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      // Storage is a closed port: the attempt fails downloading the source,
+      // which is exactly a transient Storage outage.
+      const sub = await seedSubmission(w, "queued");
+      const jobId = await seedJob(w, sub, { status: "queued", attempts: 0, maxAttempts: 3 });
+
+      const worker = w.spawnWorker();
+      const failedOnce = await waitFor(async () => {
+        const j = await job(w, jobId);
+        return j.attempts === 1 && j.status === "queued";
+      }, 30_000);
+      assert.ok(failedOnce, `attempt 1 never failed back to the queue: ${await state(w, sub, jobId)}\n${worker.output()}`);
+      await waitFor(async () => (await ledger(w, sub)).some((r) => r.status === "failed"), 5_000);
+
+      // The teacher's page renders 'failed' as "Transcode failed. Contact your
+      // programme admin." -- an invitation to re-upload, hours on 2G, for a
+      // video the queue is about to try again by itself.
+      const v = await video(w, sub);
+      assert.equal(v.status, "queued", `with a retry pending the video said '${v.status}'`);
+      assert.match(v.processing_log ?? "", /retry/i, "the note should say a retry is coming");
+    });
+  },
+);
+
+test(
+  "F09: the failure of the LAST attempt marks the video failed",
+  { skip, timeout: 90_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      const sub = await seedSubmission(w, "queued");
+      const jobId = await seedJob(w, sub, { status: "queued", attempts: 2, maxAttempts: 3 });
+
+      const worker = w.spawnWorker();
+      const dead = await waitFor(async () => (await job(w, jobId)).status === "dead", 30_000);
+      assert.ok(dead, `the last attempt never ran: ${await state(w, sub, jobId)}\n${worker.output()}`);
+      await waitFor(async () => (await video(w, sub)).status === "failed", 5_000);
+      assert.equal((await video(w, sub)).status, "failed");
     });
   },
 );

@@ -35,7 +35,7 @@ import { transcodeJobs, videoSubmissions, files } from "@gml/db/schema";
 import { enqueueTranscode } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
-import { loadSubmissionStates, moveSubmission, refusalFor, verbsFor } from "./state";
+import { cancelQueuedRetry, loadSubmissionStates, moveSubmission, refusalFor, verbsFor } from "./state";
 
 const DLQ_PATH = "/admin/transcode-jobs";
 
@@ -185,16 +185,22 @@ export async function dropTranscodeJobAction(formData: FormData): Promise<void> 
     if (!verbsFor({ jobId: row.jobId, status: row.jobStatus }, state).drop) {
       return refusalFor({ jobId: row.jobId, status: row.jobStatus }, state);
     }
+    // A retry the queue is still holding goes with the drop. If a worker took
+    // it between the read above and here, it is running now: refuse.
+    if (state?.liveJob === "queued" && !(await cancelQueuedRetry(tx, row.videoSubmissionId))) {
+      return "job_live";
+    }
 
     await tx
       .update(transcodeJobs)
       .set({ status: "dropped", endedAt: new Date() })
       .where(eq(transcodeJobs.id, jobId));
 
-    // The parent submission stays 'failed', so /videos surfaces tell the
-    // truth -- the operator decided this submission won't get a playable HLS
-    // render. Compare-and-set, so it can never be written over a result.
-    await moveSubmission(tx, row.videoSubmissionId, ["failed"], "failed");
+    // The parent submission ends 'failed' (from 'queued' when a retry was
+    // pending), so /videos surfaces tell the truth -- the operator decided this
+    // submission won't get a playable HLS render. Compare-and-set, so it can
+    // never be written over a result.
+    await moveSubmission(tx, row.videoSubmissionId, ["failed", "queued"], "failed");
     return null;
   });
   if (refusal) redirect(`${DLQ_PATH}?error=${refusal}`);

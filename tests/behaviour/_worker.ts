@@ -122,6 +122,46 @@ export async function withWorkerWorld(body: (w: WorkerWorld) => Promise<void>): 
   }
 }
 
+/** A direct-upload video_submissions row in the world, with the given status. */
+export async function seedSubmission(
+  w: WorkerWorld,
+  status: string,
+  extra: { processingLog?: string } = {},
+): Promise<string> {
+  const [v] = await w.q<{ id: string }>(
+    `INSERT INTO ${w.schema}.video_submissions (file_id, source, status, context_type, processing_log)
+       VALUES (gen_random_uuid(), 'direct', $1, 'generic', $2) RETURNING id`,
+    [status, extra.processingLog ?? null],
+  );
+  return v!.id;
+}
+
+/** The source key a seeded transcode job points at. */
+export const sourceKeyFor = (submissionId: string) => `test/${submissionId}.mp4`;
+
+/** A transcode job for the submission, exactly as the producers write it. */
+export async function seedJob(
+  w: WorkerWorld,
+  submissionId: string,
+  s: { status: "running" | "queued"; attempts: number; maxAttempts: number },
+): Promise<string> {
+  const payload = {
+    videoSubmissionId: submissionId,
+    fileId: submissionId,
+    bucket: "videos-original",
+    objectKey: sourceKeyFor(submissionId),
+  };
+  const [j] = await w.q<{ id: string }>(
+    `INSERT INTO ${w.schema}.jobs (queue, name, payload, status, attempts, max_attempts, dedupe_key, locked_by, lease_expires_at)
+       VALUES ('transcode', 'transcode', $1, $2::text, $3, $4, 'submission:' || $5::text,
+               CASE WHEN $2::text = 'running' THEN 'a-worker-that-was-killed' END,
+               CASE WHEN $2::text = 'running' THEN now() - interval '1 minute' END)
+     RETURNING id`,
+    [JSON.stringify(payload), s.status, s.attempts, s.maxAttempts, submissionId],
+  );
+  return j!.id;
+}
+
 /** Poll `probe` until it returns a truthy value, or give up after `ms`. */
 export async function waitFor<T>(probe: () => Promise<T | null | undefined | false>, ms: number, every = 250): Promise<T | null> {
   const deadline = Date.now() + ms;

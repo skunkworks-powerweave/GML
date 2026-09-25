@@ -264,6 +264,30 @@ test("failures back off, then dead-letter rather than looping", { skip }, async 
   }
 });
 
+test("F09: a failed attempt is retried minutes later, so a short outage cannot spend the whole budget", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("backoff-span");
+  try {
+    const j = await enqueue(db, { queue: "transcode", name, payload: {}, maxAttempts: 3 });
+    const delay = async () =>
+      Number(((await db.execute<{ s: number }>(sql`
+        SELECT extract(epoch FROM run_at - now())::float8 AS s FROM jobs WHERE id = ${j.id}::uuid
+      `)) as unknown as { rows: { s: number }[] }).rows[0]!.s);
+
+    // Retries at +5 s and +10 s put all three attempts inside ~15 s: a one-
+    // minute Storage or pooler blip dead-lettered every transcode that started
+    // during it, and an operator had to retry each by hand.
+    await fail(db, j.id, "transient", 1, 3);
+    assert.ok((await delay()) >= 55, `attempt 2 was scheduled ${(await delay()).toFixed(0)} s out`);
+    await fail(db, j.id, "transient again", 2, 3);
+    assert.ok((await delay()) >= 9 * 60, `attempt 3 was scheduled ${(await delay()).toFixed(0)} s out`);
+  } finally {
+    await cleanup(db, name);
+    await close();
+  }
+});
+
 test("queueDepth counts what the admin view renders", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("depth");

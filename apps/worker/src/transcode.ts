@@ -125,7 +125,18 @@ export async function repairReapedTranscodes(tx: QueueTx, reaped: ReapedJob[]): 
   }
 }
 
-export async function transcode480p(input: TranscodeJobInput): Promise<void> {
+/**
+ * `finalAttempt` is whether the queue will give up if this attempt fails. The
+ * video's status is what the teacher's page renders, and this catch used to
+ * write 'failed' on EVERY attempt -- "Transcode failed. Contact your programme
+ * admin.", an invitation to re-upload for hours on 2G -- while the queue was
+ * about to try again by itself. With a retry to come the video stays 'queued',
+ * which the page shows as in progress.
+ */
+export async function transcode480p(
+  input: TranscodeJobInput,
+  opts: { finalAttempt: boolean } = { finalAttempt: true },
+): Promise<void> {
   const { videoSubmissionId, objectKey } = input;
 
   // EVERYTHING after the ledger row exists is inside the try, and so is the
@@ -255,6 +266,8 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
       .set({
         hlsMasterKey: playlistKey,
         status: "ready",
+        // An earlier attempt's failure text must not outlive the success.
+        processingLog: null,
         verifiedAt: new Date(),
         durationSec: probe.durationSec ?? undefined,
         width: probe.width ?? undefined,
@@ -285,7 +298,11 @@ export async function transcode480p(input: TranscodeJobInput): Promise<void> {
     }
     await db
       .update(videoSubmissions)
-      .set({ status: "failed", processingLog: msg })
+      .set(
+        opts.finalAttempt
+          ? { status: "failed", processingLog: msg }
+          : { status: "queued", processingLog: `attempt failed, retrying: ${msg}` },
+      )
       .where(eq(videoSubmissions.id, videoSubmissionId))
       .catch(() => undefined);
     throw err;

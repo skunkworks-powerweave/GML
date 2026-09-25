@@ -68,7 +68,7 @@ const STATUS_CHIP: Record<string, string> = {
 };
 
 // The four "live" queue states we surface at the top. delayed is
-// included because spec 151 added exponential backoff (5s, 10s, 20s)
+// included because failures back off exponentially (1 min, 10 min, 1 h)
 // and a job between attempts shows up as 'delayed' — the operator
 // needs to see that depth too or they'll mistake delayed jobs for
 // stuck ones.

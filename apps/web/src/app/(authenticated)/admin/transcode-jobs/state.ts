@@ -16,7 +16,8 @@ import "server-only";
 // transcoded it again.
 //
 // So a verb is offered only on a submission's LATEST attempt, only while the
-// submission is actually failed, and only when no job for it is live. The
+// submission is actually failed, and only when no job for it is live -- except
+// that Drop also applies while a retry is merely queued, and cancels it. The
 // actions re-check this under a row lock and write with compare-and-set.
 
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -38,13 +39,36 @@ export function verbsFor(
   row: { jobId: string; status: string },
   state: SubmissionState | undefined,
 ): DlqVerbs {
-  const actionable =
-    row.status === "failed" &&
-    state !== undefined &&
-    state.latestAttemptId === row.jobId &&
-    state.status === "failed" &&
-    state.liveJob === null;
-  return { retry: actionable, drop: actionable };
+  if (!(row.status === "failed" && state !== undefined && state.latestAttemptId === row.jobId)) {
+    return { retry: false, drop: false };
+  }
+  return {
+    // Nothing to retry while a job for it is queued or running.
+    retry: state.status === "failed" && state.liveJob === null,
+    // Drop also applies while a retry is merely QUEUED (the video is 'queued'
+    // then, see transcode480p) -- and cancels it; it used to leave it queued, so
+    // the retry ran anyway and undid the operator's decision within seconds.
+    // Never while one is RUNNING: that attempt writes its own outcome.
+    drop: (state.status === "failed" || state.status === "queued") && state.liveJob !== "running",
+  };
+}
+
+/**
+ * Cancel the retry the queue is holding for a submission. False when there is
+ * none left to cancel -- a worker claimed it in the meantime, so it is running.
+ */
+export async function cancelQueuedRetry(
+  q: Pick<typeof import("@gml/db")["db"], "execute">,
+  submissionId: string,
+): Promise<boolean> {
+  const res = await q.execute(sql`
+    UPDATE jobs
+       SET status = 'dead', completed_at = now(), updated_at = now(),
+           last_error = COALESCE(last_error, '') || ' [dropped by an operator]'
+     WHERE queue = 'transcode' AND dedupe_key = ${`submission:${submissionId}`} AND status = 'queued'
+     RETURNING id
+  `);
+  return ((res as unknown as { rows: unknown[] }).rows ?? []).length > 0;
 }
 
 /** Why a verb was refused, as the page's ?error= code. */

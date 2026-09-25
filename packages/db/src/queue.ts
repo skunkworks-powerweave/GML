@@ -167,8 +167,12 @@ export async function succeed(
 /**
  * Record a failure, and either schedule a retry or dead-letter it.
  *
- * Exponential backoff from 5s, matching what BullMQ was configured to do, so
- * the retry cadence does not silently change with the transport. A job that has
+ * Exponential backoff from ONE MINUTE: 1 min, 10 min, then an hour. It was
+ * 5 s, 10 s -- carried over from the BullMQ config -- which spent a job's whole
+ * budget of three attempts inside about fifteen seconds, so a one-minute
+ * Storage or pooler blip dead-lettered every transcode that started during it
+ * and an operator had to retry each by hand. A retry is re-downloading a
+ * source over the Leh uplink; spacing them out is the point. A job that has
  * exhausted its attempts becomes 'dead' rather than 'failed' -- the two are
  * distinguished so the admin view can tell "will be retried" from "needs a
  * human", which the old DLQ page could not.
@@ -181,7 +185,7 @@ export async function fail(
   maxAttempts: number,
 ): Promise<{ willRetry: boolean }> {
   const willRetry = attempts < maxAttempts;
-  const backoffSeconds = Math.min(5 * 2 ** (attempts - 1), 3600);
+  const backoffSeconds = Math.min(60 * 10 ** (attempts - 1), 3600);
   await db.execute(sql`
     UPDATE jobs
        SET status = ${willRetry ? "queued" : "dead"},
