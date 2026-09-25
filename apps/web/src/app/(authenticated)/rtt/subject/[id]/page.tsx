@@ -15,11 +15,43 @@ import {
   phases,
 } from "@gml/db/schema";
 import { listSubjectAssessments } from "@/lib/rtt/assessments";
+import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
+import { markProgressAction } from "./actions";
+
+/** A one-button form that marks a lesson or reading done, or undoes it. */
+function ProgressToggle({ kind, itemId, isDone }: { kind: "lesson" | "reading"; itemId: string; isDone: boolean }) {
+  return (
+    <form action={markProgressAction} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <input type="hidden" name="kind" value={kind} />
+      <input type="hidden" name="itemId" value={itemId} />
+      <input type="hidden" name="done" value={isDone ? "false" : "true"} />
+      {isDone ? <span className="chip chip-lichen">Done</span> : null}
+      <button type="submit" className={isDone ? "btn btn-sm btn-ghost" : "btn btn-sm"}>
+        {isDone ? "Undo" : kind === "lesson" ? "Mark done" : "Mark read"}
+      </button>
+    </form>
+  );
+}
+
+const ATTENDANCE_CHIP: Record<string, string> = {
+  present: "chip chip-lichen",
+  absent: "chip chip-rust",
+  excused: "chip",
+};
 
 export const dynamic = "force-dynamic";
 
-export default async function RttSubjectPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function RttSubjectPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ open?: string }>;
+}) {
   const { id } = await params;
+  // ?open=<module sequence>: the module a progress tick came from stays open
+  // after the form round-trip (actions.ts redirects here with it).
+  const openSeq = Number((await searchParams).open);
   const [subject] = await db.select().from(rttSubjects).where(eq(rttSubjects.id, id)).limit(1);
   if (!subject) notFound();
   const [term] = await db.select().from(terms).where(eq(terms.id, subject.termId)).limit(1);
@@ -83,13 +115,31 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
   // a quiz under any other slug was offered nowhere (lib/rtt/assessments.ts).
   const assessments = await listSubjectAssessments(db, id, session.user.id);
 
-  // Spec 119 — wire the JSX-prototype "Resume" CTA to the first module by
-  // sequence (anchor jump on this same page). When no modules exist, the
-  // anchor falls back to the modules card heading so the user still lands
-  // somewhere sensible instead of a dead button.
-  const firstModule = modules[0];
-  const resumeHref = firstModule
-    ? `/rtt/subject/${id}#module-${firstModule.sequence}`
+  // THE LEARNER'S OWN PROGRESS (F36): the lessons and readings she has marked
+  // done (rtt_progress, written by ./actions.ts) and the attendance taken of
+  // her at this subject's sessions. None of it was recorded or shown before.
+  const [done, attendance] = await Promise.all([
+    doneItems(
+      db,
+      session.user.id,
+      lessons.map((l) => l.id),
+      readings.map((r) => r.id),
+    ),
+    attendanceOf(
+      db,
+      session.user.id,
+      sessions.map((s) => s.id),
+    ),
+  ]);
+  const presentCount = [...attendance.values()].filter((s) => s === "present").length;
+  const passedCount = assessments.filter((q) => q.passed).length;
+
+  // "Resume" (spec 119's in-page anchor) goes to the first module with a
+  // lesson she has not done. It always went to module 1, whatever she had
+  // done. No modules: the modules card, so the button is never dead.
+  const resume = resumeModule(modules, lessonsByModule, done.lessons);
+  const resumeHref = resume
+    ? `/rtt/subject/${id}#module-${resume.sequence}`
     : `/rtt/subject/${id}#modules`;
 
   return (
@@ -154,6 +204,7 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
               <div>
                 {modules.map((m, i) => {
                   const moduleLessons = lessonsByModule.get(m.id) ?? [];
+                  const moduleDone = moduleLessons.filter((l) => done.lessons.has(l.id)).length;
                   const header = (
                     <div
                       style={{
@@ -190,8 +241,11 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                         ) : null}
                       </div>
                       {moduleLessons.length > 0 ? (
-                        <span className="chip">
-                          {moduleLessons.length} {moduleLessons.length === 1 ? "lesson" : "lessons"}
+                        <span
+                          className={moduleDone === moduleLessons.length ? "chip chip-lichen" : "chip"}
+                          title="Lessons you have marked done"
+                        >
+                          {moduleDone}/{moduleLessons.length} {moduleLessons.length === 1 ? "lesson" : "lessons"}
                         </span>
                       ) : (
                         <span />
@@ -210,12 +264,22 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     );
                   }
                   return (
-                    <details key={m.id} id={`module-${m.sequence}`} style={rowStyle}>
+                    <details
+                      key={m.id}
+                      id={`module-${m.sequence}`}
+                      style={rowStyle}
+                      // Where she is (the Resume module), or where she just
+                      // ticked a lesson, opens without a tap.
+                      open={m.id === resume?.id || m.sequence === openSeq}
+                    >
                       <summary style={{ cursor: "pointer", listStyle: "none" }}>{header}</summary>
                       <ol style={{ margin: 0, padding: "0 14px 14px 64px", display: "grid", gap: 10 }}>
                         {moduleLessons.map((l) => (
                           <li key={l.id} style={{ fontSize: 13 }}>
-                            <div style={{ fontWeight: 500 }}>{l.title}</div>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                              <div style={{ fontWeight: 500 }}>{l.title}</div>
+                              <ProgressToggle kind="lesson" itemId={l.id} isDone={done.lessons.has(l.id)} />
+                            </div>
                             {l.bodyMd ? (
                               // Plain text with the author's line breaks kept.
                               // Never rendered as markup: this is typed into an
@@ -261,6 +325,7 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                     <th>Session</th>
                     <th>Type</th>
                     <th>Duration</th>
+                    <th title="Your attendance, once it has been taken">You</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -303,6 +368,15 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                           {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
                         </td>
                         <td>
+                          {attendance.has(s.id) ? (
+                            <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
+                              {attendance.get(s.id)!.charAt(0).toUpperCase() + attendance.get(s.id)!.slice(1)}
+                            </span>
+                          ) : (
+                            <em className="dash">—</em>
+                          )}
+                        </td>
+                        <td>
                           {s.linkOrRecording ? (
                             <a
                               href={s.linkOrRecording}
@@ -330,6 +404,42 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
 
         <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
           <article className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Your progress</div>
+            </div>
+            <dl
+              style={{
+                margin: 0,
+                padding: 14,
+                display: "grid",
+                gridTemplateColumns: "1fr auto",
+                gap: "6px 12px",
+                fontSize: 13,
+              }}
+            >
+              <dt>Lessons</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {done.lessons.size} of {lessons.length}
+              </dd>
+              <dt>Readings</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {done.readings.size} of {readings.length}
+              </dd>
+              <dt>Assessments passed</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {passedCount} of {assessments.length}
+              </dd>
+              <dt>Sessions attended</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {attendance.size === 0 ? "not taken yet" : `${presentCount} of ${attendance.size}`}
+              </dd>
+            </dl>
+            <div style={{ padding: "0 14px 12px", fontSize: 11 }}>
+              <Link href="/rtt/progress">All my RTT progress →</Link>
+            </div>
+          </article>
+
+          <article id="readings" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
             </div>
@@ -388,6 +498,9 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                       </div>
                       <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                         {r.externalUrl ? "External link" : "Reading"}
+                      </div>
+                      <div style={{ marginTop: 6 }}>
+                        <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} />
                       </div>
                     </div>
                     {r.externalUrl ? (

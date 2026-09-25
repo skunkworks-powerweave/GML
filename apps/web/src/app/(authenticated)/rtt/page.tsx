@@ -54,6 +54,11 @@ export default async function RttIndexPage() {
           <Link href="/rtt/online/asynchronous" className="btn btn-sm btn-ghost">
             Self-paced units →
           </Link>
+          <Link href="/rtt/progress" className="btn btn-sm btn-ghost">
+            {viewer.role === "programme_admin" || viewer.role === "super_admin" || viewer.role === "mentor"
+              ? "Progress & results →"
+              : "My progress →"}
+          </Link>
           <Link href="/rtt/teach-back" className="btn btn-sm btn-ghost">
             Teach-back queue →
           </Link>

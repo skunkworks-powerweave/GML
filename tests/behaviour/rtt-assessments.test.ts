@@ -41,7 +41,10 @@ const quizHrefs = (html: string) =>
     .map((t) => attr(t, "href") ?? "")
     .filter((h) => h.startsWith("/quizzes/"));
 
-const text = (html: string) => decodeEntities(html.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ");
+// What a reader sees: React's <!-- --> text-node separators are not text, and
+// every tag boundary is.
+const text = (html: string) =>
+  decodeEntities(html.replace(/<!-- -->/g, "").replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ");
 
 async function renderSubject(user: TestUser, id: string): Promise<string> {
   signIn(user);
