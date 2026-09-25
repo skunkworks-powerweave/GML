@@ -31,6 +31,7 @@ import {
   attachHls,
   attachNative,
   createPlaybackRecovery,
+  type FailReason,
   type HlsLike,
   type PlaybackRecovery,
 } from "@/lib/video/playback-recovery";
@@ -81,6 +82,9 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     return `${base}${base.includes("?") ? "&" : "?"}r=${Date.now()}`;
   }, [onRefresh, src]);
   const [error, setError] = useState<string | null>(null);
+  // Why the recovery policy gave up, when it did: a signed-out viewer is
+  // offered sign-in, which comes back to this video.
+  const [failReason, setFailReason] = useState<FailReason | null>(null);
   const [playbackRate, setPlaybackRateState] = useState<number>(1);
   const [quality, setQuality] = useState<"auto" | "480p">("auto");
 
@@ -112,8 +116,10 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
       src: currentSrc,
       refreshSrc,
       onSource: setCurrentSrc,
-      onFail: (message: string) => {
-        if (!cancelled) setError(message);
+      onFail: (message: string, reason: FailReason) => {
+        if (cancelled) return;
+        setError(message);
+        setFailReason(reason);
       },
       resumeAt: resumeAtRef,
       policy: recoveryRef.current,
@@ -256,7 +262,20 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
               textAlign: "center",
             }}
           >
-            {error}
+            <div>
+              {error}
+              {failReason === "signed_out" ? (
+                <>
+                  {" "}
+                  <a
+                    href={`/login?from=${encodeURIComponent(videoId ? `/videos/${videoId}` : "/videos")}`}
+                    style={{ color: "var(--paper)", textDecoration: "underline" }}
+                  >
+                    Sign in
+                  </a>
+                </>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>
@@ -311,7 +330,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           >
             <option value="auto">Auto</option>
             <option value="480p">480p</option>
-            <option value="720p" disabled title="720p disabled per programme settings">
+            <option value="720p" disabled title="Not produced: videos stream at up to 480p">
               720p (not available)
             </option>
           </select>

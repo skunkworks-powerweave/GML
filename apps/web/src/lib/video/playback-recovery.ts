@@ -71,8 +71,8 @@ export type PlaybackHooks = {
   refreshSrc: () => Promise<string>;
   /** hls.js path: load this source (the component re-runs its effect). */
   onSource: (next: string) => void;
-  /** Show this message over the player. */
-  onFail: (message: string) => void;
+  /** Show this message over the player; the reason decides what it offers (signed out: a sign-in link). */
+  onFail: (message: string, reason: FailReason) => void;
   resumeAt: ResumeRef;
   /** Shared across re-attachments, so the budget survives a source change. */
   policy: PlaybackRecovery;
@@ -118,7 +118,7 @@ export function attachNative(video: VideoLike, hooks: PlaybackHooks): () => void
       // And stop: no further source is assigned, so nothing retries behind
       // the message.
       done = true;
-      hooks.onFail(PLAYBACK_FAILURE_MESSAGES[action.reason]);
+      hooks.onFail(PLAYBACK_FAILURE_MESSAGES[action.reason], action.reason);
       return;
     }
     timer = setTimeout(() => {
@@ -171,7 +171,7 @@ export function attachHls(video: VideoLike, hls: HlsLike, errorEvent: string, ho
     if (action.kind === "fail") {
       done = true;
       hls.destroy();
-      hooks.onFail(PLAYBACK_FAILURE_MESSAGES[action.reason]);
+      hooks.onFail(PLAYBACK_FAILURE_MESSAGES[action.reason], action.reason);
       return;
     }
     hooks.resumeAt.current = at || hooks.resumeAt.current;
@@ -182,7 +182,7 @@ export function attachHls(video: VideoLike, hls: HlsLike, errorEvent: string, ho
         hooks.onSource(await hooks.refreshSrc());
       } catch {
         done = true;
-        hooks.onFail(PLAYBACK_FAILURE_MESSAGES.generic);
+        hooks.onFail(PLAYBACK_FAILURE_MESSAGES.generic, "generic");
       }
     }, action.delayMs);
   });

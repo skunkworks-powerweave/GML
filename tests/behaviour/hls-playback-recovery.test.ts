@@ -239,7 +239,8 @@ test("hls.js, output missing (502): at most one re-sign, then 'not available'", 
 });
 
 test("HlsPlayer loads with this module and renders its video element", async () => {
-  // The effect that calls attachNative / attachHls cannot run without a DOM;
+  // The effect's native branch is run below, through mount(); the hls.js one
+  // needs a real MediaSource, so
   // tests/governance/test_video_player_recovery_wiring.test.mjs pins that call.
   const { renderSync, h } = await import("./_ui.js");
   const { HlsPlayer } = await import("../../apps/web/src/components/video/HlsPlayer.tsx");
@@ -253,4 +254,49 @@ test("hls.js, segments failing: bounded re-signs, then a message", async (t) => 
   const r = await runHls(t, { fatal: true, type: "networkError", details: "fragLoadError", response: { code: 400 } });
   assert.ok(r.instances <= 4, `rebuilt ${r.instances - 1} times`);
   assert.deepEqual(r.failures, [PLAYBACK_FAILURE_MESSAGES.generic]);
+});
+
+// ── What the viewer is shown ─────────────────────────────────────────────────
+//
+// The REAL HlsPlayer, mounted with its effect (see mount() in _ui.ts): the
+// fake element is handed to the ref the component renders, as React would,
+// and fails to load; the probe of the playlist route answers `status`.
+
+async function playerFailing(t: { mock: typeof mock }, status: number) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { mount, hostElements, textOf } = await import("./_ui.js");
+  const { HlsPlayer } = await import("../../apps/web/src/components/video/HlsPlayer.tsx");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ status })) as never;
+  const video = Object.assign(new FakeVideo(), { canPlayType: () => "maybe", playbackRate: 1 });
+  try {
+    const m = mount(HlsPlayer as (p: unknown) => unknown, { src: "/api/media/playlist/v1", watermark: "Mentor · now", videoId: "v1" }, { effects: true });
+    const el = hostElements(m.tree).find((e) => e.type === "video")!;
+    (el.props.ref as { current: unknown }).current = video;
+    m.rerender(); // the effect runs again, now with an element
+    await drain(t);
+    const tree = m.rerender();
+    m.unmount();
+    const overlay = hostElements(tree).find((e) => e.type === "div" && /rgba\(0,\s*0,\s*0,\s*0\.7\)/.test(JSON.stringify(e.props.style ?? {})));
+    return {
+      text: textOf(overlay ?? null),
+      links: hostElements(overlay ?? null).filter((e) => e.type === "a").map((a) => ({ href: a.props.href as string, text: textOf(a) })),
+    };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+test("signed out: the player says so and links to sign-in, back to this video", async (t) => {
+  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
+  const shown = await playerFailing(t, 401);
+  assert.match(shown.text, new RegExp(PLAYBACK_FAILURE_MESSAGES.signed_out.slice(0, 20)));
+  assert.deepEqual(shown.links, [{ href: `/login?from=${encodeURIComponent("/videos/v1")}`, text: "Sign in" }]);
+});
+
+test("any other failure: the message, and no sign-in link", async (t) => {
+  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
+  const shown = await playerFailing(t, 404);
+  assert.match(shown.text, new RegExp(PLAYBACK_FAILURE_MESSAGES.no_access.slice(0, 20)));
+  assert.deepEqual(shown.links, []);
 });

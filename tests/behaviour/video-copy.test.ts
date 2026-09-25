@@ -27,7 +27,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Client } from "pg";
-import { renderSync, render, h, withAppRouter, decodeEntities } from "./_ui.js";
+import { renderSync, render, h, withAppRouter, decodeEntities, openingTags, attr } from "./_ui.js";
 import { signIn, closeAppDb } from "./_server-actions.js";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 
@@ -63,10 +63,19 @@ test("help describes the rendition the worker actually produces, and what the wa
   assert.doesNotMatch(`${HELP.hls!.short} ${HELP.hls!.long ?? ""}`, /\b2G\b/, "an 800 kbps stream does not play on 2G");
 });
 
-test("the quality menu shows no internal spec reference", async () => {
+test("the quality menu shows no internal spec reference, and says truly why 720p is not offered", async () => {
   const { HlsPlayer } = await import("../../apps/web/src/components/video/HlsPlayer.tsx");
   const html = renderSync(h(HlsPlayer, { src: "/api/media/playlist/v1", watermark: "Mentor · now" }));
   assert.doesNotMatch(text(html), /\bspec\s*\d+/i);
+  // The tooltip said "720p disabled per programme settings". No setting turns
+  // it off: the worker never produces a 720p rendition.
+  const option = openingTags(html, "option").find((t) => attr(t, "value") === "720p");
+  assert.ok(option && /\sdisabled\b/.test(option), "the 720p row stays, disabled");
+  const title = decodeEntities(attr(option, "title") ?? "");
+  assert.doesNotMatch(title, /programme settings|per settings/i, `tooltip: ${title}`);
+  const heights = encodedHeights();
+  const named = [...title.matchAll(/(\d{3,4})p\b/g)].map((m) => m[1]!).filter((p) => p !== "720");
+  assert.ok(named.length > 0 && named.every((p) => heights.has(p)), `the tooltip names what is produced (${[...heights].join(", ")}p): ${title}`);
 });
 
 test("the player and library pages make no promise the links cannot keep", { skip }, async () => {
