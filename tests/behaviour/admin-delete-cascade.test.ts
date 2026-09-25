@@ -95,7 +95,14 @@ test("deleting an RTT session, a pairing or an observation cycle keeps the work 
       const mentor = await f.row("mentors", { name: `M ${t}` });
       const pairing = await f.row("mentor_pairings", { mentor_id: mentor, teacher_id: teacher });
       const meeting = await f.row("mentor_meetings", { pairing_id: pairing, scheduled_at: new Date(), notes: "held" });
+      // A second pairing whose only record is a feedback response, so each key
+      // is the one that refuses its delete.
+      const pairing2 = await f.row("mentor_pairings", { mentor_id: mentor, teacher_id: teacher });
+      const feedbackForm = await f.row("feedback_forms", { kind: "baseline", audience: "mentee", schema: "{}", version: t, active: false });
+      const feedback = await f.row("feedback_responses", { form_id: feedbackForm, pairing_id: pairing2, responses: "{}" });
 
+      // Both cycles at "nominated", so the entity's own lock does not refuse
+      // first: what refuses is the foreign key.
       const cycle = await f.row("observation_cycles", {
         code: `OBS-${t}`,
         teacher_id: teacher,
@@ -109,23 +116,51 @@ test("deleting an RTT session, a pairing or an observation cycle keeps the work 
         responses: JSON.stringify({ plan: "lesson plan" }),
         submitted_by_user_id: observer,
       });
+      const cycle2 = await f.row("observation_cycles", {
+        code: `OBS2-${t}`,
+        teacher_id: teacher,
+        observer_id: observer,
+        kind: "baseline",
+        status: "nominated",
+      });
+      const evidence = await f.row("observation_evidence", { cycle_id: cycle2 });
 
+      // The pairing and cycle rows sit behind section passwords, and the delete
+      // action checks the grant BEFORE it issues any DELETE. Without these
+      // grants both deletes stopped at the gate redirect, and the "still there"
+      // assertions below passed with ON DELETE CASCADE restored on every key.
+      await f.row("section_gate_grants", { user_id: admin, gate_slug: "mentorship", expires_at: new Date(Date.now() + 3600_000) });
+      await f.row("section_gate_grants", { user_id: admin, gate_slug: "observation", expires_at: new Date(Date.now() + 3600_000) });
       actAs(admin, "programme_admin");
+
+      // Where each delete sent the operator: it must be the foreign key's
+      // refusal, naming the referencing table -- not a gate or a lock.
+      const refusal = async (entitySlug: string, rowId: string) => {
+        const where = await redirectOf(deleteRowAction(form({ entitySlug, rowId })));
+        const q = new URL(where ?? "/", "http://x").searchParams;
+        return `${q.get("error")} ${q.get("ref")}`;
+      };
 
       // rtt_attendance is mutateRoles ['super_admin']: a programme_admin cannot
       // delete a mark directly, so a session delete must not do it for them.
-      await redirectOf(deleteRowAction(form({ entitySlug: "rtt-sessions", rowId: session })));
+      assert.equal(await refusal("rtt-sessions", session), "still_referenced rtt_attendance");
       assert.equal(await count(f, "rtt_attendance", attendance), 1, "deleting the session erased its attendance");
 
-      await redirectOf(deleteRowAction(form({ entitySlug: "rtt-subjects", rowId: subject })));
+      assert.equal(await refusal("rtt-subjects", subject), "still_referenced rtt_sessions");
       assert.equal(await count(f, "rtt_attendance", attendance), 1, "deleting the subject erased attendance");
       assert.equal(await count(f, "rtt_sessions", session), 1, "deleting the subject erased its sessions");
 
-      await redirectOf(deleteRowAction(form({ entitySlug: "mentor-pairings", rowId: pairing })));
+      assert.equal(await refusal("mentor-pairings", pairing), "still_referenced mentor_meetings");
+      assert.equal(await count(f, "mentor_pairings", pairing), 1);
       assert.equal(await count(f, "mentor_meetings", meeting), 1, "deleting the pairing erased its meeting notes");
+      assert.equal(await refusal("mentor-pairings", pairing2), "still_referenced feedback_responses");
+      assert.equal(await count(f, "feedback_responses", feedback), 1, "deleting the pairing erased a feedback response");
 
-      await redirectOf(deleteRowAction(form({ entitySlug: "observation-cycles", rowId: cycle })));
+      assert.equal(await refusal("observation-cycles", cycle), "still_referenced observation_forms");
+      assert.equal(await count(f, "observation_cycles", cycle), 1);
       assert.equal(await count(f, "observation_forms", obsForm), 1, "deleting the cycle erased a submitted form");
+      assert.equal(await refusal("observation-cycles", cycle2), "still_referenced observation_evidence");
+      assert.equal(await count(f, "observation_evidence", evidence), 1, "deleting the cycle erased its evidence");
     } finally {
       await f.cleanup();
     }
