@@ -276,3 +276,96 @@ test("a deploy without WhatsApp configured completes, and says WhatsApp ingest i
     sb.cleanup();
   }
 });
+
+// ── The image store: what :current and :previous actually name ──────────────
+//
+// The stubs above answer `image inspect` with a bare exit code. These need the
+// tags to MEAN something, so this docker keeps a small store in the sandbox
+// ($SANDBOX_DIR/images, one file per tag holding an image id):
+//
+//   compose build             every service's :current -> sha256:<FAKE_BUILD>-<svc>
+//   tag SRC DST               DST -> SRC's id (SRC may itself be an id)
+//   image inspect --format {{.Id}} REF    REF's id, or exit 1 if REF is untagged
+//   compose run --rm --no-deps migrate    exits FAKE_MIGRATE_EXIT (default 0)
+//   compose up ...            exits FAKE_UP_EXIT (default 0)
+
+const STORE_DOCKER = `
+store="$SANDBOX_DIR/images"; mkdir -p "$store"
+tagfile() { printf '%s/%s' "$store" "$(printf %s "$1" | tr ':/' '__')"; }
+case "$*" in
+  "image inspect --format {{.Id}} "*)
+    f="$(tagfile "$5")"; [ -f "$f" ] || exit 1; cat "$f"; echo; exit 0 ;;
+  "tag "*)
+    if [ -f "$(tagfile "$2")" ]; then id="$(cat "$(tagfile "$2")")"; else id="$2"; fi
+    printf '%s' "$id" > "$(tagfile "$3")"; exit 0 ;;
+  "compose build"*)
+    for s in app worker migrate; do printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"; done
+    exit 0 ;;
+  "compose run --rm --no-deps migrate") exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
+  "compose up"*) exit "\${FAKE_UP_EXIT:-0}" ;;
+  "compose ps --format"*) echo "app healthy" ;;
+esac
+exit 0
+`;
+
+/** A host that has deployed before, serving `serving` with `previous` behind it. */
+function storeSandbox({ serving = "v1", previous = "v0", healthy = true } = {}) {
+  const sb = makeSandbox({ files: ["scripts/deploy.sh"], prefix: "gml-deploy-" });
+  sb.write(".env", ENV_FILE);
+  sb.write("workspace/.deploy-completed", "2026-09-01T00:00:00Z");
+  for (const svc of ["app", "worker", "migrate"]) {
+    if (serving) sb.write(`images/gml-lms-${svc}_current`, `sha256:${serving}-${svc}`);
+    if (previous && svc !== "migrate") sb.write(`images/gml-lms-${svc}_previous`, `sha256:${previous}-${svc}`);
+  }
+  sb.stub("docker", STORE_DOCKER);
+  sb.stub("node", NODE);
+  sb.stub("pnpm", PNPM);
+  sb.stub("curl", caddyCurl(DOMAIN, { healthy }));
+  return sb;
+}
+
+const imageId = (sb, ref) => (sb.exists(`images/${ref.replace(/[:/]/g, "_")}`) ? sb.read(`images/${ref.replace(/[:/]/g, "_")}`) : null);
+
+// A spawn allowance for machines where every stubbed process costs a second.
+const SLOW = 240_000;
+
+test("re-running deploy.sh on unchanged code keeps :previous on the release before it", () => {
+  // v1 is serving. v2 is deployed and fails at health; the runbook says to
+  // re-run deploy.sh. The re-run builds the same v2.
+  const sb = storeSandbox({ serving: "v1", previous: "v0", healthy: false });
+  try {
+    const env = { HEALTH_TIMEOUT_SECONDS: "0", HEALTH_INTERVAL_SECONDS: "1", FAKE_BUILD: "v2" };
+    const first = sb.run("scripts/deploy.sh", { env, timeout: SLOW });
+    assert.notEqual(first.status, 0, "the v2 deploy is meant to fail at health");
+    assert.equal(imageId(sb, "gml-lms-app:current"), "sha256:v2-app");
+    assert.equal(imageId(sb, "gml-lms-app:previous"), "sha256:v1-app", "after the v2 build, :previous is v1");
+
+    const second = sb.run("scripts/deploy.sh", { env, timeout: SLOW });
+    assert.notEqual(second.status, 0);
+    for (const svc of ["app", "worker"]) {
+      assert.equal(
+        imageId(sb, `gml-lms-${svc}:previous`),
+        `sha256:v1-${svc}`,
+        `re-running deploy.sh on the same code moved gml-lms-${svc}:previous onto the release it had just ` +
+          `deployed, so rollback.sh would restart the broken one. :previous must move only when the build ` +
+          `produced a different image.\n${second.stdout}${second.stderr}`,
+      );
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a build that changed the image moves :previous to what was serving", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2" }, timeout: SLOW });
+    assert.equal(r.status, 0, r.stderr);
+    for (const svc of ["app", "worker"]) {
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`);
+      assert.equal(imageId(sb, `gml-lms-${svc}:current`), `sha256:v2-${svc}`);
+    }
+  } finally {
+    sb.cleanup();
+  }
+});

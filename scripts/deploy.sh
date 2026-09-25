@@ -19,9 +19,9 @@
 #
 # ── WHAT IT DOES NOW ─────────────────────────────────────────────────────────
 #
-#   host toolchain + .env checks + SM-5 restore-drill gate -> tag :previous
-#   -> build -> up (migrate gates app) -> health via caddy -> seed
-#   -> verify auth -> post-deploy smoke
+#   host toolchain + .env checks + SM-5 restore-drill gate -> build
+#   -> tag :previous (only what the build changed) -> up (migrate gates app)
+#   -> health via caddy -> seed -> verify auth -> post-deploy smoke
 #
 # It does NOT run scripts/preflight.sh. That script is the read-only,
 # run-it-yourself check before a FIRST deploy (README-deploy.md section 3): it
@@ -253,14 +253,20 @@ else
 fi
 
 # ── 1. Build ─────────────────────────────────────────────────────────────────
-# Tag whatever is running now as ':previous' FIRST, so scripts/rollback.sh has
-# something to go back to. Without this step a rollback has no target, which is
-# how the repository ended up with no rollback procedure at all.
-for svc in app worker; do
-  if docker image inspect "gml-lms-${svc}:current" >/dev/null 2>&1; then
-    docker tag "gml-lms-${svc}:current" "gml-lms-${svc}:previous"
-    log "tagged gml-lms-${svc}:current -> :previous"
-  fi
+# scripts/rollback.sh needs a ':previous' to go back to -- without one a
+# rollback has no target, which is how the repository ended up with no rollback
+# procedure at all. So note, BY IMAGE ID, what :current is before the build
+# moves the tag.
+#
+# :previous MOVES ONLY FOR AN IMAGE THE BUILD ACTUALLY CHANGED. It used to be
+# retagged from :current unconditionally, first thing, on every run -- and the
+# runbook says to re-run this script freely: after a failed health check, after
+# a config change. Each re-run of the SAME code tagged the release it had just
+# deployed as :previous, the release before it lost its last tag, and
+# rollback.sh then "rolled back" to the very image it was rolling back from.
+declare -A was_current=()
+for svc in app worker migrate; do
+  was_current[${svc}]="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
 done
 
 log "building images"
@@ -279,6 +285,18 @@ log "building images"
 # gml-lms-app:current nor :previous has ever actually existed on a deployed
 # box, which is why rollback.sh always aborted with ":previous does not exist".
 docker compose build
+
+for svc in app worker; do
+  built="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
+  if [ -z "${was_current[${svc}]}" ]; then
+    log "gml-lms-${svc}: first build on this host -- no :previous to keep yet"
+  elif [ "${was_current[${svc}]}" != "${built}" ]; then
+    docker tag "${was_current[${svc}]}" "gml-lms-${svc}:previous"
+    log "tagged the release that was serving as gml-lms-${svc}:previous"
+  else
+    log "gml-lms-${svc}: the build is unchanged -- :previous left where it was"
+  fi
+done
 
 # ── 2. Up ────────────────────────────────────────────────────────────────────
 # `migrate` runs first and `app`/`worker` block on it exiting 0. If the schema

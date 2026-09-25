@@ -188,9 +188,10 @@ that ports 80 and 443 are free. `deploy.sh` does **not** run it: it fails when
 80 and 443 are already bound, which is true of every later deploy.
 
 `deploy.sh` runs: host-toolchain and `.env` checks → the SM-5 restore-drill
-gate (§7; skipped, loudly, on a host's first deploy) → tag current images as
-`:previous` → build → `up` (migrate gates app/worker) → wait for health through
-Caddy → seed → verify auth → post-deploy smoke.
+gate (§7; skipped, loudly, on a host's first deploy) → build → tag the images
+that were serving as `:previous` (only those the build changed, so a re-run of
+the same code keeps the rollback target) → `up` (migrate gates app/worker) →
+wait for health through Caddy → seed → verify auth → post-deploy smoke.
 
 It is idempotent. Re-running it is the normal upgrade path.
 
@@ -337,7 +338,8 @@ down".
 ```
 
 Restarts `app` and `worker` from the `:previous` image. It asks for
-confirmation.
+confirmation, and refuses when `:previous` is the image already running --
+nothing would change.
 
 **It does not touch the database.** Migrations are forward-only and there are no
 down-sections. If a *migration* is the problem, you need §7's restore procedure,

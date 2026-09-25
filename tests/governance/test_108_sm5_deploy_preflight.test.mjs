@@ -247,14 +247,24 @@ test("spec 108: deploy.sh leaves a rollback target behind, and rollback.sh exist
   // old container keeps serving), which covers a bad migration and nothing
   // else. Re-tagging :current -> :previous before a build is what gives
   // scripts/rollback.sh something to go back to, so the two are pinned together.
+  //
+  // RE-SHAPED. This pinned `docker tag :current :previous`, unconditional and
+  // before the build. Every re-run of the same code -- which the runbook
+  // prescribes after a failed health check or a config change -- then moved
+  // :previous onto the release just deployed, and rollback.sh restarted the
+  // image it was rolling back from. The invariant is: the serving image IDs
+  // are recorded BEFORE the build moves :current, and one becomes :previous
+  // only when the build produced a different image.
+  // tests/scripts/deploy-flow.test.mjs executes both cases.
+  const recorded = src.search(/was_current\[\$\{svc\}\]="\$\(docker image inspect --format '\{\{\.Id\}\}' "gml-lms-\$\{svc\}:current"/);
+  assert.ok(
+    recorded >= 0 && recorded < src.indexOf("docker compose build"),
+    "deploy.sh must record the serving image IDs BEFORE the build overwrites :current",
+  );
   assert.match(
     src,
-    /docker tag "gml-lms-\$\{svc\}:current" "gml-lms-\$\{svc\}:previous"/,
-    "deploy.sh must demote the running images to :previous before building",
-  );
-  assert.ok(
-    src.indexOf(":previous") < src.indexOf("docker compose build"),
-    "the :previous tag must be taken BEFORE the build overwrites anything",
+    /elif \[ "\$\{was_current\[\$\{svc\}\]\}" != "\$\{built\}" \]; then\s+docker tag "\$\{was_current\[\$\{svc\}\]\}" "gml-lms-\$\{svc\}:previous"/,
+    "deploy.sh must move :previous to the serving image only when the build changed it",
   );
   assert.ok(existsSync(resolve(root, "scripts/rollback.sh")), "scripts/rollback.sh must exist");
   assert.match(
