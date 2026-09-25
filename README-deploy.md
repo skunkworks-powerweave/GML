@@ -354,8 +354,15 @@ docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/purge_demo_d
 
 That is a **dry run** — it lists every cycle, pairing, teacher, mentor and
 school it would remove, and every candidate it would keep and why, and changes
-nothing. Read the list before adding `--apply` to commit, which runs in a
-single transaction and removes exactly what the list names.
+nothing. Under the list it counts what goes with those rows: unsubmitted
+observation templates, the removed teachers' classroom sessions and RTT
+attendance marks, and the demo schools' classes and **learners** (children's
+records). Apart from the three templates the seed hangs on `OBS-2026-001`,
+the seed writes none of those, so any other count above zero is something
+someone entered; check it before going on. Read the list before adding
+`--apply` to commit, which runs in a single transaction and removes exactly
+what the list names. If a draft is saved on one of the listed rows while it
+runs, it stops and removes nothing.
 
 Three things it does deliberately:
 
@@ -363,15 +370,17 @@ Three things it does deliberately:
   exists, and `deploy.sh` runs the seed on every deploy — so removing them
   would reinstate all of this on the next deployment.
 - **It matches the seed's exact rows.** Only those ten mobiles and those eight
-  cycle codes, and a cycle only when its teacher is one of the ten — so a real
-  cycle created at `/observation/new` (which numbers on from the seed's, and
-  starts again at `OBS-2026-001` once they are gone) is never caught.
+  cycle codes, and a cycle only when its teacher is one of the ten and has no
+  login — so a real cycle created at `/observation/new` (which numbers on from
+  the seed's, and starts again at `OBS-2026-001` once they are gone) is never
+  caught.
 - **It keeps anything with real work attached.** A demo cycle that has acquired
-  a genuine form, video or evidence row; a demo pairing with a meeting, a
-  feedback response, a quarterly video or commitments; a demo teacher who has
-  been given a login; and a demo-named mentor record with a login linked to it
-  are all reported and left alone. Whatever a kept row cannot exist without —
-  its teacher, its mentor, the teacher's school — is kept with it.
+  a genuine form, video, evidence row or draft; a demo pairing with a meeting,
+  a feedback response, a quarterly video, commitments or a draft; a demo
+  teacher who has been given a login, with all their cycles and pairings; and a
+  demo-named mentor record with a login linked to it are all reported and left
+  alone. Whatever a kept row cannot exist without — its teacher, its mentor,
+  the teacher's school — is kept with it.
 
 Safe to run twice; the second run removes nothing.
 

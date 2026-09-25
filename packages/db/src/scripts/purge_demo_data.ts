@@ -49,18 +49,24 @@
 //      a genuine observation, or a demo pairing for genuine mentoring --
 //      easily done, they look real -- deleting it takes that work with it.
 //      Every candidate is checked for attached submissions, evidence, videos,
-//      meetings, feedback responses and commitments first, and anything with
-//      real work is REPORTED AND KEPT, together with the teacher and mentor it
-//      cannot exist without. The seed writes none of those things, so any of
-//      them is someone's work.
+//      meetings, feedback responses, commitments and drafts first, and
+//      anything with real work is REPORTED AND KEPT, together with the teacher
+//      and mentor it cannot exist without. The seed writes none of those
+//      things, so any of them is someone's work.
 //
 //   4. REAL ROWS CAN LOOK LIKE SEED ROWS. /observation/new mints cycle codes
 //      as OBS-<year>-<max+1>, so a real 2026 cycle is OBS-2026-009 onward --
 //      or OBS-2026-001 again once the seed's have been purged. A mentor record
-//      called "Dr. Anjali Bhatt" may have a real login linked to it. So rows
-//      are matched on the seed's exact literals, a cycle only counts as demo
-//      when its teacher is a demo teacher too, and a mentor with a login is
-//      never removed.
+//      called "Dr. Anjali Bhatt" may have a real login linked to it, and so
+//      may a teacher record with a seed mobile. So rows are matched on the
+//      seed's exact literals, a cycle only counts as demo when its teacher is
+//      a demo teacher with no login and no uploads, and a mentor with a login
+//      is never removed.
+//
+// What goes WITH the listed rows -- the removed teachers' classroom sessions
+// and RTT attendance marks, the demo schools' classes and learners -- is not
+// seed data either. The dry run counts it, table by table, before anyone
+// types --apply.
 //
 // ── USE ──────────────────────────────────────────────────────────────────────
 //
@@ -166,25 +172,11 @@ type Plan = {
   mentors: Row[];
   keptMentors: Row[];
   schools: Row[];
+  /** Counts of the rows that go with the listed ones, or are unlinked by them. */
+  also: Row;
 };
 
 async function plan(q: Exec): Promise<Plan> {
-  const demoPhones = valueList(DEMO_TEACHER_PHONES);
-
-  // A cycle someone has actually used is not demo data any more, whatever its
-  // code says. Checked BEFORE anything is deleted, and such a cycle is kept.
-  const cycles = await rowsOf(q, sql`
-    SELECT c.id, c.code, t.full_name AS teacher,
-           (SELECT count(*) FROM observation_forms f WHERE f.cycle_id = c.id
-              AND f.submitted_by_user_id IS NOT NULL)::int AS forms,
-           (SELECT count(*) FROM video_submissions v WHERE v.context_id = c.id
-              AND v.context_type = 'observation_cycle')::int AS videos,
-           (SELECT count(*) FROM observation_evidence e WHERE e.cycle_id = c.id)::int AS evidence
-    FROM observation_cycles c JOIN teachers t ON t.id = c.teacher_id
-    WHERE c.code IN (${valueList(DEMO_CYCLE_CODES)}) AND t.phone IN (${demoPhones})
-    ORDER BY c.code`);
-  const cycleWork = (r: Row) => n(r.forms) + n(r.videos) + n(r.evidence) > 0;
-
   // A teacher who has uploaded anything, or who has been given a login, is
   // real, and so is everything hanging off them: their pairings and cycles are
   // not candidates at all.
@@ -194,27 +186,53 @@ async function plan(q: Exec): Promise<Plan> {
               JOIN users u ON u.id = v.submitted_by_user_id
               WHERE u.id = t.user_id)::int AS uploads
     FROM teachers t
-    WHERE t.phone IN (${demoPhones})
+    WHERE t.phone IN (${valueList(DEMO_TEACHER_PHONES)})
     ORDER BY t.full_name`);
   const ownWork = (r: Row) => r.user_id !== null || n(r.uploads) > 0;
   const candidates = teachers.filter((r) => !ownWork(r));
 
+  // So a cycle is a candidate only when its teacher is. /observation/new
+  // re-mints the seed's codes once they are free, and a demo teacher record a
+  // real teacher has since been given a login to keeps its seed mobile: that
+  // teacher's new OBS-2026-001 is theirs, not the seed's.
+  //
+  // A draft is work too, and it would go silently: form_drafts CASCADE with
+  // their cycle or pairing. Every draft belongs to a login (user_id is NOT
+  // NULL) and the seed writes none.
+  //
+  // A cycle someone has actually used is not demo data any more, whatever its
+  // code says. Checked BEFORE anything is deleted, and such a cycle is kept.
+  const cycles = await rowsOf(q, sql`
+    SELECT c.id, c.code, t.full_name AS teacher,
+           (SELECT count(*) FROM observation_forms f WHERE f.cycle_id = c.id
+              AND f.submitted_by_user_id IS NOT NULL)::int AS forms,
+           (SELECT count(*) FROM video_submissions v WHERE v.context_id = c.id
+              AND v.context_type = 'observation_cycle')::int AS videos,
+           (SELECT count(*) FROM observation_evidence e WHERE e.cycle_id = c.id)::int AS evidence,
+           (SELECT count(*) FROM form_drafts d WHERE d.observation_cycle_id = c.id)::int AS drafts
+    FROM observation_cycles c JOIN teachers t ON t.id = c.teacher_id
+    WHERE c.code IN (${valueList(DEMO_CYCLE_CODES)}) AND c.teacher_id IN (${ids(candidates)})
+    ORDER BY c.code`);
+  const cycleWork = (r: Row) => n(r.forms) + n(r.videos) + n(r.evidence) + n(r.drafts) > 0;
+
   // The seed writes pairings and nothing on them: no meetings, no feedback
-  // responses, no quarterly videos, no commitments. Any of those is a real
-  // mentor's or mentee's work, and keeps the pairing.
+  // responses, no quarterly videos, no commitments, no drafts. Any of those is
+  // a real mentor's or mentee's work, and keeps the pairing.
   const pairings = await rowsOf(q, sql`
     SELECT p.id, t.full_name AS teacher, m.name AS mentor,
            (SELECT count(*) FROM mentor_meetings mm WHERE mm.pairing_id = p.id)::int AS meetings,
            (SELECT count(*) FROM feedback_responses fr WHERE fr.pairing_id = p.id)::int AS responses,
            (SELECT count(*) FROM video_submissions v WHERE v.context_id = p.id
               AND v.context_type = 'mentee_quarterly')::int AS videos,
-           jsonb_array_length(p.commitments) AS commitments
+           jsonb_array_length(p.commitments) AS commitments,
+           (SELECT count(*) FROM form_drafts d WHERE d.pairing_id = p.id)::int AS drafts
     FROM mentor_pairings p
     JOIN teachers t ON t.id = p.teacher_id
     JOIN mentors m ON m.id = p.mentor_id
     WHERE p.teacher_id IN (${ids(candidates)})
     ORDER BY t.full_name, m.name`);
-  const pairingWork = (r: Row) => n(r.meetings) + n(r.responses) + n(r.videos) + n(r.commitments) > 0;
+  const pairingWork = (r: Row) =>
+    n(r.meetings) + n(r.responses) + n(r.videos) + n(r.commitments) + n(r.drafts) > 0;
 
   const doomedCycles = cycles.filter((r) => !cycleWork(r));
   const doomedPairings = pairings.filter((r) => !pairingWork(r));
@@ -247,8 +265,28 @@ async function plan(q: Exec): Promise<Plan> {
       AND s.id NOT IN (SELECT school_id FROM teachers WHERE id NOT IN (${ids(doomedTeachers)}))
     ORDER BY s.code`);
 
+  // What goes with them, which remove() deletes by teacher and by school, and
+  // what they leave pointing at nothing (ON DELETE SET NULL). The seed writes
+  // none of the sessions, marks, learners or classes, so the operator sees
+  // how many there are before deciding.
+  const cyc = ids(doomedCycles);
+  const tch = ids(doomedTeachers);
+  const sch = ids(schools);
+  const [also = {}] = await rowsOf(q, sql`
+    SELECT
+      (SELECT count(*) FROM observation_forms WHERE cycle_id IN (${cyc})
+         AND submitted_by_user_id IS NULL)::int AS templates,
+      (SELECT count(*) FROM sessions WHERE teacher_id IN (${tch}) OR school_id IN (${sch}))::int AS sessions,
+      (SELECT count(*) FROM rtt_attendance WHERE teacher_id IN (${tch}))::int AS attendance,
+      (SELECT count(*) FROM learners WHERE school_id IN (${sch}))::int AS learners,
+      (SELECT count(*) FROM classes WHERE school_id IN (${sch}))::int AS classes,
+      (SELECT count(*) FROM sessions WHERE observation_cycle_id IN (${cyc})
+         AND teacher_id NOT IN (${tch}) AND school_id NOT IN (${sch}))::int AS unlinked_sessions,
+      (SELECT count(*) FROM course_outlines WHERE owner_teacher_id IN (${tch}))::int AS unowned_outlines`);
+
   const doomedTeacherIds = new Set(doomedTeachers.map((r) => String(r.id)));
   return {
+    also,
     cycles: doomedCycles,
     keptCycles: cycles.filter(cycleWork),
     pairings: doomedPairings,
@@ -263,30 +301,45 @@ async function plan(q: Exec): Promise<Plan> {
 
 function report(p: Plan): void {
   const removals = p.cycles.length + p.pairings.length + p.teachers.length + p.mentors.length + p.schools.length;
-  console.log(`  WILL BE REMOVED (${removals} rows, with their unsubmitted form templates,`);
-  console.log("  drafts, classroom sessions, RTT attendance marks, and the demo schools' classes):");
+  console.log(`  WILL BE REMOVED (${removals} rows):`);
   for (const r of p.cycles) console.log(`    cycle    ${r.code}  teacher ${r.teacher}`);
   for (const r of p.pairings) console.log(`    pairing  ${r.id}  ${r.teacher} <-> ${r.mentor}`);
   for (const r of p.teachers) console.log(`    teacher  ${r.full_name}  ${r.phone}`);
   for (const r of p.mentors) console.log(`    mentor   ${r.id}  ${r.name}`);
   for (const r of p.schools) console.log(`    school   ${r.code}  ${r.name}`);
-  if (removals === 0) console.log("    nothing");
+  if (removals === 0) {
+    console.log("    nothing");
+  } else {
+    const a = p.also;
+    console.log("\n  and, with them:");
+    console.log(`    observation form templates  ${n(a.templates)}  unsubmitted, on the cycles above`);
+    console.log(`    classroom sessions          ${n(a.sessions)}  of the teachers above, or at the schools above`);
+    console.log(`    RTT attendance marks        ${n(a.attendance)}  of the teachers above`);
+    console.log(`    learners                    ${n(a.learners)}  children's records at the schools above`);
+    console.log(`    classes                     ${n(a.classes)}  at the schools above`);
+    console.log("  and, kept but no longer linked to them:");
+    console.log(`    sessions of other teachers  ${n(a.unlinked_sessions)}  lose their link to a cycle above`);
+    console.log(`    course outlines             ${n(a.unowned_outlines)}  lose their owner, a teacher above`);
+  }
 
   // Everything below this heading is kept. (The purge tests read the listing
   // on either side of it.)
   console.log("\n  KEPT -- review these by hand:");
   for (const r of p.keptCycles) {
-    console.log(`    cycle    ${r.code}  real work: forms=${n(r.forms)} videos=${n(r.videos)} evidence=${n(r.evidence)}`);
+    console.log(
+      `    cycle    ${r.code}  real work: forms=${n(r.forms)} videos=${n(r.videos)} ` +
+        `evidence=${n(r.evidence)} drafts=${n(r.drafts)}`,
+    );
   }
   for (const r of p.keptPairings) {
     console.log(
       `    pairing  ${r.id}  ${r.teacher} <-> ${r.mentor}  real work: meetings=${n(r.meetings)} ` +
-        `responses=${n(r.responses)} videos=${n(r.videos)} commitments=${n(r.commitments)}`,
+        `responses=${n(r.responses)} videos=${n(r.videos)} commitments=${n(r.commitments)} drafts=${n(r.drafts)}`,
     );
   }
   for (const r of p.keptTeachers) {
     const why = r.user_id !== null || n(r.uploads) > 0
-      ? `login=${r.user_id ? "set" : "none"} uploads=${n(r.uploads)}`
+      ? `login=${r.user_id ? "set" : "none"} uploads=${n(r.uploads)}, so their cycles and pairings stay too`
       : "a cycle or pairing that stays is theirs";
     console.log(`    teacher  ${r.full_name}  ${r.phone}  ${why}`);
   }
@@ -298,21 +351,40 @@ function report(p: Plan): void {
 }
 
 async function remove(q: Exec, p: Plan): Promise<void> {
-  // Cycles first: they RESTRICT teacher deletion. Their drafts cascade. Their
-  // forms and evidence are RESTRICT since migration 0031 (so a grid delete
-  // cannot erase submitted work): a cycle in the plan has no submitted form
-  // and no evidence, so only the seed's unsubmitted templates are removed
-  // here. Anything submitted since the plan was made blocks the DELETE and
-  // rolls the purge back rather than going with it.
   const cycles = ids(p.cycles);
+  const pairings = ids(p.pairings);
+
+  // Drafts CASCADE with their cycle or pairing, so one saved after the plan
+  // was made would go with it, unlisted. Lock the rows first: a draft saved
+  // from here on waits for this transaction and then fails its foreign key,
+  // and one saved in between is visible to the count below (each statement
+  // takes a fresh snapshot) and stops the purge.
+  await q.execute(sql`SELECT 1 FROM observation_cycles WHERE id IN (${cycles}) FOR UPDATE`);
+  await q.execute(sql`SELECT 1 FROM mentor_pairings WHERE id IN (${pairings}) FOR UPDATE`);
+  const [late = {}] = await rowsOf(q, sql`
+    SELECT count(*)::int AS drafts FROM form_drafts
+    WHERE observation_cycle_id IN (${cycles}) OR pairing_id IN (${pairings})`);
+  if (n(late.drafts) > 0) {
+    throw new Error(
+      `${n(late.drafts)} draft(s) were saved on the cycles or pairings listed above while the purge ` +
+        "was running. Nothing was removed; run it again and they will be kept.",
+    );
+  }
+
+  // Cycles first: they RESTRICT teacher deletion. Their forms and evidence
+  // are RESTRICT since migration 0031 (so a grid delete cannot erase
+  // submitted work): a cycle in the plan has no submitted form, no evidence
+  // and no draft, so only the seed's unsubmitted templates are removed here.
+  // Anything submitted since the plan was made blocks the DELETE and rolls
+  // the purge back rather than going with it.
   await q.execute(sql`DELETE FROM observation_forms WHERE cycle_id IN (${cycles}) AND submitted_by_user_id IS NULL`);
   await q.execute(sql`DELETE FROM observation_cycles WHERE id IN (${cycles})`);
 
   // Pairings RESTRICT both mentors and teachers. A pairing in the plan has no
-  // meetings and no feedback responses -- those are RESTRICT since 0031 and
-  // deliberately NOT deleted here, so one recorded after the plan was made
-  // makes this fail instead of taking it. Drafts cascade.
-  await q.execute(sql`DELETE FROM mentor_pairings WHERE id IN (${ids(p.pairings)})`);
+  // meetings, no feedback responses and no drafts. Meetings and responses are
+  // RESTRICT since 0031 and deliberately NOT deleted here, so one recorded
+  // after the plan was made makes this fail instead of taking it.
+  await q.execute(sql`DELETE FROM mentor_pairings WHERE id IN (${pairings})`);
 
   // sessions.teacher_id and rtt_attendance.teacher_id are RESTRICT, so these
   // must go before the teachers.
@@ -338,7 +410,7 @@ async function main(): Promise<void> {
 
   if (!APPLY) {
     const p = await plan(db);
-    const found = Object.values(p).reduce((sum, list) => sum + list.length, 0);
+    const found = Object.values(p).reduce((sum, v) => sum + (Array.isArray(v) ? v.length : 0), 0);
     if (found === 0) {
       console.log("  Nothing to purge — no demo rows found. (Already done, or this is real data.)\n");
     } else {

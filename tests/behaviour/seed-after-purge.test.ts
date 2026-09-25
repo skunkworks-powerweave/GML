@@ -37,6 +37,13 @@
 // login was linked to it. And the dry run printed counts, so none of that was
 // visible before --apply.
 //
+// After that fix it still took a seed-coded cycle whose demo teacher record had
+// since been given a login -- the teacher counted as real, their cycle did not
+// -- and it let in-progress drafts cascade away with an idle pairing or cycle,
+// including one saved while the purge was running. And the sessions, RTT
+// marks, learners and classes it removes with the listed rows were named but
+// never counted.
+//
 // ── HOW THESE TESTS RUN ──────────────────────────────────────────────────────
 //
 // Both scripts are executed as the operator runs them, in a child process.
@@ -62,7 +69,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Client } from "pg";
 import { startFakePg } from "./_fake_pg.js";
-import { DATABASE_URL, needsDatabase, tag, withClient } from "./_harness.js";
+import { DATABASE_URL, connect, needsDatabase, tag, withClient } from "./_harness.js";
 
 const here = fileURLToPath(import.meta.url);
 const root = resolve(here, "..", "..", "..");
@@ -189,17 +196,28 @@ const SEED_PHONES = Array.from({ length: 10 }, (_, i) => `+91 94191000${String(i
 const SEED_CYCLE_CODES = Array.from({ length: 8 }, (_, i) => `OBS-2026-${String(i + 1).padStart(3, "0")}`);
 /** Codes /observation/new mints for a real 2026 cycle once the seed's exist. */
 const MINTED_2026_CODES = Array.from({ length: 89 }, (_, i) => `OBS-2026-${String(i + 11).padStart(3, "0")}`);
+/** The seed's school codes, which the purge also recognises. */
+const SEED_SCHOOL_CODES = [
+  "GPS-CHU", "GMS-KHA", "GHS-DSK", "GMS-DRS", "GHS-PDM",
+  "GHS-KGL", "GMS-NYM", "GHS-LEH", "GPS-SNK", "GMS-SRG",
+];
 
 /**
- * `n` of `codes` that no cycle holds yet. observation_cycles.code is UNIQUE,
- * and a cycle the purge is meant to recognise has to carry one of the seed's
- * codes -- so a database still holding the seed's own cycles cannot host
- * these fixtures, and says so rather than failing on a duplicate key.
+ * `n` of `codes` that no row of `table` holds yet. observation_cycles.code and
+ * schools.code are UNIQUE, and a row the purge is meant to recognise has to
+ * carry one of the seed's codes -- so a database still holding the seed's own
+ * rows cannot host these fixtures, and says so rather than failing on a
+ * duplicate key.
  */
-async function freeCodes(c: Client, codes: string[], n: number): Promise<string[]> {
+async function freeCodes(
+  c: Client,
+  codes: string[],
+  n: number,
+  table: "observation_cycles" | "schools" = "observation_cycles",
+): Promise<string[]> {
   const { rows } = await c.query(
     `SELECT code FROM unnest($1::text[]) WITH ORDINALITY AS u(code, i)
-      WHERE code NOT IN (SELECT code FROM observation_cycles) ORDER BY i`,
+      WHERE code NOT IN (SELECT code FROM ${table}) ORDER BY i`,
     [codes],
   );
   assert.ok(rows.length >= n, `this test needs ${n} of ${codes[0]}..${codes.at(-1)} unused; ${rows.length} are free`);
@@ -302,8 +320,9 @@ test(
  * exactly the seed's -- the situation a live database is in after a few weeks.
  */
 async function realAndDemo(c: Client, r: ReturnType<typeof rows>, id: string) {
-  const [demoCode, reusedCode] = await freeCodes(c, SEED_CYCLE_CODES, 2);
+  const [demoCode, reusedCode, linkedCode, draftCycleCode] = await freeCodes(c, SEED_CYCLE_CODES, 4);
   const [mintedCode] = await freeCodes(c, MINTED_2026_CODES, 1);
+  const [demoSchoolCode] = await freeCodes(c, SEED_SCHOOL_CODES, 1, "schools");
   const d = await r.add("districts", { name: `Purge real ${id}`, code: `PR${id}` });
   const z = await r.add("zones", { district_id: d, name: "purge real zone" });
   const s = await r.add("schools", { zone_id: z, code: `PR-${id}`, name: "Purge real school" });
@@ -343,10 +362,57 @@ async function realAndDemo(c: Client, r: ReturnType<typeof rows>, id: string) {
   const pIdle = await r.add("mentor_pairings", { mentor_id: mIdle, teacher_id: dIdle });
   const idleCycle = await r.add("observation_cycles", { code: demoCode, teacher_id: dIdle, kind: "baseline" });
 
+  // A demo teacher record a real teacher has since been given a login to (it
+  // carries a seed mobile), with an idle cycle nominated for them that took a
+  // free seed code. The login makes the teacher real, and their cycles with
+  // them.
+  const tLogin = await r.add("users", { id: randomUUID(), email: `teacher.${id}@example.test`, name: `Teacher ${id}`, role: "teacher" });
+  const dLinked = await r.add("teachers", {
+    school_id: s, full_name: `Demo linked ${id}`, phone: SEED_PHONES[5], user_id: tLogin, active: false,
+  });
+  const linkedCycle = await r.add("observation_cycles", { code: linkedCode, teacher_id: dLinked, kind: "baseline" });
+
+  // In-progress drafts, which cascade with the pairing or cycle they sit on:
+  // the linked mentor's half-written feedback on an otherwise idle pairing, and
+  // an observer's draft on an otherwise idle demo cycle. A draft always
+  // belongs to a login, and the seed writes none.
+  const dDraft = await r.add("teachers", { school_id: s, full_name: `Demo draft ${id}`, phone: SEED_PHONES[6], active: false });
+  const pDraft = await r.add("mentor_pairings", { mentor_id: mLinked, teacher_id: dDraft });
+  const pairingDraft = await r.add("form_drafts", {
+    user_id: login, template_id: form, pairing_id: pDraft, responses: '{"q1":"half-written feedback"}',
+  });
+  const dCycleDraft = await r.add("teachers", { school_id: s, full_name: `Demo cycle draft ${id}`, phone: SEED_PHONES[7], active: false });
+  const draftCycle = await r.add("observation_cycles", { code: draftCycleCode, teacher_id: dCycleDraft, kind: "baseline" });
+  const cycleDraft = await r.add("form_drafts", {
+    user_id: login2, observation_cycle_id: draftCycle, responses: '{"notes":"half-written observation"}',
+  });
+
+  // What the purge removes along with the rows it lists, none of which the
+  // seed writes: the idle cycle's unsubmitted template, the idle teacher's
+  // classroom session and RTT attendance mark, and a demo school's class and
+  // learner -- a child's record.
+  const template = await r.add("observation_forms", { cycle_id: idleCycle, kind: "pre", responses: "{}" });
+  const subject = await r.add("subjects", { name: `Purge subject ${id}`, code: `PS${id}` });
+  const cls = await r.add("classes", { school_id: s, grade: 5, stage: "Primary" });
+  const session = await r.add("sessions", {
+    school_id: s, class_id: cls, subject_id: subject, teacher_id: dIdle, scheduled_date: "2026-09-01",
+  });
+  const ph = await r.add("phases", { label: `PR ${id}`, sequence: 902 });
+  const tm = await r.add("terms", { phase_id: ph, name: "Purge real term", sequence: 1 });
+  const rs = await r.add("rtt_subjects", { term_id: tm, name: "Purge real subject" });
+  const se = await r.add("rtt_sessions", { rtt_subject_id: rs, sequence: 1, title: "Purge real webinar" });
+  const attendance = await r.add("rtt_attendance", { rtt_session_id: se, teacher_id: dIdle });
+  const ds = await r.add("schools", { zone_id: z, code: demoSchoolCode, name: `Demo school ${id}` });
+  const dsClass = await r.add("classes", { school_id: ds, grade: 3, stage: "Primary" });
+  const learner = await r.add("learners", { class_id: dsClass, school_id: ds, grade: 3, name: `Learner ${id}` });
+
   return {
-    demoCode, mintedCode, reusedCode,
-    keep: { minted, reused, real, dFeedback, dMeeting, mLinked, mLinkedUnpaired, mMeeting, pFeedback, pMeeting, response, meeting },
-    gone: { idleCycle, pIdle, dIdle, mIdle },
+    demoCode, mintedCode, reusedCode, linkedCode, draftCycleCode, demoSchoolCode,
+    keep: {
+      minted, reused, real, dFeedback, dMeeting, mLinked, mLinkedUnpaired, mMeeting, pFeedback, pMeeting, response, meeting,
+      dLinked, linkedCycle, dDraft, pDraft, pairingDraft, dCycleDraft, draftCycle, cycleDraft,
+    },
+    gone: { idleCycle, pIdle, dIdle, mIdle, template, session, attendance, ds, dsClass, learner },
   };
 }
 
@@ -380,12 +446,44 @@ test(
           ["the pairing with a real mentor's feedback", w.keep.pFeedback],
           ["the pairing with a meeting", w.keep.pMeeting],
           ["the demo-named mentor linked to a real login", w.keep.mLinkedUnpaired],
+          ["the cycle of a demo teacher record that has a login", w.linkedCode],
+          ["the pairing with a mentor's draft on it", w.keep.pDraft],
+          ["the cycle with an observer's draft on it", w.draftCycleCode],
         ]) {
           assert.ok(!removed.includes(needle!), `the dry run lists ${what} (${needle}) as removed:\n${out}`);
         }
         assert.ok(kept.includes(w.keep.pFeedback), `the dry run must say which pairings it keeps, and why:\n${out}`);
+        assert.match(
+          kept,
+          new RegExp(`${w.keep.pDraft}.*drafts=1`),
+          `the dry run must say a pairing is kept for the draft on it:\n${out}`,
+        );
+        assert.match(
+          kept,
+          new RegExp(`${w.draftCycleCode}.*drafts=1`),
+          `the dry run must say a cycle is kept for the draft on it:\n${out}`,
+        );
 
-        for (const [table, rowId] of [["observation_cycles", w.gone.idleCycle], ["mentor_pairings", w.gone.pIdle], ["teachers", w.gone.dIdle], ["mentors", w.gone.mIdle]]) {
+        // Rows the listed ones take with them are counted, table by table, so
+        // "the demo schools' classes" cannot hide a school's children.
+        for (const [what, label] of [
+          ["the idle cycle's unsubmitted template", "observation form templates"],
+          ["the idle teacher's classroom session", "classroom sessions"],
+          ["the idle teacher's RTT attendance mark", "RTT attendance marks"],
+          ["the demo school's learner", "learners"],
+          ["the demo school's class", "classes"],
+        ]) {
+          assert.match(
+            removed,
+            new RegExp(`^\\s*${label}\\s+1\\b`, "m"),
+            `the dry run must count ${what} among the rows removed ("${label}  1"):\n${out}`,
+          );
+        }
+
+        for (const [table, rowId] of [
+          ["observation_cycles", w.gone.idleCycle], ["mentor_pairings", w.gone.pIdle], ["teachers", w.gone.dIdle],
+          ["mentors", w.gone.mIdle], ["sessions", w.gone.session], ["learners", w.gone.learner],
+        ]) {
           assert.ok(await exists(c, table!, rowId!), `a dry run must change nothing, but ${table} ${rowId} is gone`);
         }
       } finally {
@@ -421,6 +519,14 @@ test(
           ["teachers", w.keep.dMeeting, "that pairing's teacher"],
           ["mentors", w.keep.mMeeting, "that pairing's mentor"],
           ["mentors", w.keep.mLinkedUnpaired, "a demo-named mentor record linked to a real login"],
+          ["teachers", w.keep.dLinked, "a demo teacher record that has been given a login"],
+          ["observation_cycles", w.keep.linkedCycle, `that teacher's idle cycle ${w.linkedCode}`],
+          ["form_drafts", w.keep.pairingDraft, "a mentor's draft on an otherwise idle demo pairing"],
+          ["mentor_pairings", w.keep.pDraft, "the pairing that draft is on"],
+          ["teachers", w.keep.dDraft, "that pairing's teacher"],
+          ["form_drafts", w.keep.cycleDraft, "an observer's draft on an otherwise idle demo cycle"],
+          ["observation_cycles", w.keep.draftCycle, `the cycle ${w.draftCycleCode} that draft is on`],
+          ["teachers", w.keep.dCycleDraft, "that cycle's teacher"],
         ];
         for (const [table, rowId, what] of kept) {
           assert.ok(await exists(c, table, rowId), `${what} must be kept, but ${table} ${rowId} was deleted:\n${out}`);
@@ -430,11 +536,90 @@ test(
           ["mentor_pairings", w.gone.pIdle, "a demo pairing with nothing on it"],
           ["teachers", w.gone.dIdle, "a demo teacher with nothing keeping them"],
           ["mentors", w.gone.mIdle, "a demo mentor with no login and no pairing left"],
+          ["observation_forms", w.gone.template, "the idle demo cycle's unsubmitted template"],
+          ["sessions", w.gone.session, "the removed teacher's classroom session"],
+          ["rtt_attendance", w.gone.attendance, "the removed teacher's RTT attendance mark"],
+          ["learners", w.gone.learner, "the demo school's learner"],
+          ["classes", w.gone.dsClass, "the demo school's class"],
+          ["schools", w.gone.ds, `the demo school ${w.demoSchoolCode}, which no teacher is left in`],
         ];
         for (const [table, rowId, what] of gone) {
           assert.ok(!(await exists(c, table, rowId)), `${what} must still be removed:\n${out}`);
         }
       } finally {
+        await r.cleanup();
+      }
+    });
+  },
+);
+
+/** Poll `check` until it holds, or give up after `ms`. */
+async function waitFor(check: () => Promise<boolean>, ms: number): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (await check()) return true;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  return false;
+}
+
+test(
+  "purge --apply stops, rather than take it, when a draft is saved on a listed pairing while it runs",
+  { skip: purgeSkip() },
+  async () => {
+    const id = tag("pw").slice(-8);
+    await withClient(async (c) => {
+      const r = rows(c);
+      // A second session plays the mentor's browser, autosaving a draft.
+      const mentorSession = await connect();
+      let draft: string | undefined;
+      try {
+        const d = await r.add("districts", { name: `Purge race ${id}`, code: `PW${id}` });
+        const z = await r.add("zones", { district_id: d, name: "purge race zone" });
+        const s = await r.add("schools", { zone_id: z, code: `PW-${id}`, name: "Purge race school" });
+        const login = await r.add("users", { id: randomUUID(), email: `race.${id}@example.test`, name: `Race ${id}`, role: "mentor" });
+        const t = await r.add("teachers", { school_id: s, full_name: `Purge race ${id}`, phone: SEED_PHONES[0], active: false });
+        const m = await r.add("mentors", { name: `Purge race mentor ${id}` });
+        const p = await r.add("mentor_pairings", { mentor_id: m, teacher_id: t });
+        const form = await r.add("feedback_forms", { kind: "baseline", audience: "mentor", schema: "{}", version: `race-${id}` });
+
+        // The draft is inserted but not yet committed when the purge starts, so
+        // the purge's plan cannot see it and lists the pairing as idle. Its
+        // foreign-key check holds a KEY SHARE lock on the pairing row until it
+        // commits, which is what the purge then has to wait on.
+        await mentorSession.query("BEGIN");
+        const ins = await mentorSession.query(
+          `INSERT INTO form_drafts (user_id, template_id, pairing_id, responses)
+           VALUES ($1, $2, $3, '{"q1":"typed while the purge ran"}') RETURNING id`,
+          [login, form, p],
+        );
+        draft = ins.rows[0].id as string;
+        const mentorPid = (await mentorSession.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+
+        const purge = runTsx([PURGE, "--apply"], plainUrl());
+        const blocked = await waitFor(
+          async () =>
+            (await c.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", [mentorPid]))
+              .rows[0].n > 0,
+          30_000,
+        );
+        await mentorSession.query("COMMIT");
+        const run = await purge;
+        const out = show(run);
+        assert.ok(blocked, `the purge never reached the pairing the draft is on:\n${out}`);
+
+        assert.ok(
+          await exists(c, "form_drafts", draft),
+          "a draft saved while the purge ran must not cascade away with a pairing the plan called idle -- " +
+            `it was deleted:\n${out}`,
+        );
+        assert.ok(await exists(c, "mentor_pairings", p), `the pairing the draft is on must be kept:\n${out}`);
+        assert.notEqual(run.code, 0, `the purge must fail rather than remove less than, or other than, it listed:\n${out}`);
+        assert.match(run.stdout + run.stderr, /draft/i, `the operator must be told a draft stopped the purge:\n${out}`);
+      } finally {
+        await mentorSession.query("ROLLBACK").catch(() => undefined);
+        await mentorSession.end().catch(() => undefined);
+        if (draft) await c.query("DELETE FROM form_drafts WHERE id = $1", [draft]).catch(() => undefined);
         await r.cleanup();
       }
     });
