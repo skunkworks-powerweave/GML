@@ -67,6 +67,7 @@ applied or lifted the sign-in ban.
 | `admin.user.phone_set` | An administrator recorded or changed an account's WhatsApp number (the list `/admin/gates` shares a rotated section password with). The only `admin.user.*` action an administrator may take on their own account, so `user_id` can equal `entity_id` | none: the number itself is not recorded |
 | `admin.user.phone_cleared` | An administrator removed an account's WhatsApp number | none |
 | `admin.user.surface_viewed` | `/admin/users`, which lists every account's email address, was rendered (SM-9 visibility) | none |
+| `admin.user.super_admin_bootstrapped` | The seed's `SUPER_ADMIN_*` bootstrap (`packages/db/src/scripts/seed.ts`, run by every deploy) created or promoted the first active `super_admin`, because none existed. The only grant of super_admin made without a super_admin, so `user_id` is null (no actor); `entity_id` is the account. Written in the same transaction as the promotion | `source` ("seed"), `authUserCreated`, `profileCreated` |
 
 ## gate.* — section password flow
 

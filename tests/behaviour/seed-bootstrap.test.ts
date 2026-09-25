@@ -46,6 +46,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { DATABASE_URL, needsDatabase, tag } from "./_harness.js";
+import { fakeGoTrue } from "./_fake_gotrue.ts";
 
 const skip = needsDatabase();
 
@@ -133,6 +134,13 @@ function superAdminEnv(email: string) {
 
 type Profile = { role: string; active: boolean; deleted: boolean };
 
+/** The audit rows the super_admin bootstrap writes, in a world. */
+const bootstrapAudit = (w: SeedWorld) =>
+  w.q(
+    `SELECT user_id, entity_type, entity_id, metadata FROM ${w.schema}.audit_log
+      WHERE action = 'admin.user.super_admin_bootstrapped' ORDER BY created_at`,
+  );
+
 // ── The super admin bootstrap ────────────────────────────────────────────────
 
 test(
@@ -140,7 +148,7 @@ test(
   { skip },
   async () => {
     const { bootstrapSuperAdmin } = await import("../../packages/db/src/scripts/seed.ts");
-    await withSeedWorld(["users"], async (w) => {
+    await withSeedWorld(["users", "audit_log"], async (w) => {
       const account = async (label: string, role: string, active: boolean, deleted: boolean) => {
         const id = randomUUID();
         const email = `${w.schema}.${label}@example.invalid`;
@@ -186,6 +194,11 @@ test(
           `the operator must be told why SUPER_ADMIN_* did nothing:\n${logs}`,
         );
       }
+      assert.deepEqual(
+        await w.q(`SELECT action FROM ${w.schema}.audit_log`),
+        [],
+        "a bootstrap that changed nothing must record nothing",
+      );
     });
   },
 );
@@ -198,7 +211,7 @@ test(
     // then failed before promoting it: the trigger has written the profile as
     // an INACTIVE teacher, and nobody can administer anything until this runs.
     const { bootstrapSuperAdmin } = await import("../../packages/db/src/scripts/seed.ts");
-    await withSeedWorld(["users"], async (w) => {
+    await withSeedWorld(["users", "audit_log"], async (w) => {
       const id = randomUUID();
       const email = `${w.schema}.founder@example.invalid`;
       await w.q(`INSERT INTO auth.users (id, email) VALUES ($1, $2)`, [id, email]);
@@ -216,7 +229,68 @@ test(
         { role: "super_admin", active: true, deleted: false },
         `a fresh system must still get its first administrator:\n${logs}`,
       );
+      assert.deepEqual(
+        await bootstrapAudit(w),
+        [{ user_id: null, entity_type: "users", entity_id: id, metadata: { source: "seed", authUserCreated: false, profileCreated: false } }],
+        "the one grant of super_admin made without an existing super_admin must leave an audit row",
+      );
     });
+  },
+);
+
+// W3-42 / W3-43. The account the bootstrap creates is handed over with a
+// password someone else chose -- SUPER_ADMIN_INITIAL_PASSWORD, which also stays
+// in .env -- exactly like an account /admin/users creates. Those are marked
+// app_metadata.must_change_password, and proxy.ts sends the holder to Settings
+// until they pick their own; the seed's createUser set no app_metadata, so the
+// most privileged account was the one account never made to change it. And
+// the promotion wrote no audit row, although it is the only place anything
+// becomes super_admin without a super_admin doing it.
+
+test(
+  "the account a first deploy creates must change its password at first sign-in, and the grant is audited",
+  { skip },
+  async () => {
+    const { bootstrapSuperAdmin } = await import("../../packages/db/src/scripts/seed.ts");
+    const { mustChangePassword } = await import("../../apps/web/src/lib/password-policy.ts");
+    const gotrue = await fakeGoTrue();
+    try {
+      await withSeedWorld(["users", "audit_log"], async (w) => {
+        const email = `${w.schema}.first-admin@example.invalid`;
+        superAdminEnv(email);
+        const restore = gotrue.install();
+        let logs = "";
+        try {
+          logs = (await captureLogs(() => w.withDb((db) => bootstrapSuperAdmin(db)))).logs;
+        } finally {
+          restore();
+        }
+
+        const created = [...gotrue.users.values()].find((u) => u.email === email);
+        assert.ok(created, `the bootstrap must create the auth user:\n${logs}`);
+        assert.equal(
+          mustChangePassword(created.appMetadata),
+          true,
+          "the bootstrap account signs in with SUPER_ADMIN_INITIAL_PASSWORD, which the deployer chose and " +
+            "which stays in .env; proxy.ts must send it to Settings at first sign-in like any handed-over " +
+            `account. app_metadata was ${JSON.stringify(created.appMetadata)}`,
+        );
+        const [row] = await w.q<Profile>(
+          `SELECT role::text AS role, active, deleted_at IS NOT NULL AS deleted FROM ${w.schema}.users WHERE id = $1`,
+          [created.id],
+        );
+        assert.deepEqual(row, { role: "super_admin", active: true, deleted: false }, logs);
+        const audit = await bootstrapAudit(w);
+        assert.deepEqual(
+          audit,
+          [{ user_id: null, entity_type: "users", entity_id: created.id, metadata: { source: "seed", authUserCreated: true, profileCreated: true } }],
+          `the first super_admin must be traceable in the audit log:\n${logs}`,
+        );
+        assert.doesNotMatch(JSON.stringify(audit), /only-used-when-an-account-is-created/, "no password is ever recorded");
+      });
+    } finally {
+      await gotrue.close();
+    }
   },
 );
 

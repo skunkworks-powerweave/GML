@@ -450,6 +450,15 @@ export async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promi
       password,
       email_confirm: true,
       user_metadata: { name: "Super Admin" },
+      // SUPER_ADMIN_INITIAL_PASSWORD was chosen by whoever ran the deploy and
+      // stays in .env, so this account is handed over with a password someone
+      // else knows -- exactly like one /admin/users creates, and marked the
+      // same way: proxy.ts sends the holder to Settings until they choose
+      // their own. The key is MUST_CHANGE_PASSWORD in
+      // apps/web/src/lib/password-policy.ts, which packages/db cannot import.
+      // Only here: an auth user that already exists (above) may long since
+      // have been given its own password, and is left alone.
+      app_metadata: { must_change_password: true },
     });
     if (error || !data?.user) {
       console.error(`[seed] ✗ super_admin bootstrap FAILED — ${error?.message ?? "no user returned"}`);
@@ -465,15 +474,31 @@ export async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promi
   // The INSERT arm covers the case where no profile exists -- an auth user
   // predating the trigger. Without it the bootstrap would report success on an
   // account that still cannot obtain a token.
-  await db.execute(sql`
-    INSERT INTO users (id, email, name, role, active, default_locale)
-    VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
-    ON CONFLICT (id) DO UPDATE
-      SET role = 'super_admin',
-          active = true,
-          deleted_at = NULL,
-          updated_at = now()
-  `);
+  //
+  // AUDITED, in the same transaction, so the grant never exists without its
+  // row. This is the one place super_admin is granted with no super_admin
+  // acting, and it wrote nothing but a line in the deploy output. user_id is
+  // NULL (no actor), entity_id the account; `(xmax = 0)` is true when the
+  // INSERT arm ran, i.e. the profile did not exist. No password, in any form.
+  const authUserCreated = existingRows.length === 0;
+  await db.transaction(async (tx) => {
+    const promoted = await tx.execute(sql`
+      INSERT INTO users (id, email, name, role, active, default_locale)
+      VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
+      ON CONFLICT (id) DO UPDATE
+        SET role = 'super_admin',
+            active = true,
+            deleted_at = NULL,
+            updated_at = now()
+      RETURNING (xmax = 0) AS inserted
+    `);
+    const profileCreated = (promoted.rows[0] as { inserted?: boolean } | undefined)?.inserted === true;
+    await tx.execute(sql`
+      INSERT INTO audit_log (user_id, action, entity_type, entity_id, metadata)
+      VALUES (NULL, 'admin.user.super_admin_bootstrapped', 'users', ${userId},
+              ${JSON.stringify({ source: "seed", authUserCreated, profileCreated })}::jsonb)
+    `);
+  });
 
   console.log(`[seed] ✓ super_admin profile ready: ${email}`);
 }

@@ -38,13 +38,27 @@ function sources(dir) {
   return out;
 }
 
-/** Every action string passed to recordAudit({ action: ... }) in apps/web/src. */
+/**
+ * Every action string passed to recordAudit({ action: ... }) in apps/web/src,
+ * and every action the seed scripts INSERT into audit_log themselves.
+ *
+ * The seed cannot call recordAudit (it lives in apps/web and needs a request
+ * scope), so the super_admin bootstrap writes its admin.user.* row with raw
+ * SQL (W3-43). This scanned apps/web alone, which counted that documented row
+ * as one "the code cannot write".
+ */
 function codeActions() {
   const found = new Set();
   for (const file of sources(resolve(root, "apps/web/src"))) {
     const src = readFileSync(file, "utf8");
     for (const m of src.matchAll(/action:\s*([^,}\n]+)/g)) {
       for (const lit of m[1].matchAll(/"([a-z_]+(?:\.[a-z_]+)+)"/g)) found.add(lit[1]);
+    }
+  }
+  for (const file of sources(resolve(root, "packages/db/src/scripts"))) {
+    const src = readFileSync(file, "utf8");
+    for (const m of src.matchAll(/INSERT INTO audit_log\s*\([^)]*\)\s*VALUES\s*\(([^)]*)\)/g)) {
+      for (const lit of m[1].matchAll(/'([a-z_]+(?:\.[a-z_]+)+)'/g)) found.add(lit[1]);
     }
   }
   return [...found].filter((a) => FAMILIES.some((f) => f.test(a)));

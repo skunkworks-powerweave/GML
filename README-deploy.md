@@ -560,10 +560,13 @@ account holder signs in, every page sends them to Settings until they choose a
 password of their own; the same happens after you set someone's password for
 them. There is no invite email unless you have configured SMTP (§2.3).
 
-The account the seed creates from `SUPER_ADMIN_INITIAL_PASSWORD` is not marked
-this way. Change its password in Settings at first sign-in, then delete the
-value from `.env`, where it would otherwise remain the most privileged
-account's live password.
+The account the seed creates from `SUPER_ADMIN_INITIAL_PASSWORD` is marked the
+same way, so its first sign-in also goes to Settings to choose a new password.
+Then delete the value from `.env`: it is the password of the most privileged
+account until that change is made, and a record of it after. The seed writes
+one `admin.user.super_admin_bootstrapped` audit row when it creates or promotes
+that account (docs/audit-actions.md); it is the only super_admin grant made
+without a super_admin.
 
 Deactivating an account does three things: sets the profile inactive (the hook
 then refuses to mint tokens), ends the user's sessions on every device, and bans
