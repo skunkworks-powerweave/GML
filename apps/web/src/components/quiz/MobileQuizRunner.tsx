@@ -39,6 +39,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
+import { PickedMark } from "./PickedMark";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -330,10 +331,16 @@ export function MobileQuizRunner({
           {questions.map((qq, i) => {
             const answered = selected[qq.id] !== undefined;
             const active = i === idx;
+            // role="img": aria-label is not allowed on a bare <span> (ARIA
+            // 1.2), and assistive technology did not read it there, so these
+            // labels were never heard. The current dot is also taller, so it
+            // is not told from the others by colour alone (F135).
             return (
               <span
                 key={qq.id}
                 data-testid={`mobile-quiz-dot-${i}`}
+                role="img"
+                aria-current={active ? "step" : undefined}
                 aria-label={
                   active
                     ? `Current question ${i + 1}`
@@ -343,7 +350,7 @@ export function MobileQuizRunner({
                 }
                 style={{
                   flex: 1,
-                  height: 4,
+                  height: active ? 8 : 4,
                   borderRadius: 2,
                   background: active
                     ? "var(--saffron)"
@@ -397,7 +404,8 @@ export function MobileQuizRunner({
                 onClick={() => onPick(i)}
                 // Same contract as the desktop QuizRunner: selection is
                 // announced, not only painted saffron. Not role="radio" (see
-                // QuizRunner for why).
+                // QuizRunner for why). Seen, it is the saffron fill AND a
+                // check mark: the fill alone was colour only (F135).
                 aria-pressed={isSel}
                 style={{
                   textAlign: "left",
@@ -436,6 +444,7 @@ export function MobileQuizRunner({
                   {String.fromCharCode(65 + i)}
                 </span>
                 {opt}
+                {isSel ? <PickedMark /> : null}
               </button>
             );
           })}

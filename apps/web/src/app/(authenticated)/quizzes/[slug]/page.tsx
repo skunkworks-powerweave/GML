@@ -7,6 +7,7 @@
 //
 // JSX prototype reference: LMS GML Frontend/forms.jsx::QuizRunner (lines 157-266).
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
@@ -24,6 +25,8 @@ import { QuizRunner } from "@/components/quiz/QuizRunner";
 import { MobileQuizRunner } from "@/components/quiz/MobileQuizRunner";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Quiz" };
 
 // Seconds past the time limit a submission is still scored. It exists for the
 // time the learner did NOT see: the countdown starts only once the page has

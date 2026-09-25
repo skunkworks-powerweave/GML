@@ -28,19 +28,22 @@ export function PlacePicker({
     const s = q.toString();
     return s ? `${basePath}?${s}` : basePath;
   };
-  const chip = (on: boolean) => (on ? "chip chip-indigo" : "chip");
+  // The chosen place is bold as well as indigo: chip-indigo and the plain chip
+  // are the same lightness, so the hue alone was all that marked it (F135).
+  const chip = (on: boolean) =>
+    on ? { className: "chip chip-indigo", style: { fontWeight: 600 } } : { className: "chip" };
   const district = options.find((o) => o.districtId === place?.districtId);
   return (
     <nav aria-label="District and zone" style={{ display: "grid", gap: 6, marginTop: 12 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <Link href={href()} className={chip(!place)} aria-current={place ? undefined : "page"}>
+        <Link href={href()} {...chip(!place)} aria-current={place ? undefined : "page"}>
           Whole programme
         </Link>
         {options.map((o) => (
           <Link
             key={o.districtId}
             href={href(o.districtId)}
-            className={chip(o.districtId === place?.districtId)}
+            {...chip(o.districtId === place?.districtId)}
             aria-current={o.districtId === place?.districtId && !place?.zoneId ? "page" : undefined}
           >
             {o.districtName}
@@ -49,14 +52,20 @@ export function PlacePicker({
       </div>
       {district && district.zones.length > 0 ? (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <Link href={href(district.districtId)} className={chip(!place?.zoneId)}>
+          {/* The same URL as the district's chip above, so current with it:
+              it said nothing, and a screen reader could not tell it was on. */}
+          <Link
+            href={href(district.districtId)}
+            {...chip(!place?.zoneId)}
+            aria-current={place?.zoneId ? undefined : "page"}
+          >
             All of {district.districtName}
           </Link>
           {district.zones.map((z) => (
             <Link
               key={z.id}
               href={href(district.districtId, z.id)}
-              className={chip(z.id === place?.zoneId)}
+              {...chip(z.id === place?.zoneId)}
               aria-current={z.id === place?.zoneId ? "page" : undefined}
             >
               {z.name}

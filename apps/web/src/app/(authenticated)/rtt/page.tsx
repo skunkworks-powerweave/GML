@@ -1,5 +1,6 @@
 // /rtt — phase index + subjects matrix.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@gml/db";
@@ -10,6 +11,8 @@ import { placeLabel, placeOptions, rttScope } from "@/lib/rtt/scope";
 import { PlacePicker } from "./place-picker";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "RTT phases & subjects" };
 
 // Who /rtt/teach-back lets in: its READ_ROLES, repeated here because that page
 // does not export them. tests/behaviour/rtt-teach-back-link.test.ts asks the

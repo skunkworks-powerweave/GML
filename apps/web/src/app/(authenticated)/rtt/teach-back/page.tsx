@@ -5,6 +5,7 @@
 // component — every "open" hits the database fresh, which is exactly what a
 // reviewer wants when they're about to mark something reviewed.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, count, desc, eq, isNotNull, sql } from "drizzle-orm";
@@ -16,6 +17,8 @@ import { parsePage } from "@/lib/observation/list";
 import { isPendingTeachBackReview, pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Teach-back submissions" };
 
 const READ_ROLES = new Set(["super_admin", "programme_admin", "mentor", "observer"]);
 
@@ -263,8 +266,10 @@ export default async function TeachBackQueuePage({
         </Link>
       </header>
 
-      {/* Wraps: three tabs with their counts are wider than a phone. */}
-      <section style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 16 }}>
+      {/* Wraps: three tabs with their counts are wider than a phone. A named
+          nav, like the other RTT filters, and the tab that is on says so
+          (aria-current): it was shown by its fill alone (F135). */}
+      <nav aria-label="Filter by review state" style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 16 }}>
         {(
           [
             { v: undefined, l: "All", n: counts.all },
@@ -277,6 +282,7 @@ export default async function TeachBackQueuePage({
             <Link
               key={f.l}
               href={filterHref(f.v)}
+              aria-current={isActive ? "page" : undefined}
               style={{
                 padding: "6px 12px",
                 background: isActive ? "var(--ink)" : "transparent",
@@ -291,7 +297,7 @@ export default async function TeachBackQueuePage({
             </Link>
           );
         })}
-      </section>
+      </nav>
 
       {/* PHONE WIDTH (F11). With a submission open, the list and the review
           pane were an inline "minmax(0, 2fr) minmax(0, 3fr)" at every width:

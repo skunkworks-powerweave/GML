@@ -19,6 +19,7 @@
 //     so the ORDER BY submitted_at DESC scan is an index range scan,
 //     not a seqscan.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
@@ -27,6 +28,8 @@ import { quizzes, quizSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Quiz attempts" };
 
 // Spec 159 — render a `submittedAt` Date as a deterministic ISO YYYY-MM-DD
 // HH:MM string in UTC. We deliberately avoid `toLocaleString` here because

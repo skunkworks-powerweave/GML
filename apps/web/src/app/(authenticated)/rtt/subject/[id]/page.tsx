@@ -1,5 +1,6 @@
 // /rtt/subject/[id] — RTT subject drill-in: modules + sessions + readings.
 
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
@@ -45,6 +46,8 @@ const ATTENDANCE_CHIP: Record<string, string> = {
 };
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "RTT subject" };
 
 export default async function RttSubjectPage({
   params,

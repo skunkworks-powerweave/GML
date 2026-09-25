@@ -4,6 +4,7 @@
 // that has a scheduledAt in the present or future, laid out across a 3-week
 // Mon-Fri grid plus an upcoming-5 side panel.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, gte, inArray, isNotNull } from "drizzle-orm";
@@ -14,6 +15,8 @@ import { rttScope } from "@/lib/rtt/scope";
 import { webLink } from "@/lib/rtt/links";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Webinars & live quizzes" };
 
 // rtt_sessions.type uses the same string convention as the seed/import scripts:
 // synchronous | asynchronous | webinar | quiz. The synchronous surface excludes

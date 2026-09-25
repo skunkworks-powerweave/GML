@@ -22,6 +22,7 @@
 // so navigating away tears the timer down cleanly.
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { PickedMark } from "./PickedMark";
 
 export type QuizRunnerQuestion = {
   id: string;
@@ -287,11 +288,13 @@ export function QuizRunner({
                   key={i}
                   type="button"
                   onClick={() => onPick(i)}
-                  // The ink/paper inversion is the only visual cue; this is
-                  // the one assistive tech hears, so a screen-reader user can
+                  // What assistive tech hears, so a screen-reader user can
                   // verify an answer before submitting a graded quiz.
                   // Deliberately NOT role="radio": a radiogroup obliges roving
                   // tabindex + arrow keys, and without them Tab traversal breaks.
+                  // What a sighted user sees is the ink/paper inversion AND a
+                  // check mark (./PickedMark.tsx): the inversion alone was
+                  // colour only (F135).
                   aria-pressed={isSel}
                   style={{
                     textAlign: "left",
@@ -325,6 +328,7 @@ export function QuizRunner({
                     {String.fromCharCode(65 + i)}
                   </span>
                   {opt}
+                  {isSel ? <PickedMark /> : null}
                 </button>
               );
             })}
