@@ -19,6 +19,7 @@
 // SCORM records follow the same rules (F41): before, only /admin/scorm showed
 // them, so a mentor could not see how her mentees did in a module.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { asc, eq } from "drizzle-orm";
@@ -41,6 +42,8 @@ import {
 import { formatDuration, statusChip, statusLabel } from "@/lib/scorm/format";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "RTT progress" };
 
 const STATUS_CHIP: Record<string, string> = {
   present: "chip chip-lichen",

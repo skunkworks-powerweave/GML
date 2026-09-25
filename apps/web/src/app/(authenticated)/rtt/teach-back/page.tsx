@@ -5,6 +5,7 @@
 // component — every "open" hits the database fresh, which is exactly what a
 // reviewer wants when they're about to mark something reviewed.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, count, desc, eq, isNotNull, sql } from "drizzle-orm";
@@ -16,6 +17,8 @@ import { parsePage } from "@/lib/observation/list";
 import { isPendingTeachBackReview, pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Teach-back submissions" };
 
 const READ_ROLES = new Set(["super_admin", "programme_admin", "mentor", "observer"]);
 
@@ -198,12 +201,17 @@ export default async function TeachBackQueuePage({
     return params.toString() ? `?${params.toString()}` : "/rtt/teach-back";
   };
 
+  // #review: opening a row scrolls to the pane. Next's Link keeps the scroll
+  // position otherwise, and on a phone the pane is under the whole list (up
+  // to PAGE_SIZE rows and the pager), so a tap changed nothing a mentor could
+  // see but the row's own border. On a desktop the pane sits at the top of
+  // the list, above a row scrolled down to.
   const rowHref = (id: string) => {
     const params = new URLSearchParams();
     if (filter) params.set("status", filter);
     if (page > 1) params.set("page", String(page));
     params.set("id", id);
-    return `?${params.toString()}`;
+    return `?${params.toString()}#review`;
   };
 
   return (
@@ -212,6 +220,9 @@ export default async function TeachBackQueuePage({
         style={{
           marginBottom: 22,
           display: "flex",
+          // On a phone the "All pending review" link goes under the title
+          // rather than being squeezed to one word a line beside it.
+          flexWrap: "wrap",
           alignItems: "flex-end",
           justifyContent: "space-between",
           gap: 16,
@@ -260,7 +271,10 @@ export default async function TeachBackQueuePage({
         </Link>
       </header>
 
-      <section style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+      {/* Wraps: three tabs with their counts are wider than a phone. A named
+          nav, like the other RTT filters, and the tab that is on says so
+          (aria-current): it was shown by its fill alone (F135). */}
+      <nav aria-label="Filter by review state" style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 16 }}>
         {(
           [
             { v: undefined, l: "All", n: counts.all },
@@ -273,6 +287,7 @@ export default async function TeachBackQueuePage({
             <Link
               key={f.l}
               href={filterHref(f.v)}
+              aria-current={isActive ? "page" : undefined}
               style={{
                 padding: "6px 12px",
                 background: isActive ? "var(--ink)" : "transparent",
@@ -287,15 +302,18 @@ export default async function TeachBackQueuePage({
             </Link>
           );
         })}
-      </section>
+      </nav>
 
+      {/* PHONE WIDTH (F11). With a submission open, the list and the review
+          pane were an inline "minmax(0, 2fr) minmax(0, 3fr)" at every width:
+          on a phone, a ~120 px list beside a ~180 px pane whose label column
+          alone is 120 px. Below 768 px the pane now sits under the list. */}
       <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: selected ? "minmax(0, 2fr) minmax(0, 3fr)" : "minmax(0, 1fr)",
-          gap: 18,
-          alignItems: "start",
-        }}
+        className={
+          selected
+            ? "grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+            : "grid grid-cols-1 items-start gap-[18px]"
+        }
       >
         {/* Left: submission list */}
         <div
@@ -317,8 +335,12 @@ export default async function TeachBackQueuePage({
                 const isSelected = selectedId === r.id;
                 return (
                   <li key={r.id}>
+                    {/* aria-current: the open row was told only by its border
+                        and fill, which a phone user scrolling back up from
+                        the pane, or a screen reader, cannot go by. */}
                     <Link
                       href={rowHref(r.id)}
+                      aria-current={isSelected ? "true" : undefined}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -412,10 +434,15 @@ export default async function TeachBackQueuePage({
           ) : null}
         </div>
 
-        {/* Right: preview pane */}
+        {/* Right: preview pane. id="review" is what every row links to;
+            scroll-margin keeps its top clear of the sticky header (the
+            topbar, or MobileShell's) that the jump would otherwise put it
+            under. */}
         {selected ? (
           <article
+            id="review"
             style={{
+              scrollMarginTop: 80,
               background: "var(--card-hi)",
               border: "1px solid var(--line)",
               borderRadius: "var(--r-3)",
@@ -491,7 +518,8 @@ export default async function TeachBackQueuePage({
             <dl
               style={{
                 display: "grid",
-                gridTemplateColumns: "120px 1fr",
+                // minmax(0, 1fr): a bare 1fr is as wide as its content.
+                gridTemplateColumns: "120px minmax(0, 1fr)",
                 rowGap: 8,
                 columnGap: 12,
                 margin: 0,

@@ -1,5 +1,6 @@
 // /rtt — phase index + subjects matrix.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@gml/db";
@@ -10,6 +11,8 @@ import { placeLabel, placeOptions, rttScope } from "@/lib/rtt/scope";
 import { PlacePicker } from "./place-picker";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "RTT phases & subjects" };
 
 // Who /rtt/teach-back lets in: its READ_ROLES, repeated here because that page
 // does not export them. tests/behaviour/rtt-teach-back-link.test.ts asks the
@@ -140,8 +143,10 @@ export default async function RttIndexPage({
           <p style={{ color: "var(--ink-3)" }}>No phases seeded yet. Run the spec 086 seed script.</p>
         ) : (
           <>
-            {/* Phase strip */}
-            <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
+            {/* Phase strip. The card minimum is min(100%, 260px), as on the
+                self-paced units: a bare 260 px fits a 360 px phone's 264 px
+                column and overflows a 320 px phone's 224 px one (F11). */}
+            <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))", gap: 14 }}>
               {phaseRows.map((p) => {
                 const phaseTerms = termRows.filter((t) => t.phaseId === p.id).sort((a, b) => a.sequence - b.sequence);
                 const phaseSubjectCount = subjectRows.filter((s) =>
@@ -194,7 +199,7 @@ export default async function RttIndexPage({
                           ) : null}
                         </div>
                         {termSubjects.length > 0 ? (
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))", gap: 14 }}>
                             {termSubjects.map((s, idx) => {
                               const palette = SUBJECT_PALETTE[idx % SUBJECT_PALETTE.length];
                               return (

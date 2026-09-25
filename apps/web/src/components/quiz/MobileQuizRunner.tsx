@@ -39,6 +39,8 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
+import { PickedMark } from "./PickedMark";
+import { timeWarning } from "./time-warning";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -94,6 +96,9 @@ export function MobileQuizRunner({
   const [remaining, setRemaining] = useState<number | null>(
     typeof timeLimitSeconds === "number" ? timeLimitSeconds : null,
   );
+  // The limit the attempt opened with, seeded once like `remaining`: which
+  // spoken warnings are due depends on it (time-warning.ts).
+  const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
   // Spec 159 — refs let the interval tick read the latest selection /
   // question list / submitted flag without re-arming the timer when those
   // change. submittedRef is the idempotency guard that prevents a race
@@ -276,13 +281,15 @@ export function MobileQuizRunner({
             {/* Spec 159 — countdown chip lives next to the question
                 counter so it stays visible on the narrow mobile header
                 without competing for the question prompt's vertical
-                space. role="timer" + aria-live="polite" matches the
-                desktop runner's a11y contract. */}
+                space. role="timer" and NOT a live region, as on the
+                desktop: aria-live="polite" here had a screen reader read out
+                every second. The status region after it speaks at 5 minutes,
+                1 minute and time up only; the chip's "Time remaining" is for
+                a screen reader, the chip itself was a bare "08:42" (F135). */}
             {remaining !== null ? (
               <span
                 data-testid="mobile-quiz-countdown"
                 role="timer"
-                aria-live="polite"
                 style={{
                   fontFamily: "var(--mono)",
                   fontSize: 12,
@@ -296,7 +303,13 @@ export function MobileQuizRunner({
                     (remaining < 60 ? "var(--rust)" : "var(--line)"),
                 }}
               >
+                <span className="sr-only">Time remaining </span>
                 {formatRemaining(remaining)}
+              </span>
+            ) : null}
+            {remaining !== null ? (
+              <span role="status" className="sr-only" data-testid="mobile-quiz-time-warning">
+                {timeWarning(remaining, openedWith)}
               </span>
             ) : null}
             <div
@@ -330,10 +343,16 @@ export function MobileQuizRunner({
           {questions.map((qq, i) => {
             const answered = selected[qq.id] !== undefined;
             const active = i === idx;
+            // role="img": aria-label is not allowed on a bare <span> (ARIA
+            // 1.2), and assistive technology did not read it there, so these
+            // labels were never heard. The current dot is also taller, so it
+            // is not told from the others by colour alone (F135).
             return (
               <span
                 key={qq.id}
                 data-testid={`mobile-quiz-dot-${i}`}
+                role="img"
+                aria-current={active ? "step" : undefined}
                 aria-label={
                   active
                     ? `Current question ${i + 1}`
@@ -343,7 +362,7 @@ export function MobileQuizRunner({
                 }
                 style={{
                   flex: 1,
-                  height: 4,
+                  height: active ? 8 : 4,
                   borderRadius: 2,
                   background: active
                     ? "var(--saffron)"
@@ -397,7 +416,8 @@ export function MobileQuizRunner({
                 onClick={() => onPick(i)}
                 // Same contract as the desktop QuizRunner: selection is
                 // announced, not only painted saffron. Not role="radio" (see
-                // QuizRunner for why).
+                // QuizRunner for why). Seen, it is the saffron fill AND a
+                // check mark: the fill alone was colour only (F135).
                 aria-pressed={isSel}
                 style={{
                   textAlign: "left",
@@ -436,6 +456,7 @@ export function MobileQuizRunner({
                   {String.fromCharCode(65 + i)}
                 </span>
                 {opt}
+                {isSel ? <PickedMark /> : null}
               </button>
             );
           })}

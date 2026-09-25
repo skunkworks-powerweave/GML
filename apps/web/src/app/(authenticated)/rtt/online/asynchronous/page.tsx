@@ -8,6 +8,7 @@
 // the RTT subject name against resources.tags (JSONB) and video_submissions.caption_raw.
 // See specs/065-rtt-online-asynchronous/spec.md for the rationale.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, asc, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
@@ -17,6 +18,8 @@ import { auth } from "@/auth";
 import { rttScope } from "@/lib/rtt/scope";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Self-paced units" };
 
 // Resource kinds suitable for the async hub (everything that reads like
 // "microlearning material" — excludes Policy / Calendar / Routine / Rubric).
@@ -217,11 +220,15 @@ export default async function RttOnlineAsynchronousPage({
         ))}
       </nav>
 
-      {/* 3-column card grid */}
+      {/* 3-column card grid. The minimum is min(100%, 280px), not 280px, so a
+          card never demands more width than the column it sits in: a fixed
+          280 px minimum overflows any column narrower than that (a small
+          phone, or this page inside the usual page padding) and widens the
+          page (F11). */}
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
           gap: 14,
         }}
       >
@@ -270,6 +277,9 @@ function SubjectPill({
   return (
     <Link
       href={href}
+      // The pill that is on was shown by its fill alone; a screen reader could
+      // not tell which subject the grid was filtered to (F135).
+      aria-current={active ? "page" : undefined}
       style={{
         padding: "6px 12px",
         background: active ? "var(--ink)" : "transparent",
