@@ -11,6 +11,7 @@ import { db } from "@gml/db";
 import { rttSessions, rttSubjects, terms, phases } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { rttScope } from "@/lib/rtt/scope";
+import { webLink } from "@/lib/rtt/links";
 
 export const dynamic = "force-dynamic";
 
@@ -296,9 +297,11 @@ export default async function RttOnlineSynchronousPage() {
                           Facilitator: <span style={{ color: "var(--ink-2)" }}>{u.notes}</span>
                         </div>
                       ) : null}
-                      {u.linkOrRecording ? (
+                      {/* A web link or nothing (lib/rtt/links.ts): a stored
+                          "meet.google.com/..." was a relative href into the app. */}
+                      {webLink(u.linkOrRecording) ? (
                         <a
-                          href={u.linkOrRecording}
+                          href={webLink(u.linkOrRecording)!}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ fontSize: 12, color: "var(--indigo)" }}

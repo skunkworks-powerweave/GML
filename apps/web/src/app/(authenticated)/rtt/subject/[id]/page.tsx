@@ -20,6 +20,7 @@ import { uuidOrNotFound } from "@/lib/ids";
 import { listSubjectAssessments } from "@/lib/rtt/assessments";
 import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
 import { rttScope } from "@/lib/rtt/scope";
+import { webLink } from "@/lib/rtt/links";
 import { markProgressAction } from "./actions";
 
 /** A one-button form that marks a lesson or reading done, or undoes it. */
@@ -372,6 +373,9 @@ export default async function RttSubjectPage({
                     // rows 404'd. rtt_sessions has no detail page; the calendar
                     // at /rtt/online/synchronous is where these are listed.
                     const isUpcoming = s.isUpcoming;
+                    // A web link or nothing (lib/rtt/links.ts): a stored
+                    // "meet.google.com/..." was a relative href into the app.
+                    const link = webLink(s.linkOrRecording);
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>
@@ -407,9 +411,9 @@ export default async function RttSubjectPage({
                           )}
                         </td>
                         <td>
-                          {s.linkOrRecording ? (
+                          {link ? (
                             <a
-                              href={s.linkOrRecording}
+                              href={link}
                               className="btn btn-sm"
                               target="_blank"
                               rel="noopener noreferrer"
