@@ -125,7 +125,7 @@ this is only the operator-facing subset.
 | `GML_HELPDESK_EMAIL` | mailto target for the same Help button. |
 | `WORKER_CONCURRENCY` | **1.** One ffmpeg at `-preset veryfast` saturates both vCPUs; a second starves the web tier sharing the box. |
 | `TZ` | IANA zone, `Asia/Kolkata`. Pins the worker's sweeps and audit-log timestamp interpretation. |
-| `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_INITIAL_PASSWORD` | Used once, by the seed, to create the first usable account. |
+| `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_INITIAL_PASSWORD` | Read by the seed only while the database has no active `super_admin`: on the first deploy they create the first usable account. Once any active super admin exists they are ignored, so demoting or deactivating that account in `/admin/users` survives every later deploy. Clear `SUPER_ADMIN_INITIAL_PASSWORD` from `.env` after the first deploy. |
 
 ## Day-to-day
 

@@ -285,7 +285,7 @@ export async function main() {
 // Idempotent: a slug that already has a row is left alone, so re-running seed
 // never rotates a live password out from under its users. Rotation is an
 // explicit admin action (/admin/gates), not a side effect of deployment.
-async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
+export async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
   // 'tkt' and 'ttt' are deliberately NOT seeded: they gate /rtt/tkt and
   // /rtt/ttt, and neither route exists in the app.
   const slugs = ["observation", "mentorship", "admin"] as const;
@@ -354,11 +354,27 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
 // unverified and refuses password sign-in -- the account would exist, look
 // correct in the dashboard, and simply not work.
 //
-// Idempotent in all four states: no auth user + no profile, auth user but no
-// profile (possible if the trigger was added later), profile but wrong role,
-// and fully-provisioned. Re-running never rotates the password of a live
-// account -- that is an explicit admin action, not a deploy side effect.
-async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
+// ONCE ANY ACTIVE super_admin EXISTS, THIS DOES NOTHING AT ALL. deploy.sh runs
+// the seed on every deploy, and this function used to end, unconditionally, in
+// `ON CONFLICT (id) DO UPDATE SET role='super_admin', active=true,
+// deleted_at=NULL` against whichever account SUPER_ADMIN_EMAIL named. An
+// administrator who demoted, deactivated or offboarded that account -- the
+// founding admin leaving, the IT contractor handing over -- found it an active
+// super_admin again after the next routine deploy, with no audit row, and with
+// the GoTrue ban a deactivation sets still in place, so profile and auth record
+// disagreed. The bootstrap exists to create the FIRST administrator; after that
+// an existing profile is an administrator's decision, not a state to repair,
+// and accounts are managed at /admin/users. "Active super_admin" is the same
+// test /admin/users' last-super-admin guard (wouldStrandTheOrg) applies, so the
+// UI can never produce the state in which this runs again.
+//
+// Before that point it is idempotent in every state a first deploy can leave:
+// no auth user + no profile, auth user but no profile (possible if the trigger
+// was added later), and auth user whose profile the trigger wrote but this
+// function never promoted (a run that failed in between). Re-running never
+// rotates the password of a live account -- that is an explicit admin action,
+// not a deploy side effect.
+export async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
   const email = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
 
@@ -374,6 +390,19 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
       "[seed] ✗ super_admin bootstrap FAILED — NEXT_PUBLIC_SUPABASE_URL and " +
         "SUPABASE_SECRET_KEY are required to create an account. " +
         "Nobody can sign in until this runs.",
+    );
+    return;
+  }
+
+  // `users` is unqualified here and in the promotion below, like every drizzle
+  // statement in this seed, so the check and the write always name one table.
+  const admins = await db.execute(
+    sql`SELECT 1 FROM users WHERE role = 'super_admin' AND active AND deleted_at IS NULL LIMIT 1`,
+  );
+  if (((admins as unknown as { rows?: unknown[] }).rows ?? []).length > 0) {
+    console.log(
+      "[seed] super_admin bootstrap not needed — an active super_admin already exists, so " +
+        "SUPER_ADMIN_* were ignored and no account was changed (manage accounts at /admin/users)",
     );
     return;
   }
@@ -415,7 +444,7 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
   // predating the trigger. Without it the bootstrap would report success on an
   // account that still cannot obtain a token.
   await db.execute(sql`
-    INSERT INTO public.users (id, email, name, role, active, default_locale)
+    INSERT INTO users (id, email, name, role, active, default_locale)
     VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
     ON CONFLICT (id) DO UPDATE
       SET role = 'super_admin',
