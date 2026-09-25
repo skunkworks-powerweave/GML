@@ -13,6 +13,12 @@
 // production worker image (.github/workflows/test.yml), because that image's
 // Debian ffmpeg is the binary that actually ships.
 //
+// So it runs on several ffmpeg versions: Ubuntu's package in the behaviour job,
+// Debian's in the production image (5.1 while its node:22-slim base is
+// bookworm), the static 7.1 of docker/worker.local-test.Dockerfile. The
+// fixtures therefore use no CLI option that exists on only some of them (see
+// rotate90 below); an option 5.1 lacks fails the whole images job.
+//
 // Imports nothing but node builtins and encode.ts, so it can run in that image.
 
 import { test, after } from "node:test";
@@ -85,7 +91,17 @@ function streamOf(path: string): StreamInfo {
   return (JSON.parse(out) as { streams: StreamInfo[] }).streams[0]!;
 }
 
-type Variant = { uri: string; bandwidth: number; resolution: string; codecs: string };
+/**
+ * Whether a segment carries sound. Read from the segment itself, not from the
+ * master's CODECS attribute: which attributes the HLS muxer writes, and when,
+ * differs between ffmpeg versions, and the segment is what a player plays.
+ */
+function hasAudio(path: string): boolean {
+  const out = run("ffprobe", ["-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type", "-of", "json", path]);
+  return ((JSON.parse(out) as { streams?: unknown[] }).streams ?? []).length > 0;
+}
+
+type Variant = { uri: string; bandwidth: number; resolution: string };
 
 /** The variants a master playlist lists, in order. */
 function variantsOf(master: string): Variant[] {
@@ -96,7 +112,7 @@ function variantsOf(master: string): Variant[] {
     if (!m) continue;
     const attr = (k: string) => new RegExp(`(?:^|,)${k}=("[^"]*"|[^,]*)`).exec(m[1]!)?.[1]?.replace(/"/g, "") ?? "";
     const uri = lines.slice(i + 1).find((l) => l && !l.startsWith("#"))!;
-    out.push({ uri, bandwidth: Number(attr("BANDWIDTH")), resolution: attr("RESOLUTION"), codecs: attr("CODECS") });
+    out.push({ uri, bandwidth: Number(attr("BANDWIDTH")), resolution: attr("RESOLUTION") });
   }
   return out;
 }
@@ -115,7 +131,7 @@ function transcode(src: string): {
   seg: string;
   stream: StreamInfo;
   master: string | null;
-  variants: Array<Variant & { stream: StreamInfo }>;
+  variants: Array<Variant & { stream: StreamInfo; audio: boolean }>;
 } {
   const outDir = join(dir, `${src.split(/[\\/]/).pop()}-out`);
   mkdirSync(outDir, { recursive: true });
@@ -127,24 +143,33 @@ function transcode(src: string): {
     return { outDir, seg, stream: streamOf(seg), master: null, variants: [] };
   }
   const master = readFileSync(masterPath, "utf8");
-  const variants = variantsOf(master).map((v) => ({ ...v, stream: streamOf(firstSegment(outDir, v.uri)) }));
+  const variants = variantsOf(master).map((v) => {
+    const seg = firstSegment(outDir, v.uri);
+    return { ...v, stream: streamOf(seg), audio: hasAudio(seg) };
+  });
   const top = variants[variants.length - 1]!;
   return { outDir, seg: firstSegment(outDir, top.uri), stream: top.stream, master, variants };
 }
 
 // ── F02: every source comes out as H.264 a phone can decode ─────────────────
 //
-// libx264 is built for 8- AND 10-bit in both the static ffmpeg of the local
-// image and Debian's package, so with no pixel format given it keeps the
-// source's: an iPhone HDR clip became H.264 High 10, which Safari/iOS, Firefox
-// and 32-bit-ARM Android cannot decode, and was marked 'ready' regardless.
+// libx264 encodes 8- AND 10-bit in the static ffmpeg of the local image (and
+// Debian packages x264 with both depths), so with no pixel format given it
+// keeps the source's: an iPhone HDR clip became H.264 High 10, which
+// Safari/iOS, Firefox and 32-bit-ARM Android cannot decode, and was marked
+// 'ready' regardless.
 
-// The colour tags are set on the FRAMES (setparams), not with -color_trc: since
-// ffmpeg 7 an encoder takes its colour properties from the frames, so an
-// option alone produces an untagged file -- an "HDR" source that never
-// exercises the HDR path. Each tagged source below is checked to really carry
-// its transfer before its output is judged.
-const hdrTags = (trc: string) => ["-vf", `setparams=color_primaries=bt2020:color_trc=${trc}:colorspace=bt2020nc`];
+// The colour tags are set on the FRAMES (setparams) AND as encoder options.
+// ffmpeg 7.1 takes an encoder's colour properties from the frames, so the
+// options alone produce an untagged file there -- an "HDR" source that never
+// exercises the HDR path. Older ffmpeg (Debian bookworm's 5.1) may tag from the
+// options only; they agree, so each version gets its tags one way or the other.
+// Each tagged source below is checked to really carry its transfer before its
+// output is judged, so a version that tags neither way fails loudly here.
+const hdrTags = (trc: string) => [
+  "-vf", `setparams=color_primaries=bt2020:color_trc=${trc}:colorspace=bt2020nc`,
+  "-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc",
+];
 
 const PHONE_SOURCES: Array<{ name: string; file: string; args: string[]; needs?: string; hdr?: string }> = [
   { name: "8-bit 4:2:0 (the control: must be unchanged)", file: "sdr8.mp4", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] },
@@ -225,10 +250,62 @@ for (const s of SIZES) {
   });
 }
 
+/**
+ * Give an MP4's track a 90-degree rotation, in place, by writing its track
+ * header (tkhd) matrix -- where a phone records "this clip was held upright".
+ *
+ * On the bytes because no ffmpeg option does it on every version this file
+ * runs against: `-display_rotation` arrived in ffmpeg 6.0, so Debian
+ * bookworm's 5.1 -- the production image, until its base moves on -- rejects
+ * it as an unrecognised option, while the `rotate` metadata tag that 5.1
+ * honours is silently ignored by 7.1. Every version's MP4 demuxer reads the
+ * matrix, and that reading, followed by the worker's own filter graph, is what
+ * this test is about.
+ */
+function rotate90(path: string): void {
+  const buf = readFileSync(path);
+  const boxes = (start: number, end: number) => {
+    const out: Array<{ type: string; body: number; end: number }> = [];
+    for (let p = start; p + 8 <= end; ) {
+      let size = buf.readUInt32BE(p);
+      let body = p + 8;
+      if (size === 1) {
+        size = Number(buf.readBigUInt64BE(p + 8));
+        body = p + 16;
+      } else if (size === 0) {
+        size = end - p;
+      }
+      out.push({ type: buf.toString("latin1", p + 4, p + 8), body, end: p + size });
+      p += size;
+    }
+    return out;
+  };
+  const moov = boxes(0, buf.length).find((b) => b.type === "moov");
+  const traks = moov ? boxes(moov.body, moov.end).filter((b) => b.type === "trak") : [];
+  assert.equal(traks.length, 1, "the fixture should be one video track");
+  const tkhd = boxes(traks[0]!.body, traks[0]!.end).find((b) => b.type === "tkhd")!;
+  // version/flags, the times, track id and duration (wider in version 1),
+  // then reserved, layer, alternate group, volume and reserved: 16 bytes.
+  const matrix = tkhd.body + 4 + (buf[tkhd.body] === 1 ? 32 : 20) + 16;
+  [0, 0x10000, 0, -0x10000, 0, 0, 0, 0, 0x40000000].forEach((v, i) => buf.writeInt32BE(v, matrix + 4 * i));
+  writeFileSync(path, buf);
+}
+
+/** The rotation ffprobe reports for a file's video stream, in degrees, or null. */
+function rotationOf(path: string): number | null {
+  const out = run("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json", path]);
+  const [s] = (JSON.parse(out) as {
+    streams: Array<{ side_data_list?: Array<{ rotation?: number }>; tags?: { rotate?: string } }>;
+  }).streams;
+  const fromSideData = s?.side_data_list?.find((d) => typeof d.rotation === "number")?.rotation;
+  if (fromSideData !== undefined) return fromSideData;
+  return s?.tags?.rotate !== undefined ? Number(s.tags.rotate) : null;
+}
+
 test("F10: a phone clip coded landscape with a 90-degree rotation comes out portrait, 480 wide", { skip }, () => {
-  const coded = source("rotated-coded.mp4", { size: "1920x1080", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] });
-  const rotated = join(dir, "rotated.mp4");
-  run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90", "-i", coded, "-c", "copy", rotated]);
+  const rotated = source("rotated.mp4", { size: "1920x1080", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] });
+  rotate90(rotated);
+  assert.equal(Math.abs(rotationOf(rotated) ?? 0), 90, "the fixture does not carry a 90-degree rotation");
   const { stream } = transcode(rotated);
   assert.deepEqual([stream.width, stream.height], [480, 854]);
 });
@@ -258,7 +335,7 @@ test("F144: a 720p source is encoded as a 240p / 360p / 480p ladder under a mast
   for (const v of out.variants) {
     const [w, hgt] = v.resolution.split("x").map(Number);
     assert.deepEqual([v.stream.width, v.stream.height], [w, hgt], `${v.uri} is not the size its master entry declares`);
-    assert.match(v.codecs, /mp4a/, `${v.uri} has no audio -- a lesson video without its sound`);
+    assert.ok(v.audio, `${v.uri} has no audio -- a lesson video without its sound`);
   }
   // Declared peak bandwidth, lowest first. The bottom rung is the one a 2G
   // link has to carry: ~200 kbps video plus 48 kbps audio.
@@ -301,5 +378,5 @@ test("F15: ffmpeg's failure output is the error itself, not its banner and progr
 test("F144: a source without sound still gets its ladder", { skip }, () => {
   const out = transcode(source("ladder-silent.mp4", { size: "1280x720", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
   assert.equal(out.variants.length, 3);
-  for (const v of out.variants) assert.doesNotMatch(v.codecs, /mp4a/);
+  for (const v of out.variants) assert.equal(v.audio, false, `${v.uri} claims a sound track the source never had`);
 });

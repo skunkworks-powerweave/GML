@@ -208,8 +208,12 @@ jobs:
 
       # Having ffmpeg is not the same as producing video a phone can play. Run
       # the encoder tests INSIDE the image, against the Debian ffmpeg that ships
-      # (its libx264 is 8- and 10-bit, and the HDR path needs its zscale), with
-      # the image's own copy of the worker source.
+      # (the HDR path needs its zscale), with the image's own copy of the worker
+      # source. That ffmpeg is older than the others these tests meet -- 5.1
+      # while node:22-slim is bookworm -- so the tests use no CLI option it
+      # lacks. They were run locally only against the static 7.1, with 5.1's
+      # missing -display_rotation simulated; this step is the first run on the
+      # real Debian binary.
       - name: Worker image encodes playable HLS
         run: |
           docker run --rm -e GML_REQUIRE_FFMPEG=1 -v "$PWD/tests:/repo/tests:ro" \

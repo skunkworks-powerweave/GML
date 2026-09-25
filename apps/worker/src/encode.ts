@@ -175,7 +175,10 @@ function toneMapFilters(probe: Probe): string[] {
  * as landscape 854x480, which the bitrate caps were sized for.
  *
  * The quotes are filtergraph quoting; spawn() passes them through with no
- * shell. -2 from inside an expression works on Debian's ffmpeg 5.1 and 7.1.
+ * shell. The scale filter treats a -2 that an expression EVALUATES to exactly
+ * like a literal -2. That was run against the static ffmpeg 7.1
+ * (tests/behaviour/transcode-output.test.ts); CI runs the same tests on
+ * Ubuntu's packaged ffmpeg and inside the production image, on Debian's.
  */
 export function boundedScale(maxShort: number): string {
   const w = `if(gte(iw,ih),-2,min(${maxShort},trunc(iw/2)*2))`;
@@ -192,9 +195,9 @@ export function boundedScale(maxShort: number): string {
  * keyframes on the same frames -- segment boundaries line up across rungs and
  * a player can switch between them at any segment.
  *
- * ALWAYS 8-bit 4:2:0, High profile. libx264 is built for 8- and 10-bit in both
- * the static ffmpeg and Debian's package, and with no pixel format it keeps
- * the source's: a 10-bit phone clip (iPhone HDR, Android 10-bit) came out as
+ * ALWAYS 8-bit 4:2:0, High profile. libx264 in the static ffmpeg 7.1 encodes
+ * 8- and 10-bit (Debian packages x264 with both depths as well), and with no
+ * pixel format it keeps the source's: a 10-bit phone clip (iPhone HDR, Android 10-bit) came out as
  * H.264 High 10, a screen capture as High 4:4:4, an MJPEG AVI as High 4:2:2.
  * None has a hardware decoder anywhere, and Safari/iOS, Firefox and 32-bit-ARM
  * Android cannot play them at all -- yet each was marked 'ready'. For an
