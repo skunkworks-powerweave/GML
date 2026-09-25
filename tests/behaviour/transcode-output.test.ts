@@ -18,7 +18,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -85,14 +85,51 @@ function streamOf(path: string): StreamInfo {
   return (JSON.parse(out) as { streams: StreamInfo[] }).streams[0]!;
 }
 
-/** Probe the source and encode it exactly as the worker does; return the first segment's stream. */
-function transcode(src: string): { seg: string; stream: StreamInfo } {
+type Variant = { uri: string; bandwidth: number; resolution: string; codecs: string };
+
+/** The variants a master playlist lists, in order. */
+function variantsOf(master: string): Variant[] {
+  const out: Variant[] = [];
+  const lines = master.split("\n").map((l) => l.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^#EXT-X-STREAM-INF:(.*)$/.exec(lines[i]!);
+    if (!m) continue;
+    const attr = (k: string) => new RegExp(`(?:^|,)${k}=("[^"]*"|[^,]*)`).exec(m[1]!)?.[1]?.replace(/"/g, "") ?? "";
+    const uri = lines.slice(i + 1).find((l) => l && !l.startsWith("#"))!;
+    out.push({ uri, bandwidth: Number(attr("BANDWIDTH")), resolution: attr("RESOLUTION"), codecs: attr("CODECS") });
+  }
+  return out;
+}
+
+/** The first segment a media playlist names. */
+const firstSegment = (outDir: string, playlist: string) =>
+  join(outDir, readFileSync(join(outDir, playlist), "utf8").split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#"))!);
+
+/**
+ * Probe the source and encode it exactly as the worker does. Returns the TOP
+ * rendition's first segment (the one the 480p settings produce), and every
+ * rendition when the output is a ladder under a master playlist.
+ */
+function transcode(src: string): {
+  outDir: string;
+  seg: string;
+  stream: StreamInfo;
+  master: string | null;
+  variants: Array<Variant & { stream: StreamInfo }>;
+} {
   const outDir = join(dir, `${src.split(/[\\/]/).pop()}-out`);
   mkdirSync(outDir, { recursive: true });
   const probe = parseProbe(run("ffprobe", probeArgs(src)));
   run("ffmpeg", ["-hide_banner", "-loglevel", "error", ...hlsEncodeArgs(src, outDir, probe)]);
-  const seg = join(outDir, "seg_00000.ts");
-  return { seg, stream: streamOf(seg) };
+  const masterPath = join(outDir, "master.m3u8");
+  if (!existsSync(masterPath)) {
+    const seg = join(outDir, "seg_00000.ts");
+    return { outDir, seg, stream: streamOf(seg), master: null, variants: [] };
+  }
+  const master = readFileSync(masterPath, "utf8");
+  const variants = variantsOf(master).map((v) => ({ ...v, stream: streamOf(firstSegment(outDir, v.uri)) }));
+  const top = variants[variants.length - 1]!;
+  return { outDir, seg: firstSegment(outDir, top.uri), stream: top.stream, master, variants };
 }
 
 // ── F02: every source comes out as H.264 a phone can decode ─────────────────
@@ -136,15 +173,18 @@ for (const s of PHONE_SOURCES) {
   test(`F02: ${s.name} is transcoded to 8-bit 4:2:0 H.264 High`, { skip: skip || (s.needs && !hasEncoder(s.needs) ? `${s.needs} not available` : false) }, () => {
     const src = source(s.file, { args: s.args });
     if (s.hdr) assert.equal(streamOf(src).color_transfer, s.hdr, "the synthetic source is not tagged HDR");
-    const { stream } = transcode(src);
-    assert.equal(stream.codec_name, "h264");
-    assert.equal(stream.pix_fmt, "yuv420p", `pixel format ${stream.pix_fmt} is not what phones decode`);
-    assert.equal(stream.profile, "High", `profile ${stream.profile} has no hardware decoder and no Safari/iOS support`);
-    if (s.hdr) {
-      assert.ok(
-        stream.color_transfer !== "smpte2084" && stream.color_transfer !== "arib-std-b67",
-        `an HDR transfer (${stream.color_transfer}) was passed through untouched into an 8-bit SDR stream`,
-      );
+    const out = transcode(src);
+    // Every rendition a player might pick, not just the top one.
+    for (const stream of out.variants.length > 0 ? out.variants.map((v) => v.stream) : [out.stream]) {
+      assert.equal(stream.codec_name, "h264");
+      assert.equal(stream.pix_fmt, "yuv420p", `pixel format ${stream.pix_fmt} is not what phones decode`);
+      assert.equal(stream.profile, "High", `profile ${stream.profile} has no hardware decoder and no Safari/iOS support`);
+      if (s.hdr) {
+        assert.ok(
+          stream.color_transfer !== "smpte2084" && stream.color_transfer !== "arib-std-b67",
+          `an HDR transfer (${stream.color_transfer}) was passed through untouched into an 8-bit SDR stream`,
+        );
+      }
     }
   });
 }
@@ -201,4 +241,44 @@ test("F10: the poster frame follows the same rule at 360", { skip }, () => {
     const st = streamOf(jpg);
     assert.deepEqual([st.width, st.height], expect, `poster of a ${size} source`);
   }
+});
+
+// ── F144: an adaptive ladder, with a rung a 2G link can carry ───────────────
+//
+// The output was ONE ~800 kbps 480p media playlist. On a link below that the
+// player stalls continuously and hls.js has nothing to switch down to --
+// while the help panel told mentors it drops to 240p on a weak network.
+
+const withSound = ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-shortest", "-c:a", "aac"];
+
+test("F144: a 720p source is encoded as a 240p / 360p / 480p ladder under a master playlist", { skip }, () => {
+  const out = transcode(source("ladder-720.mp4", { size: "1280x720", args: [...withSound, "-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
+  assert.ok(out.master, "no master playlist -- a single rendition leaves the player nothing to switch down to");
+  assert.deepEqual(out.variants.map((v) => v.resolution), ["426x240", "640x360", "854x480"]);
+  for (const v of out.variants) {
+    const [w, hgt] = v.resolution.split("x").map(Number);
+    assert.deepEqual([v.stream.width, v.stream.height], [w, hgt], `${v.uri} is not the size its master entry declares`);
+    assert.match(v.codecs, /mp4a/, `${v.uri} has no audio -- a lesson video without its sound`);
+  }
+  // Declared peak bandwidth, lowest first. The bottom rung is the one a 2G
+  // link has to carry: ~200 kbps video plus 48 kbps audio.
+  const bw = out.variants.map((v) => v.bandwidth);
+  assert.deepEqual([...bw].sort((a, b) => a - b), bw, "variants must be listed lowest first");
+  assert.ok(bw[0]! <= 300_000, `the lowest rung declares ${bw[0]} bit/s`);
+});
+
+test("F144: a portrait source's rungs are portrait", { skip }, () => {
+  const out = transcode(source("ladder-portrait.mp4", { size: "1080x1920", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
+  assert.deepEqual(out.variants.map((v) => v.resolution), ["240x426", "360x640", "480x854"]);
+});
+
+test("F144: a small source gets no upscaled rungs", { skip }, () => {
+  const out = transcode(source("ladder-small.mp4", { size: "320x180", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
+  assert.deepEqual(out.variants.map((v) => v.resolution), ["320x180"], "a rung above the source is an upscale in disguise");
+});
+
+test("F144: a source without sound still gets its ladder", { skip }, () => {
+  const out = transcode(source("ladder-silent.mp4", { size: "1280x720", args: ["-pix_fmt", "yuv420p", "-c:v", "libx264"] }));
+  assert.equal(out.variants.length, 3);
+  for (const v of out.variants) assert.doesNotMatch(v.codecs, /mp4a/);
 });

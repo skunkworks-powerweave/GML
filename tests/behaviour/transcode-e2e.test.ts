@@ -88,3 +88,23 @@ test(
     });
   },
 );
+
+test(
+  "F144: the worker uploads the whole ladder and points the video at its master playlist",
+  { skip, timeout: 180_000 },
+  async () => {
+    await withWorkerWorld(async (w) => {
+      const { id, v } = await transcodeOnce(w, { source: makeSource("ladder.mp4", "1280x720") });
+      const prefix = `hls/${id}/`;
+      const keys = storage.keys("videos-hls", prefix).map((k) => k.slice(prefix.length));
+      for (const name of ["master.m3u8", "v0.m3u8", "v1.m3u8", "v2.m3u8", "v0_00000.ts", "v1_00000.ts", "v2_00000.ts"]) {
+        assert.ok(keys.includes(name), `${name} was not uploaded (got ${keys.join(", ")})`);
+      }
+      assert.equal(v.hls_master_key, `${prefix}master.m3u8`, "the video must point at the master, or the player sees one rendition");
+      const master = storage.get("videos-hls", `${prefix}master.m3u8`)!.body.toString();
+      assert.equal((master.match(/#EXT-X-STREAM-INF/g) ?? []).length, 3);
+      const [row] = await w.q<{ kind: string }>(`SELECT kind FROM ${w.schema}.files WHERE object_key = $1`, [`${prefix}master.m3u8`]);
+      assert.equal(row?.kind, "hls_master");
+    });
+  },
+);

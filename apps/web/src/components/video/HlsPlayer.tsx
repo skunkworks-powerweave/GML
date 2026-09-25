@@ -19,13 +19,32 @@
 // path and the Safari native-HLS path.
 //
 // Quality controls live on `hls.currentLevel`: -1 = auto-select per
-// ABR algorithm, 0 = pin to the lowest level. Because spec 041 ships
-// only a 480p rendition the practical effect is "Auto" and "480p" are
-// the same stream; we still expose the toggle so the keyboard contract
-// matches the prototype and so a future spec that re-enables 720p only
-// needs to flip the disabled flag.
+// ABR algorithm, otherwise the index of a rendition. The transcoder writes a
+// 240p / 360p / 480p ladder (apps/worker/src/encode.ts), so the menu is built
+// from the renditions the stream actually offers once hls.js has parsed it --
+// "480p" used to set currentLevel = 0, which in a ladder is 240p. A video
+// transcoded before the ladder offers its one 480p rendition. 720p stays a
+// disabled option: 480p is the ceiling (SM-4).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+
+type Level = { width: number; height: number };
+
+/** A rendition's label: its SHORT side, so a portrait 480x854 rung is "480p". */
+function shortSide(l: Level): number {
+  return Math.min(l.width || l.height, l.height || l.width);
+}
+
+/** The quality menu's rendition entries, in the stream's own order (lowest first). */
+export function renditionOptions(levels: Level[]): string[] {
+  return levels.map((l) => `${shortSide(l)}p`);
+}
+
+/** hls.currentLevel for a menu choice: -1 for Auto, else that rendition's index. */
+export function levelIndexFor(levels: Level[], choice: string): number {
+  if (choice === "auto") return -1;
+  return levels.findIndex((l) => `${shortSide(l)}p` === choice);
+}
 
 type HlsPlayerProps = {
   /** Pre-signed master playlist URL — /api/media/<token>. Refresh from server before expiry. */
@@ -61,7 +80,9 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
   // 40-minute lesson silently restarted it from the beginning -- worse, on a
   // Ladakh connection, than the error it replaced.
   const resumeAtRef = useRef<number>(0);
-  const hlsRef = useRef<{ destroy: () => void; currentLevel?: number } | null>(null);
+  const hlsRef = useRef<{ destroy: () => void; currentLevel?: number; levels?: Level[] } | null>(null);
+  // The renditions of the current stream, once hls.js has read its playlist.
+  const [levels, setLevels] = useState<Level[]>([]);
   const [currentSrc, setCurrentSrc] = useState(src);
 
   // Re-request the same server route, past the HTTP cache. The route mints new
@@ -73,7 +94,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
   }, [onRefresh, src]);
   const [error, setError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRateState] = useState<number>(1);
-  const [quality, setQuality] = useState<"auto" | "480p">("auto");
+  const [quality, setQuality] = useState<string>("auto");
 
   useEffect(() => {
     const video = videoRef.current;
@@ -137,6 +158,9 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           });
           hls.loadSource(currentSrc);
           hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            setLevels(hls.levels.map((l) => ({ width: l.width, height: l.height })));
+          });
           hls.on(Hls.Events.ERROR, async (_e, data) => {
             if (!data.fatal) return;
             // A media error is recoverable in place and must NOT cost a
@@ -177,15 +201,14 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     if (v) v.playbackRate = rate;
   }
 
-  // Apply quality change. -1 = auto (ABR), 0 = pin to lowest level
-  // (currently the only level, since spec 041 dropped 720p). On Safari
-  // native HLS hlsRef is null and the choice is a no-op — the stream is
-  // single-rendition anyway.
-  function applyQuality(next: "auto" | "480p") {
+  // Apply quality change. -1 = auto (ABR), otherwise the chosen rendition. On
+  // Safari native HLS hlsRef is null and the menu offers only Auto: Safari
+  // switches renditions by itself and exposes no way to pin one.
+  function applyQuality(next: string) {
     setQuality(next);
     const hls = hlsRef.current;
     if (!hls) return;
-    hls.currentLevel = next === "auto" ? -1 : 0;
+    hls.currentLevel = levelIndexFor(levels, next);
   }
 
   // Emit audit events (the server records `video.play`/`video.pause`)
@@ -314,13 +337,17 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           <select
             id="hls-quality"
             value={quality}
-            onChange={(e) => applyQuality(e.target.value as "auto" | "480p")}
+            onChange={(e) => applyQuality(e.target.value)}
             className="btn btn-sm"
             data-testid="quality-select"
             style={{ padding: "2px 6px" }}
           >
             <option value="auto">Auto</option>
-            <option value="480p">480p</option>
+            {renditionOptions(levels).map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
             <option value="720p" disabled title="720p disabled per programme settings">
               720p (disabled — spec 041)
             </option>

@@ -1,10 +1,13 @@
-// ffmpeg 480p HLS transcode.
+// ffmpeg HLS transcode: a 240p / 360p / 480p ladder.
 //
 // Input:  a source video in Supabase Storage (videos-original)
-// Output: a media playlist + segments in videos-hls, a poster frame in posters,
-//         and the dimensions/duration the UI has always claimed to show.
+// Output: a master playlist, a media playlist and segments per rendition in
+//         videos-hls (encode.ts has the ladder and the layout), a poster frame
+//         in posters, and the dimensions/duration the UI has always claimed to
+//         show.
 //
-// Targets ~800 kbps total (480p video + 64 kbps mono AAC) for Ladakh 3G.
+// From ~250 kbps all in (240p) to ~860 kbps (480p video + 64 kbps mono AAC),
+// so a 2G link has a rendition it can carry and Ladakh 3G keeps its 480p.
 //
 // ── WHAT WAS WRONG WITH THE PREVIOUS VERSION ─────────────────────────────────
 //
@@ -49,15 +52,17 @@ import { createClient } from "@supabase/supabase-js";
 import { db } from "@gml/db";
 import type { QueueTx, ReapedJob } from "@gml/db/queue";
 import { files, transcodeJobs, videoSubmissions } from "@gml/db/schema";
-import { BUCKETS, hlsPrefix, hlsPlaylistKey, posterKey } from "@gml/shared/storage/buckets";
+import { BUCKETS, hlsPrefix, hlsMasterPlaylistKey, posterKey } from "@gml/shared/storage/buckets";
 import { putObject, getObjectStream } from "@gml/shared/storage/client";
 import {
   hlsEncodeArgs,
+  ladderFor,
   parseProbe,
   posterArgs,
   probeArgs,
   renditionProbeArgs,
   renditionProblem,
+  variantFirstSegment,
   type Probe,
 } from "./encode.js";
 import type { TranscodeJobInput } from "./index.js";
@@ -203,12 +208,15 @@ export async function transcode480p(
     await runFfmpeg(hlsEncodeArgs(localInput, localOut, probe), signal);
 
     // ffmpeg exiting 0 proves it wrote something, not that a phone can play
-    // it. Refuse an undecodable rendition here, before anything is uploaded or
-    // marked ready, so it takes the failure path with a reason attached.
-    const problem = renditionProblem(
-      await run("ffprobe", renditionProbeArgs(join(localOut, "seg_00000.ts"))),
-    );
-    if (problem) throw new Error(problem);
+    // it. Refuse an undecodable rendition here -- any rung, since a player may
+    // pick any -- before anything is uploaded or marked ready, so it takes the
+    // failure path with a reason attached.
+    for (let i = 0; i < ladderFor(probe).length; i += 1) {
+      const problem = renditionProblem(
+        await run("ffprobe", renditionProbeArgs(join(localOut, variantFirstSegment(i)))),
+      );
+      if (problem) throw new Error(`rendition ${i}: ${problem}`);
+    }
 
     // ── 4. Poster frame ──────────────────────────────────────────────────────
     // Best-effort: a video with no usable frame at the chosen timestamp should
@@ -230,7 +238,8 @@ export async function transcode480p(
       console.warn(`[transcode] poster failed for ${videoSubmissionId}:`, String(err).slice(0, 200));
     }
 
-    // ── 5. Upload the playlist and every segment ─────────────────────────────
+    // ── 5. Upload the playlists and every segment ────────────────────────────
+    // The ladder's layout is flat (encode.ts), so this is every file in `out`.
     const prefix = hlsPrefix(videoSubmissionId);
     const outFiles = (await readdir(localOut)).sort();
     let bytes = 0;
@@ -248,7 +257,10 @@ export async function transcode480p(
     }
 
     // ── 6. Record it ─────────────────────────────────────────────────────────
-    const playlistKey = hlsPlaylistKey(videoSubmissionId);
+    // The video points at the MASTER playlist, so the player sees the whole
+    // ladder. (Videos transcoded before it point at their single index.m3u8,
+    // and the playlist route serves both.)
+    const playlistKey = hlsMasterPlaylistKey(videoSubmissionId);
 
     // UPSERT, not INSERT. See note 1 at the top of this file: the plain insert
     // made every retry impossible, because the key is deterministic per
@@ -289,7 +301,8 @@ export async function transcode480p(
       .where(eq(transcodeJobs.id, jobRowId));
 
     console.log(
-      `[transcode] ${videoSubmissionId} ready — ${outFiles.length - 1} segments, ` +
+      `[transcode] ${videoSubmissionId} ready — ${ladderFor(probe).map((r) => r.name).join("/")}, ` +
+        `${outFiles.filter((f) => f.endsWith(".ts")).length} segments, ` +
         `${Math.round(bytes / 1024)} KiB, ${probe.durationSec ?? "?"}s, ` +
         `${probe.width ?? "?"}x${probe.height ?? "?"}`,
     );

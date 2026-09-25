@@ -250,7 +250,9 @@ test("transcode.ts re-encodes EVERY source, including WhatsApp", () => {
   // portrait phone clip came out 270 px wide and a 320x180 forward was scaled
   // up. The short side is capped at 480 instead, with no upscaling;
   // tests/behaviour/transcode-output.test.ts executes it on real sources.
-  assert.match(src, /boundedScale\(480\)/);
+  // Per rung since F144; the top rung is still 480p at 800k.
+  assert.match(src, /boundedScale\(r\.short\)/);
+  assert.match(src, /name: "480p", short: 480, maxrate: "800k"/);
   assert.ok(
     !/scale=-2:(480|360)/.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")),
     "no filter may pin the output height again",

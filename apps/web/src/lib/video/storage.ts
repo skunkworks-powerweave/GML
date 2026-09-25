@@ -21,11 +21,12 @@ import {
   BUCKETS,
   hlsPrefix,
   hlsPlaylistKey,
+  hlsMasterPlaylistKey,
   type BucketName,
 } from "@gml/shared/storage/buckets";
 import { rewritePlaylist, extractSegments, segmentTtlSeconds } from "@gml/shared/storage/playlist";
 
-export { BUCKETS, hlsPrefix, hlsPlaylistKey, segmentTtlSeconds };
+export { BUCKETS, hlsPrefix, hlsPlaylistKey, hlsMasterPlaylistKey, segmentTtlSeconds };
 export type { BucketName, SignedObject };
 
 export const storage = {
@@ -41,6 +42,11 @@ export const storage = {
   remove: (bucket: BucketName, keys: string[]) => removeObjects(supabaseAdmin(), bucket, keys),
 };
 
+/** A master playlist lists variant streams; a media playlist lists segments. */
+export function isMasterPlaylist(playlist: string): boolean {
+  return /^#EXT-X-STREAM-INF:/m.test(playlist);
+}
+
 /**
  * Fetch a submission's media playlist and return it with every segment line
  * replaced by an absolute, individually-signed Storage URL.
@@ -52,11 +58,20 @@ export const storage = {
  * Returns null when the playlist object is missing -- a submission marked ready
  * whose output is not there is a real state, and the caller renders "not
  * available" rather than a player pointed at nothing.
+ *
+ * A MASTER playlist (the rendition ladder) lists media playlists, not
+ * segments, and is not signed at all: each variant line becomes whatever
+ * `variantUrl` returns -- the app URL that serves that rendition -- so its
+ * segments are signed on the request that needs them, after the same
+ * authorization check. Signed as if they were segments, the variant lines
+ * became bare Storage URLs whose own relative segment lines then resolved
+ * against Storage with no token, and a ladder would never have played.
  */
 export async function buildSignedPlaylist(
   videoSubmissionId: string,
   playlistKey: string,
   durationSec: number | null,
+  opts: { variantUrl?: (variantName: string) => string } = {},
 ): Promise<{ body: string; expiresAt: Date } | null> {
   const bucket = BUCKETS.videosHls;
   const client = supabaseAdmin();
@@ -72,6 +87,11 @@ export async function buildSignedPlaylist(
 
   const prefix = hlsPrefix(videoSubmissionId);
   const ttl = segmentTtlSeconds(durationSec);
+
+  if (isMasterPlaylist(playlistText)) {
+    const body = rewritePlaylist(playlistText, (name) => opts.variantUrl?.(name) ?? null);
+    return { body, expiresAt: new Date(Date.now() + ttl * 1000) };
+  }
 
   // Sign exactly the names the playlist references. Supabase will not sign a
   // key with no object behind it, so a computed range would silently drop the

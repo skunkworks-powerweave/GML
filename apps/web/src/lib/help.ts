@@ -285,13 +285,13 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   hls: {
     title: "HLS streaming",
     short: "Smart streaming that adjusts video quality to your network — works even on 2G.",
-    long: "HLS is the technology that lets the video player automatically drop to 240p when your network is weak and bump back to 720p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
+    long: "HLS is the technology that lets the video player automatically drop to 240p when your network is weak and come back up to 480p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
     related: ["video", "upload"],
   },
   transcoding: {
     title: "Transcoding",
     short: "What happens to a video after upload — we re-make it in several sizes so it plays everywhere.",
-    long: "When a teacher uploads a video, our server processes it into four versions: 240p (low-band), 480p (default), 720p (sharp), and audio-only. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
+    long: "When a teacher uploads a video, our server processes it into three versions: 240p for a weak signal, 360p, and 480p, the sharpest. The player moves between them by itself as your signal changes. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
     related: ["video", "upload", "hls"],
   },
   whatsapp_ingest: {

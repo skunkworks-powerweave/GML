@@ -5,9 +5,10 @@
 // transcode.ts needs a database and Supabase Storage before it ever reaches
 // ffmpeg, which kept its encoder settings out of reach of every test -- and
 // the settings are exactly where the defects were. With nothing but node:path
-// imported here, a test can run these arguments through a real ffmpeg and probe what comes out
-// (tests/behaviour/transcode-output.test.ts), and CI can do the same inside
-// the production worker image, whose Debian ffmpeg is the one that ships.
+// imported here, a test can run these arguments through a real ffmpeg and
+// probe what comes out (tests/behaviour/transcode-output.test.ts), and CI can
+// do the same inside the production worker image, whose Debian ffmpeg is the
+// one that ships.
 
 import { join } from "node:path";
 
@@ -21,14 +22,15 @@ export type Probe = {
   colorTransfer?: string | null;
   colorPrimaries?: string | null;
   colorSpace?: string | null;
+  /** Whether it has sound. Unknown (a failed probe) is treated as yes. */
+  hasAudio?: boolean | null;
 };
 
-/** ffprobe arguments for the source's duration and first video stream. */
+/** ffprobe arguments for the source's duration, its streams' kinds, and its video stream. */
 export function probeArgs(path: string): string[] {
   return [
     "-v", "error",
-    "-select_streams", "v:0",
-    "-show_entries", "stream=width,height,color_transfer,color_primaries,color_space",
+    "-show_entries", "stream=codec_type,width,height,color_transfer,color_primaries,color_space",
     "-show_entries", "format=duration",
     "-of", "json",
     path,
@@ -39,6 +41,7 @@ export function probeArgs(path: string): string[] {
 export function parseProbe(stdout: string): Probe {
   const parsed = JSON.parse(stdout) as {
     streams?: {
+      codec_type?: string;
       width?: number;
       height?: number;
       color_transfer?: string;
@@ -47,16 +50,56 @@ export function parseProbe(stdout: string): Probe {
     }[];
     format?: { duration?: string };
   };
-  const s0 = parsed.streams?.[0];
+  const streams = parsed.streams ?? [];
+  const v = streams.find((s) => s.codec_type === "video");
   const d = parsed.format?.duration ? Number.parseFloat(parsed.format.duration) : NaN;
   return {
     durationSec: Number.isFinite(d) && d > 0 ? Math.round(d) : null,
-    width: s0?.width ?? null,
-    height: s0?.height ?? null,
-    colorTransfer: s0?.color_transfer ?? null,
-    colorPrimaries: s0?.color_primaries ?? null,
-    colorSpace: s0?.color_space ?? null,
+    width: v?.width ?? null,
+    height: v?.height ?? null,
+    colorTransfer: v?.color_transfer ?? null,
+    colorPrimaries: v?.color_primaries ?? null,
+    colorSpace: v?.color_space ?? null,
+    hasAudio: streams.some((s) => s.codec_type === "audio"),
   };
+}
+
+/**
+ * The rendition ladder, lowest first. Each rung caps its SHORT side (so a
+ * portrait video's rungs are portrait) and its bitrate; the top rung is the
+ * 480p settings the single rendition always had, unchanged.
+ *
+ * It was one ~800 kbps 480p rendition and nothing else. On a 2G or weak-3G
+ * link below that the player stalls continuously and hls.js has no lower
+ * rendition to switch to -- while the help panel told mentors it would drop
+ * to 240p. The bottom rung is ~250 kbps all in. 480p stays the ceiling (SM-4).
+ */
+export const LADDER = [
+  { name: "240p", short: 240, maxrate: "200k", bufsize: "400k", audio: "48k" },
+  { name: "360p", short: 360, maxrate: "400k", bufsize: "800k", audio: "48k" },
+  { name: "480p", short: 480, maxrate: "800k", bufsize: "1600k", audio: "64k" },
+] as const;
+
+export type Rung = (typeof LADDER)[number];
+
+/** The master playlist's file name; its variants are v0.m3u8, v1.m3u8, ... beside it. */
+export const MASTER_PLAYLIST = "master.m3u8";
+
+/** Rendition `i`'s media playlist and first segment, as the encode below names them. */
+export const variantPlaylist = (i: number) => `v${i}.m3u8`;
+export const variantFirstSegment = (i: number) => `v${i}_00000.ts`;
+
+/**
+ * The rungs a source gets: none taller than the source itself -- a rung above
+ * it would be an upscale in disguise, the bytes-for-nothing F10 removed -- and
+ * always at least the lowest. The short side is the same whichever way a
+ * rotated phone clip is coded, so the probe's coded size is enough.
+ */
+export function ladderFor(probe: Probe): Rung[] {
+  if (!probe.width || !probe.height) return [...LADDER];
+  const short = Math.min(probe.width, probe.height);
+  const fit = LADDER.filter((r) => r.short <= short);
+  return fit.length > 0 ? fit : [LADDER[0]];
 }
 
 /** PQ (HDR10, Dolby Vision 8.1) and HLG (iPhone HDR, Dolby Vision 8.4's base layer). */
@@ -105,9 +148,13 @@ export function boundedScale(maxShort: number): string {
 }
 
 /**
- * The HLS encode: one 480p media playlist plus its segments in `outDir`.
+ * The HLS encode: the ladder for this source (ladderFor) in ONE ffmpeg run, a
+ * media playlist per rung (v0.m3u8 ...) and the master playlist listing them,
+ * all flat in `outDir` beside their segments.
  *
- * Targets ~800 kbps total (480p video + 64 kbps mono AAC) for Ladakh 3G.
+ * One run, decoding the source once and splitting it, so every rung has its
+ * keyframes on the same frames -- segment boundaries line up across rungs and
+ * a player can switch between them at any segment.
  *
  * ALWAYS 8-bit 4:2:0, High profile. libx264 is built for 8- and 10-bit in both
  * the static ffmpeg and Debian's package, and with no pixel format it keeps
@@ -122,38 +169,45 @@ export function boundedScale(maxShort: number): string {
  */
 export function hlsEncodeArgs(input: string, outDir: string, probe: Probe): string[] {
   const toneMap = toneMapFilters(probe);
+  const rungs = ladderFor(probe);
+  const audio = probe.hasAudio !== false;
+  // Tone-map once, split once per rung, then each rung: the short side capped
+  // (see boundedScale); out_range=tv brings full-range sources (MJPEG, some
+  // Android cameras) to the limited range web delivery expects and changes
+  // nothing on one that is already limited; format= last, so the conversion
+  // does not depend on option order.
+  const graph = [
+    `[0:v]${[...toneMap, `split=${rungs.length}`].join(",")}${rungs.map((_, i) => `[s${i}]`).join("")}`,
+    ...rungs.map((r, i) => `[s${i}]${boundedScale(r.short)}:out_range=tv,format=yuv420p[v${i}]`),
+  ].join(";");
   return [
     "-y",
     "-i", input,
+    "-filter_complex", graph,
+    ...rungs.flatMap((_, i) => ["-map", `[v${i}]`, ...(audio ? ["-map", "0:a:0"] : [])]),
     "-c:v", "libx264",
     "-profile:v", "high",
     "-preset", "veryfast",
     "-crf", "26",
-    "-maxrate", "800k",
-    "-bufsize", "1600k",
-    // The short side capped at 480 (see boundedScale). out_range=tv brings
-    // full-range sources (MJPEG, some Android cameras) to the limited range web
-    // delivery expects; it changes nothing on a source that is already
-    // limited. format= comes last so the conversion does not depend on option
-    // order.
-    "-vf", [...toneMap, `${boundedScale(480)}:out_range=tv`, "format=yuv420p"].join(","),
+    ...rungs.flatMap((r, i) => [`-maxrate:v:${i}`, r.maxrate, `-bufsize:v:${i}`, r.bufsize]),
     // A tone-mapped stream is BT.709 now and must say so; leaving the BT.2020
     // / PQ / HLG tags on it would make a player "correct" it a second time.
     ...(toneMap.length > 0
       ? ["-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
       : []),
-    "-c:a", "aac",
-    "-b:a", "64k",
-    "-ac", "1",
+    ...(audio ? ["-c:a", "aac", "-ac", "1", ...rungs.flatMap((r, i) => [`-b:a:${i}`, r.audio])] : []),
     // Segment boundaries must be keyframe-aligned or players stall at each
     // join. At 6s segments and 25fps that is a keyframe every 150 frames.
     "-g", "150",
     "-keyint_min", "150",
     "-sc_threshold", "0",
+    "-f", "hls",
     "-hls_time", "6",
     "-hls_playlist_type", "vod",
-    "-hls_segment_filename", join(outDir, "seg_%05d.ts"),
-    join(outDir, "index.m3u8"),
+    "-hls_segment_filename", join(outDir, "v%v_%05d.ts"),
+    "-master_pl_name", MASTER_PLAYLIST,
+    "-var_stream_map", rungs.map((_, i) => (audio ? `v:${i},a:${i}` : `v:${i}`)).join(" "),
+    join(outDir, "v%v.m3u8"),
   ];
 }
 
