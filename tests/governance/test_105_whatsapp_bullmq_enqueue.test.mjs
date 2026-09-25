@@ -59,17 +59,34 @@ test("spec 105: all five spec-kit files are present", () => {
   }
 });
 
-test("spec 105: webhook route enqueues through @/lib/queue, not through @gml/worker", () => {
+// ── F93: WHERE THE WHATSAPP TRANSCODE IS QUEUED ─────────────────────────────
+//
+// The four tests below pinned the route calling enqueueTranscode() itself,
+// right after its video_submissions insert. That shape was the defect: the
+// route did the Graph fetch, the Storage put and the insert inside after(),
+// once Meta already had its 200, so a token, Graph or Storage failure -- or a
+// restart -- lost the video for good.
+//
+// The route now records the submission (file 'uploading') and queues a
+// 'whatsapp_fetch' job in one transaction before it answers, and the worker's
+// whatsapp-fetch.ts queues the transcode once the bytes are actually stored.
+// The behaviour spec 105 bought -- a transcode queued for every WhatsApp
+// video, with the four object coordinates, no `source` discriminator, and a
+// 'transcode.enqueued' audit row -- is asserted where it now happens.
+
+const FETCH_PATH = "apps/worker/src/whatsapp-fetch.ts";
+
+test("spec 105: webhook route enqueues through @gml/db/queue, not through @gml/worker", () => {
   const src = read(ROUTE_PATH);
-  // INVERTED. This required `import { transcodeQueue } from "@gml/worker"`.
-  // The producer now lives in the web app's own lib, on top of @gml/db, which
-  // apps/web already depended on. The route is a producer; it has no business
+  // The producer is the shared queue module over @gml/db, which apps/web
+  // already depended on. The route is a producer; it has no business
   // importing a consumer process's module graph.
   assert.match(
     src,
-    /import\s*\{[^}]*\benqueueTranscode\b[^}]*\}\s*from\s*["']@\/lib\/queue["']/,
-    "route must import enqueueTranscode from @/lib/queue",
+    /import\s*\{[^}]*\benqueue\b[^}]*\}\s*from\s*["']@gml\/db\/queue["']/,
+    "route must queue the WhatsApp fetch through @gml/db/queue",
   );
+  assert.match(src, /queue\s*:\s*WHATSAPP_QUEUE/, "the fetch goes on the whatsapp queue, not behind a transcode");
   const src2 = code(src);
   assert.ok(
     !/@gml\/worker/.test(src2),
@@ -78,84 +95,83 @@ test("spec 105: webhook route enqueues through @/lib/queue, not through @gml/wor
   );
   assert.ok(
     !/\btranscodeQueue\b/.test(src2),
-    "the BullMQ Queue object no longer exists; enqueueTranscode() is the whole producer surface",
+    "the BullMQ Queue object no longer exists",
   );
-});
-
-test("spec 105: route enqueues the transcode AFTER the video_submissions insert", () => {
-  const src = read(ROUTE_PATH);
-  // The ORDERING is the part of this test that was never about BullMQ, and it
-  // still matters for the same reason: the job payload carries the submission
-  // id, so the row has to exist before the worker can be told to look for it.
-  // Only the call being ordered has changed name.
-  const insertIdx = src.search(/\.insert\s*\(\s*videoSubmissions\s*\)/);
-  const enqueueIdx = src.search(/\bawait\s+enqueueTranscode\s*\(/);
-  assert.ok(insertIdx > -1, "route must insert into videoSubmissions");
-  assert.ok(enqueueIdx > -1, "route must call enqueueTranscode(...)");
   assert.ok(
-    enqueueIdx > insertIdx,
-    "enqueueTranscode must be called AFTER the videoSubmissions insert (got insertIdx=" +
-      insertIdx +
-      ", enqueueIdx=" +
-      enqueueIdx +
-      ")",
+    !/\bafter\s*\(/.test(src2),
+    "no ingest work may be deferred to after(): Meta already has its 200, so a failure there is final",
   );
 });
 
-test("spec 105: the enqueue payload carries the four object coordinates and NOT source", () => {
+test("spec 105: the fetch is queued AFTER the insert, and the transcode only after the bytes are stored", () => {
+  // The ORDERING is the part of this test that was never about BullMQ: a job
+  // payload carries the submission id, so the row has to exist before the
+  // worker is told to look for it -- and a transcode needs an object to read.
   const src = read(ROUTE_PATH);
-  const call = src.match(/enqueueTranscode\s*\(\s*\{([\s\S]*?)\}\s*\)/);
-  assert.ok(call, "route must call enqueueTranscode({ ... }) with an object literal payload");
-  const payload = call[1];
+  const insertIdx = src.search(/\.insert\s*\(\s*videoSubmissions\s*\)/);
+  // The FETCH job specifically -- the route also queues a reply job for
+  // messages that are not videos, which has no submission to wait for.
+  const enqueueIdx = src.search(/name\s*:\s*WHATSAPP_FETCH_JOB/);
+  assert.ok(insertIdx > -1, "route must insert into videoSubmissions");
+  assert.ok(enqueueIdx > -1, "route must queue the fetch");
+  assert.ok(enqueueIdx > insertIdx, `the fetch must be queued AFTER the insert (insert=${insertIdx}, enqueue=${enqueueIdx})`);
 
-  // These four are what the worker needs to find and re-encode the object.
-  // Unchanged from spec 105; the queue name that used to be add()'s first
-  // argument is now the producer helper's business, not the caller's.
-  // `[:,}]` because the last one is written as ES shorthand (`objectKey,`).
+  const worker = read(FETCH_PATH);
+  const putIdx = worker.search(/await\s+deps\.put\s*\(/);
+  const transcodeIdx = worker.search(/queue\s*:\s*["']transcode["']/);
+  assert.ok(putIdx > -1, "the worker must store the bytes");
+  assert.ok(transcodeIdx > -1, "the worker must queue the transcode");
+  assert.ok(transcodeIdx > putIdx, "the transcode must be queued only once the bytes are in Storage");
+});
+
+// The queued fetch only helps if the worker claims it. Deleting the worker's
+// whatsapp consumer and its whatsapp_fetch case left every test green, and
+// every WhatsApp video would have waited for a fetch nothing ran.
+// tests/behaviour/whatsapp-worker-wiring.test.ts runs real jobs through
+// runJob() and checks consumerSlots() covers every queue; main() never
+// returns, so that it starts exactly those slots is pinned here.
+test("F93: the worker's main() starts a consumer for every slot consumerSlots() lists", () => {
+  const src = code(read("apps/worker/src/index.ts"));
+  const main = src.slice(src.search(/async function main\s*\(/));
+  assert.match(
+    main,
+    /consumerSlots\(\)\s*\.map\(\s*\(\s*\{\s*queue\s*,\s*slot\s*\}\s*\)\s*=>\s*consumer\(\s*queue\s*,\s*slot\s*\)\s*\)/,
+    "main() must start its consumers from consumerSlots(), which is built from QUEUE_NAMES",
+  );
+  assert.ok(!/consumer\(\s*["']/.test(main), "no consumer is started by hand, outside consumerSlots()");
+});
+
+test("spec 105: the transcode payload carries the four object coordinates and NOT source", () => {
+  const src = read(FETCH_PATH);
+  const call = src.match(/queue\s*:\s*["']transcode["'][\s\S]*?payload\s*:\s*\{([^}]*)\}/);
+  assert.ok(call, "whatsapp-fetch.ts must queue the transcode with an object-literal payload");
+  const payload = call[1];
   for (const field of ["videoSubmissionId", "fileId", "bucket", "objectKey"]) {
     assert.match(payload, new RegExp(`\\b${field}\\s*[:,}]`), `payload must include ${field}`);
   }
 
-  // INVERTED. This used to REQUIRE `source: "whatsapp"` so the worker would
-  // "skip re-encode but still package". That branch was a defect: stream-copying
-  // arbitrary phone-camera output into HLS fails on non-Annex-B H.264 or
-  // non-AAC audio, and where it succeeded it shipped a 1080p multi-megabit
-  // rendition to the users the 480p ladder exists for. Every source is
-  // re-encoded now, so nothing downstream may branch on provenance -- which
-  // means the payload must not carry it in the first place.
+  // INVERTED long ago and still true: every source is re-encoded, so nothing
+  // downstream may branch on provenance, and the payload must not carry it.
   assert.ok(
     !/\bsource\b/.test(payload),
-    "the transcode payload must not carry a `source` discriminator -- the " +
-      "worker re-encodes every source identically, and a field nothing reads " +
-      "is an invitation to reintroduce the branch",
+    "the transcode payload must not carry a `source` discriminator",
   );
 
-  // The provenance is still recorded where it belongs: on the audit row, which
-  // is a record of what happened rather than an instruction to the worker.
+  // The provenance is still recorded where it belongs: on the audit row.
   assert.match(
     src,
-    /action\s*:\s*["']transcode\.enqueued["'][\s\S]{0,400}?source\s*:\s*["']whatsapp["']/,
-    "the audit metadata must still record source:'whatsapp' -- the ingest path " +
-      "is worth knowing about after the fact even though it must not steer the encode",
+    /["']transcode\.enqueued["'][\s\S]{0,400}?source\s*:\s*["']whatsapp["']/,
+    "the audit metadata must still record source:'whatsapp'",
   );
 });
 
-test("spec 105: route audits 'transcode.enqueued' with entityType video_submission", () => {
-  const src = read(ROUTE_PATH);
+test("spec 105: the WhatsApp path audits 'transcode.enqueued' against the video_submission", () => {
+  const src = read(FETCH_PATH);
+  assert.match(src, /audit\(\s*["']transcode\.enqueued["']\s*,\s*p\.videoSubmissionId/, "worker must audit 'transcode.enqueued' for the submission");
   assert.match(
     src,
-    /action\s*:\s*["']transcode\.enqueued["']/,
-    "route must audit 'transcode.enqueued'",
-  );
-  // Locate the audit block and confirm it references video_submission entityType
-  const auditBlock = src.match(
-    /recordAudit\s*\(\s*\{[^}]*action\s*:\s*["']transcode\.enqueued["'][^}]*\}/s,
-  );
-  assert.ok(auditBlock, "transcode.enqueued audit block must be present");
-  assert.match(
-    auditBlock[0],
-    /entityType\s*:\s*["']video_submission["']/,
-    "transcode.enqueued audit must reference entityType 'video_submission'",
+    /insert\(auditLog\)\.values\(\{[^}]*entityType\s*:\s*["']video_submission["']/,
+    "the worker's audit rows must reference entityType 'video_submission'",
   );
 });
 

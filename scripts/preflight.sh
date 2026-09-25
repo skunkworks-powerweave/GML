@@ -101,6 +101,15 @@ done
 # an unconfigured integration is reported, not blocked.
 if [ -n "${WHATSAPP_APP_SECRET:-}" ]; then
   ok "WHATSAPP_APP_SECRET is set (${#WHATSAPP_APP_SECRET} chars) -- WhatsApp ingest can be switched on"
+  # The secret switches the webhook on; these are what make ingest WORK, and
+  # each missing one breaks something different. Warned, not failed: the LMS
+  # itself runs fine, and /admin/whatsapp-log says the same thing.
+  [ -n "${WHATSAPP_VERIFY_TOKEN:-}" ] ||
+    nb "WHATSAPP_VERIFY_TOKEN is not set -- Meta's webhook verification (GET) will be refused"
+  [ -n "${WHATSAPP_ACCESS_TOKEN:-}" ] ||
+    nb "WHATSAPP_ACCESS_TOKEN is not set -- videos will be recorded but cannot be fetched from Meta (use a permanent system-user token)"
+  [ -n "${WHATSAPP_PHONE_NUMBER_ID:-}" ] ||
+    nb "WHATSAPP_PHONE_NUMBER_ID is not set -- senders will get no reply saying what happened to their video"
 else
   nb "WHATSAPP_APP_SECRET is not set -- WhatsApp ingest is OFF (the webhook refuses all traffic); direct upload is unaffected"
 fi

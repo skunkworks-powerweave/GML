@@ -49,11 +49,15 @@ import {
   succeed,
   HEARTBEAT_SECONDS,
   LEASE_SECONDS,
+  QUEUE_NAMES,
   type ClaimedJob,
+  type QueueName,
 } from "@gml/db/queue";
 import { deleteOldNotifications, pruneRateLimits } from "@gml/db/scripts/retention";
 import { repairReapedTranscodes, repairStrandedTranscodes, sweepStaleScratch, transcode480p } from "./transcode.js";
 import { reconcileStalledUploads } from "./reconcile-uploads.js";
+import { fetchWhatsAppMedia, runWhatsAppReply } from "./whatsapp-fetch.js";
+import type { WhatsAppFetchPayload, WhatsAppReplyPayload } from "@gml/shared/whatsapp/fetch-job";
 import { log } from "./log.js";
 
 export type TranscodeJobInput = {
@@ -125,6 +129,19 @@ async function handle(job: ClaimedJob): Promise<void> {
         signal: stopping.signal,
       });
       break;
+    // A WhatsApp video the webhook accepted and recorded; see
+    // whatsapp-fetch.ts. It throws on failure so runJob() records it for a
+    // retry.
+    case "whatsapp_fetch":
+      await fetchWhatsAppMedia(job.payload as unknown as WhatsAppFetchPayload, {
+        attempt: job.attempts,
+        maxAttempts: job.maxAttempts,
+      });
+      break;
+    // The answer to a WhatsApp message that was not a video.
+    case "whatsapp_reply":
+      await runWhatsAppReply(job.payload as unknown as WhatsAppReplyPayload);
+      break;
     // The nightly retention sweep. The name predates the second table; it is
     // kept because scheduleDailyWork() enqueues it, and its dedupe key --
     // enqueued `once` -- is what makes the sweep once-per-day.
@@ -168,8 +185,11 @@ const OUTCOME_WRITE_ATTEMPTS = 3;
  * A job that failed BECAUSE shutdown interrupted it has no outcome: it is
  * handed back to the queue with release(), its attempt uncounted, rather than
  * recorded as a failure.
+ *
+ * Exported so tests/behaviour can run real claimed jobs through the dispatch.
+ * `lockedBy` is the claim's locked_by, which release() matches on.
  */
-async function runJob(job: ClaimedJob, lockedBy: string): Promise<void> {
+export async function runJob(job: ClaimedJob, lockedBy: string): Promise<void> {
   const hb = setInterval(() => {
     void heartbeat(db, job.id, LEASE_SECONDS).catch((err) =>
       log.warn("heartbeat failed", { job: job.id, err: String(err) }),
@@ -228,14 +248,37 @@ async function runJob(job: ClaimedJob, lockedBy: string): Promise<void> {
 }
 
 /**
+ * The consumer loops main() starts: CONCURRENCY for transcode, one for every
+ * other queue.
+ *
+ * Built from QUEUE_NAMES, not listed by hand. The WhatsApp consumer was one
+ * hand-written line, and deleting it left every test green while every
+ * WhatsApp video waited for a fetch nothing would claim. A queue added to
+ * QUEUE_NAMES now gets its consumer without anyone remembering to add it.
+ */
+export function consumerSlots(): Array<{ queue: QueueName; slot: number }> {
+  return QUEUE_NAMES.flatMap((queue): Array<{ queue: QueueName; slot: number }> =>
+    queue === "transcode"
+      ? // Transcode gets the configured concurrency.
+        Array.from({ length: CONCURRENCY }, (_, slot) => ({ queue, slot }))
+      : // Retention is housekeeping and needs exactly one runner. WhatsApp
+        // fetches are network-bound and short, and a teacher is waiting for
+        // the answer, so they have their own runner rather than queueing
+        // behind a transcode.
+        [{ queue, slot: 0 }],
+  );
+}
+
+/**
  * One consumer loop.
  *
- * `queue` is a parameter because the QueueName union has always had two members
- * and only one had a consumer -- anything enqueued onto "retention" would have
- * sat there forever with nothing claiming it. A type that invites you to write
- * a job nobody will run is worse than no type.
+ * `queue` is a parameter because the QueueName union once had two members and
+ * only one had a consumer -- anything enqueued onto "retention" would have sat
+ * there forever with nothing claiming it. A type that invites you to write a
+ * job nobody will run is worse than no type, so every member of QueueName has a
+ * consumer started in main() (consumerSlots).
  */
-async function consumer(queue: "transcode" | "retention", slot: number): Promise<void> {
+async function consumer(queue: QueueName, slot: number): Promise<void> {
   const lockedBy = `${WORKER_ID}#${queue}#${slot}`;
   while (!shuttingDown()) {
     let job: ClaimedJob | null = null;
@@ -424,12 +467,7 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
-  await Promise.all([
-    // Transcode gets the configured concurrency; retention is housekeeping and
-    // needs exactly one runner.
-    ...Array.from({ length: CONCURRENCY }, (_, i) => consumer("transcode", i)),
-    consumer("retention", 0),
-  ]);
+  await Promise.all(consumerSlots().map(({ queue, slot }) => consumer(queue, slot)));
   // A consumer only returns once shutdown has begun, after handing back
   // whatever it was running -- so when they have all returned, the drain is
   // done. Anything else is a loop that ended, and must end the process too.

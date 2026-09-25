@@ -1,0 +1,34 @@
+-- Keep what a WhatsApp submission needs to be fetched again, and who sent it.
+--
+-- ── WHY ──────────────────────────────────────────────────────────────────────
+--
+-- The webhook used to answer Meta 200 and do all of its work afterwards, in
+-- Next's after(). When the Graph lookup, the download or the Storage put
+-- failed, nothing retried, and nothing COULD: the Graph media id -- the only
+-- handle on the video, which Meta keeps for about 30 days -- was recorded
+-- nowhere. The 'whatsapp.message.received' audit row held the message id,
+-- mime type, caption and phone numbers, not the media id.
+--
+-- The webhook now inserts the submission (status 'received', file 'uploading')
+-- and queues the fetch in the same transaction before it answers. These two
+-- columns are what that row has to carry:
+--
+--   whatsapp_media_id  the Graph media id. The fetch job carries it too, but
+--                      jobs are transport and are pruned; an operator's
+--                      "Retry fetch" on /admin/whatsapp-log reads it from here.
+--   whatsapp_from      the sender's number as Meta delivers it. The ingest log
+--                      recovered it by joining audit rows on entity_id, which
+--                      the webhook never set, so the column read '-' for every
+--                      row -- and for a video from a number not on file, the
+--                      sender is the operator's only clue.
+--
+-- Both nullable: direct uploads and every row from before this migration have
+-- neither.
+--
+-- ── ROLLBACK ─────────────────────────────────────────────────────────────────
+--
+-- ALTER TABLE "video_submissions" DROP COLUMN "whatsapp_media_id";
+-- ALTER TABLE "video_submissions" DROP COLUMN "whatsapp_from";
+
+ALTER TABLE "video_submissions" ADD COLUMN IF NOT EXISTS "whatsapp_media_id" text;--> statement-breakpoint
+ALTER TABLE "video_submissions" ADD COLUMN IF NOT EXISTS "whatsapp_from" text;

@@ -8,9 +8,10 @@
 // grade view that:
 //
 //   - lists every video_submission whose source='whatsapp',
-//   - shows the original sender phone (pulled from the matching
-//     audit_log row's metadata.from field — webhook records it under
-//     action='whatsapp.message.received'),
+//   - shows the original sender phone (video_submissions.whatsapp_from;
+//     for rows older than migration 0036, the matching
+//     'whatsapp.message.received' audit row's metadata.from, found by
+//     message id),
 //   - shows the truncated caption (video_submissions.caption_raw),
 //     parsed context (matched / unmatched, color-coded), submission
 //     status chip, and a /videos/<id> deep link,
@@ -22,12 +23,13 @@
 // programme-oversight semantics of /admin/audit and /admin/gates).
 
 import Link from "next/link";
-import { desc, eq, and, gte, lte, inArray } from "drizzle-orm";
+import { desc, eq, and, gte, lte, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { videoSubmissions, auditLog } from "@gml/db/schema";
+import { videoSubmissions, auditLog, files } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
-import { resendTranscodeAction } from "./actions";
+import { whatsappHealth } from "@/lib/health";
+import { resendTranscodeAction, retryWhatsAppFetchAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +68,22 @@ const RESENDABLE_STATUSES = new Set([
   "failed",
 ]);
 
+// What each ?error= the two actions (./actions.ts) redirect back with means.
+// The page used to read no `error` at all, so a refused Retry fetch -- on a row
+// from before the media id was kept, say -- reloaded the page unchanged.
+const ACTION_ERRORS: Record<string, string> = {
+  missing_submission_id: "No submission was given. Use the button on the row.",
+  submission_not_found: "That submission no longer exists.",
+  not_whatsapp_source: "That submission did not arrive through WhatsApp.",
+  cannot_resend_finalised: "That video has already been processed or reviewed, so it is not transcoded again.",
+  media_not_fetched:
+    "That video's media was never fetched from WhatsApp, so there is nothing to transcode. Use Retry fetch.",
+  no_media_id:
+    "That video arrived before the WhatsApp media id was recorded, so it cannot be fetched again. " +
+    "Ask the sender to send it again.",
+  already_fetched: "That video's media is already stored. Use Resend transcode instead.",
+};
+
 function chipForContext(contextType: string): string {
   if (contextType === "generic") return "chip chip-rust";
   return "chip chip-lichen";
@@ -78,7 +96,7 @@ function parsingLabel(contextType: string): "matched" | "unmatched" {
 export default async function WhatsappIngestLogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ parsing?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ parsing?: string; from?: string; to?: string; error?: string }>;
 }) {
   await requireRole(["programme_admin", "super_admin"]);
   const sp = await searchParams;
@@ -125,60 +143,130 @@ export default async function WhatsappIngestLogPage({
       contextId: videoSubmissions.contextId,
       captionRaw: videoSubmissions.captionRaw,
       createdAt: videoSubmissions.createdAt,
+      processingLog: videoSubmissions.processingLog,
+      mediaId: videoSubmissions.whatsappMediaId,
+      whatsappFrom: videoSubmissions.whatsappFrom,
+      whatsappMessageId: videoSubmissions.whatsappMessageId,
+      fileStatus: files.status,
+      // The webhook records a submission BEFORE its media is fetched, so a row
+      // can be waiting on the worker's fetch. Its latest error is the one thing
+      // that says why -- a missing token, a Graph 401, a Storage refusal.
+      fetchError: sql<string | null>`(
+        SELECT j.last_error FROM jobs j
+         WHERE j.queue = 'whatsapp' AND j.dedupe_key = 'wa:' || ${videoSubmissions.whatsappMessageId}
+         ORDER BY j.created_at DESC LIMIT 1)`,
     })
     .from(videoSubmissions)
+    .innerJoin(files, eq(files.id, videoSubmissions.fileId))
     .where(and(...conds))
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(PAGE_LIMIT);
 
-  // Pull the matching whatsapp.message.received audit rows to recover the
-  // sender phone from metadata.from. Single round-trip indexed on
-  // (action, createdAt) per audit_log_action_created_idx (spec 010).
-  const submissionIds = rows.map((r) => r.id);
-  const phoneBySubmissionId = new Map<string, string>();
+  // The integration's own state, first. A partly configured deployment -- the
+  // secret set, the access token not -- accepted every video and fetched none,
+  // and this page, the one an operator opens when a teacher says "I sent it",
+  // said nothing about why.
+  const health = await whatsappHealth();
+  const MISSING_EFFECT: Record<string, string> = {
+    WHATSAPP_VERIFY_TOKEN: "Meta's webhook verification is refused",
+    WHATSAPP_ACCESS_TOKEN: "videos are recorded but cannot be fetched from Meta",
+    WHATSAPP_PHONE_NUMBER_ID: "senders get no reply",
+  };
 
-  if (submissionIds.length > 0) {
+  // WHO SENT IT. The webhook writes the sender onto the submission
+  // (video_submissions.whatsapp_from, migration 0036), and that is read first.
+  //
+  // This used to come only from the 'whatsapp.message.received' audit rows,
+  // joined on audit_log.entity_id -- which the webhook never set, because it
+  // wrote that row before the submission existed. The join could not match, so
+  // the column read "—" for every row, including the unmatched videos from
+  // numbers on file for nobody, where the sender is the operator's only clue.
+  //
+  // Rows from before 0036 have no whatsapp_from; for those the audit row is
+  // still the only record, and it is found by the message id it DOES carry.
+  const phoneBySubmissionId = new Map<string, string>();
+  const needAudit = new Map<string, string>(); // whatsapp_message_id -> submission id
+  for (const r of rows) {
+    if (r.whatsappFrom) phoneBySubmissionId.set(r.id, r.whatsappFrom);
+    else if (r.whatsappMessageId) needAudit.set(r.whatsappMessageId, r.id);
+  }
+
+  if (needAudit.size > 0) {
     const audits = await db
-      .select({
-        entityId: auditLog.entityId,
-        metadata: auditLog.metadata,
-      })
+      .select({ metadata: auditLog.metadata })
       .from(auditLog)
       .where(
         and(
           eq(auditLog.action, "whatsapp.message.received"),
-          inArray(auditLog.entityId, submissionIds),
+          inArray(sql<string>`${auditLog.metadata} ->> 'msgId'`, [...needAudit.keys()]),
         ),
       )
-      .limit(submissionIds.length * 2);
+      .limit(needAudit.size * 2);
 
-    // The webhook fires whatsapp.message.received with entityType="video_submission"
-    // BEFORE it knows the submission id — so the action might not always
-    // carry entityId for older rows. We pre-populate from the latest set
-    // that does include it; rows without a hit fall back to "—".
     for (const a of audits) {
-      if (!a.entityId) continue;
       const md = (a.metadata ?? {}) as Record<string, unknown>;
       const from = typeof md.from === "string" ? md.from : null;
-      if (from) phoneBySubmissionId.set(a.entityId, from);
+      const submissionId = typeof md.msgId === "string" ? needAudit.get(md.msgId) : undefined;
+      if (from && submissionId) phoneBySubmissionId.set(submissionId, from);
     }
   }
-
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
       <header>
         <h1 className="text-2xl font-semibold">WhatsApp ingest log</h1>
         <p className="text-sm text-neutral-500">
-          Every video sent to the GML WhatsApp number. Captions starting
-          with OBS- / TB- / MM- link the upload to an observation cycle,
-          teach-back, or mentor meeting; everything else is parked as a
-          generic submission. The operator can find it in the video library at
-          /videos and re-link it there -- /admin/data/videos, which this page
-          used to name, is not one of the registered admin entities and has
-          never existed.
+          Every video sent to the GML WhatsApp number. A caption carrying
+          OBS- / TB- / MM- and a code the sender may use links the upload to
+          that observation cycle, teach-back, or mentor meeting; everything
+          else is kept as a generic submission, visible to admins and the
+          sender, with its caption and sender shown here. The app has no
+          control yet for attaching a generic video to a cycle afterwards:
+          ask the teacher to send it again with the cycle code as the caption.
         </p>
       </header>
+
+      {sp.error ? (
+        <p
+          className="rounded-lg border border-neutral-200 bg-white p-3 text-sm text-rust"
+          data-testid="action-error"
+          role="alert"
+        >
+          {ACTION_ERRORS[sp.error] ?? "That action could not be completed."}
+        </p>
+      ) : null}
+
+      {health.state !== "on" ? (
+        <section
+          className="rounded-lg border border-neutral-200 bg-white p-4 text-sm"
+          data-testid="whatsapp-config"
+          role="status"
+        >
+          {health.state === "off" ? (
+            <p>
+              WhatsApp ingest is off: WHATSAPP_APP_SECRET is not set, so the webhook refuses all
+              traffic. Direct upload is unaffected.
+            </p>
+          ) : (
+            <>
+              <p className="font-medium">WhatsApp ingest is only partly configured.</p>
+              <ul className="mt-1 list-disc pl-5">
+                {health.missing.map((name) => (
+                  <li key={name}>
+                    <span className="font-mono">{name}</span> is not set: {MISSING_EFFECT[name] ?? "see README-IT.md"}.
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      ) : null}
+      {health.deadFetches24h ? (
+        <p className="text-sm text-rust" role="status">
+          {health.deadFetches24h} WhatsApp video fetch(es) gave up in the last 24 hours; each row below
+          shows why, with Retry fetch.
+        </p>
+      ) : null}
 
       <form
         method="get"
@@ -252,7 +340,14 @@ export default async function WhatsappIngestLogPage({
                 const phone = phoneBySubmissionId.get(r.id) ?? "—";
                 const caption = (r.captionRaw ?? "").trim();
                 const captionShort = caption.length > 40 ? `${caption.slice(0, 40)}…` : caption || "—";
-                const canResend = RESENDABLE_STATUSES.has(r.status);
+                // No bytes in Storage yet (or ever): a transcode has nothing to
+                // read, so the row offers the fetch again instead -- when the
+                // media id was kept (every row since migration 0036).
+                const awaitingMedia = r.fileStatus !== "stored";
+                const canRetryFetch = awaitingMedia && r.mediaId !== null;
+                const canResend = !awaitingMedia && RESENDABLE_STATUSES.has(r.status);
+                const why =
+                  r.status === "failed" ? r.processingLog : awaitingMedia ? r.fetchError : null;
                 const parsing = parsingLabel(r.contextType);
                 return (
                   <tr key={r.id} className="border-t border-neutral-100">
@@ -277,10 +372,27 @@ export default async function WhatsappIngestLogPage({
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      <span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>{r.status}</span>
+                      <span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>
+                        {awaitingMedia && r.status === "received" ? "awaiting media" : r.status}
+                      </span>
+                      {why ? (
+                        <div className="mt-1 max-w-xs break-words text-[11px] text-rust" data-testid="ingest-error">
+                          {why.length > 200 ? `${why.slice(0, 200)}…` : why}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      {canResend ? (
+                      {canRetryFetch ? (
+                        <form action={retryWhatsAppFetchAction}>
+                          <input type="hidden" name="submissionId" value={r.id} />
+                          <button
+                            type="submit"
+                            className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+                          >
+                            Retry fetch
+                          </button>
+                        </form>
+                      ) : canResend ? (
                         <form action={resendTranscodeAction}>
                           <input type="hidden" name="submissionId" value={r.id} />
                           <button

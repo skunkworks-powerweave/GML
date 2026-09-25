@@ -118,14 +118,70 @@ this is only the operator-facing subset.
 | `SUPABASE_SECRET_KEY` | Bypasses RLS entirely and can create, ban and delete accounts. Never let it reach a browser. |
 | `AUTH_EMAIL_ENABLED` | `false` until SMTP is attached in the Supabase dashboard. See "Accounts and passwords" below. |
 | `WHATSAPP_APP_SECRET` | Optional until WhatsApp is switched on. While empty, the webhook refuses **all** traffic (503 `whatsapp_not_configured`) and deploy/preflight report WhatsApp ingest as OFF; everything else works. |
-| `WHATSAPP_VERIFY_TOKEN` | Must match what you type into the Meta dashboard during webhook setup. |
-| `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` | From Meta Business Manager. |
+| `WHATSAPP_VERIFY_TOKEN` | A random string you choose; must match what you type into the Meta dashboard during webhook setup. See "WhatsApp Business setup" below. |
+| `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` | From Meta. The access token must be a **permanent system-user token**: the dashboard's temporary one expires in 24 hours, and without a valid token videos are recorded but cannot be fetched. See "WhatsApp Business setup" below. |
 | `GML_WHATSAPP_NUMBER` | Display E.164 shown on the upload pages as the "send your clip here" hint. |
 | `GML_HELPDESK_PHONE` | wa.me-ready E.164 without the plus, for the in-product Help button. |
 | `GML_HELPDESK_EMAIL` | mailto target for the same Help button. |
 | `WORKER_CONCURRENCY` | **1.** One ffmpeg at `-preset veryfast` saturates both vCPUs; a second starves the web tier sharing the box. |
 | `TZ` | IANA zone, `Asia/Kolkata`. Pins the worker's sweeps and audit-log timestamp interpretation. |
 | `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_INITIAL_PASSWORD` | Used once, by the seed, to create the first usable account. |
+
+## WhatsApp Business setup
+
+WhatsApp is the programme's low-bandwidth video path, and it is switched on
+after go-live: until `WHATSAPP_APP_SECRET` is set the webhook refuses all
+traffic and everything else works. Switching it on takes the four values
+below, all from Meta, and one webhook registration.
+
+1. **App and number.** In Meta for Developers, open the Business app that has
+   the WhatsApp product, with the programme's business number added. On
+   **WhatsApp > API Setup**, copy the **Phone number ID** into
+   `WHATSAPP_PHONE_NUMBER_ID`. It is Meta's opaque id for the number, not the
+   number itself; the dialable number goes in `GML_WHATSAPP_NUMBER`.
+2. **App secret.** **App settings > Basic > App secret** into
+   `WHATSAPP_APP_SECRET`. Every delivery is checked against it
+   (`X-Hub-Signature-256`); a wrong value makes each one a 401 with a log line
+   naming the variable.
+3. **A permanent access token.** The token shown on API Setup expires after
+   24 hours, and with an expired token no video can be fetched. In **Business
+   settings > Users > System users**, add a system user, assign it the app and
+   the WhatsApp account, and generate a token with the
+   `whatsapp_business_messaging` and `whatsapp_business_management`
+   permissions that never expires. Put it in `WHATSAPP_ACCESS_TOKEN`. The
+   worker uses it to download each video and to reply to the sender.
+4. **Verify token.** Any long random string you choose, in
+   `WHATSAPP_VERIFY_TOKEN`. Meta sends it back once, when the webhook is
+   registered.
+5. Run `scripts/preflight.sh` (it warns about any of the four still missing),
+   then deploy.
+6. **Register the webhook.** **WhatsApp > Configuration > Webhook > Edit**:
+   callback URL `https://<DOMAIN>/api/webhooks/whatsapp`, verify token as in
+   step 4, **Verify and save**. Then, under **Webhook fields**, subscribe to
+   **messages** -- without it Meta sends nothing.
+7. **Check it end to end.**
+   - The handshake, by hand (it must print `12345`; a 403 means the token
+     does not match, or is unset, which the app logs):
+
+     ```
+     curl "https://<DOMAIN>/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=<WHATSAPP_VERIFY_TOKEN>&hub.challenge=12345"
+     ```
+
+   - `curl -s https://<DOMAIN>/api/health` reports `"whatsapp":"on"`
+     (`partial` names what is missing in `details` when `HEALTH_DEBUG=1`).
+   - From a teacher's phone whose number is on her teacher record
+     (`/admin/data/teachers`), send a short video captioned with her cycle
+     code, e.g. `OBS-2026-009`. Within a minute `/admin/whatsapp-log` lists
+     it, linked to the cycle, and the phone gets a reply saying so. A row
+     marked "awaiting media" prints why; fix the cause and press
+     **Retry fetch**.
+
+A sender is recognised by the last ten digits of their number, matched
+against the teacher record (`/admin/data/teachers`) or the phone on the
+account itself (`/admin/users`), which is where a mentor's or an observer's
+number goes: they have no teacher record. A video from a number that matches
+nobody, or captioned with a cycle the sender may not add to, is kept for an
+admin rather than attached.
 
 ## Day-to-day
 
@@ -147,8 +203,12 @@ typing the URL.
   that distinction is what separates "will retry itself" from "needs a human".
 - **`/admin/system-settings`** — programme name, academic-year label, default
   video quality, and which inbox notification types are on globally.
-- **`/admin/whatsapp-log`** — recent WhatsApp ingest events: signature failures,
-  replay-ignores, media fetch results, unmatched context.
+- **`/admin/whatsapp-log`** — every video sent to the WhatsApp number: who sent
+  it, the caption and what it was linked to, its status, and — for one whose
+  media has not arrived — why (a missing or rejected access token, a Graph
+  error), with **Retry fetch**. It also says when the integration is only
+  partly configured. Signature failures and the other webhook events are in
+  `/admin/audit` under `whatsapp.*` (docs/audit-actions.md).
 - **`/admin`** and **`/admin/data/<table>`** — the no-code tables: schools,
   teachers, mentors, pairings, classes, learners, sessions, course outlines,
   resources, RTT modules / lessons / readings / sessions, observation cycles and
@@ -307,7 +367,7 @@ calls:
 | Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate node scripts/verify-auth.mjs`. |
 | `/api/health` returns 503 | Read which of `db`, `storage`, `migrations` is false | `docker compose logs migrate` first — it is usually that. |
 | Worker unhealthy, videos stuck transcoding | It cannot reach the database, or ffmpeg failed | Check `DATABASE_URL` uses the session pooler (5432); then `/admin/transcode-jobs`. |
-| WhatsApp videos not arriving | `WHATSAPP_APP_SECRET` unset or wrong | Unset: the webhook answers 503 `whatsapp_not_configured` and logs `WhatsApp ingest is OFF` once. Wrong: it answers 401 and audits `whatsapp.signature_failed`. Check `docker compose logs app`. |
+| WhatsApp videos not arriving | The integration is off or partly configured, or a secret or token is wrong | `/api/health` reports `whatsapp: off / partial / on` (its `details` name the missing variables), and `/admin/whatsapp-log` says the same. Secret unset: 503 `whatsapp_not_configured` and one `WhatsApp ingest is OFF` log line. Secret wrong: 401, `whatsapp.signature_failed` rows and a log line naming `WHATSAPP_APP_SECRET`. Access token missing or expired: the videos are listed on `/admin/whatsapp-log` as awaiting media, with the reason; fix the token, then **Retry fetch**. Check `docker compose logs app worker`. |
 
 ## Support
 

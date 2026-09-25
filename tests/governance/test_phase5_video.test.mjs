@@ -81,17 +81,30 @@ test("WhatsApp webhook has GET verify + POST ingestion + signature check", () =>
 });
 
 test("WhatsApp webhook parses OBS-/TB-/MM- caption prefixes", () => {
-  const src = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
-  for (const tag of ["OBS", "TB", "MM"]) {
-    assert.match(src, new RegExp(`tag === "${tag}"`));
+  // F129: the parser moved to packages/shared so it can be executed without
+  // Next (tests/behaviour/whatsapp-caption.test.ts drives it, and the
+  // webhook, with the captions teachers really type). The route must use it.
+  // The parser now tries every tag in the caption and keeps the first
+  // well-formed code, so the three tags are a table (tag -> context type)
+  // rather than three `tag === "..."` branches; each must still map to its
+  // context.
+  const src = read("packages/shared/src/whatsapp/caption.ts");
+  for (const [tag, type] of [["OBS", "observation_cycle"], ["TB", "teach_back"], ["MM", "mentor_meeting"]]) {
+    assert.match(src, new RegExp(`\\b${tag}\\s*:\\s*"${type}"`), `${tag} must map to ${type}`);
   }
+  const route = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
+  assert.match(route, /import\s*\{\s*parseCaption\s*\}\s*from\s*"@gml\/shared\/whatsapp\/caption"/);
 });
 
 test("WhatsApp webhook uses dotted-notation audit actions", () => {
   const src = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
-  for (const action of ["whatsapp.message.received", "whatsapp.media.fetched", "whatsapp.signature_failed"]) {
+  for (const action of ["whatsapp.message.received", "whatsapp.signature_failed"]) {
     assert.match(src, new RegExp(action.replace(/\./g, "\\.")));
   }
+  // F93: the media fetch moved to the worker (the webhook ran it after Meta's
+  // 200, so any failure lost the video), and its audit action moved with it.
+  const worker = read("apps/worker/src/whatsapp-fetch.ts");
+  assert.match(worker, /whatsapp\.media\.fetched/);
 });
 
 // Spec 044 — external link embed

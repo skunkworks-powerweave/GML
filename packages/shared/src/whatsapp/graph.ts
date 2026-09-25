@@ -27,11 +27,11 @@
  *
  * An earlier revision of this block said every failure on this path "collapses
  * to the same silence" and that a blank or revoked token was indistinguishable
- * from no video at all. That was wrong: route.ts records
- * `whatsapp.media.url_failed` when `fetchMediaUrl` returns null and
- * `whatsapp.media.fetch_failed` when `downloadMediaBytes` does. The expired
- * version was the one case that left no trace — precisely BECAUSE it does not
- * fail.
+ * from no video at all. That was wrong: a rejected lookup or download is
+ * recorded (today by the worker's fetch, which fails the job with the HTTP
+ * status and Graph error, and audits `whatsapp.media.fetch_failed` when it gives
+ * up). The expired version was the one case that left no trace — precisely
+ * BECAUSE it does not fail.
  *
  * So the version lives here, in one place, with a test that fails before it
  * expires (tests/governance/test_173_graph_api_version_pin.test.mjs).
@@ -166,8 +166,10 @@ export function graphApiVersion(env: EnvLike = ambientEnv()): string {
  * non-OK. That is byte-identical to the behaviour before this module existed.
  *
  * THROWS `URIError` on a lone UTF-16 surrogate, because `encodeURIComponent`
- * does. The one caller today, `fetchMediaUrl`, wraps it in a try/catch. A new
- * caller must do the same, or validate the id first.
+ * does. The one caller today, the worker's fetch (apps/worker/src/
+ * whatsapp-fetch.ts), runs it inside the handler's try/catch, so it fails that
+ * attempt with the reason. A new caller must do the same, or validate the id
+ * first.
  *
  * RUNTIME: the environment is read through `globalThis.process`, which exists on
  * Node. If the webhook route were ever moved to `runtime = "edge"`, the override
@@ -177,17 +179,97 @@ export function graphApiVersion(env: EnvLike = ambientEnv()): string {
  * Meta also accepts an optional `phone_number_id` query parameter here, which
  * scopes the lookup: "the request will only be processed if the business phone
  * number ID included in the query matches the ID of the business phone number
- * that the media was uploaded on." That would give `WHATSAPP_PHONE_NUMBER_ID` —
- * currently read by nothing in this repository — a real use on the inbound path.
- * Deliberately not wired up in this change, which is about the version pin; it
- * is a behaviour change to the fetch and belongs in its own commit with its own
- * test.
+ * that the media was uploaded on." `WHATSAPP_PHONE_NUMBER_ID` is read by
+ * sendWhatsAppText below, for replies; it is deliberately not added to this
+ * lookup, which would make every fetch fail on a mistyped id -- a behaviour
+ * change to the fetch that belongs in its own commit with its own test.
  */
 export function mediaMetadataUrl(
   mediaId: string,
   env: EnvLike = ambientEnv(),
 ): string {
   return `https://${GRAPH_HOST}/${graphApiVersion(env)}/${encodeURIComponent(mediaId)}`;
+}
+
+/**
+ * The Cloud API endpoint that sends a message FROM the programme's number.
+ *
+ * `POST /{phone-number-id}/messages`. The id is Meta's opaque account id for the
+ * business number (WHATSAPP_PHONE_NUMBER_ID), not the dialable number.
+ */
+export function messagesUrl(phoneNumberId: string, env: EnvLike = ambientEnv()): string {
+  return `https://${GRAPH_HOST}/${graphApiVersion(env)}/${encodeURIComponent(phoneNumberId)}/messages`;
+}
+
+export type ReplyResult = { sent: true } | { sent: false; reason: string };
+
+let warnedReplyUnconfigured = false;
+
+/**
+ * Send a plain-text WhatsApp message to `to` (E.164 digits, as Meta delivered
+ * the sender's number).
+ *
+ * ── WHY ──────────────────────────────────────────────────────────────────────
+ *
+ * The sender used to get nothing back, ever: no "received, linked to
+ * OBS-2026-009", no "the caption did not match", no "please send it again".
+ * A teacher on a 2G link got the same silence whether her lesson reached the
+ * cycle, was parked for an admin, or was lost -- and found out only when the
+ * cycle stalled. An inbound message opens WhatsApp's 24-hour customer-service
+ * window, so a free-form text reply is allowed without a template.
+ *
+ * NEVER THROWS, and is a logged no-op when WHATSAPP_PHONE_NUMBER_ID or
+ * WHATSAPP_ACCESS_TOKEN is unset: WhatsApp is switched on after go-live, and a
+ * reply is a courtesy that must not fail, retry or block the ingest it reports
+ * on. A refused send comes back as `{ sent: false, reason }` for the caller to
+ * record.
+ */
+export async function sendWhatsAppText(
+  msg: { to: string; body: string },
+  deps: { fetch: typeof fetch; env?: EnvLike; timeoutMs?: number },
+): Promise<ReplyResult> {
+  const env = deps.env ?? ambientEnv();
+  const phoneNumberId = env.WHATSAPP_PHONE_NUMBER_ID?.trim();
+  const token = env.WHATSAPP_ACCESS_TOKEN?.trim();
+  if (!phoneNumberId || !token) {
+    if (!warnedReplyUnconfigured) {
+      warnedReplyUnconfigured = true;
+      console.warn(
+        "[whatsapp] replies are OFF: WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_ACCESS_TOKEN must both be set " +
+          "for senders to hear what happened to their video.",
+      );
+    }
+    return { sent: false, reason: "not_configured" };
+  }
+  const to = msg.to.replace(/\D/g, "");
+  if (!to) return { sent: false, reason: "no_recipient" };
+  try {
+    const res = await deps.fetch(messagesUrl(phoneNumberId, env), {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { preview_url: false, body: msg.body.slice(0, 4096) },
+      }),
+      signal: AbortSignal.timeout(deps.timeoutMs ?? 10_000),
+    });
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const j = (await res.json()) as { error?: { code?: number; message?: string } };
+        if (j.error) detail = ` (Graph error ${j.error.code ?? "?"}: ${String(j.error.message ?? "").slice(0, 200)})`;
+      } catch {
+        // Not JSON; the status is all there is.
+      }
+      return { sent: false, reason: `HTTP ${res.status}${detail}` };
+    }
+    return { sent: true };
+  } catch (err) {
+    return { sent: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**

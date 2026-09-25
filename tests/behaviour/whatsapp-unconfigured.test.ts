@@ -18,17 +18,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import "./_ui.js"; // the @/ alias and framework stubs, for apps/web modules
-import { needsDatabase, withClient } from "./_harness.js";
+import { request } from "./_ui.js"; // the @/ alias and framework stubs, for apps/web modules
+import { needsDatabase, withClient, tag } from "./_harness.js";
 
 const skip = needsDatabase();
 const route = () => import("../../apps/web/src/app/api/webhooks/whatsapp/route.ts");
 
+// recordAudit reads the user agent through next/headers, which the harness
+// serves from `request`. A user agent unique to this file makes the counts
+// below this file's own rows: other files (whatsapp-signature.test.ts) write
+// signature failures too, and run at the same time.
+const UA = tag("wa-unconfigured");
+request.headers = { "user-agent": UA };
+
 const BODY = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
+// A source address of this run's own: signature failures are audited a bounded
+// number of times per masked source per minute, so re-running this file must
+// not find the budget already spent by the previous run.
+const SOURCE_IP = `10.${1 + Math.floor(Math.random() * 250)}.${1 + Math.floor(Math.random() * 250)}.3`;
+
 const post = (headers: Record<string, string> = {}) =>
   new Request("http://127.0.0.1:3100/api/webhooks/whatsapp", {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", "x-real-ip": SOURCE_IP, ...headers },
     body: BODY,
   });
 
@@ -36,7 +48,10 @@ async function signatureAuditsSince(since: Date): Promise<number> {
   return withClient(async (c) =>
     Number(
       (
-        await c.query(`SELECT count(*) AS n FROM audit_log WHERE action = 'whatsapp.signature_failed' AND created_at >= $1`, [since])
+        await c.query(
+          `SELECT count(*) AS n FROM audit_log WHERE action = 'whatsapp.signature_failed' AND created_at >= $1 AND user_agent = $2`,
+          [since, UA],
+        )
       ).rows[0].n,
     ),
   );

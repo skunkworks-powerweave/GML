@@ -116,7 +116,7 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   cycle: {
     title: "Observation cycle",
     short: "One round of pre-form → lesson → post-form → sign-off, run between a teacher and a mentor.",
-    long: "A cycle is one complete round of observation. It has a unique ID (like c2026-001), a date, a topic, a kind (baseline, developmental or evaluative), and moves through five stages. A teacher can have several cycles in a year.",
+    long: "A cycle is one complete round of observation. It has a unique code (like OBS-2026-001), a date, a topic, a kind (baseline, developmental or evaluative), and moves through five stages. A teacher can have several cycles in a year.",
     related: ["pre_form", "post_form", "sign_off", "kind", "status"],
   },
   pre_form: {
@@ -297,7 +297,7 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   whatsapp_ingest: {
     title: "WhatsApp upload",
     short: "Forward your lesson video to our WhatsApp number — it comes straight into the system.",
-    long: "Many of our teachers find it easier to send videos via WhatsApp than upload through the app. Forward your video to the programme WhatsApp number with the caption #c2026-XXX (your cycle ID) and it will land in the right place automatically.",
+    long: "Many of our teachers find it easier to send videos via WhatsApp than upload through the app. Send your video to the programme WhatsApp number with your cycle code as the caption, for example OBS-2026-009 (the code is shown on your cycle's page), and it will land on that cycle automatically. A long lesson can be attached as a document instead.",
     related: ["upload", "video", "cycle"],
     seeAlso: ["/uploads"],
   },

@@ -114,8 +114,13 @@ test("spec 126 — page queries video_submissions filtered to source='whatsapp'"
 
 test("spec 126 — page joins audit_log for sender phone via metadata.from", () => {
   const src = read(PAGE_PATH);
-  // The page reads the audit log to recover the sender phone — the
-  // submission row itself does not carry the phone.
+  // F98: the submission row now carries the phone (whatsapp_from, migration
+  // 0036) and the page reads it first. The audit join was keyed on entity_id,
+  // which the webhook never wrote, so it showed "—" for every row; it remains
+  // only for rows older than 0036, keyed on the message id the row does carry.
+  // tests/behaviour/whatsapp-log.test.ts renders both cases.
+  assert.match(src, /videoSubmissions\.whatsappFrom/, "page must read the sender stored on the submission");
+  assert.doesNotMatch(src, /inArray\(auditLog\.entityId/, "the entity_id join could never match; the webhook never set it");
   assert.match(src, /from\(auditLog\)/, "page must query auditLog to surface sender phone");
   assert.match(
     src,

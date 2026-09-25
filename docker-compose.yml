@@ -237,6 +237,15 @@ services:
       # of the target instance; a second starves the web tier it shares the box
       # with. Queue depth absorbs bursts -- that is what a queue is for.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      # The worker fetches WhatsApp media from the Graph API (whatsapp-fetch.ts)
+      # and replies to the sender; the webhook only records the message and
+      # queues the work. Soft defaults, like the app's: WhatsApp is switched on
+      # after go-live, a fetch without a token fails by name, is retried, and is
+      # visible on /admin/whatsapp-log, and replies without the phone number id
+      # are a logged no-op -- none of it stops the stack from starting.
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_GRAPH_API_VERSION: ${WHATSAPP_GRAPH_API_VERSION:-}
       TZ: ${TZ:-Asia/Kolkata}
       # The Supabase pooler CA -- see the note on the app service.
       SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt

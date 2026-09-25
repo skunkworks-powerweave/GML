@@ -31,6 +31,39 @@ export function isBucketName(value: unknown): value is BucketName {
   return typeof value === "string" && BUCKET_VALUES.has(value);
 }
 
+/**
+ * The content types the videos-original bucket accepts: its
+ * allowed_mime_types in _post/005, which Supabase enforces on every upload.
+ * Kept equal to that list (tests/behaviour/whatsapp-ingest.test.ts).
+ */
+export const VIDEOS_ORIGINAL_TYPES: ReadonlySet<string> = new Set([
+  "video/mp4",
+  "video/quicktime",
+  "video/x-matroska",
+  "video/webm",
+  "video/3gpp",
+  "video/x-msvideo",
+  "video/mpeg",
+  "application/octet-stream",
+]);
+
+/**
+ * The content type to store a source video under: the declared one when the
+ * bucket lists it, otherwise application/octet-stream.
+ *
+ * A WhatsApp document carries whatever type the sender's phone declared --
+ * video/x-m4v, video/mp2t from a camcorder, video/x-flv -- and Supabase refuses
+ * an upload whose type the bucket does not list. That refusal is
+ * deterministic, so retrying cannot help: the video was lost after every
+ * attempt failed the same way. ffmpeg reads the container from the bytes, so
+ * the stored type does not affect the transcode; the declared type is still
+ * recorded on the files row.
+ */
+export function storableVideoType(declared: string | null | undefined): string {
+  const type = (declared ?? "").split(";")[0]!.trim().toLowerCase();
+  return VIDEOS_ORIGINAL_TYPES.has(type) ? type : "application/octet-stream";
+}
+
 // ── HLS key layout ────────────────────────────────────────────────────────────
 //
 // Two layouts exist, both flat under hls/<id>/, and both must keep playing:

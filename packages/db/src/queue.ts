@@ -29,7 +29,14 @@
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 
-export type QueueName = "transcode" | "retention";
+// "whatsapp" carries the webhook's media fetches (apps/worker/src/whatsapp-fetch.ts).
+// Its own queue, so a fetch is not stuck behind a 40-minute ffmpeg run on the
+// single transcode slot while the teacher waits to hear the video arrived.
+//
+// A value as well as a type, so the worker can start a consumer for every
+// member (apps/worker/src/index.ts, consumerSlots) and a test can check it.
+export const QUEUE_NAMES = ["transcode", "retention", "whatsapp"] as const;
+export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export type ClaimedJob = {
   id: string;
@@ -294,7 +301,8 @@ export type QueueTx = Parameters<
  * kills its worker dead-letters instead of looping forever. A dead-letter sets
  * completed_at exactly as fail() does: pruneFinished() keys on it, and without
  * it a reaper-dead job -- and the 'N failed' chip that counts it -- stayed
- * forever.
+ * forever. The WhatsApp health count of fetches that gave up (dead, completed
+ * in the last 24 hours) keys on it too, and never saw a reaper-dead fetch.
  *
  * `onReaped` runs in the SAME transaction, once per reaped job. This module
  * only knows the transport; the handler that was killed also left domain rows

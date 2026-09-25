@@ -97,6 +97,11 @@ export const videoSubmissions = pgTable(
     // so Meta stops retrying. Nullable: non-whatsapp submissions (tusd upload,
     // external_url) carry NULL and are exempt from the partial unique index.
     whatsappMessageId: text("whatsapp_message_id"),
+    // Migration 0036. The Graph media id, so a failed fetch can be queued again
+    // (Meta keeps the media ~30 days), and the sender's number as Meta sent it,
+    // which the ingest log shows. Both null for non-WhatsApp rows.
+    whatsappMediaId: text("whatsapp_media_id"),
+    whatsappFrom: text("whatsapp_from"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     verifiedAt: timestamp("verified_at", { withTimezone: true, mode: "date" }),
   },

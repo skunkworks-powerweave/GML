@@ -268,3 +268,21 @@ test("WhatsApp: a configured integration passes", () => {
   const r = run();
   assert.ok(line(r.out, "PASS", /WHATSAPP_APP_SECRET/), `expected a PASS for the configured secret:\n${r.out}`);
 });
+
+// F139: the secret is what switches the webhook on, but it is not what makes
+// ingest WORK. With the secret set and the access token empty -- the state
+// compose accepts -- every video is recorded and none can be fetched; with the
+// verify token empty, Meta's webhook handshake is refused. Preflight used to
+// PASS the secret and say nothing about either.
+test("WhatsApp: a secret without the token, verify token or phone number id is a WARN naming each", () => {
+  const r = run();
+  for (const name of ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"]) {
+    assert.ok(line(r.out, "WARN", new RegExp(name)), `expected a WARN naming ${name}:\n${r.out}`);
+  }
+  assert.equal(r.status, 0, `a partly configured integration must not block the deploy:\n${r.out}`);
+
+  const full = run({
+    envFile: { WHATSAPP_ACCESS_TOKEN: "t", WHATSAPP_VERIFY_TOKEN: "v", WHATSAPP_PHONE_NUMBER_ID: "p" },
+  });
+  assert.ok(!line(full.out, "WARN", /WHATSAPP_/), `a fully configured integration draws no warning:\n${full.out}`);
+});
