@@ -5,6 +5,7 @@
 // "Retake" links back to the runner while an attempt remains. Mirrors the JSX prototype's done-state in
 // `LMS GML Frontend/forms.jsx::QuizRunner` (lines 166-200).
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, eq, sql } from "drizzle-orm";
@@ -17,6 +18,8 @@ import {
 import { auth } from "@/auth";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Quiz results" };
 
 export default async function QuizResultPage({
   params,

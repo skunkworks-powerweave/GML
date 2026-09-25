@@ -22,6 +22,8 @@
 // so navigating away tears the timer down cleanly.
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { PickedMark } from "./PickedMark";
+import { timeWarning } from "./time-warning";
 
 export type QuizRunnerQuestion = {
   id: string;
@@ -78,6 +80,9 @@ export function QuizRunner({
   const [remaining, setRemaining] = useState<number | null>(
     typeof timeLimitSeconds === "number" ? timeLimitSeconds : null,
   );
+  // The limit the attempt opened with, seeded once like `remaining`: which
+  // spoken warnings are due depends on it (time-warning.ts).
+  const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
   // Spec 159 — a ref so the interval tick can call the latest selection
   // map / submit path without re-arming the timer when those change.
   const selectedRef = useRef(selected);
@@ -224,12 +229,15 @@ export function QuizRunner({
             time limit. The banner shifts to var(--rust) under 60s
             remaining so the learner has a clear last-minute cue. The
             data-testid attribute makes the banner scrapable by the
-            governance test (and any future Playwright integration). */}
+            governance test (and any future Playwright integration).
+            role="timer" and NOT a live region: the value changes every
+            second, and aria-live="polite" here had a screen reader read out
+            every tick. The region after it speaks at 5 minutes, 1 minute and
+            time up only (F135). */}
         {remaining !== null ? (
           <div
             data-testid="quiz-countdown"
             role="timer"
-            aria-live="polite"
             style={{
               marginTop: 12,
               padding: "8px 12px",
@@ -254,6 +262,11 @@ export function QuizRunner({
               {formatRemaining(remaining)}
             </span>
           </div>
+        ) : null}
+        {remaining !== null ? (
+          <span role="status" className="sr-only" data-testid="quiz-time-warning">
+            {timeWarning(remaining, openedWith)}
+          </span>
         ) : null}
         <div className="bar" style={{ marginTop: 14 }}>
           <div style={{ width: `${progressPct}%` }} />
@@ -287,11 +300,13 @@ export function QuizRunner({
                   key={i}
                   type="button"
                   onClick={() => onPick(i)}
-                  // The ink/paper inversion is the only visual cue; this is
-                  // the one assistive tech hears, so a screen-reader user can
+                  // What assistive tech hears, so a screen-reader user can
                   // verify an answer before submitting a graded quiz.
                   // Deliberately NOT role="radio": a radiogroup obliges roving
                   // tabindex + arrow keys, and without them Tab traversal breaks.
+                  // What a sighted user sees is the ink/paper inversion AND a
+                  // check mark (./PickedMark.tsx): the inversion alone was
+                  // colour only (F135).
                   aria-pressed={isSel}
                   style={{
                     textAlign: "left",
@@ -325,6 +340,7 @@ export function QuizRunner({
                     {String.fromCharCode(65 + i)}
                   </span>
                   {opt}
+                  {isSel ? <PickedMark /> : null}
                 </button>
               );
             })}

@@ -17,6 +17,7 @@
 // Observers are not given the staff view: whether classroom observers should
 // read teachers' training scores is a programme decision nobody has made.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { asc, eq } from "drizzle-orm";
@@ -37,6 +38,8 @@ import {
 } from "@/lib/rtt/progress";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "RTT progress" };
 
 const STATUS_CHIP: Record<string, string> = {
   present: "chip chip-lichen",
