@@ -6,10 +6,11 @@ import "server-only";
 import Papa from "papaparse";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import type { AdminEntity } from "@/admin/types";
 import { exportColumnKeys } from "@/admin/export-columns";
 import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
-import { eq, getTableColumns, inArray } from "drizzle-orm";
+import { eq, getTableColumns, inArray, sql, type AnyColumn } from "drizzle-orm";
 import { describeWriteError } from "@/admin/db-errors";
 import { MutationRefused, updateAudit } from "@/admin/audit-image";
 import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
@@ -62,6 +63,78 @@ function storedFormValues(
     } else {
       out[field] = v;
     }
+  }
+  return out;
+}
+
+/** A duplicateKey value as compared: trimmed, case-folded, spaces collapsed. */
+function keyText(v: unknown): string {
+  return v === null || v === undefined ? "" : String(v).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Whether two rows agree on `key`: its first field equal, each later one equal where both have it. */
+function sameRecord(key: readonly string[], a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return key.every((field, i) => {
+    const x = keyText(a[field]);
+    const y = keyText(b[field]);
+    return i === 0 ? x === y : !x || !y || x === y;
+  });
+}
+
+/**
+ * The lines among `rows` -- rows to be ADDED, without an id -- that look like
+ * a record the table already holds, or like an earlier line of the same file,
+ * each with the sentence to report (AdminEntity.duplicateKey). Stored rows are
+ * read by the key's first field, in chunks, so a large roster costs a few
+ * queries rather than one per line.
+ */
+async function likelyDuplicates(
+  entity: AdminEntity,
+  key: readonly string[],
+  rows: ReadonlyArray<{ line: number; data: Record<string, unknown> }>,
+): Promise<Map<number, string>> {
+  const columns = getTableColumns(entity.table) as Record<string, AnyColumn>;
+  const firstField = key[0]!;
+  const wanted = [...new Set(rows.map((r) => keyText(r.data[firstField])).filter(Boolean))];
+  const stored = new Map<string, Array<Record<string, unknown>>>();
+  for (let start = 0; start < wanted.length; start += ID_LOOKUP_CHUNK) {
+    const found = (await db
+      .select(Object.fromEntries(["id", ...key].map((f) => [f, columns[f]!])) as never)
+      .from(entity.table as never)
+      .where(
+        inArray(
+          sql`lower(regexp_replace(btrim(${columns[firstField]!}::text), '\\s+', ' ', 'g'))`,
+          wanted.slice(start, start + ID_LOOKUP_CHUNK),
+        ),
+      )) as Array<Record<string, unknown>>;
+    for (const r of found) {
+      const k = keyText(r[firstField]);
+      const list = stored.get(k);
+      if (list) list.push(r);
+      else stored.set(k, [r]);
+    }
+  }
+
+  const out = new Map<number, string>();
+  const earlier = new Map<string, Array<{ line: number; data: Record<string, unknown> }>>();
+  for (const row of rows) {
+    const k = keyText(row.data[firstField]);
+    const match = stored.get(k)?.find((s) => sameRecord(key, row.data, s));
+    if (match) {
+      out.set(
+        row.line,
+        `looks like a record already on this table (id ${String(match.id)}): to change it, put that id in an id column; to add a second record with these details, use Add row`,
+      );
+      continue;
+    }
+    const repeat = earlier.get(k)?.find((e) => sameRecord(key, row.data, e.data));
+    if (repeat) {
+      out.set(row.line, `repeats line ${repeat.line} of this file`);
+      continue;
+    }
+    const seen = earlier.get(k);
+    if (seen) seen.push(row);
+    else earlier.set(k, [row]);
   }
   return out;
 }
@@ -283,6 +356,23 @@ export async function importCsv(slug: string, csv: string): Promise<{
     const valid = parse.data as Record<string, unknown>;
     const data = before ? Object.fromEntries(Object.keys(coerced).map((k) => [k, valid[k]])) : valid;
     validRows.push({ line, data, ...(id ? { id } : {}), ...(before ? { update: true } : {}) });
+  }
+
+  // A ROW ADDED WITHOUT AN ID THAT IS ALREADY THERE IS REPORTED, NOT ADDED
+  // AGAIN. The id round trip above only helps a file that carries ids, and a
+  // hand-made roster does not. So the ordinary recovery from a partial import
+  // -- fix the three rejected rows, upload the whole file again -- inserted
+  // every row that had already landed a second time and reported ok:true
+  // (17 teacher rows for 10 people): nothing in teachers, learners or mentors
+  // is unique without a login link. The entity names what identifies a
+  // record (AdminEntity.duplicateKey); a match is reported with the stored
+  // row's id, so the operator can update it instead.
+  if (entity.duplicateKey) {
+    const dupes = await likelyDuplicates(entity, entity.duplicateKey, validRows.filter((r) => !r.id));
+    for (const [line, message] of dupes) errors.push({ row: line, message });
+    const kept = validRows.filter((r) => !dupes.has(r.line));
+    validRows.length = 0;
+    validRows.push(...kept);
   }
 
   if (validRows.length === 0) {

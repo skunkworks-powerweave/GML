@@ -91,4 +91,15 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
     before: Record<string, unknown>,
     next?: Record<string, unknown>,
   ) => string | null;
+  /**
+   * CSV import only: the form fields that together say "this record is
+   * already on the table", for a row added WITHOUT an id (a hand-made roster).
+   * The first is required and must match; each later one is compared only
+   * where both rows have it. Text is compared trimmed, case-folded and with
+   * runs of spaces collapsed. A match -- with a stored row, or with an earlier
+   * line of the same file -- is reported against its line and not added. Not
+   * applied to the grid's Add row, where two people sharing a name is a
+   * deliberate act.
+   */
+  duplicateKey?: string[];
 };

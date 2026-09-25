@@ -73,5 +73,8 @@ export const teachersEntity: AdminEntity = {
     "active",
     "userId",
   ],
+  // A hand-made roster re-uploaded after a partial import (csv.ts). Phone
+  // tells two same-named teachers at one school apart when both rows have it.
+  duplicateKey: ["schoolId", "fullName", "phone"],
   describeRow: (r) => `teacher:${r.fullName ?? r.id}`,
 };

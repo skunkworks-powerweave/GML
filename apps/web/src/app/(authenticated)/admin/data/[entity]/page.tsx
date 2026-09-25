@@ -555,6 +555,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               entityLabel={entity.label}
               // `id` too: a row carrying one updates that row (csv.ts importCsv).
               acceptedColumns={["id", ...entity.formFields]}
+              reportsDuplicates={Boolean(entity.duplicateKey)}
             />
           ) : null}
           {canExport ? (
