@@ -11,6 +11,11 @@ import { PlacePicker } from "./place-picker";
 
 export const dynamic = "force-dynamic";
 
+// Who /rtt/teach-back lets in: its READ_ROLES, repeated here because that page
+// does not export them. tests/behaviour/rtt-teach-back-link.test.ts asks the
+// queue page itself, so the two cannot drift apart unnoticed.
+const TEACH_BACK_REVIEWERS: ReadonlySet<string> = new Set(["super_admin", "programme_admin", "mentor", "observer"]);
+
 const SUBJECT_PALETTE = [
   { chip: "chip-indigo", stripe: "var(--indigo)" },
   { chip: "chip-saffron", stripe: "var(--saffron)" },
@@ -80,9 +85,14 @@ export default async function RttIndexPage({
               ? "Progress & results →"
               : "My progress →"}
           </Link>
-          <Link href="/rtt/teach-back" className="btn btn-sm btn-ghost">
-            Teach-back queue →
-          </Link>
+          {/* Only for the roles the queue admits (its READ_ROLES): shown to
+              everyone, it sent teachers -- this hub's main audience -- to
+              /forbidden. */}
+          {TEACH_BACK_REVIEWERS.has(viewer.role) ? (
+            <Link href="/rtt/teach-back" className="btn btn-sm btn-ghost">
+              Teach-back queue →
+            </Link>
+          ) : null}
         </div>
       </div>
 
