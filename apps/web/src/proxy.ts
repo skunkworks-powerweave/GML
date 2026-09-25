@@ -323,6 +323,13 @@ export const config = {
     //   api/health
     //       Probed by Docker and the load balancer, which have no session and
     //       must not be redirected.
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
+    //   api/scorm/content/*
+    //       SCORM package files. They carry their OWN policy
+    //       (buildScormContentCsp), which permits the inline script SCORM
+    //       content is built on. Passing through here would add the nonce
+    //       policy as well, and a browser enforces both: the intersection
+    //       blocks the content. The route authenticates itself (auth()), and
+    //       sets the baseline headers applySecurityHeaders would have.
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|api/scorm/content/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
   ],
 };
