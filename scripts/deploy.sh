@@ -30,7 +30,8 @@
 # upgrade, so wiring it in here would make a re-deploy impossible.
 #
 # Idempotent. Safe to re-run: the migration ledgers make a re-run a no-op, and
-# the seed never rotates a live account's password or an existing gate.
+# the seed never rotates a live account's password or a gate anyone can open
+# (it repairs only a gate hashed from the empty password, which admits nobody).
 
 set -euo pipefail
 
