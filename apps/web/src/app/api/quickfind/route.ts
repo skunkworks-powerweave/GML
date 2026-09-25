@@ -13,12 +13,22 @@
 // Method matrix:
 //   GET ?q=<2+ chars>          → 200 { ok:true, q, results: [...] }
 //   GET ?q=<<2 chars>          → 200 { ok:true, q, results: [] } (no-op, but still 200)
+//   GET ?q=<over 100 chars>    → 400 { error: "query_too_long" }
+//   GET (over the throttle)    → 429 { error: "rate_limited", retryAfterMs } + Retry-After
 //   GET (no session)           → 401 { error: "unauthenticated" }
 //   POST / PUT / DELETE        → 405 { error: "method_not_allowed" }
 //
 // SM-1: every search writes one audit row with action="quickfind.query"
 // and metadata { q, resultCount }. Audit-on-completion so resultCount is
 // accurate. Best-effort `void` — never block the 200 response.
+//
+// BOUNDED, because that row is permanent: audit_log is append-only by trigger
+// and never pruned. This route stored the whole `q` of every call with nothing
+// in front of it, so a 6,000-character q was searched, echoed and kept, and a
+// loop of distinct queries grew the table for as long as it ran. The query is
+// capped at MAX_QUERY and each user at QUICKFIND_LIMIT searches a minute. A
+// refused call runs no search and writes no row, so every search that IS
+// answered is still audited.
 //
 // SM-9: learner rows are NOT exposed here. The endpoint only walks
 // teachers / schools / classes / subjects / outlines / observation cycles
@@ -55,11 +65,19 @@ import { actorFrom } from "@/lib/authz";
 import { searchCycles, searchPairings } from "@/lib/gated-reads";
 import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { recordAudit } from "@/lib/audit";
+import { rateLimit } from "@/lib/rate-limit";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
 const MIN_QUERY = 2;
+// Longer than any name, code or topic this searches; a longer q can only be a
+// paste or a script, and would otherwise be stored whole in the audit log.
+const MAX_QUERY = 100;
+// Per user. QuickFind sends one request per debounced keystroke (180ms), so a
+// person typing stays well under this; a loop does not.
+const QUICKFIND_LIMIT = 60;
+const QUICKFIND_WINDOW_MS = 60_000;
 const MAX_PER_KIND = 4; // 8 kinds × 4 ≈ 20-row cap after the flat merge.
 const HARD_CAP = 20;
 
@@ -104,6 +122,28 @@ export async function GET(req: Request) {
       { ok: true, q: rawQ, results: [] satisfies QuickFindResult[] },
       { status: 200 },
     );
+  }
+  if (rawQ.length > MAX_QUERY) {
+    return NextResponse.json({ error: "query_too_long" }, { status: 400 });
+  }
+
+  // Fail closed (lib/rate-limit.ts): without the counter the search would be
+  // unthrottled, and the counter lives in the database the search needs anyway.
+  try {
+    const rl = await rateLimit({
+      bucket: "quickfind",
+      id: session.user.id,
+      limit: QUICKFIND_LIMIT,
+      windowMs: QUICKFIND_WINDOW_MS,
+    });
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
+        { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil(rl.retryAfterMs / 1000))) } },
+      );
+    }
+  } catch {
+    return NextResponse.json({ error: "rate_limit_unavailable" }, { status: 503 });
   }
 
   // ESCAPED. `%`, `_` and `\` are LIKE metacharacters, and this route

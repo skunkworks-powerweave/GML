@@ -10,28 +10,45 @@
 //   - Method:  POST only. GET returns 405.
 //   - Auth:    requires session. 401 otherwise (best-effort beacons from
 //              logged-out tabs are rejected, not silently logged).
-//   - Body:    { resourceId: uuid, viewerId?: string }. Validated with zod.
+//   - Body:    { resourceId: uuid }. Validated with zod.
 //              Legacy alias: `{ id }` accepted as `resourceId` so the existing
 //              PdfViewer caller (`body: JSON.stringify({ id: resourceId })`)
 //              keeps working without a UI touch in this run.
 //   - Effect:  recordAudit({ action: "resource.view.client_ping", ... }).
-//   - Status:  204 on success, 400 on bad body, 401 on no session.
+//   - Status:  204 on success, 400 on bad body, 401 on no session,
+//              429 over the per-user throttle.
 //   - NEVER 404: we deliberately do NOT verify the resource exists. This is
 //              telemetry — never block a user-facing flow on a missing row.
+//
+// THROTTLED, because that last point means any well-formed uuid is accepted,
+// and each call is a permanent row in the append-only audit_log. With nothing
+// in front of it, a script cycling random uuids wrote one row per request for
+// as long as it ran. The client-audit beacon beside this route was limited
+// for the same reason.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { rateLimit } from "@/lib/rate-limit";
+
+// Per user. PdfViewer pings once per document it paints, so this is far more
+// PDFs a minute than a person opens.
+const RESOURCE_VIEW_LIMIT = 30;
+const RESOURCE_VIEW_WINDOW_MS = 60_000;
 
 // Accept the spec contract (`resourceId`) and the legacy PdfViewer shape (`id`)
-// — whichever lands, we normalise to `resourceId`. `viewerId` is optional
-// extra metadata that the client may forward (e.g. the watermark identity).
+// — whichever lands, we normalise to `resourceId`.
+//
+// NO viewerId. The body used to take one and write it into the row as the
+// viewer, so a forensic record of who saw a document named whoever the client
+// claimed. The viewer is the session's user, which recordAudit already stores
+// as the row's user_id. A client still sending viewerId is not refused: zod
+// drops the unknown key.
 const BodySchema = z
   .object({
     resourceId: z.string().uuid().optional(),
     id: z.string().uuid().optional(),
-    viewerId: z.string().max(128).optional(),
   })
   .refine((v) => Boolean(v.resourceId ?? v.id), {
     message: "resourceId is required",
@@ -42,6 +59,26 @@ export async function POST(req: Request): Promise<Response> {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  // Fail closed (lib/rate-limit.ts): an unthrottled beacon is the defect this
+  // guards against, and a dropped ping blocks nothing -- PdfViewer ignores the
+  // response.
+  try {
+    const rl = await rateLimit({
+      bucket: "resource-view",
+      id: session.user.id,
+      limit: RESOURCE_VIEW_LIMIT,
+      windowMs: RESOURCE_VIEW_WINDOW_MS,
+    });
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
+        { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil(rl.retryAfterMs / 1000))) } },
+      );
+    }
+  } catch {
+    return NextResponse.json({ error: "rate_limit_unavailable" }, { status: 503 });
   }
 
   const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -60,10 +97,7 @@ export async function POST(req: Request): Promise<Response> {
     action: "resource.view.client_ping",
     entityType: "resource",
     entityId: resourceId,
-    metadata: {
-      beacon: true,
-      viewerId: parsed.data.viewerId ?? session.user.id,
-    },
+    metadata: { beacon: true },
   });
 
   return new NextResponse(null, { status: 204 });
