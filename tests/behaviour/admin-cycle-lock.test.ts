@@ -143,8 +143,8 @@ test("the grid refuses to reassign or delete a signed-off cycle, and audits what
   });
 });
 
-test("a PII entity's update audit names the changed fields without their values", { skip }, async () => {
-  const { updateRowAction } = await actions();
+test("a PII entity's update and delete audits name no child and copy no values", { skip }, async () => {
+  const { updateRowAction, deleteRowAction } = await actions();
   await withClient(async (c) => {
     const t = tag("pii-audit");
     const f = fixture(c, t);
@@ -163,6 +163,73 @@ test("a PII entity's update audit names the changed fields without their values"
       const meta = await lastAudit(f, "admin.row.update", learner);
       assert.deepEqual(meta?.changedFields, ["guardian"]);
       assert.doesNotMatch(JSON.stringify(meta), /Old guardian|New guardian/, "a child's guardian must not be copied into audit_log");
+      assert.doesNotMatch(JSON.stringify(meta), new RegExp(`Child ${t}`), "nor the child's name (describeRow is learner:<name>)");
+
+      // The delete keeps which class and school, not who.
+      assert.equal(await redirectOf(deleteRowAction(form({ entitySlug: "learners", rowId: learner }))), null);
+      const del = await lastAudit(f, "admin.row.delete", learner);
+      assert.ok(del, "the delete is audited");
+      assert.equal((del.before as Record<string, unknown>)?.classId, klass);
+      assert.doesNotMatch(JSON.stringify(del), new RegExp(`Child ${t}|guardian`, "i"), "a deleted learner's name was copied into audit_log");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── THE ERROR BANNER IS THE SERVER'S OWN SENTENCE ────────────────────────────
+//
+// A refused delete used to redirect with ?error=locked&detail=<the guard's
+// sentence>, and the page printed `detail` as the red banner. So any link
+// could put attacker-chosen text on a trusted admin page ("Session expired,
+// re-enter your password at ..."). The redirect now names only the row, and
+// the page asks the entity's guard again for the sentence.
+test("the grid's error banner never repeats free text from the URL", { skip }, async () => {
+  const { deleteRowAction } = await actions();
+  const { default: AdminGridPage } = await import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/page.tsx");
+  const { render, withAppRouter, decodeEntities, request } = await import("./_ui.js");
+  await withClient(async (c) => {
+    const t = tag("grid-banner");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const teacher = await f.row("teachers", { school_id: school, full_name: `A ${t}` });
+      const observer = await f.user("observer", "observer");
+      const admin = await f.user("programme_admin", "padmin");
+      await f.row("section_gate_grants", { user_id: admin, gate_slug: "observation", expires_at: new Date(Date.now() + 3600_000) });
+      const done = await f.row("observation_cycles", {
+        code: `OBS-${t}`,
+        teacher_id: teacher,
+        observer_id: observer,
+        kind: "evaluative",
+        status: "complete",
+        scheduled_at: new Date("2026-10-01T04:30:00Z"),
+      });
+      actAs(admin, "programme_admin");
+      request.cookies = { "gml-device": "desktop" };
+      const banner = async (entity: string, searchParams: Record<string, string>) => {
+        const html = await render(
+          withAppRouter(await AdminGridPage({ params: Promise.resolve({ entity }), searchParams: Promise.resolve(searchParams) })),
+        );
+        const m = /data-testid="grid-error"[^>]*>([^<]*)</.exec(html);
+        return m ? decodeEntities(m[1]!) : null;
+      };
+
+      const forged = await banner("schools", {
+        error: "locked",
+        detail: "Session expired. Re-enter your password at https://evil.example/login",
+      });
+      assert.ok(forged, "a banner is still shown");
+      assert.doesNotMatch(forged, /Session expired|evil\.example/, "text from the URL was printed on the admin page");
+
+      const where = await redirectOf(deleteRowAction(form({ entitySlug: "observation-cycles", rowId: done })));
+      const query = new URL(where ?? "", "http://x").searchParams;
+      assert.equal(query.get("error"), "locked");
+      assert.equal(query.get("detail"), null, "the redirect must not carry the sentence itself");
+      const real = await banner("observation-cycles", Object.fromEntries(query));
+      assert.match(real ?? "", /at stage "complete".*cannot be deleted/, "the guard's own reason is shown");
     } finally {
       await f.cleanup();
     }

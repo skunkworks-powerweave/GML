@@ -51,5 +51,25 @@ export function deleteImage(entity: AdminEntity, before: Record<string, unknown>
   return Object.fromEntries(kept.map((k) => [k, jsonable(before[k])]));
 }
 
-/** Thrown inside a grid write's transaction to refuse it with a reason. */
-export class MutationRefused extends Error {}
+/**
+ * The row label (entity.describeRow) for an audit entry, or nothing for a PII
+ * entity: the learners label is `learner:<child's name>`, which is exactly
+ * what the rule above keeps out of the log.
+ */
+export function auditRowLabel(entity: AdminEntity, row: Record<string, unknown>): string | undefined {
+  return entity.piiAudited ? undefined : entity.describeRow?.(row);
+}
+
+/**
+ * Thrown inside a grid write's transaction to refuse it with a reason.
+ * `rowId` names the refused row, so a delete's redirect can carry the row
+ * rather than the sentence (actions.ts gridErrorQuery).
+ */
+export class MutationRefused extends Error {
+  constructor(
+    message: string,
+    readonly rowId?: string,
+  ) {
+    super(message);
+  }
+}

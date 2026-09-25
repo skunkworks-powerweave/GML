@@ -506,12 +506,24 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const refEntity = rawRef
     ? Object.values(ADMIN_ENTITIES).find((e) => getTableName(e.table) === rawRef)
     : undefined;
-  // `locked` carries the entity guard's own sentence (actions.ts,
-  // entity.guardMutation), e.g. why a signed-off cycle cannot be deleted.
-  const rawDetail = typeof sp.detail === "string" ? sp.detail.slice(0, 300) : undefined;
+  // `locked` names the row a guard refused to delete (actions.ts
+  // gridErrorQuery); the sentence -- why a signed-off cycle cannot be deleted
+  // -- is the entity guard's own, asked again here. Nothing typed into the
+  // URL is printed.
+  const lockedRowId = typeof sp.row === "string" && UUID_RE.test(sp.row) ? sp.row : undefined;
+  let lockedReason: string | null = null;
+  if (rawError === "locked" && lockedRowId && entity.guardMutation) {
+    const idCol = (entity.table as unknown as { id: unknown }).id;
+    const [locked] = (await db
+      .select()
+      .from(entity.table as never)
+      .where(eq(idCol as never, lockedRowId))
+      .limit(1)) as Record<string, unknown>[];
+    lockedReason = locked ? entity.guardMutation("delete", locked) : null;
+  }
   const gridError = rawError
     ? rawError === "locked"
-      ? (rawDetail ?? "That row is locked in its current state.")
+      ? (lockedReason ?? "That row is locked in its current state and cannot be deleted from the grid.")
       : rawError === "still_referenced" && refEntity
       ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
       : (GRID_ERRORS[rawError] ?? "That action could not be completed.")

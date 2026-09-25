@@ -19,7 +19,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { entityRowProblems } from "@/admin/access";
-import { deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
+import { auditRowLabel, deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
 import { describeWriteError } from "@/admin/db-errors";
 import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
@@ -195,7 +195,7 @@ export async function createRowAction(
       action: "admin.row.create",
       entityType: entity.slug,
       entityIdFrom: (id) => id,
-      metadata: { op: "create", row: entity.describeRow?.(parse.data as Record<string, unknown>) },
+      metadata: { op: "create", row: auditRowLabel(entity, parse.data as Record<string, unknown>) },
     },
   );
 
@@ -275,7 +275,7 @@ export async function updateRowAction(
       entityId: rowId,
       metadata: {
         op: "update",
-        row: entity.describeRow?.(next),
+        row: auditRowLabel(entity, next),
       },
       // `changes: { field: { from, to } }` -- field names only for PII.
       metadataFrom: (diff) => diff,
@@ -327,7 +327,7 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
           .for("update")) as Record<string, unknown>[];
         if (!before) return null;
         const reason = entity.guardMutation?.("delete", before);
-        if (reason) throw new MutationRefused(reason);
+        if (reason) throw new MutationRefused(reason, rowId);
         await tx.delete(entity.table as never).where(eq(idCol as never, rowId));
         return before;
       }),
@@ -337,7 +337,7 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
       entityId: rowId,
       metadata: { op: "delete" },
       metadataFrom: (before) =>
-        before ? { row: entity.describeRow?.(before), before: deleteImage(entity, before) } : { missing: true },
+        before ? { row: auditRowLabel(entity, before), before: deleteImage(entity, before) } : { missing: true },
     },
   );
 
@@ -391,9 +391,14 @@ function describeDbError(err: unknown): string {
  * identifier is passed on, and the page shows the matching entity's label.
  */
 function gridErrorQuery(err: unknown): string {
-  // A guard's refusal carries its own sentence (entity.guardMutation).
+  // A guard's refusal: the ROW, not its sentence. The page used to print
+  // `detail` from the URL as its red banner, so any link could put
+  // attacker-chosen text ("Session expired, re-enter your password at ...")
+  // on a trusted admin page. The page asks the entity's guard again instead.
   if (err instanceof MutationRefused) {
-    return new URLSearchParams({ error: "locked", detail: err.message.slice(0, 300) }).toString();
+    const params = new URLSearchParams({ error: "locked" });
+    if (err.rowId) params.set("row", err.rowId);
+    return params.toString();
   }
   const params = new URLSearchParams({ error: describeDbError(err) });
   const { code, table } = (err ?? {}) as { code?: string; table?: string };
@@ -446,7 +451,7 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
         .for("update")) as Record<string, unknown>[];
       for (const before of befores) {
         const reason = entity.guardMutation?.("delete", before);
-        if (reason) throw new MutationRefused(reason);
+        if (reason) throw new MutationRefused(reason, String(before.id));
       }
       // Single DELETE ... WHERE id IN (...) — atomic, one round-trip.
       // Drizzle's `inArray` builds the correct parameterised SQL list.
