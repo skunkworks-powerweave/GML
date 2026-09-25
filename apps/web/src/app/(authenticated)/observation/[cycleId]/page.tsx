@@ -122,8 +122,14 @@ export default async function CycleDetailPage({
   const evidence = await db.select().from(observationEvidence).where(eq(observationEvidence.cycleId, cycleId));
   const notes = parseNotes(cycle.remark);
   // What each textarea keeps if a submit is refused, keyed to this viewer and
-  // this version of the cycle (lib/observation/drafts.ts).
-  const drafts = { userId: actor.id, cycleId, version: String(cycle.updatedAt.getTime()) };
+  // to a version of ITS OWN form (lib/observation/drafts.ts). A stage form's
+  // version is the cycle's status: only that form landing moves it, and the
+  // form is shown at that status alone. The note's is the number of entries:
+  // a saved note always adds one. Both used to be the cycle's updated_at, which
+  // every write moves, so saving a note emptied an unsent rubric and saving
+  // the rubric emptied an unsent note.
+  const drafts = { userId: actor.id, cycleId, version: cycle.status };
+  const noteDraftVersion = String(notes.length);
 
   const currentStageIdx = CYCLE_STAGES.findIndex((s) => s.id === cycle.status);
 
@@ -441,7 +447,7 @@ export default async function CycleDetailPage({
           <DraftTextarea
             name="note"
             draftScope={draftScope(drafts.userId, drafts.cycleId, "note")}
-            draftVersion={drafts.version}
+            draftVersion={noteDraftVersion}
             rows={3}
             required
             className="text"
@@ -482,6 +488,7 @@ function StageFields({
   drafts,
 }: {
   kind: StageKind;
+  /** version: the cycle's status (see `drafts` above). */
   drafts: { userId: string; cycleId: string; version: string };
 }) {
   return (

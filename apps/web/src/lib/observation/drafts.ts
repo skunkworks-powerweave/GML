@@ -9,11 +9,15 @@
 // browser keeps it: the textarea saves to sessionStorage as it is typed and
 // restores itself when the same form is shown again (DraftTextarea.tsx).
 //
-// "The same form" is the key: user, cycle, field, and the cycle's updated_at
-// as its version. Every successful submit or note moves updated_at, so a draft
-// comes back only onto the version of the cycle it was typed against: a note
-// that was saved does not reappear in the box, and nobody else signing in on
-// the same tab sees it. sessionStorage ends with the tab.
+// "The same form" is the key: user, cycle, field, and a version of that
+// field's OWN form, which only that form being saved moves (the cycle page
+// uses the cycle's status for a stage form, the number of entries for the
+// note). So a draft comes back only onto the version it was typed against: a
+// note that was saved does not reappear in the box, saving one form leaves
+// what is typed in another alone, and nobody else signing in on the same tab
+// sees it. The version was once the cycle's updated_at, which every write
+// moves: saving a note emptied an unsent rubric. sessionStorage ends with the
+// tab.
 //
 // Pure functions of a Storage, so tests/behaviour can run them.
 

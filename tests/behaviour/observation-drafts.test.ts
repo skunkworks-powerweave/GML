@@ -132,3 +132,74 @@ test("the page keys each draft to its user, cycle and version; only a saved subm
     await w.cleanup();
   }
 });
+
+// Saving ONE form must not throw away what is typed in ANOTHER. Every draft
+// was versioned by the cycle's updated_at, which a note moves as well as a
+// stage submit, so an observer at pre_submitted who typed her rubric and then
+// saved a quick note came back to an empty rubric box -- and the other way
+// round, a note being typed was emptied by a rubric that saved.
+test("saving the note keeps the unsent rubric, and saving the rubric keeps the unsent note", { skip }, async () => {
+  const w = await observationWorld("obsdraft2");
+  const { DraftTextarea } = await import("../../apps/web/src/app/(authenticated)/observation/[cycleId]/DraftTextarea.tsx");
+  const g = globalThis as Record<string, unknown>;
+  const store = new MemoryStorage();
+  g.window = { sessionStorage: store };
+  // Type into a textarea as the page rendered it, then show it again as the
+  // page renders it after the write: what is in the box then?
+  const typeInto = (key: string | null | undefined, scope: string, text: string) => {
+    assert.ok(key?.startsWith(scope), `rendered with its draft key: ${key}`);
+    const props = { name: "x", draftScope: scope, draftVersion: key!.slice(scope.length) };
+    const m = mount(DraftTextarea as never, props as never);
+    const tree = m.tree as unknown as { props: Record<string, unknown> };
+    (tree.props.onChange as (e: unknown) => void)({ currentTarget: { value: text } });
+    return (nextKey: string | null | undefined) => {
+      assert.ok(nextKey?.startsWith(scope), `still rendered: ${nextKey}`);
+      props.draftVersion = nextKey!.slice(scope.length);
+      const shown = (m.rerender() as unknown as { props: Record<string, unknown> }).props.value;
+      return { shown, stored: readDraft(store, scope, props.draftVersion) };
+    };
+  };
+  try {
+    const { submitObserverFormAction, addNoteAction } = await import(
+      "../../apps/web/src/app/(authenticated)/observation/[cycleId]/actions.ts"
+    );
+    const cyc = await w.cycle({ status: "pre_submitted" });
+    await w.grant(w.observer.id);
+    const rubric = draftScope(w.observer.id, cyc.id, "narrativeComments");
+    const note = draftScope(w.observer.id, cyc.id, "note");
+
+    const before = await draftKeys(w.observer, cyc.id);
+    const rubricAfter = typeInto(before.narrativeComments, rubric, "a long unsent rubric");
+
+    signIn(w.observer);
+    const noted = await outcome(() => addNoteAction(form({ cycleId: cyc.id, note: "Quick note" })));
+    assert.deepEqual(noted, { kind: "redirect", location: `/observation/${cyc.id}` }, "the note was saved");
+    const afterNote = await draftKeys(w.observer, cyc.id);
+    assert.equal(afterNote.narrativeComments, before.narrativeComments, "the rubric was not submitted: its draft key stays");
+    assert.deepEqual(
+      rubricAfter(afterNote.narrativeComments),
+      { shown: "a long unsent rubric", stored: "a long unsent rubric" },
+      "the unsent rubric is still in the box and still kept for the tab",
+    );
+    assert.notEqual(afterNote.note, before.note, "the note that was saved does not come back");
+
+    // Now the other way round: a note being typed, and the rubric saves.
+    const noteAfter = typeInto(afterNote.note, note, "a second note, not yet added");
+    signIn(w.observer);
+    const submitted = await outcome(() =>
+      submitObserverFormAction(form({ cycleId: cyc.id, narrativeComments: "a long unsent rubric" })),
+    );
+    assert.deepEqual(submitted, { kind: "redirect", location: `/observation/${cyc.id}` }, "the rubric was saved");
+    const afterRubric = await draftKeys(w.observer, cyc.id);
+    assert.equal(afterRubric.narrativeComments, undefined, "the saved rubric's form is gone: the cycle moved on");
+    assert.ok(afterRubric.whatWorked?.startsWith(draftScope(w.observer.id, cyc.id, "whatWorked")), JSON.stringify(afterRubric));
+    assert.equal(afterRubric.note, afterNote.note, "the note was not submitted: its draft key stays");
+    assert.deepEqual(noteAfter(afterRubric.note), {
+      shown: "a second note, not yet added",
+      stored: "a second note, not yet added",
+    });
+  } finally {
+    delete g.window;
+    await w.cleanup();
+  }
+});
