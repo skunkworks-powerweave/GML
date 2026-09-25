@@ -12,7 +12,7 @@
 import { sql } from "drizzle-orm";
 import { boolean, check, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { attendanceStatusEnum } from "./enums";
-import { teachers } from "./geography";
+import { districts, teachers, zones } from "./geography";
 import { users } from "./identity";
 
 // Admin-editable since the grid registered phases and terms; migration 0032
@@ -57,8 +57,19 @@ export const rttSubjects = pgTable(
     name: varchar("name", { length: 160 }).notNull(),
     code: varchar("code", { length: 32 }),
     active: boolean("active").notNull().default(true),
+    // WHERE it is taught (migration 0038): neither = the whole programme, a
+    // district = all its zones, a zone = that zone only (its district is the
+    // zone's, so it is never stored twice). A teacher's own place comes from
+    // teachers -> schools -> zones -> districts; lib/rtt/scope.ts reads both.
+    districtId: uuid("district_id").references(() => districts.id, { onDelete: "restrict" }),
+    zoneId: uuid("zone_id").references(() => zones.id, { onDelete: "restrict" }),
   },
-  (t) => [uniqueIndex("rtt_subjects_term_name_uq").on(t.termId, t.name)],
+  (t) => [
+    uniqueIndex("rtt_subjects_term_name_uq").on(t.termId, t.name),
+    check("rtt_subjects_one_place", sql`${t.districtId} IS NULL OR ${t.zoneId} IS NULL`),
+    index("rtt_subjects_district_idx").on(t.districtId),
+    index("rtt_subjects_zone_idx").on(t.zoneId),
+  ],
 );
 
 export const rttModules = pgTable(

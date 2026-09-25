@@ -42,7 +42,8 @@ export type RttWorld = {
   addTeacher: (label: string, zoneId?: string) => Promise<{ user: RttUser; teacherId: string }>;
   /** A live section-gate grant (8 hours). */
   grant: (userId: string, slug: "mentorship" | "observation") => Promise<void>;
-  subject: (opts?: { name?: string; active?: boolean }) => Promise<string>;
+  /** A subject in the world's term; `districtId` / `zoneId` scope it (migration 0038). */
+  subject: (opts?: { name?: string; active?: boolean; districtId?: string; zoneId?: string }) => Promise<string>;
   module: (subjectId: string, sequence: number, title?: string) => Promise<string>;
   lesson: (moduleId: string, sequence: number, title?: string) => Promise<string>;
   reading: (subjectId: string, sequence: number, title?: string) => Promise<string>;
@@ -162,11 +163,10 @@ export async function rttWorld(prefix = "rttw"): Promise<RttWorld> {
       );
     },
     subject: async (opts = {}) => {
-      const id = await one(`INSERT INTO rtt_subjects (term_id, name, active) VALUES ($1, $2, $3) RETURNING id`, [
-        termId,
-        opts.name ?? `Subject ${++n} ${T}`,
-        opts.active ?? true,
-      ]);
+      const id = await one(
+        `INSERT INTO rtt_subjects (term_id, name, active, district_id, zone_id) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [termId, opts.name ?? `Subject ${++n} ${T}`, opts.active ?? true, opts.districtId ?? null, opts.zoneId ?? null],
+      );
       subjectIds.push(id);
       return id;
     },

@@ -13,6 +13,8 @@ import {
   rttReadings,
   terms,
   phases,
+  districts,
+  zones,
 } from "@gml/db/schema";
 import { uuidOrNotFound } from "@/lib/ids";
 import { listSubjectAssessments } from "@/lib/rtt/assessments";
@@ -69,6 +71,17 @@ export default async function RttSubjectPage({
   if (!subject) notFound();
   const [term] = await db.select().from(terms).where(eq(terms.id, subject.termId)).limit(1);
   const [phase] = term ? await db.select().from(phases).where(eq(phases.id, term.phaseId)).limit(1) : [null];
+  // Where it is taught, when that is not the whole programme (F42).
+  const [taughtIn] = subject.zoneId
+    ? await db
+        .select({ name: sql<string>`${zones.name} || ', ' || ${districts.name}` })
+        .from(zones)
+        .innerJoin(districts, eq(districts.id, zones.districtId))
+        .where(eq(zones.id, subject.zoneId))
+        .limit(1)
+    : subject.districtId
+      ? await db.select({ name: districts.name }).from(districts).where(eq(districts.id, subject.districtId)).limit(1)
+      : [null];
 
   const modules = await db.select().from(rttModules).where(eq(rttModules.rttSubjectId, id)).orderBy(rttModules.sequence);
   // LESSONS. rtt_lessons existed in the schema and nothing read or wrote it,
@@ -170,6 +183,7 @@ export default async function RttSubjectPage({
             <div className="label" style={{ marginTop: 8 }}>
               {phase?.label ?? "Phase ?"} · {term?.name ?? "Term ?"}
               {subject.code ? ` · ${subject.code}` : ""}
+              {taughtIn ? ` · ${taughtIn.name} only` : ""}
             </div>
             {!subject.active ? (
               // Only an administrator reaches an inactive subject.

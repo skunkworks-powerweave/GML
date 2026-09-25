@@ -26,7 +26,8 @@ import { auth } from "@/auth";
 import { getActiveGrant } from "@/lib/gates";
 import { isUuid } from "@/lib/ids";
 import { menteeTeacherIds, mentorIdFor } from "@/lib/visibility";
-import { rttScope } from "@/lib/rtt/scope";
+import { placeLabel, placeOptions, rttScope, teachersIn } from "@/lib/rtt/scope";
+import { PlacePicker } from "../place-picker";
 import {
   attendanceRows,
   progressBySubject,
@@ -51,7 +52,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export default async function RttProgressPage({
   searchParams,
 }: {
-  searchParams: Promise<{ subject?: string }>;
+  searchParams: Promise<{ subject?: string; district?: string; zone?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
@@ -141,8 +142,11 @@ export default async function RttProgressPage({
     teacherIds = mentorId ? await menteeTeacherIds(db, mentorId) : [];
   }
 
-  const filter: StaffFilter = { teacherIds, subjectId };
-  const [subjects, results, attendance] = await Promise.all([
+  // District > zone, as on /rtt: the teachers whose school is in the place.
+  const scope = await rttScope(db, actor, sp);
+  const filter: StaffFilter = { teacherIds, subjectId, teachersWhere: teachersIn(scope.place) };
+  const [places, subjects, results, attendance] = await Promise.all([
+    placeOptions(db),
     db
       .select({ id: rttSubjects.id, name: rttSubjects.name })
       .from(rttSubjects)
@@ -151,14 +155,18 @@ export default async function RttProgressPage({
     quizResults(db, filter),
     attendanceRows(db, filter),
   ]);
-  const whose = isMentor ? "your mentees" : "every teacher";
+  const whose =
+    (isMentor ? "your mentees" : "every teacher") + (scope.place ? ` in ${placeLabel(scope.place)}` : "");
 
   return (
     <div>
       <Header title="RTT progress & results" />
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
+        <PlacePicker basePath="/rtt/progress" options={places} place={scope.place} keep={{ subject: subjectId }} />
         {/* A plain GET form: works with no JavaScript on a slow link. */}
         <form method="get" style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
+          {scope.place ? <input type="hidden" name="district" value={scope.place.districtId} /> : null}
+          {scope.place?.zoneId ? <input type="hidden" name="zone" value={scope.place.zoneId} /> : null}
           <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
             Subject
             <select name="subject" defaultValue={subjectId ?? ""}>

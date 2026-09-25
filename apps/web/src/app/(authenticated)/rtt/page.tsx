@@ -6,7 +6,8 @@ import { db } from "@gml/db";
 import { phases, terms, rttSubjects } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { listOpenAssessments } from "@/lib/rtt/assessments";
-import { rttScope } from "@/lib/rtt/scope";
+import { placeLabel, placeOptions, rttScope } from "@/lib/rtt/scope";
+import { PlacePicker } from "./place-picker";
 
 export const dynamic = "force-dynamic";
 
@@ -19,17 +20,32 @@ const SUBJECT_PALETTE = [
   { chip: "chip-indigo", stripe: "oklch(0.40 0.10 320)" },
 ] as const;
 
-export default async function RttIndexPage() {
+export default async function RttIndexPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ district?: string; zone?: string }>;
+}) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   const viewer = { id: session.user.id, role: session.user.role };
 
   const phaseRows = await db.select().from(phases).orderBy(phases.sequence);
   const termRows = await db.select().from(terms);
-  // Only the subjects this viewer is shown (lib/rtt/scope.ts). Every row was
-  // listed, counted and linked, so retiring a subject changed nothing here.
-  const scope = await rttScope(db, viewer);
+  // Only the subjects this viewer is shown (lib/rtt/scope.ts): active ones
+  // (every row was listed, so retiring a subject changed nothing here), and
+  // for a teacher those taught in her own district and zone -- everyone was
+  // shown the whole programme. Staff choose a district or zone below.
+  const scope = await rttScope(db, viewer, await searchParams);
   const subjectRows = await db.select().from(rttSubjects).where(scope.subjectWhere);
+  const placeChoices = scope.isStaff ? await placeOptions(db) : [];
+  // Said from the data. This read "across Leh + Kargil" whatever the rows were.
+  const where = scope.place
+    ? scope.isStaff
+      ? `in ${placeLabel(scope.place)}`
+      : `for ${placeLabel(scope.place)}`
+    : scope.isStaff && placeChoices.length > 0
+      ? `across ${placeChoices.map((d) => d.districtName).join(" + ")}`
+      : "taught across the programme";
   // The dashboard's "N open quizzes" to-do links here and counts exactly this
   // list (lib/rtt/assessments.ts). /rtt used to list no quizzes at all, so the
   // to-do led nowhere.
@@ -41,8 +57,9 @@ export default async function RttIndexPage() {
         <div className="label">RTT — Recruit, Train, Transform</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>RTT phases &amp; subjects</h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          {phaseRows.length} phases · {termRows.length} terms · {subjectRows.length} subjects across Leh + Kargil.
+          {phaseRows.length} phases · {termRows.length} terms · {subjectRows.length} subjects {where}.
         </p>
+        {scope.isStaff ? <PlacePicker basePath="/rtt" options={placeChoices} place={scope.place} /> : null}
 
         {/* THE ONLY WAY INTO THE ONLINE SURFACES.
             /rtt/online/synchronous (the webinar and live-quiz calendar) and
@@ -123,6 +140,12 @@ export default async function RttIndexPage() {
                   <article key={p.id} className="card" style={{ padding: 18 }}>
                     <div className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
                       PHASE {p.sequence} / {phaseRows.length}
+                      {/* teachers.current_phase_id existed and nothing read it. */}
+                      {p.id === scope.currentPhaseId ? (
+                        <span className="chip chip-saffron" style={{ marginLeft: 8 }}>
+                          Your phase
+                        </span>
+                      ) : null}
                     </div>
                     <div style={{ fontFamily: "var(--serif)", fontSize: 22, marginTop: 6, letterSpacing: "-0.01em" }}>
                       {p.label}

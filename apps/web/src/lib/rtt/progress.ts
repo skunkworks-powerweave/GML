@@ -166,12 +166,14 @@ export type StaffFilter = {
   /** teachers.id values the viewer may see; null means every teacher. */
   teacherIds: string[] | null;
   subjectId: string | null;
+  /** A district / zone filter on the teachers (lib/rtt/scope.ts teachersIn). */
+  teachersWhere?: SQL;
 };
 
 function teacherScope(f: StaffFilter): SQL | undefined {
-  if (f.teacherIds === null) return undefined;
   // An empty list must match nothing, not everything (lib/visibility.ts).
-  return f.teacherIds.length ? inArray(teachers.id, f.teacherIds) : sql`false`;
+  const allowed = f.teacherIds === null ? undefined : f.teacherIds.length ? inArray(teachers.id, f.teacherIds) : sql`false`;
+  return and(allowed, f.teachersWhere);
 }
 
 export type QuizResultRow = {
