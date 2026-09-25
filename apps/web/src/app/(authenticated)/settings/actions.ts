@@ -95,8 +95,10 @@ export async function changePasswordAction(
   // End the session on every OTHER device. If the reason someone is changing
   // their password is that they think it is known, leaving those alive defeats
   // the exercise. 'others' keeps THIS session so they are not bounced to
-  // /login the instant it succeeds.
-  await supabase.auth.signOut({ scope: "others" }).catch(() => undefined);
+  // /login the instant it succeeds. auth-js returns a failure as {error}
+  // rather than throwing, so the result is what says whether it happened.
+  const { error: signOutError } = await supabase.auth.signOut({ scope: "others" });
+  if (signOutError) console.error("[auth] could not sign out other sessions after a password change:", signOutError);
 
   // A password they chose themselves: lift the must-change flag an
   // administrator-set one carries, and re-mint this browser's token without it.
@@ -107,8 +109,12 @@ export async function changePasswordAction(
     action: "auth.password.changed",
     entityType: "user",
     entityId: session.user.id,
-    metadata: { selfService: true, otherSessionsEnded: true },
+    metadata: { selfService: true, otherSessionsEnded: !signOutError },
   });
 
-  return { ok: "Password changed. You have been signed out on other devices." };
+  return {
+    ok: signOutError
+      ? "Password changed, but your other devices could not be signed out from here. Sign out on them yourself."
+      : "Password changed. You have been signed out on other devices.",
+  };
 }

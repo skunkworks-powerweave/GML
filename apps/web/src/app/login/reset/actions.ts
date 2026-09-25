@@ -75,8 +75,10 @@ export async function resetPasswordAction(
   // Sign out everywhere else. Recovery is what someone does after losing
   // control of an account, so leaving the attacker's other sessions alive would
   // defeat the exercise. 'others' keeps THIS session so the redirect lands on a
-  // usable dashboard rather than bouncing back to /login.
-  await supabase.auth.signOut({ scope: "others" });
+  // usable dashboard rather than bouncing back to /login. auth-js returns a
+  // failure as {error} rather than throwing; the audit row records which.
+  const { error: signOutError } = await supabase.auth.signOut({ scope: "others" });
+  if (signOutError) console.error("[auth] could not sign out other sessions after a reset:", signOutError);
 
   // They chose this password themselves, so one an administrator set for them
   // no longer needs changing.
@@ -88,7 +90,7 @@ export async function resetPasswordAction(
     entityType: "user",
     entityId: data.user.id,
     userId: data.user.id,
-    metadata: { otherSessionsEnded: true },
+    metadata: { otherSessionsEnded: !signOutError },
   });
   if (!wrote) noteAuditDegraded("login/reset/resetPasswordAction");
 
