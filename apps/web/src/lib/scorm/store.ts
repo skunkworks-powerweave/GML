@@ -58,8 +58,15 @@ export async function insertPackage(db: Db, p: NewScormPackage): Promise<string>
   return p.id;
 }
 
-export async function setPackageActive(db: Db, id: string, active: boolean): Promise<void> {
-  await db.update(scormPackages).set({ active }).where(eq(scormPackages.id, id));
+/** Withdraw or restore a package. Returns its title, or null when there is no such package. */
+export async function setPackageActive(db: Db, id: string, active: boolean): Promise<string | null> {
+  if (!UUID.test(id)) return null;
+  const [row] = await db
+    .update(scormPackages)
+    .set({ active })
+    .where(eq(scormPackages.id, id))
+    .returning({ title: scormPackages.title });
+  return row?.title ?? null;
 }
 
 /** WHERE over scorm_packages joined to rtt_subjects: the packages `viewer` may launch. */

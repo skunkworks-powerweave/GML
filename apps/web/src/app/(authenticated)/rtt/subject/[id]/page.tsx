@@ -21,6 +21,8 @@ import { listSubjectAssessments } from "@/lib/rtt/assessments";
 import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
 import { rttScope } from "@/lib/rtt/scope";
 import { webLink } from "@/lib/rtt/links";
+import { launchLabel, statusChip, statusLabel } from "@/lib/scorm/format";
+import { subjectPackages } from "@/lib/scorm/store";
 import { markProgressAction } from "./actions";
 
 /** A one-button form that marks a lesson or reading done, or undoes it. */
@@ -138,6 +140,11 @@ export default async function RttSubjectPage({
   // predicate, so one programme-wide "mid-unit" quiz ran on every subject and
   // a quiz under any other slug was offered nowhere (lib/rtt/assessments.ts).
   const assessments = await listSubjectAssessments(db, id, session.user.id);
+
+  // THIS SUBJECT'S SCORM MODULES (F41), with the learner's own record of
+  // each. The same predicate as the launch page and the content route
+  // (lib/scorm/store.ts), so nothing listed here 404s when opened.
+  const scorm = await subjectPackages(db, viewer, id);
 
   // THE LEARNER'S OWN PROGRESS (F36): the lessons and readings she has marked
   // done (rtt_progress, written by ./actions.ts) and the attendance taken of
@@ -334,6 +341,65 @@ export default async function RttSubjectPage({
                   );
                 })}
               </div>
+            )}
+          </article>
+
+          <article id="scorm" className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              {/* One text node, so the count reads as one string. */}
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{`SCORM modules (${scorm.length})`}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Interactive modules. Leave one at any point and it opens where you stopped.
+              </div>
+            </div>
+            {scorm.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No SCORM modules for this subject.
+                {viewerIsAdmin ? (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    Upload one at <Link href="/admin/scorm">Admin → SCORM packages</Link>.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+                {scorm.map((p, i) => (
+                  <li
+                    key={p.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "12px 0",
+                      borderTop: i ? "1px solid var(--line)" : "none",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 500 }}>
+                        {p.title}
+                        {!p.active ? (
+                          // Only an administrator is shown a withdrawn package.
+                          <span className="chip chip-rust" style={{ marginLeft: 6 }}>
+                            Withdrawn
+                          </span>
+                        ) : null}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, fontSize: 11 }}>
+                        <span className={statusChip(p.lessonStatus)}>{statusLabel(p.lessonStatus)}</span>
+                        {p.scoreRaw !== null ? <span className="mono">{`Score ${p.scoreRaw}`}</span> : null}
+                      </div>
+                    </div>
+                    <Link
+                      href={`/scorm/${p.id}`}
+                      className={p.lessonStatus === "not attempted" ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                      style={{ textDecoration: "none" }}
+                    >
+                      {launchLabel(p.lessonStatus)}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             )}
           </article>
 
