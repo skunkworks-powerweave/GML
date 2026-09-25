@@ -39,8 +39,8 @@ is stamped with every `auth.sign_in`, which is what `/admin/users` shows.
 | `auth.sign_in` | A session was established: a password sign-in at `/login`, or an emailed link opened at `/auth/confirm` or `/auth/callback`. `user_id` and `entity_id` are the account | `method` ("password" / "email_link" / "recovery_link") |
 | `auth.sign_in_failed` | A password sign-in reached the credential check and was refused. Throttled and outage-refused attempts write nothing, so this is bounded by the sign-in throttle. `user_id` is null: no account is looked up for a failure, and the attempt is not credited to anyone already signed in on that browser (a failed attempt leaves that session in place; `recordAudit({ userId: null })` skips the session fallback) | `reason` ("invalid_credentials" / "inactive" / "email_not_confirmed"), `emailHash` (first 16 hex characters of SHA-256 over the lower-cased address, never the address itself) |
 | `auth.sign_out` | Someone signed out of this browser (other devices stay signed in) | none |
-| `auth.password.changed` | The holder changed their own password at `/settings`, after re-entering the current one | `selfService` (true), `otherSessionsEnded` |
-| `auth.password.reset_completed` | A new password was set at `/login/reset`, from a session an emailed recovery or magic link established in the last 15 minutes | `otherSessionsEnded` |
+| `auth.password.changed` | The holder changed their own password at `/settings`, after re-entering the current one | `selfService` (true), `otherSessionsEnded` (true only when Supabase accepted the sign-out of the holder's other sessions) |
+| `auth.password.reset_completed` | A new password was set at `/login/reset`, from a session an emailed recovery or magic link established in the last 15 minutes | `otherSessionsEnded` (as above) |
 
 There is no per-account lockout any more, and so no lockout, unlock or
 "rate limit down" rows: sign-in is throttled per account and address
