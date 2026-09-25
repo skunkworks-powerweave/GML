@@ -113,8 +113,24 @@ with "already registered"), the claimed account shows in `/admin/users` as a
 deactivated teacher that one press of *Reactivate* hands to them, and the
 sign-up endpoint tells anyone which addresses already have accounts.
 `verify-auth.mjs` reports **FAIL public sign-up is disabled** until this is off.
-If an address is already squatted, delete that user in Authentication → Users
-and create the account again at `/admin/users`; do not reactivate it.
+
+If an address is already squatted, remove that account and create it again at
+`/admin/users`; do not reactivate it. Remove its profile first. The sign-up
+wrote one (the deactivated teacher above), and the profile's link to the login
+is deliberately RESTRICT, so *Delete user* in Authentication → Users fails with
+"Database error deleting user" while the profile exists. In the SQL editor:
+
+```sql
+-- 1. It should be an inactive teacher nobody approved.
+select id, email, role, active, created_at from public.users where email = lower('<address>');
+-- 2. Remove that profile. Expect DELETE 1.
+delete from public.users where email = lower('<address>') and active = false and role = 'teacher';
+```
+
+`DELETE 0`, or a foreign-key error, means the account has been used (for
+example, it was reactivated): stop, and deactivate it at `/admin/users`
+instead. Otherwise delete the user in Authentication → Users, then create the
+account at `/admin/users`.
 
 **e) Bound how long a session lives.** Authentication → Sessions → *Time-box
 user sessions*: **12 hours**; *Inactivity timeout*: **2 hours** (both are Pro
