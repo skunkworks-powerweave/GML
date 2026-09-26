@@ -128,3 +128,33 @@ test(
     }));
   },
 );
+
+test(
+  "FR-23: privileges a --no-acl restore drops come back on the next deploy",
+  { skip: needsDatabase() },
+  async () => {
+    // backup.sh dumps --no-acl and the runbook restores --no-acl, so every
+    // GRANT is gone after a DR restore -- and the _post files that made them
+    // are in the restored ledger, so migrate never ran them again. GoTrue lost
+    // EXECUTE on the access-token hook (no one could sign in) and authenticated
+    // lost the private schema (every browser upload refused).
+    await withRlsProbeLock("exclusive", () => withClient(async (c) => {
+      const { rows } = await c.query(
+        `SELECT to_regprocedure('public.custom_access_token_hook(jsonb)') IS NOT NULL AS hook,
+                EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') AS gotrue`,
+      );
+      if (!rows[0].hook || !rows[0].gotrue) return; // not a Supabase database: nothing to grant
+      const granted = async () =>
+        (await c.query(`SELECT has_function_privilege('supabase_auth_admin', 'public.custom_access_token_hook(jsonb)', 'EXECUTE') AS ok`)).rows[0].ok;
+      await c.query(`REVOKE EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) FROM supabase_auth_admin`);
+      try {
+        assert.equal(await granted(), false, "precondition: the grant is gone, as after a --no-acl restore");
+        const r = await migrate();
+        assert.equal(r.code, 0, r.out);
+        assert.equal(await granted(), true, "migrate must re-grant GoTrue EXECUTE on the hook");
+      } finally {
+        await c.query(`GRANT EXECUTE ON FUNCTION public.custom_access_token_hook(jsonb) TO supabase_auth_admin`);
+      }
+    }));
+  },
+);

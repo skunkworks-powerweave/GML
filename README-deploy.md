@@ -791,6 +791,9 @@ under `$BACKUP_S3_BUCKET/storage/`.
 4. Re-run the dashboard steps in §2.2 — **hooks and settings are not in the
    dump.**
 5. Point `DATABASE_URL` and the Supabase keys at the restored project, redeploy.
+   The redeploy's migrate step re-grants what `--no-acl` dropped
+   (`_post/always/002_privileges.sql`: GoTrue's EXECUTE on the access-token
+   hook, `authenticated`'s access to the upload check, the audit_log revokes).
 
 Step 4 is the one people miss. A perfectly restored database with no
 access-token hook is a site nobody can log into.
