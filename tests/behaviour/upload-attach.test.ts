@@ -210,16 +210,19 @@ test("F18: a failed upload offers no attach, and is not moved", { skip }, async 
   });
 });
 
-// The control offers a cycle, a meeting or a quarterly slot, and nothing else
-// is attachable: a crafted teach-back target used to reach the uuid column
-// unchecked (Postgres 22P02, a 500), or move a private video into every
-// mentor's teach-back queue.
-test("F18: only a cycle, a meeting or a quarterly slot can be attached, with a well-formed id", { skip }, async () => {
+// The control offers a cycle, a meeting, a quarterly slot or a teach-back, and
+// nothing else is attachable: a crafted teach-back target used to reach the
+// uuid column unchecked (Postgres 22P02, a 500), or move a private video into
+// every mentor's teach-back queue. A teach-back became attachable with FR-02,
+// once its id had to be an RTT subject its uploader is shown
+// (rtt-teach-back-submit.test.ts attaches one); an id that is no subject -- a
+// cycle's, here -- is the reservation's own 404, and moves nothing.
+test("F18: only a cycle, a meeting, a quarterly slot or a teach-back can be attached, with a well-formed id", { skip }, async () => {
   await withWorld(async (w) => {
     const id = await w.video(w.teacher);
     for (const target of [
       "teach_back|abc|",
-      `teach_back|${w.cycle.id}|`,
+      "teach_back||",
       "classroom_session||",
       `classroom_session|${w.cycle.id}|`,
       "observation_cycle|not-a-uuid|",
@@ -229,6 +232,8 @@ test("F18: only a cycle, a meeting or a quarterly slot can be attached, with a w
       assert.deepEqual(r, { kind: "redirect", location: "/uploads?attach=invalid" }, target);
       assert.equal((await row(w, id)).context_type, "generic", target);
     }
+    assert.deepEqual(await attach(w.teacher, id, `teach_back|${w.cycle.id}|`), { kind: "notFound" }, "a cycle id is no subject");
+    assert.equal((await row(w, id)).context_type, "generic");
   });
 });
 

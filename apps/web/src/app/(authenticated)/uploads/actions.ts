@@ -160,8 +160,8 @@ export async function completeUploadAction(
 }
 
 /**
- * Attach one of the uploader's own GENERIC videos to a cycle, a meeting or a
- * quarterly slot, from its row on /uploads.
+ * Attach one of the uploader's own GENERIC videos to a cycle, a meeting, a
+ * quarterly slot or a teach-back, from its row on /uploads.
  *
  * Until /uploads asked what a video was for, every upload made there was
  * generic, and so is every WhatsApp video whose caption named nothing the
@@ -176,13 +176,16 @@ export async function completeUploadAction(
  * generic and still this user's (attachSubmissionToContext), so a linked video
  * is never taken off its evidence and nobody else's is moved.
  *
- * Only the three places the control offers can be chosen, each by a
- * well-formed id: a teach-back target reached the uuid column unchecked (a
- * 500), and would have moved a private video into every mentor's teach-back
- * queue. And, as every action inside the two gated sections does, it needs
- * the section unlocked -- the page offers these targets only then.
+ * Only the places the control offers can be chosen, each by a well-formed id.
+ * A teach-back was left out while its id was any uuid (a crafted target
+ * reached the uuid column unchecked, a 500, and could move a private video
+ * into every mentor's queue); it is an RTT subject she is shown now, checked
+ * by assertContextAllowed like the rest, so a WhatsApp teach-back whose
+ * caption missed can be re-filed instead of sent again. And, as every action
+ * inside the two gated sections does, a cycle, meeting or quarterly target
+ * needs its section unlocked -- the page offers those only then.
  */
-const ATTACHABLE: ReadonlySet<string> = new Set(["observation_cycle", "mentor_meeting", "mentee_quarterly"]);
+const ATTACHABLE: ReadonlySet<string> = new Set(["observation_cycle", "mentor_meeting", "mentee_quarterly", "teach_back"]);
 
 export async function attachUploadAction(formData: FormData): Promise<void> {
   const session = await auth();

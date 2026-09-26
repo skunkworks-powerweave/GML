@@ -136,14 +136,92 @@ test("F141: a mentor whose account has a phone is credited and may attach to the
   );
 });
 
+/**
+ * RTT subjects for a teach-back caption to name: one taught across the
+ * programme (so the world's teachers are shown it), one taught only in another
+ * district, and a retired one.
+ */
+async function rttSubjects(w: World) {
+  const one = async (q: string, p: unknown[]) => (await w.c.query(q, p)).rows[0].id as string;
+  const district = await one(`INSERT INTO districts (name, code) VALUES ($1, $2) RETURNING id`, [`TB ${w.T}`, `T${w.T.slice(-11)}`]);
+  // phases.label is varchar(24) and unique; sequence is unique too.
+  const phase = await one(`INSERT INTO phases (label, sequence) VALUES ($1, $2) RETURNING id`, [
+    `TB ${w.T}`.slice(0, 24),
+    3_000_000 + Math.floor(Math.random() * 1e9),
+  ]);
+  const term = await one(`INSERT INTO terms (phase_id, name, sequence) VALUES ($1, $2, 1) RETURNING id`, [phase, `Term ${w.T}`]);
+  const subject = (name: string, o: { districtId?: string; active?: boolean } = {}) =>
+    one(`INSERT INTO rtt_subjects (term_id, name, district_id, active) VALUES ($1, $2, $3, $4) RETURNING id`, [
+      term,
+      `${name} ${w.T}`,
+      o.districtId ?? null,
+      o.active ?? true,
+    ]);
+  const shown = await subject("Everywhere");
+  const elsewhere = await subject("Elsewhere", { districtId: district });
+  const retired = await subject("Retired", { active: false });
+  return {
+    shown,
+    elsewhere,
+    retired,
+    cleanup: async () => {
+      // The world deletes its video rows only after this runs; a teach-back
+      // carries no key to its subject (context_id has no FK by design).
+      await w.c.query(`DELETE FROM rtt_subjects WHERE term_id = $1`, [term]);
+      await w.c.query(`DELETE FROM terms WHERE id = $1`, [term]);
+      await w.c.query(`DELETE FROM phases WHERE id = $1`, [phase]);
+      await w.c.query(`DELETE FROM districts WHERE id = $1`, [district]);
+    },
+  };
+}
+
+// FR-02: TB-<id> was accepted for any syntactically valid uuid -- the
+// "teach_backs surface" its comment deferred to does not exist -- so a
+// teach-back sent by WhatsApp was linked to nothing a reviewer could name, and
+// no page could give a teacher an id to send. A teach-back is now FOR an RTT
+// subject, and the caption the /uploads page gives for one is TB-<subject id>:
+// held here to the same check as the direct upload (uploads/context.ts), a
+// subject the sender is shown.
+test("FR-02: TB-<subject> links a teach-back to the RTT subject it names, for a sender shown that subject", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const s = await rttSubjects(w);
+      try {
+        const mine = await send(w, w.teacher.phone, `TB-${s.shown}`);
+        assert.deepEqual([mine.sub.context_type, mine.sub.context_id], ["teach_back", s.shown]);
+
+        for (const [label, id, action, reason] of [
+          ["an id that is no subject", randomUUID(), "whatsapp.context.unmatched", "teach_back.subject_not_found"],
+          ["a subject taught in another district", s.elsewhere, "whatsapp.context.forbidden", "teach_back.not_permitted"],
+          ["a retired subject", s.retired, "whatsapp.context.forbidden", "teach_back.not_permitted"],
+        ] as const) {
+          const r = await send(w, w.teacher.phone, `TB-${id}`);
+          assert.deepEqual([r.sub.context_type, r.sub.context_id], ["generic", null], `${label}: kept, linked to nothing`);
+          const [a] = await waitFor(() => w.audits(action, r.id), (rows) => rows.length >= 1);
+          assert.equal((a?.metadata as { reason?: string } | undefined)?.reason, reason, label);
+        }
+      } finally {
+        await s.cleanup();
+      }
+    }),
+  );
+});
+
 test("F138: a teach-back needs a registered sender; a stranger's clip is quarantined, not queued for every reviewer", { skip }, async () => {
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {
-      const tb = `TB-${randomUUID()}`;
-      assert.equal((await send(w, STRANGER, tb)).sub.context_type, "generic");
-      const mine = await send(w, w.teacher.phone, tb);
-      assert.equal(mine.sub.context_type, "teach_back", "a registered teacher's own teach-back is accepted, as on the upload path");
-      assert.equal(mine.sub.submitted_by_user_id, w.teacher.userId);
+      // A subject the teacher is shown: TB- names an RTT subject since FR-02
+      // (any uuid was accepted before, which this test used to send).
+      const s = await rttSubjects(w);
+      try {
+        const tb = `TB-${s.shown}`;
+        assert.equal((await send(w, STRANGER, tb)).sub.context_type, "generic");
+        const mine = await send(w, w.teacher.phone, tb);
+        assert.equal(mine.sub.context_type, "teach_back", "a registered teacher's own teach-back is accepted, as on the upload path");
+        assert.equal(mine.sub.submitted_by_user_id, w.teacher.userId);
+      } finally {
+        await s.cleanup();
+      }
     }),
   );
 });

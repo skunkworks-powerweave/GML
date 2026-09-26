@@ -2,8 +2,9 @@
 //
 // Flow:
 //   1. Teacher sends a video to the GML number with a caption like
-//      `OBS-2026-001` (observation cycle) or `TB-<uuid>` (teach-back). A video
-//      attached through WhatsApp's Document picker counts too.
+//      `OBS-2026-001` (observation cycle) or `TB-<subject id>` (a teach-back
+//      of that RTT subject). A video attached through WhatsApp's Document
+//      picker counts too.
 //   2. Meta calls this webhook with the message metadata.
 //   3. We verify the signature, work out which cycle / teach-back / meeting the
 //      caption names, and -- in ONE transaction -- insert the files row
@@ -32,6 +33,7 @@ import {
   observationCycles,
   mentorMeetings,
   mentorPairings,
+  rttSubjects,
   users,
   teachers,
 } from "@gml/db/schema";
@@ -43,6 +45,7 @@ import { maskIp, recordAudit } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 import { clientIpFrom, UNKNOWN_IP } from "@/lib/request-ip";
 import { cycleVisibility, pairingVisibility, type Actor } from "@/lib/visibility";
+import { rttScope } from "@/lib/rtt/scope";
 import { parseCaption } from "@gml/shared/whatsapp/caption";
 import {
   WHATSAPP_FETCH_JOB,
@@ -420,10 +423,26 @@ async function acceptVideoMessage(
     }
   } else if (ctx.type === "teach_back" && ctx.code) {
     if (UUID_RE.test(ctx.code)) {
-      // We accept the caption-supplied uuid as the teach_back id. The
-      // teach_backs surface (spec 066) is the source of truth for the id
-      // namespace; no FK exists on video_submissions.context_id by design.
-      contextId = ctx.code;
+      // TB-<id> names the RTT SUBJECT taught back, as the direct upload's
+      // context id does (uploads/context.ts). Any uuid used to be accepted,
+      // for a "teach_backs surface" that was never built, so a teach-back
+      // was linked to nothing a reviewer could name. Still no FK on
+      // context_id, by design: the subject is looked up here instead.
+      const [subject] = await db
+        .select({ id: rttSubjects.id })
+        .from(rttSubjects)
+        .where(eq(rttSubjects.id, ctx.code))
+        .limit(1);
+      if (subject?.id) {
+        contextId = subject.id;
+      } else {
+        contextType = "generic";
+        void recordAudit({
+          action: "whatsapp.context.unmatched",
+          entityType: "video_submission",
+          metadata: { msgId: msg.id, caption, reason: "teach_back.subject_not_found" },
+        });
+      }
     } else {
       contextType = "generic";
       void recordAudit({
@@ -734,9 +753,11 @@ async function resolveSender(from: string): Promise<Actor | null> {
  *   mentor_meeting     a member of the meeting's pairing, or an admin
  *   mentee_quarterly   a member of the pairing, or an admin; the Q4 video only
  *                      once the pairing has reached Q4
- *   teach_back         any registered sender. A teach-back is the uploader's
- *                      own work and has no owning row to check -- the upload
- *                      path accepts it from any signed-in user the same way.
+ *   teach_back         a registered sender who is shown the RTT subject it
+ *                      names (lib/rtt/scope.ts: active, and taught where a
+ *                      teacher is). A teach-back is the uploader's own work;
+ *                      the subject is the only row to check, as on the upload
+ *                      path.
  *
  * These mirror the direct upload's assertContextAllowed (uploads/context.ts),
  * which cannot be called from here: it answers a refusal with notFound().
@@ -753,7 +774,15 @@ async function refusalFor(
 ): Promise<string | null> {
   if (!sender) return "sender_unregistered";
   if (!contextId) return "no_target";
-  if (contextType === "teach_back") return null;
+  if (contextType === "teach_back") {
+    const scope = await rttScope(db, sender);
+    const [ok] = await db
+      .select({ id: rttSubjects.id })
+      .from(rttSubjects)
+      .where(and(eq(rttSubjects.id, contextId), scope.subjectWhere))
+      .limit(1);
+    return ok ? null : "teach_back.not_permitted";
+  }
   if (contextType === "observation_cycle") {
     const [ok] = await db
       .select({ status: observationCycles.status })

@@ -258,7 +258,11 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                   cycle detail page).
                 </li>
                 <li>
-                  Caption <code className="mono">TB-&lt;uuid&gt;</code> — attaches to a teach-back session.
+                  {/* There is no "teach-back session": TB- names the RTT
+                      subject taught back (uploads/context.ts), and the
+                      subject's page is where a teacher is given it. */}
+                  Caption <code className="mono">TB-&lt;subject&gt;</code> — a teach-back for an RTT subject (Upload a
+                  teach-back video on the subject&apos;s page gives its code).
                 </li>
                 <li>
                   Caption <code className="mono">MM-&lt;uuid&gt;</code> — attaches to a mentor meeting.

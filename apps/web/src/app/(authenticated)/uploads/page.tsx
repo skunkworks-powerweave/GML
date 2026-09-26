@@ -22,10 +22,11 @@
 // links here. A generic video is visible to its uploader and administrators
 // only, so her observer and mentor got a 404 and the cycle's Evidence card
 // stayed empty (F18). The page now takes ?context=&contextId= (and &quarter=
-// for a mentee's quarterly video) from the cycle and pairing pages, runs the
-// reservation's own check on it (./context.ts), and says what the upload is
-// for. Without one it asks, offering the user's own open cycles, meetings and
-// quarterly videos -- and "something else", knowingly.
+// for a mentee's quarterly video) from the cycle, pairing and RTT subject
+// pages, runs the reservation's own check on it (./context.ts), and says what
+// the upload is for. Without one it asks, offering the user's own open cycles,
+// meetings, quarterly videos and teach-backs -- and "something else",
+// knowingly.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -289,10 +290,10 @@ export default async function UploadsPage({
     .limit(50);
 
   // What an unlinked video of hers can still be attached to: the same open
-  // cycles, meetings and quarterly slots the chooser offers. Not a failed one
-  // (attachSubmissionToContext refuses it): its bytes never came, or it will
-  // not play. One still uploading can be: its completion links the row's
-  // context as it is then.
+  // cycles, meetings, quarterly slots and teach-backs the chooser offers. Not
+  // a failed one (attachSubmissionToContext refuses it): its bytes never came,
+  // or it will not play. One still uploading can be: its completion links the
+  // row's context as it is then.
   const attachable = (r: { contextType: string; status: string }) => r.contextType === "generic" && r.status !== "failed";
   const attachOptions = rows.some(attachable)
     ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: `${o.title} · ${o.detail}` }))

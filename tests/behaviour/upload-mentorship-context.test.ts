@@ -185,8 +185,11 @@ test("F18: a malformed teach-back or classroom-session id names nothing; it is n
     for (const contextType of ["teach_back", "classroom_session"]) {
       assert.deepEqual(await begin(w.teacher, { contextType, contextId: "abc" }), { kind: "notFound" }, contextType);
     }
-    // A well-formed one, and none at all, reserve as before.
-    reserved(await begin(w.teacher, { contextType: "teach_back", contextId: w.pairingId }));
+    // A classroom session reserves with none, as before. A teach-back no
+    // longer takes any well-formed id: it names an RTT subject its uploader is
+    // shown (FR-02, rtt-teach-back-submit.test.ts), so a pairing's id is a 404
+    // like any other id that names no subject.
     reserved(await begin(w.teacher, { contextType: "classroom_session" }));
+    assert.deepEqual(await begin(w.teacher, { contextType: "teach_back", contextId: w.pairingId }), { kind: "notFound" });
   });
 });
