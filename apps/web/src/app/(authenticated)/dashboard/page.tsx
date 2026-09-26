@@ -35,7 +35,7 @@
 // the TodayChecklist row builder share one materialisation per request.
 
 import type { Metadata } from "next";
-import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@gml/db";
 import { getTranslations } from "next-intl/server";
@@ -202,15 +202,33 @@ const getTeacherChrome = cache(async (userId: string) => {
   const since7d = new Date(Date.now() - SEVEN_DAYS_MS);
   const obsOpen = await sectionOpen(userId, "observation");
   // Her cycles at one stage, or null while observation is locked for her.
-  const myCyclesAt = (status: "nominated" | "pre_submitted" | "observed") =>
+  const myCyclesAt = (status: "nominated" | "pre_submitted" | "observed", extra?: SQL) =>
     gatedCount(obsOpen, () =>
       teacherId
         ? db
             .select({ c: count() })
             .from(observationCycles)
-            .where(and(eq(observationCycles.teacherId, teacherId), eq(observationCycles.status, status)))
+            .where(and(eq(observationCycles.teacherId, teacherId), eq(observationCycles.status, status), extra))
         : Promise.resolve([{ c: 0 }]),
     );
+  // A pre_submitted cycle whose lesson video is in (processing or ready) waits
+  // for the observer, not for her: only the observer's form moves it on, so
+  // counting it kept "Upload lesson video" up after she had sent it. A failed
+  // video has to be sent again. Keyed on the video's context, as the
+  // observation list's Video column is (lib/observation/list.ts).
+  const noLessonVideoYet = notInArray(
+    observationCycles.id,
+    db
+      .select({ id: videoSubmissions.contextId })
+      .from(videoSubmissions)
+      .where(
+        and(
+          eq(videoSubmissions.contextType, "observation_cycle"),
+          isNotNull(videoSubmissions.contextId),
+          ne(videoSubmissions.status, "failed"),
+        ),
+      ),
+  );
 
   const [myUploads7d, pendingPre, awaitingVideo, awaitingPost, openQuizzes] = await Promise.all([
     // My uploads this week — every video_submission this user submitted in
@@ -231,7 +249,7 @@ const getTeacherChrome = cache(async (userId: string) => {
     myCyclesAt("nominated"),
     // Cycles awaiting video — pre-form done, observation upload still owed.
     // 'pre_submitted' is the JSX prototype's "awaiting video" stage.
-    myCyclesAt("pre_submitted"),
+    myCyclesAt("pre_submitted", noLessonVideoYet),
     // Cycles awaiting her post-form — observed, reflection owed. This stage
     // had no to-do at all, so a teacher whose cycle reached 'observed' was
     // prompted for nothing and the cycle stalled before sign-off.

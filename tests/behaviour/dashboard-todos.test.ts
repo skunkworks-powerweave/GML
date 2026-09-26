@@ -234,3 +234,39 @@ test("a locked section's numbers and cycles stay off the dashboard until it is u
     await w.cleanup();
   }
 });
+
+test("FR-40: 'Upload lesson video' clears once the cycle's video is in, and returns if it failed", { skip }, async () => {
+  const w = await observationWorld("dashvid");
+  const fileIds: string[] = [];
+  try {
+    const cyc = await w.cycle({ status: "pre_submitted" });
+    await w.grant(w.teacher.id);
+    const owed = /Upload lesson video for 1 cycle/;
+    assert.match((await dashboard(w.teacher)).todos, owed, "no video yet");
+
+    const fileId = (
+      await w.c.query(
+        `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos', $1, 'video/mp4', 'video_original', 'stored') RETURNING id`,
+        [`test/${w.T}/${cyc.id}`],
+      )
+    ).rows[0].id as string;
+    fileIds.push(fileId);
+    const videoId = (
+      await w.c.query(
+        `INSERT INTO video_submissions (file_id, source, status, context_type, context_id)
+         VALUES ($1, 'direct', 'transcoding', 'observation_cycle', $2) RETURNING id`,
+        [fileId, cyc.id],
+      )
+    ).rows[0].id as string;
+    // Only the observer's form moves the cycle on, so it stays pre_submitted:
+    // with her video in, it is waiting for the observer, not for her.
+    assert.doesNotMatch((await dashboard(w.teacher)).todos, owed, "the video is processing");
+
+    await w.c.query(`UPDATE video_submissions SET status = 'failed' WHERE id = $1`, [videoId]);
+    assert.match((await dashboard(w.teacher)).todos, owed, "a failed video has to be sent again");
+  } finally {
+    await w.c.query(`DELETE FROM video_submissions WHERE file_id = ANY($1::uuid[])`, [fileIds]);
+    await w.c.query(`DELETE FROM files WHERE id = ANY($1::uuid[])`, [fileIds]);
+    await w.cleanup();
+  }
+});
