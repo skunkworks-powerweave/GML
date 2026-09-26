@@ -108,3 +108,59 @@ test("a malformed form id on submit goes back to /forms with invalid_form_submit
     assert.equal(n, 0);
   });
 });
+
+// ── W3-29 (F100 remainder) ───────────────────────────────────────────────────
+//
+// The rest of /api now answers the same way (lib/api-json.ts, lib/api-guards):
+// a body that is not JSON is 400 {"error":"invalid_json"} and nothing more,
+// zod issues come back bounded and without the rejected value, and no session
+// is 401 "unauthenticated". This route answered malformed JSON with the
+// parser's own SyntaxError text as `message`, returned zod's raw issues, and
+// said "unauthorized" -- the only three uses of that token under /api.
+
+test("a draft PUT whose body is not JSON is 400 invalid_json, and nothing else", { skip }, async () => {
+  await withWorld(async () => {
+    const { PUT } = await drafts();
+    for (const scope of ["template", "cycle"]) {
+      for (const body of ["{bad", "", '{"responses":']) {
+        const r = await outcome(() => PUT(req(ZERO, scope, { method: "PUT", headers: { "content-type": "application/json" }, body }), ctx(ZERO)));
+        assert.equal(r.kind, "value", `${scope} ${JSON.stringify(body)}: ${describe(r)}`);
+        const res = (r as { value: Response }).value;
+        assert.equal(res.status, 400, `${scope} ${JSON.stringify(body)}`);
+        assert.deepEqual(await res.json(), { error: "invalid_json" }, "the parser's message is not echoed");
+      }
+    }
+  });
+});
+
+test("a draft PUT that fails validation names the field, without echoing the value", { skip }, async () => {
+  await withWorld(async () => {
+    const { PUT } = await drafts();
+    const r = await outcome(() =>
+      PUT(req(ZERO, "cycle", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ responses: "x".repeat(300) }) }), ctx(ZERO)),
+    );
+    assert.equal(r.kind, "value", describe(r));
+    const res = (r as { value: Response }).value;
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { error: string; issues: Array<Record<string, unknown>> };
+    assert.equal(body.error, "validation_failed");
+    assert.deepEqual(body.issues.map((i) => i.path), [["responses"]]);
+    for (const issue of body.issues) assert.deepEqual(Object.keys(issue).sort(), ["message", "path"], "no `received` echo");
+  });
+});
+
+test("the draft API without a session is 401 unauthenticated on every method", { skip }, async () => {
+  signIn(null);
+  const { GET, PUT, DELETE } = await drafts();
+  for (const [name, call] of [
+    ["GET", () => GET(req(ZERO, "cycle"), ctx(ZERO))],
+    ["PUT", () => PUT(req(ZERO, "cycle", putInit), ctx(ZERO))],
+    ["DELETE", () => DELETE(req(ZERO, "cycle", { method: "DELETE" }), ctx(ZERO))],
+  ] as const) {
+    const r = await outcome(call);
+    assert.equal(r.kind, "value", `${name}: ${describe(r)}`);
+    const res = (r as { value: Response }).value;
+    assert.equal(res.status, 401, name);
+    assert.deepEqual(await res.json(), { error: "unauthenticated" }, name);
+  }
+});

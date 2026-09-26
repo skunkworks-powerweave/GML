@@ -66,7 +66,7 @@ export default async function MentorshipListPage({
 }) {
   const sp = await searchParams;
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
-  const page = Math.min(1000, Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1));
+  let page = Math.min(1000, Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1));
 
   // OWNERSHIP. The detail page refuses to show a teacher anyone else's
   // pairing (assertCanAccessPairing); this list was showing her all of them --
@@ -84,32 +84,32 @@ export default async function MentorshipListPage({
     conds.push(eq(mentorPairings.status, statusFilter as PairingStatus));
   }
 
-  const rowsPlusOne = await db
-    .select({
-      id: mentorPairings.id,
-      status: mentorPairings.status,
-      currentQuarter: mentorPairings.currentQuarter,
-      meetingsCount: mentorPairings.meetingsCount,
-      lastMeetingAt: mentorPairings.lastMeetingAt,
-      startedAt: mentorPairings.startedAt,
-      mentorName: mentors.name,
-      mentorBase: mentors.baseLocation,
-      teacherName: teachers.fullName,
-      teacherHindi: teachers.hindiName,
-    })
-    .from(mentorPairings)
-    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
-    .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
-    .where(conds.length === 0 ? undefined : and(...conds))
-    // id breaks ties: the seed gives every pairing the same started_at, and
-    // without a unique tail the pages would not be a partition -- a pairing
-    // could appear on two of them, or on none.
-    .orderBy(desc(mentorPairings.startedAt), desc(mentorPairings.id))
-    // One extra row says whether there is a next page without a second COUNT.
-    .limit(PAGE_SIZE + 1)
-    .offset((page - 1) * PAGE_SIZE);
-  const hasNext = rowsPlusOne.length > PAGE_SIZE;
-  const rows = rowsPlusOne.slice(0, PAGE_SIZE);
+  const pageRows = (p: number) =>
+    db
+      .select({
+        id: mentorPairings.id,
+        status: mentorPairings.status,
+        currentQuarter: mentorPairings.currentQuarter,
+        meetingsCount: mentorPairings.meetingsCount,
+        lastMeetingAt: mentorPairings.lastMeetingAt,
+        startedAt: mentorPairings.startedAt,
+        mentorName: mentors.name,
+        mentorBase: mentors.baseLocation,
+        teacherName: teachers.fullName,
+        teacherHindi: teachers.hindiName,
+      })
+      .from(mentorPairings)
+      .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
+      .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
+      .where(conds.length === 0 ? undefined : and(...conds))
+      // id breaks ties: the seed gives every pairing the same started_at, and
+      // without a unique tail the pages would not be a partition -- a pairing
+      // could appear on two of them, or on none.
+      .orderBy(desc(mentorPairings.startedAt), desc(mentorPairings.id))
+      // One extra row says whether there is a next page without a second COUNT.
+      .limit(PAGE_SIZE + 1)
+      .offset((p - 1) * PAGE_SIZE);
+  let rowsPlusOne = await pageRows(page);
 
   // Per-status counts so the filter chips remain truthful regardless of
   // the active filter. One GROUP BY; it also gives the pager its total.
@@ -128,8 +128,21 @@ export default async function MentorshipListPage({
   const statusCount = (v: string) =>
     v === "all" ? totalPairings : (statusCountRows.find((r) => r.status === v)?.n ?? 0);
   const filteredTotal = statusCount(statusFilter);
+
+  // PAST THE END IS THE LAST PAGE. A stale ?page= -- a link kept after
+  // pairings were removed or changed status -- rendered "Showing 0–950 of 87"
+  // and "No pairings match this filter." with a Previous link to another empty
+  // page. As /observation does (lib/observation/list.ts); only that case pays
+  // a second query.
+  const lastPage = Math.max(1, Math.ceil(filteredTotal / PAGE_SIZE));
+  if (page > lastPage) {
+    page = lastPage;
+    rowsPlusOne = await pageRows(page);
+  }
+  const hasNext = rowsPlusOne.length > PAGE_SIZE;
+  const rows = rowsPlusOne.slice(0, PAGE_SIZE);
   const firstShown = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const lastShown = (page - 1) * PAGE_SIZE + rows.length;
+  const lastShown = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + rows.length;
 
   return (
     <div>

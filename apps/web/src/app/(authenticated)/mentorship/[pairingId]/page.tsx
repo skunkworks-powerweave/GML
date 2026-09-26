@@ -38,6 +38,7 @@ import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
 import { lookupOwn } from "@/lib/lookup";
 import { QUARTER_TO_KIND, quarterlyVersionByKind } from "@/lib/forms/quarterly";
+import { loadEnabledNotificationKinds } from "@/lib/notification-kinds";
 import { MobileDetailFrame } from "@/components/shells";
 import {
   logMeetingAction,
@@ -185,6 +186,17 @@ export default async function PairingDetailPage({
   // The mentee does not log meetings: "Mentor logs every contact", and a
   // mistaken entry by her could not be removed by anyone.
   const canLogMeeting = !viewerIsMentee;
+
+  // WHETHER A CANCELLATION REACHES ANYONE. cancelMeetingAction always writes
+  // the meeting.cancelled notice, but /inbox and the bell show only the kinds
+  // switched on in /admin/system-settings. The confirmation promised "will be
+  // told" regardless, and a mentee can travel to a meeting her mentor thinks
+  // she knows is off. `null` is "settings unreadable", which shows every kind
+  // (lib/notification-kinds.ts), so the promise holds then too. Read only when
+  // a confirmation is on screen.
+  const cancelIsShown = sp.confirmCancel
+    ? await loadEnabledNotificationKinds().then((kinds) => kinds === null || kinds.includes("meeting.cancelled"))
+    : true;
 
   const meetings = await db
     .select()
@@ -526,7 +538,21 @@ export default async function PairingDetailPage({
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
-                {state === "done" ? (
+                {state === "done" && formHref && !viewerIsAdmin && !answeredByViewer.has(formKind) ? (
+                  // CLOSED, BUT NOT BY HER. Only the mentor's form closes a
+                  // quarter, so it can close before the mentee has sent hers.
+                  // "View responses" then led her to a record that shows her
+                  // only her own answers -- none -- and this page, where her
+                  // quarterly forms live, no longer led to the form at all.
+                  <Link
+                    href={formHref}
+                    className="btn btn-sm"
+                    style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
+                    aria-label={`Fill your Q${qNum} form (the quarter is closed)`}
+                  >
+                    Fill your Q{qNum} form →
+                  </Link>
+                ) : state === "done" ? (
                   // The READ-ONLY record. This opened the live form, where
                   // each visit could file another copy and nobody but the
                   // respondent could see the answers at all.
@@ -727,7 +753,9 @@ export default async function PairingDetailPage({
                                 <input type="hidden" name="confirm" value="1" />
                                 <p style={{ margin: 0, color: "var(--ink-2)" }}>
                                   {upcoming
-                                    ? `Cancel the meeting on ${when}? The other people on this pairing will be told.`
+                                    ? cancelIsShown
+                                      ? `Cancel the meeting on ${when}? The other people on this pairing will be told.`
+                                      : `Cancel the meeting on ${when}? Meeting-cancelled notices are switched off, so nobody will be told in the app. Let the other people on this pairing know yourself.`
                                     : `Remove the meeting of ${when} from the record? It will stop counting towards this pairing's meetings. This cannot be undone.`}
                                 </p>
                                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>

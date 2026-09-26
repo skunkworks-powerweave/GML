@@ -7,8 +7,9 @@
 // The runner is a server component; the only client surface is <FormRenderer>
 // (spec 072), which owns autosave + field rendering. `submitFormAction` is a
 // top-level `"use server"` action this file owns; it inserts into
-// `feedback_responses`, deletes the matching draft, and fires `form.submit`
-// audit, then redirects to /forms/[slug]/thanks.
+// `feedback_responses` (for a quarter's form sent again, it replaces the
+// respondent's earlier answers), deletes the matching draft, and fires
+// `form.submit` audit, then redirects to /forms/[slug]/thanks.
 //
 // Spec 155 — the runner now enforces an audience-vs-role gate BEFORE
 // rendering. Any logged-in user used to be able to GET /forms/<slug> regardless
@@ -23,8 +24,9 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
+import { notify } from "@gml/db/notify";
 import {
   feedbackForms,
   feedbackResponses,
@@ -32,6 +34,7 @@ import {
   mentorPairings,
   mentors,
   teachers,
+  users,
   type FeedbackForm,
 } from "@gml/db/schema";
 
@@ -267,7 +270,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // This form files mentorship feedback and advances the pairing's quarter,
   // and it lives outside /mentorship, so nothing else asked for the password.
   await assertSectionGate(actor.id, "mentorship", formRunnerHref(slug, pairingId));
-  await assertCanAccessPairing(actor, pairingId);
+  const pairing = await assertCanAccessPairing(actor, pairingId);
 
   // Pull the form back so we know which field ids to accept. Drop unknown keys.
   const [form] = await db
@@ -355,18 +358,60 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     responses.__context = context;
   }
 
+  // ONE RECORD PER QUARTER'S FORM, PAIRING AND RESPONDENT. The form stays
+  // live after it is sent -- the runner pre-fills the earlier answers, and
+  // spec 131 has the most recent retake win -- but this always INSERTed, so
+  // sending it again filed a second record beside the first, and the pairing's
+  // record listed both with nothing saying which counts. Sending it again now
+  // REPLACES the earlier answers (the runner says so). A form with a purpose
+  // (the School visit checklist) is repeatable: each visit is its own record.
+  // The advisory lock makes two submits at once -- a double tap on a slow
+  // link -- take turns, so the second finds the first's row.
+  const isQuarterly = isQuarterlyForm(form.schema);
+  // The pairing's FINAL (Q4) form, sent by this respondent for the first
+  // time: the notice after the transaction. The Endline survey borrows kind
+  // 'final' and is not one (lib/forms/quarterly.ts).
+  const isFinalForm = isQuarterly && form.kind === "final";
+  let firstFinal = false;
+  let replaced = false;
+
   let newResponseId = "";
   await db.transaction(async (tx) => {
-    const [inserted] = await tx
-      .insert(feedbackResponses)
-      .values({
-        formId: form.id,
-        pairingId,
-        respondentUserId: userId,
-        responses,
-      })
-      .returning({ id: feedbackResponses.id });
-    newResponseId = inserted?.id ?? "";
+    let earlierId: string | null = null;
+    if (isQuarterly) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`feedback_responses:${form.id}:${pairingId}:${userId}`}))`);
+      const [earlier] = await tx
+        .select({ id: feedbackResponses.id })
+        .from(feedbackResponses)
+        .where(
+          and(
+            eq(feedbackResponses.formId, form.id),
+            eq(feedbackResponses.pairingId, pairingId),
+            eq(feedbackResponses.respondentUserId, userId),
+          ),
+        )
+        .orderBy(desc(feedbackResponses.submittedAt))
+        .limit(1);
+      earlierId = earlier?.id ?? null;
+    }
+    firstFinal = isFinalForm && !earlierId;
+    replaced = earlierId !== null;
+    const [saved] = earlierId
+      ? await tx
+          .update(feedbackResponses)
+          .set({ responses, submittedAt: sql`now()` })
+          .where(eq(feedbackResponses.id, earlierId))
+          .returning({ id: feedbackResponses.id })
+      : await tx
+          .insert(feedbackResponses)
+          .values({
+            formId: form.id,
+            pairingId,
+            respondentUserId: userId,
+            responses,
+          })
+          .returning({ id: feedbackResponses.id });
+    newResponseId = saved?.id ?? "";
 
     // Clear the autosave draft for this user, template AND PAIRING. Keyed by
     // user+template alone, submitting one mentee's form deleted the unfinished
@@ -426,13 +471,67 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       kind: form.kind,
       audience: form.audience,
       version: form.version,
+      replaced,
       ...context,
     },
   });
 
+  if (firstFinal) await notifyFinalSubmitted(pairing, pairingId, actor.id);
+
   // With the pairing, so the thank-you card can link back to it and to its
   // read-only record of submitted feedback.
   redirect(`/forms/${slug}/thanks?pairingId=${encodeURIComponent(pairingId)}`);
+}
+
+/**
+ * THE FINAL FORM IS IN. It is what makes a pairing ready for an administrator
+ * to close (completePairingAction; the form advances no quarter), and nothing
+ * said it had happened: the pairing sat active at Q4 until someone opened it.
+ * The programme admins and the other party on the pairing are told, minus
+ * whoever sent it; the row opens the pairing.
+ *
+ * NOTHING THE SECTION PASSWORD GUARDS goes into the row -- no names, no
+ * answers: /inbox has no gate (see logMeetingAction). And nothing here can
+ * fail the submission, which has already been saved: notify() never throws,
+ * and a failed lookup is logged and dropped.
+ */
+async function notifyFinalSubmitted(
+  pairing: { mentorId: string; teacherId: string },
+  pairingId: string,
+  actorId: string,
+): Promise<void> {
+  try {
+    const [mentor] = await db.select({ userId: mentors.userId }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+    const [mentee] = await db.select({ userId: teachers.userId }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+    const admins = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.active, true), inArray(users.role, ["programme_admin", "super_admin"] as const)));
+    const recipients = new Set(
+      [...admins.map((a) => a.id), mentor?.userId, mentee?.userId].filter((u): u is string => Boolean(u)),
+    );
+    // One insert per person: notify() writes its rows in a single INSERT, and
+    // an account deleted between the lookup above and that INSERT (a foreign
+    // key violation) would cost everyone else their notice.
+    for (const userId of recipients) {
+      await notify(
+        db,
+        [
+          {
+            userId,
+            kind: "pairing.final_submitted",
+            subject: "Final (Q4) feedback was submitted on a mentorship pairing",
+            body: null,
+            entityType: "mentor_pairing",
+            entityId: pairingId,
+          },
+        ],
+        { excludeUserId: actorId },
+      );
+    }
+  } catch (err) {
+    console.error("[forms] final-form notification failed", { pairingId, err });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +822,15 @@ export default async function FormRunnerPage({
             <span className="chip">No draft yet</span>
           )}
         </div>
+        {priorSubmittedAt && isQuarterlyForm(form.schema) ? (
+          // Sending a quarter's form again replaces the record rather than
+          // filing a second one (submitFormAction); nothing used to say so.
+          <p data-testid="form-already-sent" style={{ marginTop: 8, fontSize: 13, color: "var(--ink-2)" }}>
+            You already sent this form on{" "}
+            {new Date(priorSubmittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}. Sending
+            it again replaces your earlier answers.
+          </p>
+        ) : null}
       </div>
 
       <div className="page-body" style={{ maxWidth: 760, margin: "0 auto" }}>

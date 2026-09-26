@@ -46,32 +46,63 @@ export function useDraftAutosave(
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [failure, setFailure] = useState<SaveFailure | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const retry = useRef<{ timer: ReturnType<typeof setTimeout> | null; attempt: number }>({ timer: null, attempt: 0 });
+  // `epoch` counts cancellations (cancelRetry, unmount); a save started before
+  // one must not act after it. `queue` is the save in flight, if any.
+  const retry = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    attempt: number;
+    epoch: number;
+    queue: Promise<void>;
+  }>({ timer: null, attempt: 0, epoch: 0, queue: Promise.resolve() });
 
   const flushSave = useCallback(async () => {
     if (!enabled || !draftKey) return;
+    // A SAVE STARTED BEFORE A CANCEL STAYS CANCELLED. cancelRetry() and the
+    // unmount cleanup used to clear only a retry timer already pending. A PUT
+    // still on the wire -- the debounced save a second before Submit, any save
+    // when the user navigates away -- reached its catch afterwards and set a
+    // fresh timer nothing cleared: it PUT the draft back after the submit
+    // transaction had deleted it ("Draft loaded" over a submitted form), and
+    // kept retrying for the rest of the session. A generation, not a one-way
+    // flag: after a submission the server sends back (?error=), the runner
+    // stays mounted and its later saves must still retry. Nor does a cancelled
+    // save keep a device copy: one written after the submission would be newer
+    // than it, and be restored and sent on the next visit. setField wrote the
+    // copy that matters at keystroke time.
+    const epoch = retry.current.epoch;
     const attempt = async (): Promise<void> => {
+      if (retry.current.epoch !== epoch) return;
       if (retry.current.timer) clearTimeout(retry.current.timer);
       retry.current.timer = null;
       setSaveState("pending");
       try {
         await saveDraft({ ...draftKey, responses: valuesRef.current });
+        if (retry.current.epoch !== epoch) return;
         retry.current.attempt = 0;
         dropLocalCopy(owner, draftKey);
         setFailure(null);
         setLastSavedAt(Date.now());
         setSaveState("saved");
       } catch (err) {
+        if (retry.current.epoch !== epoch) return;
         const kind = saveFailureKind(err);
         keepLocalCopy(owner, draftKey, valuesRef.current);
         setFailure(kind);
         setSaveState("error");
         if (isRetryable(kind)) {
-          retry.current.timer = setTimeout(() => void attempt(), retryDelayMs(retry.current.attempt++));
+          if (retry.current.timer) clearTimeout(retry.current.timer);
+          retry.current.timer = setTimeout(() => void enqueue(), retryDelayMs(retry.current.attempt++));
         }
       }
     };
-    await attempt();
+    // ONE SAVE AT A TIME. The runners' Submit does `await flushSave()` so that
+    // no PUT lands after the POST; that awaited only the PUT it issued itself,
+    // and a debounced one already in flight could still land (or fail and
+    // retry) afterwards. Queued, the Submit's save starts once the earlier one
+    // has settled, so awaiting it awaits both -- and an older answer can no
+    // longer overwrite a newer one by arriving second.
+    const enqueue = () => (retry.current.queue = retry.current.queue.then(attempt).catch(() => undefined));
+    await enqueue();
   }, [draftKey, enabled, owner, valuesRef]);
 
   // Back online: send what is waiting now rather than at the next backoff.
@@ -88,18 +119,21 @@ export function useDraftAutosave(
     const r = retry.current;
     return () => {
       if (r.timer) clearTimeout(r.timer);
+      r.timer = null;
+      r.epoch += 1;
     };
   }, []);
 
   /**
-   * Stop a pending retry. Called once a submission is under way: the POST
-   * carries the answers, and a draft PUT landing after the submit transaction
-   * deleted the draft would re-create it -- "Draft loaded" over a form that
-   * was in fact submitted.
+   * Stop a pending retry, and any retry a save still in flight would schedule.
+   * Called once a submission is under way: the POST carries the answers, and a
+   * draft PUT landing after the submit transaction deleted the draft would
+   * re-create it -- "Draft loaded" over a form that was in fact submitted.
    */
   const cancelRetry = useCallback(() => {
     if (retry.current.timer) clearTimeout(retry.current.timer);
     retry.current.timer = null;
+    retry.current.epoch += 1;
   }, []);
 
   return { saveState, failure, lastSavedAt, flushSave, cancelRetry };

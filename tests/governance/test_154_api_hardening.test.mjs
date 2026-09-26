@@ -13,8 +13,9 @@
 //
 //   2. apps/web/src/app/api/form-drafts/[id]/route.ts (EDITED)
 //      — the PUT handler's silent `req.json().catch(() => ({}))`
-//        is replaced with an explicit try/catch that returns 400
-//        `{ error: "invalid_json", message: String(err) }`.
+//        is replaced with an explicit 400 `{ error: "invalid_json" }`
+//        (since W3-29 through lib/api-json's readJsonBody, which does
+//        not echo the parser's message).
 //
 //   3. apps/web/src/app/api/helpdesk/tickets/route.ts (EDITED)
 //      — imports `rateLimit` from `@/lib/rate-limit`;
@@ -249,25 +250,23 @@ test("spec 154 — form-drafts PUT handler no longer silently swallows malformed
     undefined,
     `form-drafts route must not contain \`req.json().catch(() => ({}))\` as live code — spec 154 replaced the silent swallow with an explicit try/catch (offending line: ${offending ?? "<none>"})`,
   );
-  // The explicit try/catch must exist — we pin the catch body's response
-  // shape (`invalid_json` + `message`) so a refactor can't quietly drop
-  // the diagnostic.
+  // W3-29 changed what this pins. It used to require the route's own
+  // try/catch answering `{ error: "invalid_json", message: String(err) }`:
+  // the parser's SyntaxError text, echoed to the caller, which no other /api
+  // route does. The body is now read through lib/api-json's readJsonBody --
+  // the helper the hardened routes share, which answers 400
+  // {"error":"invalid_json"} and nothing more (executed by
+  // tests/behaviour/mentorship-forms-uuid.test.ts). What stays pinned is
+  // that the route uses it, and never forwards an error's text.
   assert.match(
     src,
-    /catch\s*\([^)]*\)\s*\{[\s\S]{0,400}error:\s*"invalid_json"/,
-    "form-drafts route PUT handler must have a catch branch that returns error: \"invalid_json\"",
+    /await\s+readJsonBody\(\s*req\s*\)/,
+    "form-drafts route PUT handler must read its body through readJsonBody (lib/api-json)",
   );
-  assert.match(
+  assert.doesNotMatch(
     src,
-    /error:\s*"invalid_json"[\s\S]{0,200}message:\s*String\(\s*err\s*\)/,
-    "form-drafts route PUT handler must forward the parser error via String(err) for client-side diagnostics",
-  );
-  // The status code is 400 — preserving the existing contract so no
-  // client breakage.
-  assert.match(
-    src,
-    /error:\s*"invalid_json"[\s\S]{0,400}status:\s*400/,
-    "form-drafts route PUT handler must return status 400 on JSON parse failure",
+    /String\(\s*err\s*\)/,
+    "form-drafts route must not echo an error's text to the caller",
   );
 });
 

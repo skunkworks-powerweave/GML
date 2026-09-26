@@ -92,6 +92,34 @@ test("an administrator's quarter links are previews that file nothing against th
   });
 });
 
+// ── W3-31 ────────────────────────────────────────────────────────────────────
+//
+// Only the mentor's form closes a quarter, so a quarter can close before the
+// mentee has sent hers. A closed quarter offered only "View responses", and
+// the responses page shows a mentee her own responses -- none -- so the
+// pairing page, where her quarterly forms live, led her to an empty page and
+// no longer to her form.
+test("a quarter the mentor closed still offers the mentee her own form until she sends it", { skip }, async () => {
+  await withForms(async (w, f) => {
+    await submitAs(w.mentor, f.mentor, w.pairingA);
+    assert.equal(await quarter(w, w.pairingA), 2, "precondition: the mentor's form closed Q1");
+
+    const formHref = `href="/forms/${f.mentee.slug}?pairingId=${w.pairingA}&quarter=1"`;
+    const before = await pairingHtml(w.teacherA, w.pairingA);
+    assert.ok(before.includes(formHref), "her Q1 form is still one tap from the pairing");
+
+    await submitAs(w.teacherA, f.mentee, w.pairingA);
+    const after = await pairingHtml(w.teacherA, w.pairingA);
+    assert.ok(!after.includes(formHref), "once sent, it is not asked for again");
+    const q1 = /<a\b[^>]*aria-label="View Q1 responses"[^>]*>/.exec(after)?.[0] ?? "";
+    assert.ok(q1.includes(`href="/mentorship/${w.pairingA}/responses"`), q1 || "no View Q1 responses link");
+
+    const mentor = await pairingHtml(w.mentor, w.pairingA);
+    assert.match(mentor, /aria-label="View Q1 responses"/, "the mentor, whose form closed it, reads the record");
+    assert.ok(!mentor.includes(`href="/forms/${f.mentor.slug}?pairingId=${w.pairingA}&quarter=1"`));
+  });
+});
+
 test("once the mentee has sent her quarter's form, her card says so instead of asking again", { skip }, async () => {
   await withForms(async (w, f) => {
     await submitAs(w.teacherA, f.mentee, w.pairingA);
