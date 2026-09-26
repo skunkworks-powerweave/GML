@@ -3,6 +3,7 @@
 // Data only: importing it opens nothing (the pool is imported lazily below).
 import migrationsJournal from "@gml/db/migrations/journal";
 import { BUCKETS } from "@gml/shared/storage/buckets";
+import { UNRESOLVED_DEAD_SQL } from "@gml/db/queue";
 
 export type PingResult = {
   ok: boolean;
@@ -156,7 +157,7 @@ export async function whatsappHealth(): Promise<WhatsAppHealth> {
         -- updated_at for a job the lease reaper dead-lettered before it set
         -- completed_at (packages/db/src/queue.ts, reapExpiredLeases).
         (SELECT count(*) FROM jobs WHERE queue = 'whatsapp' AND name = 'whatsapp_fetch'
-            AND status = 'dead' AND coalesce(completed_at, updated_at) > now() - interval '24 hours')::text AS dead,
+            AND ${UNRESOLVED_DEAD_SQL} AND coalesce(completed_at, updated_at) > now() - interval '24 hours')::text AS dead,
         (SELECT max(created_at) FROM audit_log WHERE action = 'whatsapp.media.fetched') AS last
     `);
     const row = q.rows[0];

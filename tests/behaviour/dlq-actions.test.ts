@@ -204,9 +204,44 @@ test("F09: Drop on a video whose retry is pending cancels that retry", { skip },
     // queue, so the pending retry ran anyway and flipped the video back to
     // transcoding -- overriding the operator's decision within seconds.
     const [job] = await w.q<{ status: string }>(`SELECT status FROM jobs WHERE id = $1`, [retry]);
-    assert.equal(job?.status, "dead", "the pending retry is still claimable");
+    assert.equal(job, undefined, `the pending retry is still in the queue (${job?.status})`);
     assert.equal(await statusOf(w), "failed");
     assert.deepEqual(await ledgerOf(w), ["dropped"]);
+  });
+});
+
+/** The dead job an exhausted transcode leaves in the queue. */
+async function seedDeadJob(w: World): Promise<string> {
+  const [j] = await w.q<{ id: string }>(
+    `INSERT INTO jobs (queue, name, payload, status, dedupe_key, attempts, max_attempts, run_at, completed_at, last_error, created_at)
+       VALUES ('transcode', 'transcode', '{}', 'dead', $1, 3, 3, now() - interval '1 hour', now() - interval '30 minutes', 'ffmpeg exited 1',
+               now() - interval '1 hour')
+     RETURNING id`,
+    [`submission:${w.submissionId}`],
+  );
+  return j!.id;
+}
+
+const listedDead = async () => (await (await import("../../apps/web/src/lib/queue.ts")).deadJobs(1000)).map((j) => j.id);
+
+test("FR-17: a dead job stops counting as a failure once Retry has replaced it", { skip }, async () => {
+  await withSubmission({ status: "failed", attempts: ["failed"] }, async (w) => {
+    const dead = await seedDeadJob(w);
+    assert.ok((await listedDead()).includes(dead), "an unhandled failure is listed");
+    const { retryTranscodeJobAction } = await actions();
+    assert.equal((await act(() => retryTranscodeJobAction(form(w.attempts[0]!)))).completed, true);
+    // The retry is a new job under the same dedupe key; the dead one is history.
+    assert.ok(!(await listedDead()).includes(dead), "the 'N failed' chip and the DLQ list still count the failure Retry dealt with");
+  });
+});
+
+test("FR-17: Drop resolves the failure: its dead job leaves the DLQ", { skip }, async () => {
+  await withSubmission({ status: "failed", attempts: ["failed"] }, async (w) => {
+    const dead = await seedDeadJob(w);
+    const { dropTranscodeJobAction } = await actions();
+    assert.equal((await act(() => dropTranscodeJobAction(form(w.attempts[0]!)))).completed, true);
+    assert.ok(!(await listedDead()).includes(dead), "a dropped video's failure is still reported for 30 days");
+    assert.deepEqual(await ledgerOf(w), ["dropped"], "the ledger keeps the record");
   });
 });
 

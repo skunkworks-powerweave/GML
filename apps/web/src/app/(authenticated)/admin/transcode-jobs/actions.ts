@@ -29,7 +29,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions, files } from "@gml/db/schema";
 import { enqueueTranscode } from "@/lib/queue";
@@ -195,6 +195,12 @@ export async function dropTranscodeJobAction(formData: FormData): Promise<void> 
       .update(transcodeJobs)
       .set({ status: "dropped", endedAt: new Date() })
       .where(eq(transcodeJobs.id, jobId));
+    // Drop resolves the failure: its dead queue rows stop feeding the
+    // "N failed" chip and the DLQ list. The ledger keeps the record.
+    await tx.execute(sql`
+      DELETE FROM jobs
+       WHERE queue = 'transcode' AND dedupe_key = ${`submission:${row.videoSubmissionId}`} AND status = 'dead'
+    `);
 
     // The parent submission ends 'failed' (from 'queued' when a retry was
     // pending), so /videos surfaces tell the truth -- the operator decided this

@@ -61,10 +61,10 @@ export async function cancelQueuedRetry(
   q: Pick<typeof import("@gml/db")["db"], "execute">,
   submissionId: string,
 ): Promise<boolean> {
+  // Deleted, not dead-lettered: a dropped video's retry is not a failure for
+  // the DLQ to report. The ledger row ('dropped') and the audit log keep it.
   const res = await q.execute(sql`
-    UPDATE jobs
-       SET status = 'dead', completed_at = now(), updated_at = now(),
-           last_error = COALESCE(last_error, '') || ' [dropped by an operator]'
+    DELETE FROM jobs
      WHERE queue = 'transcode' AND dedupe_key = ${`submission:${submissionId}`} AND status = 'queued'
      RETURNING id
   `);

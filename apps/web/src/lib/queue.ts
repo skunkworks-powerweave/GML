@@ -14,7 +14,7 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { enqueue, queueDepth } from "@gml/db/queue";
+import { enqueue, queueDepth, UNRESOLVED_DEAD_SQL } from "@gml/db/queue";
 import { ADMIN_ROLES, hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
 
 export type TranscodeJobInput = {
@@ -108,7 +108,7 @@ export async function deadJobs(limit = 50): Promise<DeadJob[]> {
     SELECT id, queue, name, attempts, max_attempts, last_error, completed_at,
            payload->>'videoSubmissionId' AS video_submission_id
       FROM jobs
-     WHERE status = 'dead'
+     WHERE ${sql.raw(UNRESOLVED_DEAD_SQL)}
      ORDER BY completed_at DESC NULLS LAST, created_at DESC
      LIMIT ${limit}
   `);

@@ -353,20 +353,32 @@ export async function reapExpiredLeases(
   });
 }
 
+/**
+ * A dead `jobs` row that still needs a human: nothing has replaced it. Retry,
+ * Retry fetch and every later producer enqueue a NEW job under the same dedupe
+ * key and leave the dead one behind as history; counting those kept the
+ * "N failed" chip, the DLQ list and WhatsApp's "gave up" count on failures an
+ * operator had already dealt with, for the 30 days pruneFinished keeps them.
+ * The outer table must be `jobs`, unaliased.
+ */
+export const UNRESOLVED_DEAD_SQL = `status = 'dead' AND NOT EXISTS (
+  SELECT 1 FROM jobs newer
+   WHERE newer.queue = jobs.queue AND newer.dedupe_key = jobs.dedupe_key AND newer.created_at > jobs.created_at)`;
+
 /** Depth by status, for the topbar chip and the admin DLQ view. */
 export async function queueDepth(
   db: NodePgDatabase<Record<string, unknown>>,
   queue: QueueName,
 ): Promise<{ queued: number; running: number; dead: number }> {
   const res = await db.execute(sql`
-    SELECT status, count(*)::int AS n
+    SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued,
+           count(*) FILTER (WHERE status = 'running')::int AS running,
+           count(*) FILTER (WHERE ${sql.raw(UNRESOLVED_DEAD_SQL)})::int AS dead
       FROM jobs
      WHERE queue = ${queue} AND status IN ('queued', 'running', 'dead')
-     GROUP BY status
   `);
-  const rows = ((res as unknown as { rows: { status: string; n: number }[] }).rows ?? []);
-  const get = (s: string) => rows.find((r) => r.status === s)?.n ?? 0;
-  return { queued: get("queued"), running: get("running"), dead: get("dead") };
+  const [row] = (res as unknown as { rows: { queued: number; running: number; dead: number }[] }).rows ?? [];
+  return { queued: row?.queued ?? 0, running: row?.running ?? 0, dead: row?.dead ?? 0 };
 }
 
 /**
