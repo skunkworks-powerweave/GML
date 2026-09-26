@@ -242,8 +242,11 @@ export async function main() {
     teacherId: t.id,
     status: i < 7 ? ("active" as const) : i < 9 ? ("review" as const) : ("complete" as const),
     currentQuarter: ((i % 4) + 1),
-    meetingsCount: 3 + (i % 5),
-    lastMeetingAt: new Date(Date.now() - i * 86400000 * 7),
+    // No meetings: the counters describe mentor_meetings rows, and the seed
+    // writes none. Invented counts ("7 meetings · last 27 Aug") sat over an
+    // empty "No meetings logged yet" list on every demo pairing.
+    meetingsCount: 0,
+    lastMeetingAt: null,
     conceptNote: i === 0 ? "Focus on phonics and reading aloud routines." : null,
   }));
   // The insert must still run; only the unused binding is dropped. The

@@ -129,6 +129,9 @@ test("FR-09: a pairing's meetings page past the newest 20, and the chip counts t
     const first = await html({});
     assert.deepEqual(shown(first), Array.from({ length: 20 }, (_, i) => i + 1), "the newest 20, newest first");
     assert.match(first, /<span class="chip">23<\/span>/, "the chip counts every meeting");
+    // The header too: it read the cached meetings_count, which these rows (and
+    // the demo seed's invented counts) never touched.
+    assert.match(first, /· 23 meetings/, "the header counts every meeting");
     assert.ok(first.includes(`href="/mentorship/${w.pairingA}?meetings=2">Older`), "an Older link to page 2");
 
     const older = await html({ meetings: "2" });

@@ -366,7 +366,7 @@ export default async function PairingDetailPage({
                 month: "long",
                 year: "numeric",
               })}
-              {pairing.meetingsCount != null ? ` · ${pairing.meetingsCount} meetings` : ""}
+              {` · ${meetingTotal} meeting${meetingTotal === 1 ? "" : "s"}`}
             </p>
           </div>
 
