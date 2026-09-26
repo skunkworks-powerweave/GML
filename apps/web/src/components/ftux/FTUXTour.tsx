@@ -46,7 +46,9 @@ type Step = {
 // FTUX_TOURS map — verbatim from help.jsx::FTUX_TOURS. Five steps per persona
 // (selecting the *right* persona is more important than padding to six — the
 // prototype settled on a 4–5 length to keep the overlay finishable in under
-// 90 seconds). super_admin maps onto programme_admin, observer onto mentor.
+// 90 seconds). super_admin maps onto programme_admin. The observer has a
+// tour of its own: it was the mentor's, whose first step ("Your mentees live
+// here") pointed at an item observers do not have.
 // Exported for tests/behaviour/ui-navigation.test.ts, which checks that the
 // copy promises only help affordances that exist.
 export const FTUX_TOURS: Record<Role, Step[]> = {
@@ -64,7 +66,7 @@ export const FTUX_TOURS: Record<Role, Step[]> = {
         "Every time you watch a lesson — live or by video — it's a cycle. Five steps: pre-form, observe, video, post-form, sign-off.",
     },
     {
-      target: "[data-help-anchor='nav-videos']",
+      target: "[data-help-anchor='nav-teach-back']",
       title: "Pending video reviews",
       body:
         "Teachers upload their lessons. Aim to give written feedback within 48 hours.",
@@ -139,12 +141,34 @@ export const FTUX_TOURS: Record<Role, Step[]> = {
   ],
   // help.jsx::FTUX_TOURS.super_admin = FTUX_TOURS.programme_admin
   super_admin: [],
-  // help.jsx::FTUX_TOURS.observer = FTUX_TOURS.mentor
-  observer: [],
+  observer: [
+    {
+      target: "[data-help-anchor='nav-observation']",
+      title: "Your observation cycles",
+      body:
+        "The cycles you are assigned to. Read the teacher's pre-form, watch the lesson live or by video, then file your observer form.",
+    },
+    {
+      target: "[data-help-anchor='nav-teach-back']",
+      title: "Teach-back reviews",
+      body: "Teachers record themselves teaching an RTT lesson. Watch each one and mark it reviewed.",
+    },
+    {
+      target: "[data-help-anchor='nav-repo']",
+      title: "The repository",
+      body:
+        "Everything about every school, class, subject, lesson and reading material. Searchable. Browse it like a library.",
+    },
+    {
+      target: "[data-help-anchor='topbar-help']",
+      title: "Help is always here",
+      body:
+        "Tap the ? button to look up any term or message the programme team. It sits here on a computer and at the bottom right on a phone. On a keyboard, ? opens it too.",
+    },
+  ],
 };
 // Mirror the prototype's role aliasing (see help.jsx lines 484-485).
 FTUX_TOURS.super_admin = FTUX_TOURS.programme_admin;
-FTUX_TOURS.observer = FTUX_TOURS.mentor;
 
 type FTUXTourProps = {
   role: Role;

@@ -87,10 +87,14 @@ test("spec 123 — FTUXTour reads role + ftuxSeenAt props and mirrors prototype 
     /FTUX_TOURS\.super_admin\s*=\s*FTUX_TOURS\.programme_admin/,
     "super_admin must alias to programme_admin (per help.jsx)",
   );
-  assert.match(
+  // The observer does NOT alias to the mentor any more: that tour opened with
+  // "Your mentees live here", pointing at an item observers do not have. Every
+  // role's steps are checked against its own navigation in
+  // tests/behaviour/ui-help.test.ts.
+  assert.doesNotMatch(
     src,
     /FTUX_TOURS\.observer\s*=\s*FTUX_TOURS\.mentor/,
-    "observer must alias to mentor (per help.jsx)",
+    "the observer tour must be its own, not the mentor's",
   );
 });
 

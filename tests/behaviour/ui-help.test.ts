@@ -214,3 +214,21 @@ test("F128: the tour still renders on the server, where there is no window to me
   assert.ok(cap, "the caption renders");
   assert.match(attr(cap, "style") ?? "", /visibility:hidden/, "unplaced until measured, not parked where a phone cannot show it");
 });
+
+test("every first-run tour points only at navigation its own role has", async () => {
+  // The observer tour was the mentor's: its first step, "Your mentees live
+  // here", pointed at a My mentees item observers do not have. And the
+  // mentor's "Pending video reviews" step pointed at the Video library.
+  const { FTUX_TOURS } = await import("../../apps/web/src/components/ftux/FTUXTour.tsx");
+  const { NAV_BY_ROLE } = await import("../../apps/web/src/config/nav.ts");
+  for (const [role, steps] of Object.entries(FTUX_TOURS)) {
+    const anchors = new Set(NAV_BY_ROLE[role as keyof typeof NAV_BY_ROLE].flatMap((s) => s.items.map((i) => `nav-${i.id}`)));
+    for (const s of steps) {
+      const anchor = s.target.match(/data-help-anchor='([^']+)'/)?.[1];
+      if (anchor === "topbar-help") continue;
+      assert.ok(anchor && anchors.has(anchor), `${role}: "${s.title}" points at ${anchor}, which that role's navigation lacks`);
+    }
+  }
+  const mentorReview = FTUX_TOURS.mentor.find((s) => /review/i.test(s.title));
+  assert.match(mentorReview?.target ?? "", /nav-teach-back/, "the mentor's review step points at the review queue");
+});
