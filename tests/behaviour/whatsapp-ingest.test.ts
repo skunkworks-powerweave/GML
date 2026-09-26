@@ -376,8 +376,12 @@ test("W3-64: a last attempt that fails once shutdown has begun leaves the video 
 // backs off 1 min, 10 min, then hourly, so ten attempts ran for about 7.2
 // hours, and a sender whose video could not be fetched was told so hours
 // later. Measured here on the real queue: the job the webhook wrote, failed
-// by the real fail() until it gives up, adding up the waits it schedules.
-test("W3-65: a fetch that keeps failing gives up, and its sender hears, within about an hour", { skip }, async () => {
+// by the real fail() attempt after attempt, adding up the waits it schedules.
+//
+// It stops at the start of the last attempt -- the one whose failure tells the
+// sender -- rather than failing that one too: a dead fetch, deleted again on
+// cleanup, would move the dead-fetch count other files assert on.
+test("W3-65: a fetch that keeps failing reaches its last attempt, and its sender hears, within about an hour", { skip }, async () => {
   await withEnv(PARTLY_CONFIGURED, () =>
     withWorld(async (w) => {
       const { fail } = await import("../../packages/db/src/queue.ts");
@@ -385,9 +389,9 @@ test("W3-65: a fetch that keeps failing gives up, and its sender hears, within a
       const { job } = await acceptAndClaim(w);
       let waited = 0;
       let attempt = job.attempts;
-      for (;;) {
+      while (attempt < job.maxAttempts) {
         const { willRetry } = await fail(db as never, job.id, "Graph media lookup failed: HTTP 500", attempt, job.maxAttempts);
-        if (!willRetry) break;
+        assert.ok(willRetry, `attempt ${attempt} of ${job.maxAttempts} is retried`);
         const [r] = (
           await w.c.query(`SELECT EXTRACT(EPOCH FROM run_at - updated_at)::int AS wait FROM jobs WHERE id = $1`, [job.id])
         ).rows;
