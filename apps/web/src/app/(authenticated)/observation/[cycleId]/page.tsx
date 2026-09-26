@@ -13,6 +13,7 @@ import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import Link from "next/link";
+import { SubmitButton } from "@/components/SubmitButton";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { teachers, subjects, observationEvidence } from "@gml/db/schema";
@@ -203,9 +204,9 @@ export default async function CycleDetailPage({
     canSignOff ? (
       <form action={signOffCycleAction}>
         <input type="hidden" name="cycleId" value={cycleId} />
-        <button type="submit" className="btn btn-primary btn-sm">
+        <SubmitButton className="btn btn-primary btn-sm">
           Sign off cycle
-        </button>
+        </SubmitButton>
       </form>
     ) : undefined;
 
@@ -242,9 +243,9 @@ export default async function CycleDetailPage({
         {canSignOff ? (
           <form action={signOffCycleAction}>
             <input type="hidden" name="cycleId" value={cycleId} />
-            <button type="submit" className="btn btn-primary">
+            <SubmitButton className="btn btn-primary">
               Sign off cycle
-            </button>
+            </SubmitButton>
           </form>
         ) : null}
       </header>
@@ -318,9 +319,9 @@ export default async function CycleDetailPage({
             <form action={submitPreFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
               <StageFields kind="pre" drafts={drafts} />
-              <button type="submit" className="btn btn-primary btn-sm">
+              <SubmitButton className="btn btn-primary btn-sm">
                 Submit pre-form
-              </button>
+              </SubmitButton>
             </form>
           ) : null}
 
@@ -329,9 +330,9 @@ export default async function CycleDetailPage({
             <form action={submitObserverFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
               <StageFields kind="observer" drafts={drafts} />
-              <button type="submit" className="btn btn-primary btn-sm">
+              <SubmitButton className="btn btn-primary btn-sm">
                 Submit observer-form
-              </button>
+              </SubmitButton>
             </form>
           ) : null}
 
@@ -340,9 +341,9 @@ export default async function CycleDetailPage({
             <form action={submitPostFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
               <StageFields kind="post" drafts={drafts} />
-              <button type="submit" className="btn btn-primary btn-sm">
+              <SubmitButton className="btn btn-primary btn-sm">
                 Submit post-form
-              </button>
+              </SubmitButton>
             </form>
           ) : null}
         </article>
@@ -473,9 +474,9 @@ export default async function CycleDetailPage({
             style={{ fontSize: 13 }}
           />
           <div>
-            <button type="submit" className="btn btn-sm">
+            <SubmitButton className="btn btn-sm">
               Add note
-            </button>
+            </SubmitButton>
           </div>
         </form>
         ) : null}

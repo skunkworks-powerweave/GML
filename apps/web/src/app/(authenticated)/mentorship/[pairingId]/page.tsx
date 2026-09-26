@@ -20,6 +20,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
 import Link from "next/link";
+import { SubmitButton } from "@/components/SubmitButton";
 import { and, asc, eq, desc, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -387,14 +388,13 @@ export default async function PairingDetailPage({
             {canComplete && pairing.status !== "complete" ? (
               <form action={completePairingAction}>
                 <input type="hidden" name="pairingId" value={pairingId} />
-                <button
-                  type="submit"
+                <SubmitButton
                   className="btn btn-sm"
                   aria-label="Mark pairing complete"
                   style={{ background: "var(--lichen)", color: "white", borderColor: "var(--lichen)" }}
                 >
                   Complete pairing
-                </button>
+                </SubmitButton>
               </form>
             ) : null}
           </div>
@@ -463,9 +463,9 @@ export default async function PairingDetailPage({
               <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost">
                 Cancel
               </Link>
-              <button type="submit" className="btn btn-sm btn-primary">
+              <SubmitButton className="btn btn-sm btn-primary">
                 Save meeting
-              </button>
+              </SubmitButton>
             </div>
           </form>
         ) : null}
@@ -759,9 +759,9 @@ export default async function PairingDetailPage({
                                     : `Remove the meeting of ${when} from the record? It will stop counting towards this pairing's meetings. This cannot be undone.`}
                                 </p>
                                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                                  <button type="submit" className="btn btn-sm" style={{ fontSize: 11 }}>
+                                  <SubmitButton className="btn btn-sm" style={{ fontSize: 11 }}>
                                     {upcoming ? "Yes, cancel it" : "Yes, remove it"}
-                                  </button>
+                                  </SubmitButton>
                                   <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost" style={{ fontSize: 11 }}>
                                     Keep it
                                   </Link>
@@ -960,8 +960,8 @@ export default async function PairingDetailPage({
                         anything is added or removed, so two mentors editing at
                         once would toggle each other's items. */}
                     <input type="hidden" name="commitmentId" value={c.id} />
-                    <button
-                      type="submit"
+                    <SubmitButton
+                      pendingLabel=""
                       aria-label={`${c.done ? "Unmark" : "Mark"} commitment: ${c.text}`}
                       style={{
                         width: 16,
@@ -1068,8 +1068,7 @@ export default async function PairingDetailPage({
                     background: "var(--card)",
                   }}
                 />
-                <button
-                  type="submit"
+                <SubmitButton
                   style={{
                     flex: "none",
                     padding: "6px 12px",
@@ -1082,7 +1081,7 @@ export default async function PairingDetailPage({
                   }}
                 >
                   Add
-                </button>
+                </SubmitButton>
               </div>
             </form>
           </div>

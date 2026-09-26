@@ -307,3 +307,28 @@ test("FR-33: the cycle page offers WhatsApp only where WhatsApp can take the vid
     await w.cleanup();
   }
 });
+
+test("FR-27: the cycle's and the pairing's action buttons disable themselves while their form is sending", { skip }, async () => {
+  // Plain server <form action> buttons stayed live, so a second tap on 2G
+  // recorded a meeting or a note twice. They are SubmitButton now, which
+  // renders an ordinary submit button and disables it while pending.
+  const { readFile } = await import("node:fs/promises");
+  for (const page of ["observation/[cycleId]/page.tsx", "mentorship/[pairingId]/page.tsx"]) {
+    const src = await readFile(new URL(`../../apps/web/src/app/(authenticated)/${page}`, import.meta.url), "utf8");
+    assert.doesNotMatch(src, /<button[^>]*type="submit"/, `${page} still has a plain submit button`);
+  }
+  const { SubmitButton } = await import("../../apps/web/src/components/SubmitButton.tsx");
+  const { h } = await import("./_ui.js");
+  const idle = await render(h("form", {}, h(SubmitButton, { className: "btn" }, "Add note")));
+  assert.match(idle, /<button[^>]*type="submit"[^>]*>Add note<\/button>/);
+  assert.doesNotMatch(idle, /disabled/);
+
+  const w = await observationWorld("lockbtn");
+  try {
+    const cyc = await w.cycle({ status: "nominated" });
+    await w.grant(w.teacher.id);
+    assert.match(await renderCycle(w.teacher, cyc.id), /Submit pre-form/, "the page still renders its buttons");
+  } finally {
+    await w.cleanup();
+  }
+});
