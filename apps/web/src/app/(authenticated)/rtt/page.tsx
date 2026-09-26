@@ -63,7 +63,9 @@ export default async function RttIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">RTT — Recruit, Train, Transform</div>
+        {/* The programme's name, as the metadata, sign-in page and help say;
+            "Recruit, Train, Transform" was the design prototype's (W3-72). */}
+        <div className="label">RTT — Refresher Teacher Training</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>RTT phases &amp; subjects</h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
           {phaseRows.length} phases · {termRows.length} terms · {subjectRows.length} subjects {where}.

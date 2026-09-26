@@ -267,13 +267,63 @@ test("F32: the quiz editor can move a quiz to another RTT subject, and refuses o
   });
 });
 
+test("W3-16: a quiz on a curriculum subject can be saved from its own editor, unchanged or edited", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(randomUUID(), "programme_admin");
+    // The one scope the create form cannot make but quizzes_one_scope allows,
+    // and legacy rows can hold: a curriculum subject, no RTT subject.
+    const [curric] = await w.q<{ id: string }>(`INSERT INTO subjects (name, code) VALUES ($1, $2) RETURNING id`, [
+      `Subject ${w.t}`,
+      w.t.slice(-20),
+    ]);
+    try {
+      await w.q(`UPDATE quizzes SET subject_id = $2, rtt_subject_id = NULL WHERE id = $1`, [w.quizId, curric!.id]);
+      const { default: Editor } = await editorPage();
+      const editor = findElement(
+        await Editor({ params: Promise.resolve({ id: w.quizId }) }),
+        (el) => typeof el.props.initialJson === "string",
+      );
+      const exported = JSON.parse(editor!.props.initialJson as string) as Record<string, unknown>;
+      assert.ok(!("rttSubjectId" in exported), `the export offers rttSubjectId=${JSON.stringify(exported.rttSubjectId)} to save back`);
+
+      const { saveQuizSchema } = await editorActions();
+      const unchanged = await saveQuizSchema(w.quizId, JSON.stringify(exported));
+      assert.equal(unchanged.ok, true, `the editor refused its own export: ${JSON.stringify(unchanged)}`);
+      const renamed = await saveQuizSchema(w.quizId, JSON.stringify({ ...exported, title: `Renamed ${w.t}` }));
+      assert.equal(renamed.ok, true, JSON.stringify(renamed));
+      // An export from before this fix carries an explicit null: nothing to clear.
+      const explicitNull = await saveQuizSchema(w.quizId, JSON.stringify({ rttSubjectId: null }));
+      assert.equal(explicitNull.ok, true, JSON.stringify(explicitNull));
+      const scope = () =>
+        w.q<{ title: string; subject_id: string | null; rtt_subject_id: string | null }>(
+          `SELECT title, subject_id, rtt_subject_id FROM quizzes WHERE id = $1`,
+          [w.quizId],
+        );
+      assert.deepEqual((await scope())[0], { title: `Renamed ${w.t}`, subject_id: curric!.id, rtt_subject_id: null });
+
+      // Moving it to an RTT subject still works, and leaves the curriculum scope.
+      const moved = await saveQuizSchema(w.quizId, JSON.stringify({ rttSubjectId: w.subjectId }));
+      assert.equal(moved.ok, true, JSON.stringify(moved));
+      assert.deepEqual((await scope())[0], { title: `Renamed ${w.t}`, subject_id: null, rtt_subject_id: w.subjectId });
+    } finally {
+      await w.q(`UPDATE quizzes SET rtt_subject_id = $2, subject_id = NULL WHERE id = $1`, [w.quizId, w.subjectId]);
+      await w.q(`DELETE FROM subjects WHERE id = $1`, [curric!.id]);
+    }
+  });
+});
+
 // ── Driving the runner as a browser does ─────────────────────────────────────
 
 type AnyEl = { type: unknown; props: Record<string, unknown> };
 type RunnerProps = {
   slug: string;
+  attemptId: string;
   timeLimitSeconds?: number | null;
-  submitAction: (slug: string, answers: Array<{ questionId: string; selectedIndex: number | null }>) => Promise<void>;
+  submitAction: (
+    slug: string,
+    attemptId: string,
+    answers: Array<{ questionId: string; selectedIndex: number | null }>,
+  ) => Promise<void>;
 };
 
 function findElement(node: unknown, match: (el: AnyEl) => boolean): AnyEl | undefined {
@@ -301,10 +351,10 @@ async function openRunner(w: QuizWorld, searchParams: Record<string, string> = {
   return { html: renderSync(res.value), runner: runner?.props as RunnerProps | undefined };
 }
 
-/** What the runner's Submit button does: call the action the page handed it. */
+/** What the runner's Submit button does: call the action the page handed it, for the attempt it was handed. */
 function submit(runner: RunnerProps | undefined, answers: Array<{ questionId: string; selectedIndex: number | null }>) {
   assert.ok(runner, "the runner page rendered no runner");
-  return outcome(() => runner!.submitAction(runner!.slug, answers));
+  return outcome(() => runner!.submitAction(runner!.slug, runner!.attemptId, answers));
 }
 
 /** Take the quiz start to finish; returns the result page's submission id. */
@@ -414,6 +464,73 @@ const submissionCount = async (w: QuizWorld) =>
 const openAttempts = async (w: QuizWorld) =>
   (await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_attempts WHERE quiz_id = $1 AND closed_at IS NULL`, [w.quizId]))[0]!.n;
 
+// ── W3-17: an open attempt with no time left when the page renders ──────────
+//
+// The page clamped what was left to 0 and still mounted a runner, whose first
+// tick auto-submitted what it held -- nothing, after a reload. Inside the grace
+// that blank was scored and used up a capped attempt the learner never acted on.
+
+test("W3-17: a reload inside the grace with no time left mounts no runner and uses up no attempt", { skip }, async () => {
+  await withQuiz({ maxAttempts: 1, timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    await openRunner(w);
+    // The tab died; the learner reloads 10 s after the limit, inside the grace.
+    await backdateOpenAttempt(w, 70);
+    const reload = await openRunner(w);
+    assert.equal(
+      reload.runner,
+      undefined,
+      `a runner was mounted with ${reload.runner?.timeLimitSeconds}s left; its first tick auto-submits blank answers`,
+    );
+    assert.equal(reload.redirect, `/quizzes/${w.slug}/history?error=time_up`);
+    assert.equal(await submissionCount(w), 0);
+    assert.equal(await openAttempts(w), 1, "inside the grace the attempt stays open for an auto-submit already on its way");
+    // Once the grace has passed the attempt is closed as out of time ...
+    await backdateOpenAttempt(w, 100);
+    assert.equal((await openRunner(w)).redirect, `/quizzes/${w.slug}/history?error=time_expired`);
+    assert.equal(await openAttempts(w), 0);
+    // ... and the learner's one attempt is still theirs.
+    const fresh = await openRunner(w);
+    assert.ok(fresh.runner, `the next visit opened no fresh attempt: ${JSON.stringify(fresh.redirect)}`);
+    assert.ok(fresh.runner!.timeLimitSeconds! >= 58, `a fresh attempt starts with ${fresh.runner!.timeLimitSeconds}s`);
+  });
+});
+
+test("W3-17: an auto-submit already on its way when the learner reloads is still scored", { skip }, async () => {
+  await withQuiz({ maxAttempts: 1, timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const tab = (await openRunner(w)).runner;
+    await backdateOpenAttempt(w, 65);
+    await openRunner(w); // the reload, inside the grace
+    assert.match((await submit(tab, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("W3-17: an attempt abandoned past its deadline is closed when the page renders, not by a runner at 00:00", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    await openRunner(w);
+    await backdateOpenAttempt(w, 600);
+    const res = await openRunner(w);
+    assert.equal(res.runner, undefined, "a runner mounted at 00:00 for an attempt that ended ten minutes ago");
+    assert.equal(res.redirect, `/quizzes/${w.slug}/history?error=time_expired`);
+    assert.equal(await openAttempts(w), 0);
+    assert.equal(await submissionCount(w), 0);
+    let expired = 0;
+    for (let i = 0; i < 40 && expired === 0; i++) {
+      expired = (
+        await w.q<{ n: number }>(
+          `SELECT count(*)::int AS n FROM audit_log WHERE action = 'quiz.attempt.expired' AND entity_id = $1 AND user_id = $2`,
+          [w.quizId, w.userId],
+        )
+      )[0]!.n;
+      if (expired === 0) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(expired, 1, "closing the attempt at render is audited as the submit path does");
+  });
+});
+
 test("F37: submitting the same attempt twice records one submission", { skip }, async () => {
   await withQuiz({}, async (w) => {
     signIn(w.userId);
@@ -438,6 +555,44 @@ test("F37: a timed quiz cannot be submitted around its clock from a second tab",
     const late = await submit(tabA, answerAll(w, 0));
     assert.doesNotMatch(late.redirect ?? "", /\/result\//, "an unbounded second sitting was scored");
     assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("W3-19: a runner left open on an earlier attempt cannot submit into the retake opened since", { skip }, async () => {
+  await withQuiz({ maxAttempts: 2, timeLimitSeconds: 600 }, async (w) => {
+    signIn(w.userId);
+    // The desktop tab and the phone both render attempt 1; the phone submits it.
+    const desktop = (await openRunner(w)).runner;
+    const phone = (await openRunner(w)).runner;
+    assert.match((await submit(phone, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    // "Retake" on the phone opens attempt 2.
+    const retake = (await openRunner(w)).runner;
+    // The desktop tab's 00:00 auto-submit fires with nothing answered.
+    const stale = await submit(desktop, answerAll(w, 2));
+    assert.equal(
+      stale.redirect,
+      `/quizzes/${w.slug}/history?error=attempt_closed`,
+      `the stale runner's submit was taken as the retake's: ${JSON.stringify(stale)}`,
+    );
+    assert.equal(await submissionCount(w), 1);
+    assert.equal(await openAttempts(w), 1, "the retake is still open");
+    // The learner's real answers to the retake are the ones scored.
+    assert.match((await submit(retake, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    const scores = await w.q<{ score: number }>(`SELECT score FROM quiz_submissions WHERE quiz_id = $1 ORDER BY submitted_at`, [w.quizId]);
+    assert.deepEqual(scores.map((s) => s.score), [100, 100]);
+  });
+});
+
+test("W3-19: a submit naming no attempt, or another quiz's, closes nothing", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    for (const attemptId of ["", "not-a-uuid", randomUUID()]) {
+      const res = await submit(runner && { ...runner, attemptId }, answerAll(w, 0));
+      assert.equal(res.redirect, `/quizzes/${w.slug}/history?error=attempt_closed`, `attemptId=${JSON.stringify(attemptId)}`);
+    }
+    assert.equal(await openAttempts(w), 1);
+    assert.equal(await submissionCount(w), 0);
   });
 });
 
@@ -536,6 +691,8 @@ function mountLive<P>(component: (props: P) => unknown, props: P) {
     useTransition() { cursor++; return [false, (fn: () => void) => fn()]; },
     useContext(ctx: { _currentValue: unknown }) { return ctx._currentValue; },
     useId() { return `live-${cursor++}`; },
+    // A mounted client reads the store itself (hydration is over).
+    useSyncExternalStore<T>(_subscribe: unknown, get: () => T) { cursor++; return get(); },
     useDebugValue() {},
   };
   let tree: unknown;
@@ -562,6 +719,7 @@ function mountLive<P>(component: (props: P) => unknown, props: P) {
   render();
   return {
     rerender: render,
+    tree: () => tree,
     text: () => hostElements(tree).map((el) => textOf(el)).join(" "),
     unmount: () => effects.forEach((e) => typeof e?.cleanup === "function" && (e.cleanup as () => void)()),
   };
@@ -664,6 +822,260 @@ test("F37: the countdown follows the deadline, so a phone that slept shows the t
       clock.restore();
     }
   }
+});
+
+/** The option buttons of the runner's current question, in order. */
+const optionButtons = (tree: unknown) =>
+  hostElements(tree).filter((el) => el.type === "button" && "aria-pressed" in el.props);
+
+test("W3-17: a runner that opens with no time left does not auto-submit blank answers", async () => {
+  for (const [name, Runner] of await runners()) {
+    const clock = fakeClock();
+    try {
+      const calls: unknown[] = [];
+      const submitAction = async (...args: unknown[]) => void calls.push(args);
+      const live = mountLive(Runner as never, { slug: "s", title: "T", questions: RUNNER_QUESTIONS, timeLimitSeconds: 0, submitAction } as never);
+      for (let i = 0; i < 3; i++) {
+        clock.tick(1000);
+        await flush();
+        live.rerender();
+      }
+      assert.equal(calls.length, 0, `${name} submitted blank answers the learner never had a second to give`);
+      assert.doesNotMatch(live.text(), /being submitted/, `${name} says answers are being submitted when none are`);
+      assert.match(live.text(), /Time is up/);
+      live.unmount();
+
+      // What the learner HAS chosen still goes, as at any other 00:00.
+      const picked = mountLive(Runner as never, { slug: "s", title: "T", questions: RUNNER_QUESTIONS, timeLimitSeconds: 0, submitAction } as never);
+      (optionButtons(picked.tree()).at(1)!.props.onClick as () => void)();
+      picked.rerender();
+      clock.tick(1000);
+      await flush();
+      assert.equal(calls.length, 1, `${name} dropped an answer the learner picked`);
+      assert.match(JSON.stringify(calls[0]), /"selectedIndex":1/);
+      picked.unmount();
+    } finally {
+      clock.restore();
+    }
+  }
+});
+
+// ── W3-18: the countdown ends when the attempt does, however slow the load ───
+
+/** Mount `Runner` with a limit and a server clock, and report the second of the fake clock at which it auto-submits. */
+async function autoSubmitSecond(Runner: unknown, timeLimitSeconds: number, serverOffsetMs: number | null): Promise<number | null> {
+  const clock = fakeClock();
+  try {
+    let at: number | null = null;
+    const mountedAt = Date.now();
+    const live = mountLive(Runner as never, {
+      slug: "s",
+      title: "T",
+      questions: RUNNER_QUESTIONS,
+      timeLimitSeconds,
+      serverNowMs: serverOffsetMs === null ? null : mountedAt + serverOffsetMs,
+      submitAction: async () => {
+        at ??= Math.round((Date.now() - mountedAt) / 1000);
+      },
+    } as never);
+    for (let s = 0; s < timeLimitSeconds + 2 && at === null; s++) {
+      clock.tick(1000);
+      await flush();
+      live.rerender();
+    }
+    live.unmount();
+    return at;
+  } finally {
+    clock.restore();
+  }
+}
+
+test("W3-18: a page that took 40 s to arrive leaves 20 s of a 60 s countdown, not 60", async () => {
+  for (const [name, Runner] of await runners()) {
+    // The server rendered 40 s before the runner mounted.
+    assert.equal(await autoSubmitSecond(Runner, 60, -40_000), 20, `${name} counted the load time as time to answer`);
+  }
+});
+
+test("W3-18: a server clock that cannot be load time is ignored, so a wrong phone clock takes nothing off", async () => {
+  for (const [name, Runner] of await runners()) {
+    assert.equal(await autoSubmitSecond(Runner, 60, null), 60, `${name} with no server clock`);
+    // The phone's clock is behind the server's: the gap is negative.
+    assert.equal(await autoSubmitSecond(Runner, 60, 5_000), 60, `${name} with a phone clock behind`);
+    // Ten minutes is not a page load; it is a phone clock ten minutes fast.
+    assert.equal(await autoSubmitSecond(Runner, 60, -600_000), 60, `${name} with a phone clock far ahead`);
+  }
+});
+
+test("W3-18: the page hands the runner the database's clock as it rendered", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    const serverNowMs = (runner as { serverNowMs?: unknown } | undefined)?.serverNowMs;
+    assert.equal(typeof serverNowMs, "number", `serverNowMs=${JSON.stringify(serverNowMs)}`);
+    // The local Postgres and this process share a machine, so the two clocks agree.
+    assert.ok(Math.abs(Date.now() - (serverNowMs as number)) < 5_000, `server clock ${serverNowMs} vs ${Date.now()}`);
+  });
+});
+
+// ── W3-20: the answers survive a reload ──────────────────────────────────────
+//
+// The runners kept the selections in React state only, so a reload or a stray
+// navigation remounted them with nothing chosen while the attempt carried on.
+
+/** A sessionStorage stand-in, as a browser tab has one. */
+function memoryStorage(): Storage {
+  const m = new Map<string, string>();
+  return {
+    get length() {
+      return m.size;
+    },
+    key: (i: number) => [...m.keys()][i] ?? null,
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+    removeItem: (k: string) => void m.delete(k),
+    clear: () => m.clear(),
+  } as Storage;
+}
+
+/** Run `body` with a `window` whose sessionStorage is `store`, as in a tab. */
+async function inTab<T>(store: Storage, body: () => Promise<T>): Promise<T> {
+  const g = globalThis as Record<string, unknown>;
+  const had = "window" in g;
+  const previous = g.window;
+  g.window = { sessionStorage: store };
+  try {
+    return await body();
+  } finally {
+    if (had) g.window = previous;
+    else delete g.window;
+  }
+}
+
+const TWO_QUESTIONS = [
+  { id: "q1", prompt: "One?", options: ["a", "b", "c"] },
+  { id: "q2", prompt: "Two?", options: ["a", "b"] },
+];
+
+test("W3-20: a runner remounted for the same attempt shows the answers chosen before the reload", async () => {
+  for (const [name, Runner] of await runners()) {
+    const tab = memoryStorage();
+    await inTab(tab, async () => {
+      const props = {
+        slug: "s",
+        title: "T",
+        questions: TWO_QUESTIONS,
+        userId: "user-1",
+        attemptId: "attempt-1",
+        submitAction: async () => undefined,
+      };
+      const first = mountLive(Runner as never, props as never);
+      (optionButtons(first.tree()).at(2)!.props.onClick as () => void)();
+      first.rerender();
+      first.unmount();
+
+      // The reload: same attempt, fresh component.
+      const again = mountLive(Runner as never, props as never);
+      again.rerender();
+      const pressed = optionButtons(again.tree()).map((b) => b.props["aria-pressed"]);
+      assert.deepEqual(pressed, [false, false, true], `${name} came back with nothing chosen after a reload`);
+      again.unmount();
+
+      // Another attempt, or another learner on the same tab, starts empty.
+      for (const other of [{ attemptId: "attempt-2" }, { userId: "user-2" }]) {
+        const fresh = mountLive(Runner as never, { ...props, ...other } as never);
+        fresh.rerender();
+        assert.deepEqual(
+          optionButtons(fresh.tree()).map((b) => b.props["aria-pressed"]),
+          [false, false, false],
+          `${name}: ${JSON.stringify(other)} was shown answers that are not its own`,
+        );
+        fresh.unmount();
+      }
+    });
+  }
+});
+
+test("W3-20: the timed auto-submit after a reload sends the restored answers", async () => {
+  for (const [name, Runner] of await runners()) {
+    const tab = memoryStorage();
+    const clock = fakeClock();
+    try {
+      await inTab(tab, async () => {
+        const calls: unknown[][] = [];
+        const props = {
+          slug: "s",
+          title: "T",
+          questions: TWO_QUESTIONS,
+          userId: "user-1",
+          attemptId: "attempt-1",
+          timeLimitSeconds: 30,
+          submitAction: async (...args: unknown[]) => void calls.push(args),
+        };
+        const first = mountLive(Runner as never, props as never);
+        (optionButtons(first.tree()).at(1)!.props.onClick as () => void)();
+        first.rerender();
+        first.unmount();
+        // Reloaded with two seconds left; the countdown runs out.
+        const again = mountLive(Runner as never, { ...props, timeLimitSeconds: 2 } as never);
+        again.rerender();
+        for (let i = 0; i < 3; i++) {
+          clock.tick(1000);
+          await flush();
+          again.rerender();
+        }
+        assert.equal(calls.length, 1, `${name} auto-submitted ${calls.length} times`);
+        const answers = calls[0]!.at(-1) as Array<{ questionId: string; selectedIndex: number | null }>;
+        assert.deepEqual(
+          answers,
+          [
+            { questionId: "q1", selectedIndex: 1 },
+            { questionId: "q2", selectedIndex: null },
+          ],
+          `${name} auto-submitted without the answer chosen before the reload`,
+        );
+        again.unmount();
+      });
+    } finally {
+      clock.restore();
+    }
+  }
+});
+
+test("W3-20: saved answers are checked against the quiz, and a save drops only this quiz's other attempts", async () => {
+  const { answersScope, parseAnswers, readAnswers, saveAnswers } = await import(
+    "../../apps/web/src/components/quiz/answer-drafts.ts"
+  );
+  const qs = [
+    { id: "q1", options: ["a", "b"] },
+    { id: "q2", options: ["a", "b", "c"] },
+  ];
+  assert.deepEqual(parseAnswers(JSON.stringify({ q1: 1, q2: 2 }), qs), { q1: 1, q2: 2 });
+  // A question that has gone, an option it no longer has, anything not a whole index.
+  assert.deepEqual(parseAnswers(JSON.stringify({ gone: 0, q1: 2, q2: 1.5 }), qs), {});
+  assert.deepEqual(parseAnswers(JSON.stringify({ q1: "1", q2: -1 }), qs), {});
+  for (const junk of [null, "", "{", "[1,2]", "7", "null"]) assert.deepEqual(parseAnswers(junk, qs), {}, String(junk));
+
+  const store = memoryStorage();
+  const mine = answersScope("u1", "quiz-a");
+  saveAnswers(store, mine, "attempt-1", { q1: 0 });
+  saveAnswers(store, answersScope("u1", "quiz-b"), "attempt-9", { q1: 1 });
+  saveAnswers(store, answersScope("u2", "quiz-a"), "attempt-7", { q1: 1 });
+  saveAnswers(store, mine, "attempt-2", { q1: 1 });
+  assert.equal(readAnswers(store, mine, "attempt-1"), null, "the earlier attempt's entry stays behind");
+  assert.equal(readAnswers(store, mine, "attempt-2"), JSON.stringify({ q1: 1 }));
+  assert.ok(readAnswers(store, answersScope("u1", "quiz-b"), "attempt-9"), "another quiz, possibly still open, lost its answers");
+  assert.ok(readAnswers(store, answersScope("u2", "quiz-a"), "attempt-7"), "another learner's entry was touched");
+});
+
+test("W3-20: the page tells the runner whose attempt it is", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    const [open] = await w.q<{ id: string }>(`SELECT id FROM quiz_attempts WHERE quiz_id = $1 AND closed_at IS NULL`, [w.quizId]);
+    assert.equal((runner as { userId?: string } | undefined)?.userId, w.userId);
+    assert.equal(runner?.attemptId, open!.id);
+  });
 });
 
 // ── F38: the editor and a payload without questions ──────────────────────────
@@ -937,6 +1349,11 @@ test("F48: every quiz audit row the code writes is documented with its real meta
       if (rows.length < 4) await new Promise((r) => setTimeout(r, 50));
     }
     assert.deepEqual(rows.map((r) => r.action).sort(), ["quiz.attempt.expired", "quiz.created", "quiz.schema.update", "quiz.submit"]);
+    // W3-23: the rows about a quiz name it the same way, so an export filtered
+    // by entity_type finds them all. The expiry row said 'quiz', the admin
+    // rows 'quizzes' (the table's name).
+    const aboutTheQuiz = rows.filter((r) => r.action !== "quiz.submit").map((r) => `${r.action}: ${r.entity_type}`).sort();
+    assert.deepEqual(aboutTheQuiz, ["quiz.attempt.expired: quizzes", "quiz.created: quizzes", "quiz.schema.update: quizzes"]);
 
     const { readFileSync } = await import("node:fs");
     const doc = readFileSync(new URL("../../docs/audit-actions.md", import.meta.url), "utf8");

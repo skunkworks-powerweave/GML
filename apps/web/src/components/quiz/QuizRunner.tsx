@@ -23,7 +23,9 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { PickedMark } from "./PickedMark";
-import { timeWarning } from "./time-warning";
+import { useQuizAnswers } from "./answer-drafts";
+import { loadLatencyMs } from "./deadline";
+import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type QuizRunnerQuestion = {
   id: string;
@@ -37,12 +39,23 @@ export type QuizRunnerProps = {
   questions: QuizRunnerQuestion[];
   // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
   timeLimitSeconds?: number | null;
-  // Server action — receives slug + answers; redirects to /quizzes/[slug]/result/[id].
+  // The quiz_attempts row this runner was rendered for. Every submit names it,
+  // so a runner left open on an earlier attempt cannot close a newer one
+  // (W3-19); "" when there is none, which the action refuses.
+  attemptId: string;
+  // Whose attempt it is: with the attempt id, the key the answers are kept
+  // under in this tab so a reload does not lose them (answer-drafts.ts).
+  userId?: string | null;
+  // The database's clock (epoch ms) as the page rendered: what the page took
+  // to arrive comes off the countdown (deadline.ts, W3-18).
+  serverNowMs?: number | null;
+  // Server action — receives slug + attempt id + answers; redirects to /quizzes/[slug]/result/[id].
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
   // instead of silently shrinking the denominator.
   submitAction: (
     slug: string,
+    attemptId: string,
     answers: Array<{ questionId: string; selectedIndex: number | null }>,
   ) => Promise<void>;
 };
@@ -66,11 +79,16 @@ export function QuizRunner({
   title,
   questions,
   timeLimitSeconds,
+  attemptId,
+  userId,
+  serverNowMs,
   submitAction,
 }: QuizRunnerProps) {
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
-  const [selected, setSelected] = useState<Record<string, number>>({});
+  // Kept in this tab's sessionStorage as they are picked and restored for
+  // the same attempt, so a reload or a stray tap does not lose them (W3-20).
+  const [selected, pickAnswer] = useQuizAnswers(userId, slug, attemptId, questions);
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
   // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
@@ -83,6 +101,11 @@ export function QuizRunner({
   // The limit the attempt opened with, seeded once like `remaining`: which
   // spoken warnings are due depends on it (time-warning.ts).
   const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
+  // The time ran out with nothing to send (see the countdown effect). True
+  // from the start for a runner handed no time at all.
+  const [nothingSent, setNothingSent] = useState(
+    () => typeof timeLimitSeconds === "number" && timeLimitSeconds <= 0,
+  );
   // Spec 159 — a ref so the interval tick can call the latest selection
   // map / submit path without re-arming the timer when those change.
   const selectedRef = useRef(selected);
@@ -116,16 +139,37 @@ export function QuizRunner({
   // keep ticking at 00:00 and re-arm on a refused submit, so after the server
   // bounced a late attempt the runner POSTed the same answers again one second
   // later. If the auto-submit fails, the error is shown and Submit still works.
+  //
+  // NOTHING CHOSEN IN NO TIME IS NOT AN ANSWER (W3-17). A runner that appears
+  // with no time left gave the learner no second to answer, so an empty
+  // selection then is not their answer: sending it only recorded a 0% and, on
+  // a capped quiz, used up an attempt. It is not sent. Anything that IS chosen
+  // by the first tick still goes, as at any other 00:00. (The page mounts no
+  // runner for an attempt with no time left; this covers a load that took
+  // longer than the time there was.)
+  //
+  // FROM WHEN THE PAGE RENDERED, NOT WHEN IT ARRIVED (W3-18). The seconds
+  // left were measured as the page rendered; counting them from mount added
+  // the page's delivery and hydration time to the countdown, and that time
+  // was paid out of the server's submit grace. It is taken off here
+  // (deadline.ts).
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
-    const deadline = Date.now() + timeLimitSeconds * 1000;
+    const mountedAt = Date.now();
+    const deadline = mountedAt + timeLimitSeconds * 1000 - loadLatencyMs(serverNowMs, mountedAt);
+    const hadTime = deadline > mountedAt;
     // Auto-submit closure — reads from refs so it always sees the latest
     // selection map and the latest question list, even though the effect
     // captured the initial values.
     const autoSubmit = () => {
       if (submittedRef.current) return;
-      submittedRef.current = true;
       const live = selectedRef.current;
+      if (!hadTime && Object.keys(live).length === 0) {
+        setNothingSent(true);
+        return;
+      }
+      setNothingSent(false);
+      submittedRef.current = true;
       const answers = questionsRef.current.map((qq) => ({
         questionId: qq.id,
         selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
@@ -133,7 +177,7 @@ export function QuizRunner({
       // Fire-and-forget: same shape as the manual onSubmit but without
       // the useTransition wrapper (we're already inside an interval
       // callback, not a render path).
-      submitAction(slug, answers).catch((e: unknown) => {
+      submitAction(slug, attemptId, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
         submittedRef.current = false; // a manual Submit may retry
       });
@@ -169,8 +213,7 @@ export function QuizRunner({
   const selection = selected[q.id];
   const isLast = idx === totalCount - 1;
 
-  const onPick = (i: number) =>
-    setSelected((s) => ({ ...s, [q.id]: i }));
+  const onPick = (i: number) => pickAnswer(q.id, i);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with
@@ -192,7 +235,7 @@ export function QuizRunner({
     setServerErr(null);
     startTransition(async () => {
       try {
-        await submitAction(slug, answers);
+        await submitAction(slug, attemptId, answers);
       } catch (e) {
         setServerErr((e as Error).message);
         submittedRef.current = false;
@@ -265,8 +308,13 @@ export function QuizRunner({
         ) : null}
         {remaining !== null ? (
           <span role="status" className="sr-only" data-testid="quiz-time-warning">
-            {timeWarning(remaining, openedWith)}
+            {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
           </span>
+        ) : null}
+        {nothingSent ? (
+          <p data-testid="quiz-time-up" style={{ marginTop: 8, fontSize: 13, color: "var(--rust)" }}>
+            The time for this attempt ran out before the page loaded, so nothing was submitted.
+          </p>
         ) : null}
         <div className="bar" style={{ marginTop: 14 }}>
           <div style={{ width: `${progressPct}%` }} />

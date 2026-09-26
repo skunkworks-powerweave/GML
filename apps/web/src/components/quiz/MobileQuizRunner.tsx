@@ -40,7 +40,9 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
 import { PickedMark } from "./PickedMark";
-import { timeWarning } from "./time-warning";
+import { useQuizAnswers } from "./answer-drafts";
+import { loadLatencyMs } from "./deadline";
+import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -54,13 +56,24 @@ export type MobileQuizRunnerProps = {
   questions: MobileQuizRunnerQuestion[];
   // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
   timeLimitSeconds?: number | null;
-  // Server action — receives slug + answers; redirects to
+  // The quiz_attempts row this runner was rendered for. Every submit names it,
+  // so a runner left open on an earlier attempt cannot close a newer one
+  // (W3-19); "" when there is none, which the action refuses.
+  attemptId: string;
+  // Whose attempt it is: with the attempt id, the key the answers are kept
+  // under in this tab so a reload does not lose them (answer-drafts.ts).
+  userId?: string | null;
+  // The database's clock (epoch ms) as the page rendered: what the page took
+  // to arrive comes off the countdown (deadline.ts, W3-18).
+  serverNowMs?: number | null;
+  // Server action — receives slug + attempt id + answers; redirects to
   // /quizzes/[slug]/result/[id]. Drop-in same shape as QuizRunner.
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
   // instead of silently shrinking the denominator.
   submitAction: (
     slug: string,
+    attemptId: string,
     answers: Array<{ questionId: string; selectedIndex: number | null }>,
   ) => Promise<void>;
 };
@@ -83,11 +96,16 @@ export function MobileQuizRunner({
   title,
   questions,
   timeLimitSeconds,
+  attemptId,
+  userId,
+  serverNowMs,
   submitAction,
 }: MobileQuizRunnerProps) {
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
-  const [selected, setSelected] = useState<Record<string, number>>({});
+  // Kept in this tab's sessionStorage as they are picked and restored for
+  // the same attempt, so a reload or a stray tap does not lose them (W3-20).
+  const [selected, pickAnswer] = useQuizAnswers(userId, slug, attemptId, questions);
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
   // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
@@ -99,6 +117,10 @@ export function MobileQuizRunner({
   // The limit the attempt opened with, seeded once like `remaining`: which
   // spoken warnings are due depends on it (time-warning.ts).
   const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
+  // The time ran out with nothing to send; as in QuizRunner.
+  const [nothingSent, setNothingSent] = useState(
+    () => typeof timeLimitSeconds === "number" && timeLimitSeconds <= 0,
+  );
   // Spec 159 — refs let the interval tick read the latest selection /
   // question list / submitted flag without re-arming the timer when those
   // change. submittedRef is the idempotency guard that prevents a race
@@ -121,20 +143,28 @@ export function MobileQuizRunner({
   // surfaces have identical auto-submit semantics: counted against a
   // deadline (a locked phone runs no interval callbacks, so counting ticks
   // showed more time than the server allows), and fired ONCE (it used to
-  // re-send the same answers every second after a refused auto-submit).
-  // See QuizRunner for the full reasoning.
+  // re-send the same answers every second after a refused auto-submit), and
+  // a runner that appeared with no time left sends nothing unless something
+  // was chosen (W3-17). See QuizRunner for the full reasoning.
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
-    const deadline = Date.now() + timeLimitSeconds * 1000;
+    const mountedAt = Date.now();
+    const deadline = mountedAt + timeLimitSeconds * 1000 - loadLatencyMs(serverNowMs, mountedAt);
+    const hadTime = deadline > mountedAt;
     const autoSubmit = () => {
       if (submittedRef.current) return;
-      submittedRef.current = true;
       const live = selectedRef.current;
+      if (!hadTime && Object.keys(live).length === 0) {
+        setNothingSent(true);
+        return;
+      }
+      setNothingSent(false);
+      submittedRef.current = true;
       const answers = questionsRef.current.map((qq) => ({
         questionId: qq.id,
         selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
       }));
-      submitAction(slug, answers).catch((e: unknown) => {
+      submitAction(slug, attemptId, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
         submittedRef.current = false; // a manual Submit may retry
       });
@@ -207,8 +237,7 @@ export function MobileQuizRunner({
   // After the early return above, currentQ is guaranteed non-undefined.
   const q = currentQ as MobileQuizRunnerQuestion;
 
-  const onPick = (i: number) =>
-    setSelected((s) => ({ ...s, [q.id]: i }));
+  const onPick = (i: number) => pickAnswer(q.id, i);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with
@@ -230,7 +259,7 @@ export function MobileQuizRunner({
     setServerErr(null);
     startTransition(async () => {
       try {
-        await submitAction(slug, answers);
+        await submitAction(slug, attemptId, answers);
       } catch (e) {
         setServerErr((e as Error).message);
         submittedRef.current = false;
@@ -309,7 +338,7 @@ export function MobileQuizRunner({
             ) : null}
             {remaining !== null ? (
               <span role="status" className="sr-only" data-testid="mobile-quiz-time-warning">
-                {timeWarning(remaining, openedWith)}
+                {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
               </span>
             ) : null}
             <div
@@ -462,6 +491,11 @@ export function MobileQuizRunner({
           })}
         </div>
 
+        {nothingSent ? (
+          <p data-testid="mobile-quiz-time-up" style={{ marginTop: 14, fontSize: 13, color: "var(--rust)" }}>
+            The time for this attempt ran out before the page loaded, so nothing was submitted.
+          </p>
+        ) : null}
         {serverErr ? (
           <div
             data-testid="mobile-quiz-error"
@@ -483,7 +517,8 @@ export function MobileQuizRunner({
           exactly where MobileShell draws its position:fixed tab bar, with the
           "?" help button floating over the right end. On a 640px phone the
           centre of "Next →" was the Inbox tab: a tap navigated away and every
-          selected answer, held only in this component's state, was gone. It
+          selected answer, then held only in this component's state, was gone
+          (they are kept in sessionStorage now too, answer-drafts.ts). It
           now sticks above the 80px the shell reserves for the tab bar (plus
           the notch inset the tab bar pads itself with), and its right padding
           keeps the buttons out from under the help button (right 14px,

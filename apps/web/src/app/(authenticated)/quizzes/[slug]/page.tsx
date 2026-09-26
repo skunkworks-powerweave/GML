@@ -21,20 +21,45 @@ import {
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
+import { isUuid } from "@/lib/ids";
 import { QuizRunner } from "@/components/quiz/QuizRunner";
 import { MobileQuizRunner } from "@/components/quiz/MobileQuizRunner";
+import { quizShownTo } from "./quiz-scope";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Quiz" };
 
 // Seconds past the time limit a submission is still scored. It exists for the
-// time the learner did NOT see: the countdown starts only once the page has
-// arrived and hydrated, and the auto-submit at 00:00 still has to travel back.
-// On a Ladakh 2G link that is seconds, and penalising it would be penalising
-// someone's bandwidth. It is applied HERE ONLY -- the countdown shows the real
-// limit -- because a grace that is also on the clock is no grace at all.
+// time the learner did NOT see: the auto-submit at 00:00 still has to travel
+// back, and the interval that fires it can be a second late. On a Ladakh 2G
+// link that is seconds, and penalising it would be penalising someone's
+// bandwidth. It is applied HERE ONLY -- the countdown shows the real limit --
+// because a grace that is also on the clock is no grace at all.
+//
+// It no longer has to cover the page's own load. The countdown used to start
+// when the runner mounted, so delivery and hydration came out of this grace
+// -- seconds on a warm cache, but a cold first load on 2G can take longer
+// than 30 s, and then every answer was refused. The runner now takes that
+// time off the countdown (components/quiz/deadline.ts, W3-18), except when
+// the phone's clock is too far from the database's to tell latency from a
+// wrong clock; then the load is paid from here, as before.
 const SUBMIT_GRACE_SECONDS = 30;
+
+/**
+ * The audit row for an attempt closed because its time ran out, by either
+ * path. entity_type is the table's name, as quiz.created and
+ * quiz.schema.update write it; this row said 'quiz', so an export filtered
+ * by entity type found one set or the other, never both (W3-23).
+ */
+function auditExpired(quiz: { id: string; timeLimitSeconds: number | null }, slug: string): void {
+  void recordAudit({
+    action: "quiz.attempt.expired",
+    entityType: "quizzes",
+    entityId: quiz.id,
+    metadata: { quizSlug: slug, limitSeconds: quiz.timeLimitSeconds },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Server action — wired into <QuizRunner> via the `submitAction` prop.
@@ -43,6 +68,9 @@ const SUBMIT_GRACE_SECONDS = 30;
 
 export async function submitQuizAttempt(
   slug: string,
+  // The attempt the runner was rendered for (quiz_attempts.id). See the
+  // transaction below for why a submit names it.
+  attemptId: string,
   answers: Array<{ questionId: string; selectedIndex: number | null }>,
 ): Promise<void> {
   "use server";
@@ -51,13 +79,17 @@ export async function submitQuizAttempt(
   if (!session?.user?.id) redirect("/login");
   const userId = session.user.id;
 
-  // Load the quiz by slug (active only).
+  // Load the quiz by slug (active, and on a subject this learner is shown:
+  // a runner opened before its subject was retired cannot still submit --
+  // quiz-scope.ts, W3-21).
   const [quiz] = await db
     .select()
     .from(quizzes)
     .where(eq(quizzes.slug, slug))
     .limit(1);
-  if (!quiz || !quiz.active) redirect(`/quizzes/${slug}?error=not_found`);
+  if (!quiz || !quiz.active || !(await quizShownTo(db, { id: userId, role: session.user.role }, quiz))) {
+    redirect(`/quizzes/${slug}?error=not_found`);
+  }
 
   // Load questions ordered by sequence.
   const qs = await db
@@ -141,12 +173,23 @@ export async function submitQuizAttempt(
   // submission. The cap is counted inside the same transaction, and cannot be
   // raced across attempts either: quiz_attempts_one_open_uq makes a new
   // attempt wait for this transaction before it can open.
+  //
+  // THE ATTEMPT THE RUNNER WAS RENDERED FOR, NOT WHICHEVER IS OPEN (W3-19).
+  // The submit named no attempt, so it closed whatever attempt was open when
+  // it arrived. A runner left open on an earlier attempt -- the desktop tab
+  // after the learner submitted on the phone and pressed Retake -- then
+  // auto-submitted its blank answers at 00:00 into the retake: scored, the
+  // learner's last try gone, and their real answers refused as
+  // attempt_closed. The page hands each runner its attempt's id, and only
+  // that attempt, still open and still this learner's, can be closed here.
   const result = await db.transaction(async (tx) => {
+    if (!isUuid(attemptId)) return { kind: "attempt_closed" } as const;
     const [attempt] = await tx
       .update(quizAttempts)
       .set({ closedAt: sql`now()` })
       .where(
         and(
+          eq(quizAttempts.id, attemptId),
           eq(quizAttempts.quizId, quiz.id),
           eq(quizAttempts.userId, userId),
           isNull(quizAttempts.closedAt),
@@ -209,14 +252,7 @@ export async function submitQuizAttempt(
   // the still-mounted runner submitted the same answers into it on its next
   // tick -- scored. The history page says why, shows past scores, and starts
   // nothing until the learner chooses "Take quiz again".
-  if (result.kind === "time_expired") {
-    void recordAudit({
-      action: "quiz.attempt.expired",
-      entityType: "quiz",
-      entityId: quiz.id,
-      metadata: { quizSlug: slug, limitSeconds: quiz.timeLimitSeconds },
-    });
-  }
+  if (result.kind === "time_expired") auditExpired(quiz, slug);
   if (result.kind !== "submitted") redirect(`/quizzes/${slug}/history?error=${result.kind}`);
   const submissionId = result.submissionId;
 
@@ -260,7 +296,15 @@ export default async function QuizRunnerPage({
     .where(eq(quizzes.slug, slug))
     .limit(1);
 
-  if (!quiz || !quiz.active) {
+  // A quiz on an RTT subject this viewer is not shown -- retired, or taught
+  // in another district or zone -- is treated as not there, as /rtt and the
+  // subject page treat it; a direct link used to open it (quiz-scope.ts,
+  // W3-21).
+  if (
+    !quiz ||
+    !quiz.active ||
+    !(await quizShownTo(db, { id: session.user.id, role: session.user.role }, quiz))
+  ) {
     // submitQuizAttempt sends a learner here with ?error=not_found when the
     // quiz was switched off (or removed) while they were answering it. This
     // check used to run first and 404 them, so the message written for
@@ -375,6 +419,9 @@ export default async function QuizRunnerPage({
     .select({
       id: quizAttempts.id,
       elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::int`,
+      // The same clock at the same moment, for the runner to measure how long
+      // this page took to reach it (components/quiz/deadline.ts).
+      serverNowMs: sql<number>`(EXTRACT(EPOCH FROM now()) * 1000)::float8`,
     })
     .from(quizAttempts)
     .where(
@@ -391,6 +438,43 @@ export default async function QuizRunnerPage({
       0,
       Math.round(remainingSeconds - (attempt.elapsedSeconds ?? 0)),
     );
+  }
+
+  // NO TIME LEFT: NO RUNNER.
+  //
+  // A runner handed 0 seconds showed 00:00 and auto-submitted on its first
+  // tick whatever it held -- nothing, after the reload that brought the
+  // learner here. Inside the grace that blank was scored, and on a capped quiz
+  // it used up an attempt the learner never acted on; after the grace it was
+  // refused, so coming back later cost nothing. The learner who came back
+  // sooner was the one penalised. Nobody can answer in no time, so no runner
+  // is mounted; the history page says why.
+  //
+  //  - Past the grace, no submit can be scored any more, so the attempt is
+  //    closed here and recorded as the submit path records it. Postgres's
+  //    clock decides, as it does at submit. This is also what closes an
+  //    attempt abandoned past its deadline: it stays open until the learner
+  //    comes back, and used to be closed by a runner flashing 00:00.
+  //  - Inside the grace it is left open: an auto-submit already on its way
+  //    from the tab that timed out (the 2G case the grace exists for) must
+  //    still be scored, not refused as attempt_closed.
+  if (quiz.timeLimitSeconds != null && attempt && remainingSeconds === 0) {
+    if (attempt.elapsedSeconds > quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS) {
+      const closed = await db
+        .update(quizAttempts)
+        .set({ closedAt: sql`now()` })
+        .where(
+          and(
+            eq(quizAttempts.id, attempt.id),
+            isNull(quizAttempts.closedAt),
+            sql`now() - ${quizAttempts.startedAt} > make_interval(secs => ${quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS})`,
+          ),
+        )
+        .returning({ id: quizAttempts.id });
+      if (closed.length > 0) auditExpired(quiz, slug);
+      redirect(`/quizzes/${slug}/history?error=time_expired`);
+    }
+    redirect(`/quizzes/${slug}/history?error=time_up`);
   }
 
   // Spec 134 — device-aware runner. Mobile gets the full-screen
@@ -423,6 +507,9 @@ export default async function QuizRunnerPage({
   // runner's state -- answers and a countdown already at zero -- across a
   // re-render that brought a new attempt.
   const runnerKey = attempt?.id ?? "no-attempt";
+  // And the attempt its submit closes (see submitQuizAttempt). None is "",
+  // which the action refuses as attempt_closed.
+  const attemptId = attempt?.id ?? "";
 
   if (device === "mobile") {
     return (
@@ -433,6 +520,9 @@ export default async function QuizRunnerPage({
           title={quiz.title}
           questions={mappedQuestions}
           timeLimitSeconds={timeLimitSeconds}
+          attemptId={attemptId}
+          userId={session.user.id}
+          serverNowMs={attempt?.serverNowMs ?? null}
           submitAction={submitQuizAttempt}
         />
       </main>
@@ -456,6 +546,9 @@ export default async function QuizRunnerPage({
         title={quiz.title}
         questions={mappedQuestions}
         timeLimitSeconds={timeLimitSeconds}
+        attemptId={attemptId}
+        userId={session.user.id}
+        serverNowMs={attempt?.serverNowMs ?? null}
         submitAction={submitQuizAttempt}
       />
     </main>

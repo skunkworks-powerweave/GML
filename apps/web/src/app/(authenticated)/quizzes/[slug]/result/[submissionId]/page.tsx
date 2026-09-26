@@ -16,6 +16,7 @@ import {
   quizSubmissions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { quizShownTo } from "../../quiz-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -111,6 +112,18 @@ export default async function QuizResultPage({
     quiz.maxAttempts == null ? null : Math.max(0, quiz.maxAttempts - (mine?.used ?? 0));
   const canRetake = attemptsLeft === null || attemptsLeft > 0;
   const revealKey = Boolean(mine?.everPassed) || !canRetake;
+  // Whether the quiz can be taken now: switched off, or on an RTT subject this
+  // learner is no longer shown (W3-21), the runner 404s, so no Retake is
+  // offered -- and the subject's page is not there to go back to.
+  const shown = await quizShownTo(db, { id: session.user.id, role: session.user.role }, quiz);
+  const offerRetake = canRetake && quiz.active && shown;
+
+  // WHERE "CONTINUE" GOES (W3-22). A pass said "you may proceed to the next
+  // module" while Continue went to the dashboard, which does not lead to the
+  // subject either. An RTT quiz now goes back to its subject page, where the
+  // modules are; a quiz on a curriculum subject has no module to promise and
+  // continues to the dashboard (there is no quiz list to send it to).
+  const subjectHref = quiz.rttSubjectId && shown ? `/rtt/subject/${quiz.rttSubjectId}` : null;
 
   // Spec 146 — grading-bug fix surfaces a separate "answered" vs
   // "correct" count. Skipped (null/undefined) and explicitly-answered
@@ -192,7 +205,9 @@ export default async function QuizResultPage({
             }}
           >
             {passed
-              ? "Well done — you may proceed to the next module."
+              ? subjectHref
+                ? "Well done — continue with the next module on the subject page."
+                : "Well done — you passed this quiz."
               : revealKey
                 ? "The correct answers and explanations are shown below."
                 : attemptsLeft === null
@@ -349,7 +364,7 @@ export default async function QuizResultPage({
           >
             {/* Only while an attempt remains: the runner sends a learner with
                 none left straight to their history. */}
-            {canRetake ? (
+            {offerRetake ? (
               <Link href={`/quizzes/${slug}`} className="btn">
                 Retake
               </Link>
@@ -365,8 +380,8 @@ export default async function QuizResultPage({
             >
               View history
             </Link>
-            <Link href="/dashboard" className="btn btn-primary">
-              Continue
+            <Link href={subjectHref ?? "/dashboard"} className="btn btn-primary">
+              {subjectHref ? "Back to the subject" : "Continue"}
             </Link>
           </div>
         </div>

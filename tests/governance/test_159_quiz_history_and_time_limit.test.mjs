@@ -255,11 +255,12 @@ test("spec 159 — QuizRunner.tsx accepts timeLimitSeconds and renders the count
     /data-testid=["']quiz-countdown["']/,
     "QuizRunner must render an element with data-testid=\"quiz-countdown\"",
   );
-  // The auto-submit must call the existing submitAction shape.
+  // The auto-submit must call the existing submitAction shape, naming the
+  // attempt the runner was rendered for (W3-19).
   assert.match(
     src,
-    /submitAction\(\s*slug\s*,\s*answers\s*\)/,
-    "QuizRunner's auto-submit must call submitAction(slug, answers) — same wire shape as manual submit",
+    /submitAction\(\s*slug\s*,\s*attemptId\s*,\s*answers\s*\)/,
+    "QuizRunner's auto-submit must call submitAction(slug, attemptId, answers) — same wire shape as manual submit",
   );
   // The interval cleanup must clearInterval — no leaks.
   assert.match(
@@ -302,8 +303,8 @@ test("spec 159 — MobileQuizRunner.tsx accepts timeLimitSeconds and renders the
   );
   assert.match(
     src,
-    /submitAction\(\s*slug\s*,\s*answers\s*\)/,
-    "MobileQuizRunner's auto-submit must call submitAction(slug, answers)",
+    /submitAction\(\s*slug\s*,\s*attemptId\s*,\s*answers\s*\)/,
+    "MobileQuizRunner's auto-submit must call submitAction(slug, attemptId, answers)",
   );
   assert.match(src, /Spec 159/, "MobileQuizRunner must carry an inline Spec 159 reference");
 });
