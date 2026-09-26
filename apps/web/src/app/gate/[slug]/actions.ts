@@ -2,14 +2,15 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
 import bcrypt from "bcryptjs";
 import { db } from "@gml/db";
 import { sectionGateGrants } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { clientIp } from "@/lib/request-ip";
 import { rateLimit } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
 import { getCurrentGate, type GateSlug } from "@/lib/gates";
+import { safeInternalPath } from "@/lib/safe-redirect";
 
 // `admin` was ABSENT here, which made it unreachable: /gate/admin answered
 // "Unknown section." for every attempt, so the gate could not be unlocked by
@@ -26,24 +27,6 @@ export type GateState = { error?: string };
 // user. Both states map to the same response.
 const SERVICE_UNAVAILABLE = "Service temporarily unavailable.";
 
-/**
- * Only same-origin, absolute-path redirects are permitted.
- *
- * `next` arrives from the query string via a hidden form field, and was passed
- * straight to redirect(). `/gate/observation?next=https://evil.example` sent the
- * user off-site immediately after they entered a correct section password --
- * a convincing place to harvest credentials, since the victim has just proven
- * they will type one.
- *
- * Rejects protocol-relative URLs ("//evil.example", which the browser treats as
- * absolute) and anything not starting with a single "/".
- */
-function safeNext(raw: string, fallback = "/dashboard"): string {
-  if (!raw.startsWith("/")) return fallback;
-  if (raw.startsWith("//")) return fallback;
-  if (raw.includes("\\")) return fallback;
-  return raw;
-}
 
 export async function verifyGate(
   _prev: GateState | undefined,
@@ -58,12 +41,15 @@ export async function verifyGate(
   if (!VALID.includes(slug)) return { error: "Unknown section." };
   if (!password) return { error: "Enter a password." };
 
-  // Rate limit.
-  const hdr = await headers();
-  const ip =
-    hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    hdr.get("x-real-ip") ??
-    "unknown";
+  // Rate limit. The ip part of the key comes from lib/request-ip, which trusts
+  // only the hop Caddy adds. This used to read the FIRST X-Forwarded-For element
+  // -- a value the client sends, since Caddy appends to that header rather than
+  // replacing it -- so a signed-in user could rotate one header value per
+  // attempt and guess the shared section password past the limit below. The
+  // same value is inserted into section_gate_grants.ip (varchar 64) further
+  // down; an over-long header used to make that INSERT throw after a CORRECT
+  // password had been accepted. clientIp() returns only an IP literal.
+  const ip = await clientIp();
 
   // Spec 141: track whether the attempt was throttled (or would have been
   // had the channel been up) so the audit row captures the degraded state.
@@ -167,5 +153,5 @@ export async function verifyGate(
     path: "/",
   });
 
-  redirect(safeNext(next));
+  redirect(safeInternalPath(next));
 }

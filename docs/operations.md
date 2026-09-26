@@ -17,9 +17,14 @@ Check that the restore drill passed:
 cat workspace/last_restore_drill.json
 ```
 
-`"result": "ok"` and an `at` within the last seven days. If it is stale,
-`scripts/deploy.sh` will refuse to deploy once it passes 30 days — that refusal
-is the point, not an obstacle to work around.
+`"result": "ok"` and a `ranAt` within the last seven days. The same time is on
+`/admin/system-settings` under Backup & restore status, with the last backup's:
+both jobs append a `backup.*` / `restore.*` row to the audit log after each run
+(docs/audit-actions.md), and warn in their own log when they could not. A drill that failed
+says so, `"result": "failed"` with an `error`, instead of leaving no file. If it
+is failed, or stale past 30 days, `scripts/deploy.sh` will refuse to deploy —
+that refusal is the point, not an obstacle to work around. Fix the cause and
+re-run `bash scripts/restore.sh`; `/var/lib/gml/drill.log` has the detail.
 
 Note `"storage_verified": false` is expected and correct: the drill exercises
 the database only. See [SM-5](substrate-moats.md#sm-5--backups-are-proven-restorable).
@@ -44,6 +49,11 @@ That is what rotation means, and it did not use to be true: the gate compared a
 cookie to the string `"1"` and never read the grant rows, so rotating revoked
 nobody and every issued cookie survived its full 8 hours.
 
+A deploy never rotates a gate, with one exception: a gate whose current
+password is empty, which the seed wrote while an unset `GATE_PASSWORD_*`
+reached it as `""`. Nobody can open such a gate, so `deploy.sh`'s seed step
+replaces it the way Rotate does and prints the new password.
+
 ## Deactivating a member of staff
 
 `/admin/users` → Deactivate. Three things happen: the profile goes inactive (the
@@ -63,14 +73,62 @@ are not certain why they lost access.
 
 ## A video will not play
 
-1. `/admin/transcode-jobs` — is there a failed or dead job for it?
-2. **Dead** means attempts are exhausted and it needs a human. **Failed** means
-   it will be retried. The distinction is deliberate.
-3. Retry re-enqueues it. This works even for a submission that has been
+1. `/admin/transcode-jobs`. Two lists: **Dead jobs, every queue** at the top
+   is what the queue itself has given up on -- attempts exhausted, with the
+   last error it recorded, retention sweeps included -- and the table below
+   is every transcode ATTEMPT, one row each.
+2. **Dead** means attempts are exhausted and it needs a human. A **failed**
+   attempt whose video ("Video now") is still `queued` will be retried by
+   itself -- failures back off 1 minute, then 10 -- and the teacher sees
+   "Transcoding in progress" meanwhile. A failed attempt of a video that is
+   itself `failed` needs a human.
+3. Retry re-enqueues it. Each attempt is its own row, and only a video's
+   latest attempt offers Retry or Drop, only while the video itself is failed
+   and nothing is queued or running for it. An older failed attempt of a video
+   that a later attempt fixed says "superseded by a later attempt"; acting on
+   it used to break a playable video. Retry does work for a video that was
    transcoded before — the dedupe key is scoped to live jobs precisely so a
    deliberate retry is possible.
 4. If the job succeeded but playback fails, check `/api/health` for
    `storage: false`.
+
+## SCORM packages
+
+SCORM **1.2**, one SCO per package. A package belongs to an RTT subject;
+learners open it from that subject's page, and it resumes where they left it.
+
+- **Adding one.** `/admin/scorm`, as a **super_admin** — nobody else can. A
+  package's scripts run on the LMS's own origin as whoever opens it (they must,
+  to reach the SCORM API), so uploading one is as powerful as signing in as
+  every person who will launch it. Only upload packages from a source you trust.
+- **What is refused, and says why:** anything over 20 MB (Caddy refuses bodies
+  over 25 MB), more than 2000 files or 100 MB unpacked; SCORM 2004 (re-export
+  as 1.2); several launchable items (export as one SCO); file names that leave
+  the package; file types outside the allowlist in
+  `apps/web/src/lib/scorm/files.ts` (Flash `.swf`, server scripts, executables
+  — strip them and re-zip). Nothing is stored unless the whole package passes.
+- **Withdrawing one.** "Withdraw from learners" on `/admin/scorm/[id]` hides it
+  everywhere; learners' records and the files are kept, and "Restore" brings it
+  back. There is no delete.
+- **What is tracked** (`/admin/scorm/[id]`): each learner's status, score, time
+  and first finish, as the module reports them. SCORM 1.2 is self-reported by
+  design. A learner's best status is kept, so reviewing a passed module does not
+  undo the pass. With a mastery score in the manifest, a score is recorded as
+  passed or failed once the module says it has finished, or when it exits.
+- **Who sees it.** Administrators: every package on `/admin/scorm`. On
+  `/rtt/progress`, under that page's rules: a teacher sees how many of each
+  subject's modules she has completed; programme and super admins see every
+  teacher's record, and a mentor her mentees' once the mentorship section is
+  unlocked. An administrator's own "Open as a learner" is listed on the
+  package's page, labelled "not counted", and left out of its counts.
+- **Storage.** Files live in the private `scorm-packages` bucket
+  (`_post/009`), served to learners through `/api/scorm/content/...` — the one
+  route whose Content-Security-Policy allows inline script. Audit rows:
+  `scorm.*` in [`audit-actions.md`](audit-actions.md).
+- **A failed upload** removes whatever it had stored. If Storage refuses that
+  clean-up too, the web log says `[scorm] a failed upload's clean-up left up to
+  N … objects under <id>/`: nothing refers to them, so delete that folder from
+  the `scorm-packages` bucket in the Supabase dashboard.
 
 ## The queue is backing up
 
@@ -84,18 +142,48 @@ is running but cannot claim looks identical to an idle one from the outside,
 which is why the check exists — previously the container had no healthcheck at
 all and a crash-loop was invisible.
 
-A job whose worker died is requeued by the lease reaper within about a minute.
-You do not need to do anything.
+A job whose worker died (killed, OOM, the box restarting) is taken back by the
+lease reaper once its lease lapses -- up to 15 minutes after the worker's last
+heartbeat, checked every minute. The reaper also closes that attempt's row in
+`/admin/transcode-jobs` as failed ("worker stopped responding"). With attempts
+left the job then runs again by itself; on its last attempt it is dead-lettered,
+the video is marked failed, and that failed row carries Retry. The worker log
+says which: "requeued jobs with expired leases" or "dead-lettered jobs with
+expired leases".
+
+Every minute the worker also fails any attempt row still 'running', and any
+video still 'transcoding', that no queued or running job belongs to any more --
+rows left by a worker killed before the reaper repaired them, which nothing
+else would ever touch. Each gets a failed row with Retry and Drop; the log
+line is "failed stranded transcode rows (no live job)". "could not repair the
+rows of a reaped job" means the reaper took a job back but could not fix its
+rows; the job's next attempt, or for a dead job that sweep, fixes them.
 
 ## Disk filling up
 
-`/var/lib/gml` holds ffmpeg scratch and local dumps. Scratch is cleaned up in a
-`finally` block after every transcode; dumps are pruned after 14 days by
-`scripts/backup.sh`.
+`/var/lib/gml` holds local dumps, pruned after 14 days by `scripts/backup.sh`,
+and -- once README-deploy.md 2.5's data-root step is done -- Docker's data root,
+`/var/lib/gml/docker`: images, build cache and the volumes, including the
+worker's `/tmp` (the `worker_scratch` volume, its ffmpeg scratch). Without that
+step all of it sits under `/var/lib/docker` on the 30 GiB root disk, and
+`bash scripts/preflight.sh` FAILs saying so. Check with
+`docker info --format '{{.DockerRootDir}}'` and `docker system df`.
 
-If scratch is growing anyway, a worker is being killed hard enough to skip its
-cleanup — check for OOM kills (`dmesg -T | grep -i oom`). The likely cause is
-`WORKER_CONCURRENCY` above 1.
+Each successful `deploy.sh` removes dangling images (never `:current` or
+`:previous`) and build cache unused for a week. Nothing else prunes them; after
+many failed deploys, `docker image prune -f` is safe to run by hand.
+
+Scratch is removed
+after every transcode, including one interrupted by a deploy or `docker
+compose stop` -- the worker hands its job back to the queue and exits within
+seconds of SIGTERM (its `stop_grace_period` is 30 s). A worker killed hard
+enough to skip that (OOM, SIGKILL, the box losing power) leaves its scratch
+behind, and the next worker to start removes any that has not changed for 15
+minutes.
+
+If scratch is growing anyway, a worker is being killed repeatedly — check for
+OOM kills (`dmesg -T | grep -i oom`). The likely cause is `WORKER_CONCURRENCY`
+above 1.
 
 ---
 
@@ -123,8 +211,20 @@ Stated so nobody assumes otherwise:
   has not been done.
 - There are no application metrics — no request rates, no latency histograms, no
   queue-depth time series. `/admin/transcode-jobs` shows an instantaneous depth.
-- Log aggregation is `docker compose logs`. Logs are rotated at 50 MB × 5 files
-  if you followed README-deploy.md §6; otherwise they grow without bound.
+- Log aggregation is `docker compose logs`. Rotation is configured in
+  `docker-compose.yml` at 10 MB × 3 files per service (its `x-logging`
+  anchor) and 20 MB × 5 for `caddy`, about 190 MB across the stack, and needs
+  no operator action. With no alerting and no metrics these logs are the only
+  forensic record. Caddy writes one JSON access line per request (client IP,
+  method, URI with its query string, status, duration; cookies and
+  Authorization redacted, and so are the `hub.verify_token`, `code` and
+  `token_hash` query parameters, in its error lines too -- a new
+  secret-bearing query parameter must be added to `query_secrets` in
+  `docker/Caddyfile`) -- about
+  1 KB each, so its 100 MB holds on the order of 100,000 requests, roughly one
+  to two weeks for fifty users. Read them with
+  `docker compose logs caddy | grep '"logger":"http.log.access'`; raise the
+  caddy service's `max-size` / `max-file` if more history is wanted.
 
 For a single-instance internal tool with fifty users this is a defensible
 position. It is a position, not an oversight, and it should be revisited if the

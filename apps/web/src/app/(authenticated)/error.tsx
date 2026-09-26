@@ -12,15 +12,23 @@
 // It deliberately does NOT render the digest in a monospace callout the way the
 // root boundary does: inside the shell this is a content-area failure, and the
 // surrounding navigation already tells the user where they are.
+//
+// "Try again" is `unstable_retry`, not `reset`. In Next 16 reset only clears
+// the boundary's state and re-renders the children from the payload already
+// on the client -- which, for a server failure, is the error itself -- so it
+// could never recover from the "temporary connection problem" this page
+// describes; measured live, three presses sent no request at all.
+// unstable_retry refreshes the route and then resets (next/dist/client/
+// components/error-boundary.js), so a failure that has cleared is picked up.
 
 import { useEffect } from "react";
 
 export default function AuthenticatedError({
   error,
-  reset,
+  unstable_retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  unstable_retry: () => void;
 }) {
   useEffect(() => {
     console.error("[page-error]", { digest: error.digest, message: error.message });
@@ -39,7 +47,7 @@ export default function AuthenticatedError({
       </p>
       <button
         type="button"
-        onClick={reset}
+        onClick={() => unstable_retry()}
         className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white"
       >
         Try again

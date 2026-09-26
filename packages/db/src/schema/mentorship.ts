@@ -36,7 +36,11 @@ export const mentors = pgTable(
   },
   // Resolved on every page that maps a signed-in user to their mentor record.
   // This table previously declared no indexes whatsoever.
-  (t) => [index("mentors_user_idx").on(t.userId)],
+  (t) => [
+    index("mentors_user_idx").on(t.userId),
+    // One mentor record per login (migration 0033), as for teachers.
+    uniqueIndex("mentors_user_id_uq").on(t.userId).where(sql`${t.userId} IS NOT NULL`),
+  ],
 );
 
 export const mentorPairings = pgTable(
@@ -87,6 +91,8 @@ export const mentorPairings = pgTable(
     index("mentor_pairings_teacher_idx").on(t.teacherId),
     check("mentor_pairings_quarter_check", sql`${t.currentQuarter} IS NULL OR (${t.currentQuarter} BETWEEN 1 AND 4)`),
     check("mentor_pairings_meetings_count_check", sql`${t.meetingsCount} >= 0`),
+    // Migration 0027; declared so the snapshot describes the database (F107).
+    check("mentor_pairings_commitments_is_array", sql`jsonb_typeof(${t.commitments}) = 'array'`),
   ],
 );
 
@@ -94,7 +100,7 @@ export const mentorMeetings = pgTable(
   "mentor_meetings",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "cascade" }),
+    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "restrict" }), // 0031: was cascade
     scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: "date" }).notNull(),
     durationMin: text("duration_min"),
     notes: text("notes"),
@@ -122,7 +128,7 @@ export const feedbackResponses = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     formId: uuid("form_id").notNull().references(() => feedbackForms.id, { onDelete: "restrict" }),
-    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "cascade" }),
+    pairingId: uuid("pairing_id").notNull().references(() => mentorPairings.id, { onDelete: "restrict" }), // 0031: was cascade
     respondentUserId: uuid("respondent_user_id").references(() => users.id, { onDelete: "set null" }),
     responses: jsonb("responses").$type<Record<string, unknown>>().notNull(),
     submittedAt: timestamp("submitted_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

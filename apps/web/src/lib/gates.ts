@@ -3,9 +3,10 @@
 
 import "server-only";
 import { redirect } from "next/navigation";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { sectionGates, sectionGateGrants } from "@gml/db/schema";
+import { sectionGates } from "@gml/db/schema";
+import { activeGrant } from "./visibility";
 
 // Mirrors the section_gate_slug enum in packages/db/src/schema/enums.ts.
 // `admin` was omitted here, which is the type-level half of why that gate was
@@ -35,21 +36,15 @@ export function gateForPath(pathname: string): GateSlug | null {
   return hit?.slug ?? null;
 }
 
-/** Returns the current grant if any; null otherwise. */
+/**
+ * Returns the current grant if any; null otherwise.
+ *
+ * The query itself is activeGrant() in lib/visibility.ts -- one definition of
+ * "holds the section password", shared with the surfaces that re-serve gated
+ * rows outside the section, and executed by tests/behaviour.
+ */
 export async function getActiveGrant(userId: string, slug: GateSlug) {
-  const [row] = await db
-    .select()
-    .from(sectionGateGrants)
-    .where(
-      and(
-        eq(sectionGateGrants.userId, userId),
-        eq(sectionGateGrants.gateSlug, slug),
-        gt(sectionGateGrants.expiresAt, new Date()),
-      ),
-    )
-    .orderBy(desc(sectionGateGrants.expiresAt))
-    .limit(1);
-  return row ?? null;
+  return activeGrant(db, userId, slug);
 }
 
 /** Returns the current active gate password row (latest version). */

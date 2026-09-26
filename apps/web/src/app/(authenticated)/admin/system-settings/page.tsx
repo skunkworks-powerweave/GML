@@ -17,18 +17,19 @@
 // somehow reaches this URL by typing it gets bounced.
 //
 // SM-4 (anti-download): the videoDefaultQuality dropdown only allows "480p".
-// 720p and 1080p render as disabled options with a tooltip explaining spec 041
-// deferred them. Hardcoding the disable here means a future drive-by edit
+// 720p and 1080p render as disabled options with a tooltip saying why (the
+// worker's ladder tops out at 480p; spec 041 deferred 720p). Hardcoding the disable here means a future drive-by edit
 // can't quietly enable them without also touching the zod allow-list.
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { desc, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
-import { systemSettings, SYSTEM_SETTINGS_ID, auditLog } from "@gml/db/schema";
+import { systemSettings, SYSTEM_SETTINGS_ID } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { lastAuditAt } from "@/admin/audit-lookups";
 import { NOTIFICATION_CATEGORIES, NOTIFICATION_KEYS } from "@/lib/notification-kinds";
 
 export const dynamic = "force-dynamic";
@@ -131,35 +132,31 @@ export default async function SystemSettingsPage({
     .where(eq(systemSettings.id, SYSTEM_SETTINGS_ID))
     .limit(1);
 
-  // Status display — query the latest "backup" / "restore" audit log row. The
-  // backup.sh script does not yet emit audit rows (it writes /backups/last-backup.txt
-  // on the host), so until that ships these queries return null and the UI shows
-  // "never" — better than fabricating a timestamp.
-  const [lastBackup] = await db
-    .select({ at: auditLog.createdAt })
-    .from(auditLog)
-    .where(sql`${auditLog.action} LIKE 'backup.%'`)
-    .orderBy(desc(auditLog.createdAt))
-    .limit(1);
-
-  const [lastRestore] = await db
-    .select({ at: auditLog.createdAt })
-    .from(auditLog)
-    .where(sql`${auditLog.action} LIKE 'restore.%'`)
-    .orderBy(desc(auditLog.createdAt))
-    .limit(1);
+  // Status display — the latest backup.complete / restore.complete audit row,
+  // one index probe each (admin/audit-lookups.ts), which backup.sh and
+  // restore.sh append after each successful run. Where there is none yet (the
+  // jobs have not run since they began writing it, or could not reach the
+  // database) the panel says so and points at the host's own record
+  // (last-backup.txt, workspace/last_restore_drill.json) -- it used to say
+  // "never", which reads as "no backup has ever run" on a box whose nightly
+  // backups pass.
+  const lastBackupAt = await lastAuditAt("backup");
+  const lastRestoreAt = await lastAuditAt("restore");
 
   const settings = row ?? {
     programmeName: "Goldenmile RTT",
     academicYear: "2026-27",
     videoDefaultQuality: "480p" as const,
     videoMaxUploadMb: 500,
-    // helpdesk.ticket is on by default because it is the only kind the
-    // application emits; omitting it would leave the bell at zero out of the box.
+    // The column default (packages/db/src/schema/systemSettings.ts): every
+    // kind the application writes. A kind left out here is written and hidden.
     notificationsEnabled: [
       "cycle.assigned",
+      "cycle.complete",
       "video.transcoded",
       "meeting.scheduled",
+      "meeting.cancelled",
+      "pairing.final_submitted",
       "helpdesk.ticket",
     ],
     backupRetentionDays: 14,
@@ -231,8 +228,8 @@ export default async function SystemSettingsPage({
                 className="rounded border border-neutral-300 px-2 py-1"
               >
                 <option value="480p">480p (current)</option>
-                <option value="720p" disabled title="Deferred per spec 041 — worker pipeline does not transcode 720p today">
-                  720p (deferred — spec 041)
+                <option value="720p" disabled title="Not available: videos are encoded up to 480p">
+                  720p (not available: videos are encoded up to 480p)
                 </option>
                 <option value="1080p" disabled title="Not a goal — bandwidth-tight Ladakh deployments">
                   1080p (out of scope)
@@ -340,9 +337,9 @@ export default async function SystemSettingsPage({
               Last successful backup
             </dt>
             <dd className="font-mono">
-              {lastBackup?.at
-                ? new Date(lastBackup.at).toISOString().slice(0, 16).replace("T", " ")
-                : "never (no backup.* audit rows yet)"}
+              {lastBackupAt
+                ? lastBackupAt.toISOString().slice(0, 16).replace("T", " ")
+                : "not reported to the app — see last-backup.txt on the host"}
             </dd>
           </div>
           <div>
@@ -350,17 +347,21 @@ export default async function SystemSettingsPage({
               Last restore drill
             </dt>
             <dd className="font-mono">
-              {lastRestore?.at
-                ? new Date(lastRestore.at).toISOString().slice(0, 16).replace("T", " ")
-                : "never (no restore.* audit rows yet)"}
+              {lastRestoreAt
+                ? lastRestoreAt.toISOString().slice(0, 16).replace("T", " ")
+                : "not reported to the app — see last_restore_drill.json on the host"}
             </dd>
           </div>
         </dl>
         <p className="text-xs text-neutral-500">
-          Sources: latest <code className="font-mono">backup.*</code> and{" "}
-          <code className="font-mono">restore.*</code> rows in audit_log. The
-          backup script writes <code className="font-mono">/backups/last-backup.txt</code> on
-          the host; an admin route can surface that file when audit emission lands.
+          Sources: the latest <code className="font-mono">backup.complete</code> and{" "}
+          <code className="font-mono">restore.complete</code> rows in audit_log,
+          which scripts/backup.sh and scripts/restore.sh write after each
+          successful run. Each also records its last run on the host, in{" "}
+          <code className="font-mono">/var/lib/gml/backups/last-backup.txt</code> and{" "}
+          <code className="font-mono">workspace/last_restore_drill.json</code> (the
+          stamp deploy.sh&rsquo;s restore-drill gate reads); look there when a
+          time is not reported here.
         </p>
       </section>
     </main>

@@ -14,8 +14,8 @@ export const sessions = pgTable(
   "sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "cascade" }),
-    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
+    schoolId: uuid("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }), // 0031: was cascade
+    classId: uuid("class_id").notNull().references(() => classes.id, { onDelete: "restrict" }), // 0031: was cascade
     subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "restrict" }),
     teacherId: uuid("teacher_id").notNull().references(() => teachers.id, { onDelete: "restrict" }),
     outlineLessonId: uuid("outline_lesson_id").references(() => outlineLessons.id, { onDelete: "set null" }),
@@ -35,6 +35,14 @@ export const sessions = pgTable(
     index("sessions_school_date_idx").on(t.schoolId, t.scheduledDate),
     index("sessions_teacher_date_idx").on(t.teacherId, t.scheduledDate),
     index("sessions_class_date_idx").on(t.classId, t.scheduledDate),
+    // Migration 0040. /repo/subjects counts each subject's sessions and
+    // /repo/subject/[id] lists and counts them; with no index on subject_id
+    // each of those scanned the whole log, once per subject.
+    index("sessions_subject_date_idx").on(t.subjectId, t.scheduledDate),
+    // Migration 0040. The unfiltered /repo/sessions view is
+    // ORDER BY scheduled_date DESC, scheduled_time DESC LIMIT 200; walked
+    // backward, this serves it without sorting the table.
+    index("sessions_date_time_idx").on(t.scheduledDate, t.scheduledTime),
     check("sessions_status_check", sql`${t.status} IN ('planned','in_progress','complete','cancelled')`),
     check("sessions_counts_nonneg_check", sql`${t.attendedCount} >= 0 AND ${t.totalCount} >= 0`),
     check("sessions_attended_le_total_check", sql`${t.attendedCount} <= ${t.totalCount}`),

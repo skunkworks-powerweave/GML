@@ -33,7 +33,11 @@
     "forms": "Forms & quizzes",
     "settings": "Settings",
     "inbox": "Inbox",
-    "data": "Data"
+    "data": "Data",
+    "allTables": "All tables",
+    "users": "Users",
+    "primary": "Main navigation",
+    "menu": "Menu"
   },
   "navSection": {
     "programme": "Programme",
@@ -42,7 +46,68 @@
     "repository": "Repository",
     "data": "Data",
     "system": "System",
-    "resources": "Resources"
+    "resources": "Resources",
+    "yourAccount": "Your account"
+  },
+  "crumb": {
+    "dashboard": "Dashboard",
+    "menu": "Menu",
+    "observation": "Classroom Observation",
+    "mentorship": "Mentorship",
+    "rtt": "RTT Phases",
+    "videos": "Video library",
+    "forms": "Forms",
+    "quizzes": "Quizzes",
+    "scorm": "SCORM modules",
+    "inbox": "Inbox",
+    "uploads": "Uploads",
+    "settings": "Settings",
+    "repo": "Repository",
+    "admin": "Admin",
+    "audit": "Audit log",
+    "data": "Data tables",
+    "gates": "Section gates",
+    "users": "Users",
+    "systemSettings": "System settings",
+    "transcodeJobs": "Transcode jobs",
+    "whatsappLog": "WhatsApp log",
+    "class": "Class",
+    "mentor": "Mentor",
+    "mentors": "Mentors",
+    "outline": "Course outline",
+    "outlines": "Course outlines",
+    "resource": "Resource",
+    "resources": "Resources",
+    "school": "School",
+    "schools": "Schools",
+    "session": "Session",
+    "sessions": "Sessions",
+    "students": "Students",
+    "subject": "Subject",
+    "subjects": "Subjects",
+    "teacher": "Teacher",
+    "teachers": "Teachers",
+    "online": "Online sessions",
+    "synchronous": "Synchronous",
+    "asynchronous": "Asynchronous",
+    "progress": "Progress",
+    "teachBack": "Teach-back",
+    "new": "New",
+    "history": "History",
+    "result": "Result",
+    "thanks": "Thanks",
+    "responses": "Responses",
+    "learners": "Learners",
+    "view": "View",
+    "details": "Details",
+    "trail": "Breadcrumb"
+  },
+  "role": {
+    "super_admin": "Super Admin",
+    "programme_admin": "Programme Admin",
+    "mentor": "Mentor",
+    "observer": "Observer",
+    "teacher": "Teacher"
   },
   "action": {
     "save": "Save",
@@ -65,7 +130,9 @@
     "password": "Password",
     "welcomeBack": "Welcome back.",
     "rememberMe": "Remember me",
-    "forgotPassword": "Forgot?"
+    "forgotPassword": "Forgot?",
+    "help": "Help",
+    "skipToContent": "Skip to main content"
   },
   "status": {
     "pending": "Pending",
@@ -76,7 +143,11 @@
     "online": "Online · synced",
     "loading": "Loading…",
     "offline": "Offline — not saving",
-    "checking": "Checking…"
+    "checking": "Checking…",
+    "onlineHint": "The server is reachable.",
+    "offlineHint": "The server cannot be reached. Anything you save will fail until this clears.",
+    "checkingHint": "Checking whether the server is reachable…",
+    "queueDepth": "Transcode queue depth"
   },
   "gate": {
     "title": "Section gate",
@@ -110,24 +181,15 @@
     "ladakhi": "Ladakhi"
   },
   "login": {
-    "forgot": {
-      "title": "Forgot your password?",
-      "email_label": "Email address",
-      "submit_label": "Send reset link",
-      "smtp_unavailable": "Password reset is temporarily unavailable. Email server not configured — ask your programme admin to use the in-app reset path."
-    },
-    "reset": {
-      "title": "Choose a new password",
-      "new_password_label": "New password",
-      "submit_label": "Set password and sign in",
-      "token_expired": "This reset link has expired or already been used. Request a new one from the sign-in page."
+    "error": {
+      "missing_fields": "Enter your email and password.",
+      "invalid_credentials": "Incorrect email or password. If you are sure both are right, your account may have been deactivated: contact your programme administrator.",
+      "inactive": "This account is not active. Contact your programme administrator.",
+      "email_not_confirmed": "This email address has not been confirmed yet. Ask your programme administrator to confirm it.",
+      "rate_limited": "Too many sign-in attempts. Wait a few minutes and try again.",
+      "unavailable": "Sign-in is temporarily unavailable. Try again in a few minutes.",
+      "link_expired": "That sign-in or reset link has expired or was already used. Request a new one, or sign in with your password.",
+      "link_invalid": "That link is not valid. Request a new one, or sign in with your password."
     }
-  },
-  "forbidden": {
-    "title": "Access denied",
-    "locked": "Your account is locked after too many failed sign-in attempts. Wait 15 minutes and try again, or contact your programme admin.",
-    "smtp_unconfigured": "Email-based recovery is not available on this deployment. Contact your programme admin for an in-app reset.",
-    "session_expired": "Your session has expired. Sign in again to continue.",
-    "default": "You do not have permission to view this page."
   }
 }

@@ -27,22 +27,47 @@ prefix's source-of-truth bullet under "Substrate moats" if applicable.
   Pure surface-load events use the noun `surface_viewed` (or
   the generic `view`).
 
-## auth.* — credentials + lockout + reset
+## auth.* — sign-in, sign-out, passwords
+
+Sessions are Supabase Auth's. These rows are written by the application at
+the points it takes part (`app/login/**`, `app/auth/**`, `auth.ts`,
+`/settings`); `ip` is masked as everywhere else. `last_seen_at` on the user
+is stamped with every `auth.sign_in`, which is what `/admin/users` shows.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `auth.rate_limit.redis_down` | The login-rate-limit channel throws (Redis outage); credentials endpoint fails-CLOSED (spec 141) | `method` ("credentials" / "reset"), `ipMasked`, `severity` ("SEVERE"), truncated `error` string |
-| `auth.account.locked_attempt` | Login attempt against an account whose `users.locked_until` is in the future; bcrypt-verify is skipped (spec 161) | `userId`, `ipMasked`, `until` (ISO-8601) |
-| `auth.account.locked` | The failed-credentials counter just crossed 5; a 1-hour lockout is being armed | `userId`, `ipMasked`, `until`, `failedCount` |
-| `auth.account.unlocked` | A `super_admin` invoked `POST /api/admin/users/[id]/unlock` to clear a lockout before its natural expiry | `actorId` (the unlocking admin), `userId` (the cleared account) |
-| `auth.password.reset_requested` | `/api/auth/forgot-password` accepted a form submission (response identical for known and unknown emails — no enumeration oracle) | `emailHashed`, `ipMasked`, `tokenIssued` (boolean — false if email unknown) |
-| `auth.password.reset_failed` | `/api/auth/reset-password` rejected a token — expired, consumed-twice, or signature mismatch | `tokenPrefix` (first 8 chars), `reason` ("expired" / "consumed" / "not_found") |
-| `auth.password.reset_completed` | The new password was successfully set and the token marked consumed | `userId`, `ipMasked` |
+| `auth.sign_in` | A session was established: a password sign-in at `/login`, or an emailed link opened at `/auth/confirm` or `/auth/callback`. `user_id` and `entity_id` are the account | `method` ("password" / "email_link" / "recovery_link") |
+| `auth.sign_in_failed` | A password sign-in reached the credential check and was refused. Throttled and outage-refused attempts write nothing, so this is bounded by the sign-in throttle. `user_id` is null: no account is looked up for a failure, and the attempt is not credited to anyone already signed in on that browser (a failed attempt leaves that session in place; `recordAudit({ userId: null })` skips the session fallback) | `reason` ("invalid_credentials" / "inactive" / "email_not_confirmed"), `emailHash` (first 16 hex characters of SHA-256 over the lower-cased address, never the address itself) |
+| `auth.sign_out` | Someone signed out of this browser (other devices stay signed in) | none |
+| `auth.password.changed` | The holder changed their own password at `/settings`, after re-entering the current one | `selfService` (true), `otherSessionsEnded` (true only when Supabase accepted the sign-out of the holder's other sessions) |
+| `auth.password.reset_completed` | A new password was set at `/login/reset`, from a session an emailed recovery or magic link established in the last 15 minutes | `otherSessionsEnded` (as above) |
 
-Auth.js session events (`login` / `logout`) are emitted by Auth.js
-itself with the Auth.js-canonical action names; they are NOT under
-the `auth.*` prefix above. Search the audit log for `action='login'`
-or `action='logout'` to find them.
+There is no per-account lockout any more, and so no lockout, unlock or
+"rate limit down" rows: sign-in is throttled per account and address
+(`auth.ts`), and a throttled attempt is simply refused. Requests for a reset or
+magic link (`/login/forgot`) are not audited — the form answers identically for
+known and unknown addresses, and a row per request would be a log any stranger
+can fill. Token refreshes are not audited.
+
+## admin.user.* — account administration (`/admin/users`)
+
+`user_id` is the administrator, `entity_id` the account acted on. No password
+is ever recorded, in any form. `sessionsEnded` is true only when the account's
+sessions really were ended, and `sessionsEndedCount` then says how many.
+`banApplied` and `banLifted` likewise record whether Supabase actually
+applied or lifted the sign-in ban.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `admin.user.create` | An administrator created an account (with an initial password the holder must replace at first sign-in) | `email`, `role`, `linkKind` ("teacher" / "mentor" / null) |
+| `admin.user.role_change` | An account's role was changed. Losing an administrator role ends the account's sessions | `from`, `to`, `sessionsEnded`, `sessionsEndedCount` |
+| `admin.user.deactivate` | An account was deactivated: profile inactive, sessions ended, sign-in banned | `role`, `sessionsEnded`, `sessionsEndedCount`, `banApplied` |
+| `admin.user.activate` | An account was reactivated (its old sessions stay ended) | `role`, `banLifted` |
+| `admin.user.password_set` | An administrator set an account's password (the holder must replace it) | `role`, `sessionsEnded`, `sessionsEndedCount` |
+| `admin.user.phone_set` | An administrator recorded or changed an account's WhatsApp number (the list `/admin/gates` shares a rotated section password with). The only `admin.user.*` action an administrator may take on their own account, so `user_id` can equal `entity_id` | none: the number itself is not recorded |
+| `admin.user.phone_cleared` | An administrator removed an account's WhatsApp number | none |
+| `admin.user.surface_viewed` | `/admin/users`, which lists every account's email address, was rendered (SM-9 visibility) | none |
+| `admin.user.super_admin_bootstrapped` | The seed's `SUPER_ADMIN_*` bootstrap (`packages/db/src/scripts/seed.ts`, run by every deploy) created or promoted the first active `super_admin`, because none existed. The only grant of super_admin made without a super_admin, so `user_id` is null (no actor); `entity_id` is the account. Written in the same transaction as the promotion | `source` ("seed"), `authUserCreated`, `profileCreated` |
 
 ## gate.* — section password flow
 
@@ -70,22 +95,42 @@ or `action='logout'` to find them.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `quiz.submit` | A learner submitted a quiz attempt via `/quizzes/[slug]`; the grading happens server-side (spec 146) and the score is committed to `quiz_attempts` in the same transaction | `slug`, `attemptId`, `userId`, `scorePct`, `passed` (boolean) |
-| `quiz.schema.update` | A `super_admin` saved a new schema on `/admin/quizzes/[id]` | `quizId`, `actorId`, `questionCount` |
+| `quiz.created` | A `programme_admin` or `super_admin` created a quiz on `/admin/quizzes` (it starts inactive, with no questions). `entity_type` `quizzes`, `entity_id` the quiz id, `user_id` the admin | `slug`, `title`, `passThreshold`, `rttSubjectId` |
+| `quiz.schema.update` | A `programme_admin` or `super_admin` saved the JSON editor on `/admin/quizzes/[id]`. `entity_type` `quizzes`, `entity_id` the quiz id, `user_id` the admin. A setting's key is present when the save's payload set that field, whether or not its value changed: the editor pre-fills every setting from the stored quiz, so an ordinary save writes them all. To see what a save changed, compare with the quiz's previous row | `questionCount`, `questionsReplaced` (boolean: whether the save carried a questions array); when the payload carried them, `title`, `passThreshold`, `timeLimitSeconds` (null = untimed), `maxAttempts` (null = unlimited), `rttSubjectId`, `active` |
+| `quiz.submit` | A learner's attempt was scored via `/quizzes/[slug]`. Graded server-side against the quiz's questions (spec 146); the `quiz_submissions` row is written in the same transaction that closes the learner's open `quiz_attempts` row. `entity_type` `quiz_submission`, `entity_id` the submission id, `user_id` the learner | `quizSlug`, `score` (percent), `passed` (boolean), `questionCount`, `answeredCount` |
+| `quiz.attempt.expired` | A submission arrived after the quiz's time limit plus the 30 s grace, or the learner opened `/quizzes/[slug]` after that point with the attempt still open (the page closes it instead of mounting a runner with no time left); the attempt was closed and nothing was scored. `entity_type` `quizzes`, as the admin rows above (older rows carry `quiz`, the singular it was written with before; audit_log is append-only, so an export filtered by entity type needs both for them), `entity_id` the quiz id, `user_id` the learner | `quizSlug`, `limitSeconds` |
 
-## whatsapp.* — webhook ingest pipeline
+## scorm.* — SCORM 1.2 packages (`/admin/scorm`, `/scorm/[id]`)
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `whatsapp.signature_failed` | Inbound webhook POST failed the HMAC-SHA256 signature check against `WHATSAPP_APP_SECRET` (spec 040). The endpoint returns 401 without doing any DB writes | `ipMasked`, `signatureProvided` (boolean) |
-| `whatsapp.message.received` | A signed webhook payload was accepted; the wrapping audit row is written before any per-message processing so the count of distinct receives is recoverable even when downstream branches fail | `msgId`, `from` (E.164), `messageType` ("text" / "video" / "audio" / ...) |
-| `whatsapp.message.replay_ignored` | The same `msgId` had already been processed within the de-duplication window | `msgId`, `originalReceivedAt` |
-| `whatsapp.media.url_failed` | Meta's media-URL lookup returned non-200 (rare — usually a token expiry) | `msgId`, `httpStatus` |
-| `whatsapp.media.fetch_failed` | The fetched media-URL download itself failed (network, S3 upload error) | `msgId`, `error` (truncated) |
-| `whatsapp.media.fetched` | The media bytes were successfully fetched from Meta and uploaded to MinIO; a `video_submissions` row is about to be created | `msgId`, `mediaSize`, `mimeType`, `s3Key` |
-| `whatsapp.context.unmatched` | A WhatsApp reply-context fell outside any recognised conversation slot (programme reply, cycle reply, mentor handoff, ...). Multiple call sites emit this with different `metadata.reason` values | `msgId`, `from`, `reason` ("no_context" / "stale_context" / "unknown_slot" / ...) |
-| `whatsapp.log.surface_viewed` | The `/admin/whatsapp-log` page rendered (SM-1 visibility) | `actorId` |
-| `whatsapp.transcode.resent` | An admin pressed "resend to worker" on the whatsapp-log page; a BullMQ job was re-enqueued for an already-ingested video that the worker had missed | `submissionId`, `actorId` |
+| `scorm.package.upload` | A `super_admin` uploaded a SCORM 1.2 package through `POST /api/scorm/packages` (the upload form on `/admin/scorm`) and every file of it was validated and stored. Refused uploads store nothing and are not audited. `entity_type` `scorm_package`, `entity_id` the new package id, `user_id` the super_admin | `title`, `rttSubjectId`, `fileCount`, `totalBytes` |
+| `scorm.package.deactivate` | A `programme_admin` or `super_admin` withdrew a package from learners on `/admin/scorm/[id]`. Its files and every learner's record are kept. `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the admin | `title` |
+| `scorm.package.activate` | A `programme_admin` or `super_admin` restored a withdrawn package on `/admin/scorm/[id]`. `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the admin | `title` |
+| `scorm.attempt.finish` | A learner's SCO called `LMSFinish` and its final commit reached `POST /api/scorm/attempts/[id]`. The many `LMSCommit`s of a session are not audited. The values are what the SCO REPORTED; the stored record keeps the learner's best status (`lib/scorm/store.ts`). `entity_type` `scorm_package`, `entity_id` the package id, `user_id` the learner | `lessonStatus`, `scoreRaw` (0-100 or null), `sessionTimeCs` (centiseconds) |
+
+## whatsapp.* — webhook ingest pipeline
+
+The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each video and queues its media fetch before it answers Meta; the worker (`apps/worker/src/whatsapp-fetch.ts`) fetches the media, queues the transcode and replies to the sender. Worker rows carry no `user_id` or `ip`: there is no request. `/admin/whatsapp-log` lists every WhatsApp submission, including ones still waiting for or refused by the fetch, with the reason. These rows are what this table says they are, checked by `tests/behaviour/whatsapp-observability.test.ts`.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `whatsapp.signature_failed` | A POST to the configured webhook failed the HMAC-SHA256 check against `WHATSAPP_APP_SECRET`, or carried no signature; the answer is 401. `entity_type` `webhook`. Written at most 5 times per masked source per minute, and at most 30 times a minute from all sources together per app process (the table is append-only and the endpoint is public), each time with a log line naming `WHATSAPP_APP_SECRET` when a signature was offered. Not written while the secret is unset (503 `whatsapp_not_configured`) | `ipMasked` (/24 or /64), `signatureProvided` (boolean) |
+| `whatsapp.message.received` | A signed message carrying a video (a video message, or a document with a `video/*` mime type) was accepted, before the submission is written. `entity_type` `video_submission`, no `entity_id` | `msgId`, `type` ("video" / "document"), `mediaId` (Graph media id), `mime`, `caption`, `from` (sender, E.164 digits), `to` (the programme number) |
+| `whatsapp.message.replay_ignored` | Meta redelivered a message that already has a submission, so nothing was done. `entity_type` `video_submission`; `entity_id` the existing submission when the pre-check found it | `msgId`, `from`, `to`; or, when a concurrent delivery won the insert, `msgId`, `reason` ("insert_conflict") |
+| `whatsapp.message.ignored` | A signed message that is not a video (text, image, audio, a PDF document, ...) arrived; it is not ingested. Text / image / audio / sticker / document senders are queued a reply saying what the number accepts, and an `unsupported` message (one Meta could not deliver) a reply saying how to send the video; at most one of each per sender per 10 minutes, so an auto-replying number cannot start a loop. `entity_type` `webhook` | `msgId`, `type`, `mime` (documents only, else null), `from`, `to` |
+| `whatsapp.payload.unrecognised` | A correctly signed delivery, or one message in it, did not have the shape this code reads (Meta's schema moved); it was skipped and answered 200, because a retry cannot make it readable. The rest of the batch is still processed. `entity_type` `webhook` | `bytes` (body size), `where` ("payload" / "message[<index>]"), `path` (where the shape broke) |
+| `whatsapp.context.unmatched` | The caption named no target that exists, so the video is kept as `generic`. `entity_type` `video_submission` | `msgId`, `caption`, `reason` ("no_prefix_match" / "observation_cycle.code_not_found" / "teach_back.invalid_uuid" / "teach_back.subject_not_found" / "mentor_meeting.invalid_uuid" / "mentor_meeting.id_not_found" / "mentee_quarterly.invalid_uuid" / "mentee_quarterly.pairing_not_found") |
+| `whatsapp.context.forbidden` | The caption named a real target the sender may not attach to (not the cycle's teacher, observer, paired mentor or an admin; not a member of the meeting's or quarterly video's pairing; a signed-off cycle; a Q4 video before the pairing's last quarter; a teach-back for an RTT subject the sender is not shown), or the number matches no registered user; the video is kept as `generic`. `entity_type` `video_submission` | `msgId`, `caption`, `from`, `senderUserId` (null when unregistered), `attemptedContextType`, `attemptedContextId`, `attemptedQuarter` (quarterly videos only), `reason` ("sender_unregistered" / "no_target" / "observation_cycle.not_permitted" / "observation_cycle.signed_off" / "mentor_meeting.not_permitted" / "mentee_quarterly.not_permitted" / "mentee_quarterly.q4_not_open" / "teach_back.not_permitted") |
+| `whatsapp.fetch.enqueued` | The submission (status `received`, file `uploading`) and its media-fetch job were written in one transaction, before Meta got its 200. `entity_type` `video_submission`, `entity_id` the submission | `msgId`, `mediaId`, `jobId`, `contextType` |
+| `whatsapp.media.fetched` | Worker: the media was downloaded from Meta and stored, the submission moved to `queued` and its transcode queued. `entity_type` `video_submission`, `entity_id` the submission | `msgId`, `bytes`, `attempt` |
+| `whatsapp.media.checksum_mismatch` | Worker: the downloaded bytes' SHA-256 differs from the checksum in Meta's payload. Reported, not enforced (the stored file's checksum is the computed one). `entity_type` `video_submission` | `msgId`, `claimed`, `computed` |
+| `whatsapp.media.fetch_failed` | Worker: the LAST attempt failed (or the worker died during it and the lease reaper dead-lettered the fetch, or a refusal no retry can change -- media over the size cap -- ended it at once), so the submission and its file are now `failed` with the reason in `processing_log` (earlier attempts are in the job's `last_error`, shown on `/admin/whatsapp-log`). `entity_type` `video_submission` | `msgId`, `attempts`, `error` (names the cause: a missing `WHATSAPP_ACCESS_TOKEN`, the HTTP status and Graph error code, a non-video body, the size cap, a Storage refusal) |
+| `whatsapp.reply.sent` | Worker: the sender was told the outcome through the Cloud API. `entity_type` `video_submission` | `msgId`, `kind` ("linked_cycle" / "linked_teach_back" / "linked_meeting" / "linked_quarterly" / "unmatched" / "unregistered" / "fetch_failed") |
+| `whatsapp.reply.failed` | Worker: Meta refused the reply, or it could not be sent. Not written while replies are not configured (`WHATSAPP_PHONE_NUMBER_ID` or `WHATSAPP_ACCESS_TOKEN` unset; the worker logs that once). `entity_type` `video_submission` | `msgId`, `kind`, `reason` |
+| `whatsapp.log.surface_viewed` | The `/admin/whatsapp-log` page rendered (SM-1 visibility). `entity_type` `video_submission`, `user_id` the admin | `parsing` (the filter, "any" when unset), `from`, `to` (the date filters, or null) |
+| `whatsapp.transcode.resent` | An admin pressed "Resend transcode" on `/admin/whatsapp-log` for a submission whose media is stored; the transcode was queued again. `entity_type` `video_submission`, `entity_id` the submission, `user_id` the admin | `previousStatus`, `bucket`, `objectKey` |
+| `whatsapp.fetch.retried` | An admin pressed "Retry fetch" on `/admin/whatsapp-log` for a submission whose media never arrived; the fetch was queued again from the kept media id (or a waiting one moved to the front). `entity_type` `video_submission`, `entity_id` the submission, `user_id` the admin | `previousStatus`, `msgId`, `mediaId`, `jobId`, `deduped` (boolean) |
 
 ## transcode.* — BullMQ + ffmpeg pipeline
 
@@ -118,9 +163,11 @@ or `action='logout'` to find them.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `resource.pdf.view` | A PDF resource was opened in the canvas-renderer surface `/repo/resource/[id]/view` (spec 087) — both the initial server-side render and subsequent client pings | `resourceId`, `userId`, `pageOpened` (initial render only) |
-| `resource.view.client_ping` | A client-side ping from a PDF viewer kept-alive over the wire — same surface as above, sent ~every 60 s of active dwell | `resourceId`, `userId`, `dwellSec` |
+| `resource.pdf.view` | A PDF resource was opened: written when `/repo/resource/[id]/view` renders (spec 087), and again by `/api/media/pdf/[id]` each time the viewer fetches the file, before any byte is sent. `entity_type` `resource`, `entity_id` the resource id, `user_id` the viewer. The viewer's in-browser confirmation is its own action, `resource.view.client_ping` | `kind` (the resource's kind), `fileKey` (its Storage object key), `piiAudited` (false; the page render only) |
+| `resource.view.client_ping` | PdfViewer's one keepalive POST to `/api/audit/resource-view` when it first paints a document (spec 099): the viewer really rendered it, as against a page that rendered on the server and never loaded. `entity_type` `resource`, `entity_id` the resource id (not looked up), `user_id` the session user, never a viewer the client names. At most 30 per user per minute: over that the POST is refused with 429 and writes nothing, and nothing is written while the limiter is unavailable (503) | `beacon` (always true) |
 | `video.view` | A user landed on `/videos/[id]` and the HLS player started loading | `videoId`, `userId`, `quality` ("480p" / "720p") |
+| `video.context.attached` | The uploader attached one of her own unlinked (`generic`) videos to a cycle, meeting or quarterly slot from `/uploads`. `entity_type` `video_submission` | `contextType`, `contextId`, `quarter` (quarterly videos only, else null) |
+| `video.context.unlinked` | A video captioned or uploaded for an observation cycle arrived after the cycle was signed off, so it was not added to the closed record and was made `generic` again: its uploader sees it as not linked on `/uploads` and can attach it elsewhere. Written by the link step on both paths (`packages/db/src/uploads.ts`, linkSubmissionToContext), with no actor. `entity_type` `video_submission` | `contextType` ("observation_cycle"), `contextId` (the cycle), `reason` ("observation_cycle.signed_off") |
 
 ## observation.* — cycle lifecycle (spec 059)
 
@@ -136,7 +183,9 @@ or `action='logout'` to find them.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `mentor.meeting.logged` | A mentor logged a meeting against an active pairing | `pairingId`, `actorId`, `meetingId`, `durationMin` |
+| `mentor.meeting.logged` | A mentor, or a `programme_admin` / `super_admin`, logged a meeting against a pairing they can access. `entity_type` `mentor_meeting`, `entity_id` the new meeting's id, `user_id` whoever logged it. The duration and notes are not recorded here | `pairingId`, `scheduledAt` (ISO timestamp) |
+| `mentor.meeting.cancelled` | A mentor / admin cancelled an upcoming meeting (the other party is notified in the app while the "Meeting cancelled" notification kind is enabled, which is the default); entity is the meeting | `pairingId`, `scheduledAt` |
+| `mentor.meeting.removed` | A mentor / admin removed a meeting whose time had passed (a mistaken entry; nobody is notified); entity is the meeting | `pairingId`, `scheduledAt` |
 | `mentor.pairing.completed` | A pairing was marked complete (all required meetings logged) | `pairingId`, `actorId` |
 | `mentor.commitment.toggled` | A commitment checkbox on a pairing was toggled on/off | `pairingId`, `actorId`, `commitmentId`, `now` (boolean) |
 
@@ -157,23 +206,24 @@ or `action='logout'` to find them.
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `helpdesk.ticket_opened` | A learner / teacher submitted the Help FAB form and a ticket row was inserted | `ticketId`, `userId`, `category` |
-| `helpdesk.ticket_rate_limited` | The same user hit the 5-per-hour rate-limit on ticket creation — no row written | `userId`, `ipMasked` |
+| `helpdesk.ticket_opened` | A signed-in user (any role) sent the Help panel's "Open helpdesk ticket" (`POST /api/helpdesk/tickets`). There is no ticket table: a `helpdesk.ticket` notification was inserted for every active `programme_admin` and `super_admin` other than the sender. `entity_type` `helpdesk`, `entity_id` the topic, or the page slug when there is none; `user_id` the sender | `topic` (null when none), `pageSlug`, `deliveredTo` (how many notifications were inserted) |
+| `helpdesk.ticket_rate_limited` | A ticket was refused with 429 because its sender had already opened 5 this hour; no notification was sent. Written at most once per user per hour, by the first refusal: the throttle refuses every later POST in that hour without a row, so a loop cannot grow the log. `entity_type` `helpdesk`, `entity_id` and `user_id` the sender | `retryAfterMs` (what was left of the sender's hour) |
 
 ## notifications.* / user_prefs.* / dashboard.* / quickfind.* — UI-channel events
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `notifications.mark_read` | A user marked one or more notifications read via `/api/notifications/mark-read` | `userId`, `notificationIds`, `count` |
-| `user_prefs.update` | A user changed their UI preferences (language, theme, mobile-density) | `userId`, `changedKeys` |
+| `user_prefs.update` | A user saved a UI preference through `PUT /api/user-prefs` (Settings, the language picker, the first-run tour and its replay). `entity_type` `user_prefs`, `entity_id` and `user_id` the user. Written for every save that sets at least one preference, even to the value it already had; a PUT that sets none is refused (400 `empty_patch`) and writes nothing | `keys` (the names of the preferences the save set; their values are not recorded) |
 | `dashboard.viewed` | A user rendered `/dashboard` (loose "did the user come back?" signal) | `userId`, `role` |
-| `quickfind.query` | The CMD-K quick-find palette executed a search (spec 121) | `userId`, `query` (length only, NOT raw text — privacy), `resultCount` |
+| `quickfind.query` | The Cmd+K quick-find palette's search was answered (spec 121): `GET /api/quickfind` with 2 or more characters. `entity_type` `quickfind`, `user_id` the searcher. A refused search (too long, throttled, limiter unavailable) writes nothing. The text is kept as typed, as the learner search on `/repo/students` keeps its own: the row is the record of who looked up which teacher, school or session, and only a `programme_admin` or `super_admin` can read it (`/admin/audit`) | `q` (the trimmed search text, at most 240 characters), `resultCount` (rows shown, at most 20) |
 
 ## audit.* — meta-audit (read-on-write only)
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `audit.bulk_export` | A `super_admin` downloaded the audit log itself via `/api/admin/audit/export` (spec 116). Writing this row IS the audit-of-the-audit | `actorId`, `rowCount`, `dateRange` (from/to) |
+| `audit.bulk_export.gate_denied` | An admin-role session requested `/api/admin/audit/export` without an active `admin` section-gate grant; answered 403 `gate_required` and no row was read. Distinct from `audit.bulk_export` so the log never records an export that did not happen | `gateSlug` ("admin"), `reason` ("no_active_grant") |
 
 ## anti_download.* — SM-4 deterrence (spec 156)
 
@@ -189,18 +239,43 @@ component via the audit-fanout endpoint, NOT directly through
 | `anti_download.attempt.printscreen` | The user pressed `PrintScreen` (or the F12 dev-tools combo); not reliably blocked by browsers but the audit row captures the intent | `key`, `surfaceKey` |
 | `anti_download.devtools.detected` | The dev-tools open/close heuristic fired (window outerHeight - innerHeight crossed a threshold) | `widthDelta`, `heightDelta`, `surfaceKey` |
 
+## backup.* / restore.* — host jobs
+
+Written by `scripts/backup.sh` (nightly) and `scripts/restore.sh` (the weekly
+drill), not by the application: each appends one row to the live database per
+run through `scripts/lib/audit-host-job.sh`. `user_id` and `entity_id` are
+null (no account acts), `entity_type` is `host_job`. Best effort: a run that
+cannot reach the database writes no row and says so in its own log, and never
+fails because of it. `/admin/system-settings` shows the latest
+`backup.complete` and `restore.complete`.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `backup.complete` | A backup finished: dump written and checked, mirror and off-site copy done or skipped, local retention applied | `dump` (file name), `bytes`, `storage_mirrored`, `shipped_offsite` |
+| `backup.failed` | A backup exited non-zero | `error` (the failing check or line) |
+| `restore.complete` | A restore drill passed and stamped `workspace/last_restore_drill.json` | `source` (dump file name), `backup_age_days`, `tables`, `users`, `storage_verified` (false: the drill covers the database only) |
+| `restore.failed` | A restore drill failed and stamped the failure | `source`, `error` |
+
+## demo_data.* — the day-one demo purge
+
+Written by `packages/db/src/scripts/purge_demo_data.ts --apply` (README-deploy
+3.1), in the same transaction as the deletes, so the row exists exactly when
+they happened. `user_id` and `entity_id` are null (an operator runs the
+script; no account acts), `entity_type` is `host_job`. A dry run, and an
+`--apply` that finds nothing to remove, write nothing.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `demo_data.purged` | `--apply` removed the seed's fictional rows | `cycles` (`id`, `code` each), `pairings`, `teachers`, `mentors` (ids), `schools` (`id`, `code` each), `counts` (`cycles`, `pairings`, `teachers`, `mentors`, `schools`, `templates`, `unlinked_sessions`, `unowned_outlines`), `kept` (how many candidates of each kind it kept for real work) |
+
 ## Deferred prefixes (reserved but not yet wired)
 
 These prefixes have docs / specs but no live `recordAudit` call sites
 in the shipped codebase. Documenting them so the namespace stays
-reserved. The wildcard form (`backup.*`, `restore.*`, etc.) is the
+reserved. The wildcard form (`pairing.*`, `cycle.*`) is the
 canonical reservation; the concrete sub-action names below are the
 expected leaves once the surface ships.
 
-- `backup.*` — `backup.complete`, `backup.failed`. Nightly backup
-  script audit emission (deferred to spec 091 / 109).
-- `restore.*` — `restore.complete`, `restore.failed`. Restore-drill
-  audit emission (deferred to the same).
 - `pairing.*` — `pairing.created`, `pairing.advanced_to_quarter_2`,
   `pairing.ended`. Formal pairing lifecycle markers (currently the
   `mentor.*` family covers the active surface).

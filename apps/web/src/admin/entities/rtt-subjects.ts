@@ -15,14 +15,31 @@ export const rttSubjectsEntity: AdminEntity = {
     { key: "name", label: "Name" },
     { key: "code", label: "Code" },
     { key: "termId", label: "Term" },
+    { key: "districtId", label: "District" },
+    { key: "zoneId", label: "Zone" },
     { key: "active", label: "Active" },
   ],
-  formSchema: z.object({
-    name: z.string().min(2).max(160),
-    code: z.string().max(32).optional().nullable(),
-    termId: z.string().uuid(),
-    active: z.boolean().default(true),
-  }),
-  formFields: ["name", "code", "termId", "active"],
+  // WHERE the subject is taught (migration 0038; lib/rtt/scope.ts): neither
+  // for the whole programme, a district for all its zones, or one zone. Not
+  // both -- a zone already names its district, and rtt_subjects_one_place
+  // would refuse the pair; saying so here names the field.
+  formSchema: z
+    .object({
+      name: z.string().min(2).max(160),
+      code: z.string().max(32).optional().nullable(),
+      termId: z.string().uuid(),
+      districtId: z.string().uuid().optional().nullable(),
+      zoneId: z.string().uuid().optional().nullable(),
+      active: z.boolean().default(true),
+    })
+    .refine((v) => !(v.districtId && v.zoneId), {
+      path: ["zoneId"],
+      message: "Choose a district or a zone, not both: a zone is already in its district.",
+    }),
+  formFields: ["name", "code", "termId", "districtId", "zoneId", "active"],
+  fields: {
+    districtId: { help: "Leave district and zone empty for a subject taught across the whole programme." },
+    zoneId: { help: "Or one zone only. Teachers see the subjects of their own district and zone." },
+  },
   describeRow: (r) => `rtt-subject:${r.name ?? r.id}`,
 };

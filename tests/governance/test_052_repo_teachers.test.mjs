@@ -50,16 +50,29 @@ test("052: index pulls teachers joined to schools + phases + session/cycle count
   assert.match(src, /\bschools\b/);
   assert.match(src, /\bphases\b/);
   assert.match(src, /sessions as classroomSessions/);
-  assert.match(src, /\bobservationCycles\b/);
+  // The cycle count is observation data. It used to be a subquery over
+  // observationCycles written here, unscoped, so the directory showed every
+  // colleague's observation count to every signed-in user. It must be the
+  // scoped subquery from lib/gated-reads, joined like the session count.
+  assert.match(src, /cycleCountsByTeacher\(\s*db\s*,\s*observation\s*\)/);
+  assert.match(src, /leftJoin\(\s*cycleCounts\s*,/);
   // Joins + aggregation
   assert.match(src, /leftJoin\(schools/);
   assert.match(src, /leftJoin\(phases/);
-  assert.match(src, /\.groupBy\(/);
+  // The session count used to be pinned as a `.groupBy(` -- a derived table
+  // that GROUPed the whole sessions table on every load (W3-15). It is now a
+  // count correlated to the listed teacher; tests/behaviour/
+  // repo-index-counts.test.ts checks the plan.
+  assert.match(
+    src,
+    /\(select count\(\*\)::int from \$\{classroomSessions\} where \$\{classroomSessions\.teacherId\} = \$\{teachers\.id\}\)/,
+    "the session count must be correlated to the listed teacher",
+  );
 });
 
 test("052: detail route fetches teacher + school/zone + phase + sessions + cycles + pairing", () => {
   const src = read(DETAIL_PATH);
-  // Imports
+  // Imports -- the directory tables, read directly.
   for (const t of [
     "teachers",
     "schools",
@@ -68,12 +81,21 @@ test("052: detail route fetches teacher + school/zone + phase + sessions + cycle
     "sessions as classroomSessions",
     "subjects",
     "classes",
-    "mentorPairings",
-    "mentors",
-    "observationCycles",
   ]) {
     assert.match(src, new RegExp(t.replace("[", "\\[")), `detail must import ${t}`);
   }
+  // The cycles and the pairing are GATED rows. This test used to require the
+  // page to import observationCycles / mentorPairings / mentors and select them
+  // itself -- which is exactly how it served every teacher's observation
+  // history and mentor to every signed-in user, with no section gate and no
+  // visibility predicate. They must come through lib/gated-reads under the
+  // viewer's section access instead; tests/behaviour/access-control.test.ts
+  // executes those reads, tests/governance/test_security_access_wiring pins
+  // that nothing here selects the tables directly.
+  assert.match(src, /teacherCycleHistory\(\s*db\s*,\s*observation\s*,/);
+  assert.match(src, /teacherPairingHistory\(\s*db\s*,\s*mentorship\s*,/);
+  assert.match(src, /observationAccess\(\s*db\s*,\s*actor\s*\)/);
+  assert.match(src, /mentorshipAccess\(\s*db\s*,\s*actor\s*\)/);
   // notFound on missing teacher
   assert.match(src, /notFound\(\)/);
   // Section headings

@@ -6,6 +6,7 @@
 // than a form, but one click from the empty state, which is where somebody with
 // no quizzes actually is.
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import { createQuizAction, type CreateQuizState } from "./actions";
 
@@ -18,7 +19,16 @@ const field: React.CSSProperties = {
   width: "100%",
 };
 
-export function NewQuizForm({ startOpen = false }: { startOpen?: boolean }) {
+/** An RTT subject a quiz can be bound to, labelled with its phase and term. */
+export type QuizScopeOption = { id: string; label: string };
+
+export function NewQuizForm({
+  startOpen = false,
+  subjects,
+}: {
+  startOpen?: boolean;
+  subjects: QuizScopeOption[];
+}) {
   const [open, setOpen] = useState(startOpen);
   const [state, formAction, pending] = useActionState<CreateQuizState, FormData>(
     createQuizAction,
@@ -49,14 +59,36 @@ export function NewQuizForm({ startOpen = false }: { startOpen?: boolean }) {
         <input name="slug" maxLength={60} style={field} placeholder="mid-unit" pattern="[a-z0-9]+(-[a-z0-9]+)*" />
         <span style={{ fontSize: 10, color: "var(--ink-3)" }}>
           Appears in the link learners open: /quizzes/&lt;address&gt;. Left blank, it is taken
-          from the title. The RTT subject pages expect <code>mid-unit</code> and{" "}
-          <code>endline</code>.
+          from the title. The chosen RTT subject&apos;s page lists the quiz once it is active.
         </span>
       </label>
 
       <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
         Pass mark (%)
         <input name="passThreshold" type="number" min={1} max={100} defaultValue={60} style={field} />
+      </label>
+
+      {/* Required because the database requires it: quizzes_one_scope refuses
+          a quiz bound to no subject, and without this field every create
+          failed with a generic "try again". */}
+      <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
+        RTT subject
+        <select name="rttSubjectId" required defaultValue="" style={field} disabled={subjects.length === 0}>
+          <option value="" disabled>
+            Choose the subject this quiz assesses
+          </option>
+          {subjects.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        {subjects.length === 0 ? (
+          <span style={{ fontSize: 10, color: "var(--rust)" }}>
+            A quiz belongs to an RTT subject, and there are none yet. Create one in{" "}
+            <Link href="/admin/data/rtt-subjects">RTT subjects</Link> first.
+          </span>
+        ) : null}
       </label>
 
       {state?.error ? (
@@ -66,7 +98,7 @@ export function NewQuizForm({ startOpen = false }: { startOpen?: boolean }) {
       ) : null}
 
       <div style={{ display: "flex", gap: 6 }}>
-        <button type="submit" className="btn btn-sm" disabled={pending}>
+        <button type="submit" className="btn btn-sm" disabled={pending || subjects.length === 0}>
           {pending ? "Creating…" : "Create quiz"}
         </button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>

@@ -10,7 +10,19 @@ import * as schema from "./schema";
 let _pool: Pool | null = null;
 let _db: NodePgDatabase<typeof schema> | null = null;
 
-function poolConfig(): PoolConfig {
+/**
+ * The connection settings every Postgres client in this repository uses.
+ *
+ * Exported so that the connections which are NOT this module's pool -- the
+ * migrate runner, the seeds, verify-auth.mjs, the worker's healthcheck -- are
+ * built from it instead of from a bare connection string. Each of those used to
+ * say `new Pool({ connectionString })`, which negotiates no TLS for the
+ * documented DATABASE_URL (see sslConfig below): the whole deploy, owner-role
+ * DDL included, crossed to the pooler in plaintext, and with Supabase's
+ * "Enforce SSL" switched on it could not connect at all.
+ * tests/governance/test_db_tls_one_config.test.mjs refuses any other shape.
+ */
+export function poolConfig(): PoolConfig {
   const url = process.env.DATABASE_URL;
   if (!url) {
     throw new Error(
@@ -20,11 +32,26 @@ function poolConfig(): PoolConfig {
   return {
     connectionString: url,
     ssl: sslConfig(url),
-    // Conservative defaults — tune per env if needed.
-    max: 10,
+    // Connections per process. Each holds a Supabase session-pooler slot for
+    // as long as it is open, and in session mode the slots ARE the pool size
+    // (15 by default on the smaller computes), so the containers' ceilings have
+    // to add up: this was a fixed 10 in app AND worker, enough between them to
+    // exhaust the pooler, after which every new connect fails. docker-compose.yml
+    // sets DB_POOL_MAX per container; README-deploy.md 2.1 has the arithmetic.
+    max: poolMax(),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
   };
+}
+
+/** DB_POOL_MAX as a whole number from 1 to 100; unset or unusable, 10. */
+function poolMax(): number {
+  const raw = process.env.DB_POOL_MAX?.trim();
+  if (!raw) return 10;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 1 && n <= 100) return n;
+  console.warn(`[db] DB_POOL_MAX=${JSON.stringify(raw)} is not a whole number from 1 to 100 -- using 10`);
+  return 10;
 }
 
 /**
@@ -104,7 +131,31 @@ function readCaCert(): string | undefined {
 }
 
 export function getPool(): Pool {
-  if (!_pool) _pool = new Pool(poolConfig());
+  if (!_pool) {
+    _pool = new Pool(poolConfig());
+    // pg-pool re-emits an IDLE client's error -- the server ending the
+    // connection in a pooler restart, a failover, a TCP reset -- as an 'error'
+    // event on the Pool, and an EventEmitter with no listener throws it. That
+    // was an uncaught exception in whatever process held the pool: the worker
+    // (whose polling loops always have idle clients) exited mid-transcode on
+    // every such blip. The pool has already discarded the broken client and
+    // dials a fresh one on next use, so there is nothing to do but say so.
+    // (The Next.js server survived only because Next installs its own
+    // uncaughtException handler.)
+    _pool.on("error", (err) => {
+      console.warn(`[db] an idle pooled connection failed and was discarded: ${err.message}`);
+    });
+    // ...and the same for a CHECKED-OUT client. pg-pool removes its own
+    // listener while it lends a client out, so a backend that dies then -- held
+    // between the statements of a transaction, which is how the lease reaper
+    // runs -- has its error emitted on the client itself, with nothing
+    // listening. Nothing needs doing here: whoever holds the client already
+    // gets the error (its query rejects, or its next one does, "not
+    // queryable"), and the pool discards an unqueryable client on release.
+    _pool.on("connect", (client) => {
+      client.on("error", () => undefined);
+    });
+  }
   return _pool;
 }
 

@@ -25,8 +25,9 @@
 //      first decoded frame of the video (drawn on a hidden canvas) — gives
 //      the teacher a recognisable thumbnail before they commit to upload.
 //   4. The caption textarea is the teacher's chance to say what the clip is.
-//      It is POSTED, on completion, through completeUploadAction, and lands on
-//      the observation_evidence row the cycle page renders.
+//      It is POSTED, on completion, through completeUploadAction, and is kept
+//      on the submission (and, for a cycle, on the observation_evidence row the
+//      cycle page renders).
 //
 //      It previously went nowhere at all. The comment here said so plainly --
 //      "We do NOT post the caption anywhere" -- and reasoned that the webhook
@@ -52,14 +53,32 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
 import { startResumableUpload } from "@/lib/video/tus-upload";
+import { confirmUpload } from "@/lib/video/confirm-upload";
 
 type MobileUploadRunnerProps = {
   /** Programme WhatsApp number (E.164, no +) for the fallback reminder.
    *  Same env-var contract as UploadModal (spec 132). */
   whatsappPhone?: string | null;
-  /** Optional active observation cycle code to prefill the caption
-   *  ("OBS-c2026-004"). When unset the caption starts blank. */
-  activeCycleCode?: string | null;
+  /**
+   * What the video is for, as the /uploads page resolved and authorised it.
+   * Unset means 'generic': linked to nothing, visible to the uploader and
+   * administrators only.
+   *
+   * This replaced `activeCycleCode`, which no page passed and which could not
+   * have worked: it sent the cycle's CODE where the server expects its id (a
+   * 404 at reservation), prefilled the caption as `OBS-${code}` --
+   * OBS-OBS-2026-004, since codes are stored with their prefix -- and WhatsApp
+   * with `#${code}`.
+   */
+  target?: ResolvedUploadTarget | null;
+};
+
+export type ResolvedUploadTarget = {
+  contextType: "observation_cycle" | "teach_back" | "mentor_meeting" | "mentee_quarterly" | "classroom_session" | "generic";
+  contextId: string | null;
+  quarter: 1 | 4 | null;
+  /** What WhatsApp should carry as the caption to reach the same place; null when it cannot. */
+  whatsappText: string | null;
 };
 
 type Step = "choose" | "preview" | "uploading" | "done" | "failed";
@@ -144,15 +163,15 @@ async function extractFirstFrame(file: File): Promise<string | null> {
 
 export function MobileUploadRunner({
   whatsappPhone,
-  activeCycleCode,
+  target,
 }: MobileUploadRunnerProps) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("choose");
   const [file, setFile] = useState<File | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
-  const [caption, setCaption] = useState<string>(
-    activeCycleCode ? `OBS-${activeCycleCode}` : "",
-  );
+  // A note for whoever reviews the video, not a routing code: `target` decides
+  // where a direct upload goes.
+  const [caption, setCaption] = useState<string>("");
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -171,6 +190,14 @@ export function MobileUploadRunner({
   // cancellation token below.
   const mountedRef = useRef(true);
   const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The submission whose bytes are stored but whose completion the server has
+  // not confirmed. While set, Retry confirms it again instead of re-uploading.
+  // It belongs to that one upload: going Back, choosing a file, cancelling or
+  // starting an upload clears it, or a Retry of a LATER file's failure would
+  // confirm this one and report "Uploaded" for a file never sent. Abandoned,
+  // it is not lost: the reconciler finishes a stored upload whose completion
+  // never came.
+  const unconfirmedRef = useRef<string | null>(null);
 
   function openPicker(id: string) {
     if (id === "record") cameraRef.current?.click();
@@ -180,6 +207,7 @@ export function MobileUploadRunner({
   async function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    unconfirmedRef.current = null;
     setFile(f);
     setStep("preview");
     setThumb(null);
@@ -191,32 +219,48 @@ export function MobileUploadRunner({
 
   async function startUpload() {
     if (!file) return;
+    unconfirmedRef.current = null;
     setStep("uploading");
     setProgress(0);
     setErrorMsg(null);
 
+    // Reserve first. The server authorizes the context and issues an object
+    // key prefixed with this user's uuid; the bytes then go straight to
+    // Supabase Storage without passing through the application.
+    let reservation: Awaited<ReturnType<typeof beginUploadAction>>;
     try {
-      // Reserve first. The server authorizes the context and issues an object
-      // key prefixed with this user's uuid; the bytes then go straight to
-      // Supabase Storage without passing through the application.
-      const reservation = await beginUploadAction({
+      reservation = await beginUploadAction({
         filename: file.name,
         sizeBytes: file.size,
         contentType: file.type || "video/mp4",
-        contextType: activeCycleCode ? "observation_cycle" : "generic",
-        contextId: activeCycleCode ?? null,
+        contextType: target?.contextType ?? "generic",
+        contextId: target?.contextId ?? null,
+        quarter: target?.quarter ?? null,
       });
-      if (!reservation.ok) {
-        if (!mountedRef.current) return;
-        setErrorMsg(reservation.error);
-        setStep("failed");
-        return;
-      }
+    } catch {
+      // The request itself failed: offline, a dropped connection, or an answer
+      // that was not the action's (a proxy's error page during a deploy).
+      // This showed the rejection's own text -- "Failed to fetch", "Load
+      // failed" -- which tells a teacher nothing. Nothing was uploaded, and
+      // Retry starts again with the same file.
+      if (!mountedRef.current) return;
+      setErrorMsg("Could not reach the server. Check your connection and tap Retry.");
+      setStep("failed");
+      return;
+    }
+    if (!reservation.ok) {
+      if (!mountedRef.current) return;
+      setErrorMsg(reservation.error);
+      setStep("failed");
+      return;
+    }
 
+    try {
       const handle = await startResumableUpload({
         file,
         bucket: reservation.bucket,
         objectKey: reservation.objectKey,
+        contentType: reservation.contentType,
         chunkBytes: reservation.chunkBytes,
         // Server-supplied, not read from process.env in the browser -- see
         // lib/supabase/browser.ts.
@@ -236,46 +280,69 @@ export function MobileUploadRunner({
         onSuccess: () => {
           if (!mountedRef.current) return;
           setProgress(100);
-          // Confirm server-side before claiming success. The old code declared
-          // done the moment tus finished, with no row written anywhere.
-          // The caption travels with the completion, not the filename.
-          void completeUploadAction(reservation.submissionId, caption).then((res) => {
-            if (!mountedRef.current) return;
-            if (!res.ok) {
-              setErrorMsg(res.error ?? "Upload could not be confirmed.");
-              setStep("failed");
-              return;
-            }
-            setStep("done");
-            // Spec 149 — hold the redirect behind mountedRef and a stored
-            // timer handle so an unmount between completion and the delay
-            // cancels it, and a router teardown surfaces a retry rather than
-            // leaving the user on a dead success screen.
-            redirectTimerRef.current = setTimeout(() => {
-              redirectTimerRef.current = null;
-              if (!mountedRef.current) return;
-              try {
-                router.push("/uploads");
-              } catch (err) {
-                const msg = err instanceof Error ? err.message : "Redirect failed";
-                setErrorMsg(`${msg} — tap Back to return to My Uploads`);
-                setStep("failed");
-              }
-            }, 1200);
-          });
+          void confirm(reservation.submissionId);
         },
       });
       uploadRef.current = handle;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Upload failed";
-      setErrorMsg(msg);
+    } catch {
+      // startResumableUpload reports its own failures, in words, through
+      // onError; a throw here is one it did not expect, and its text is not
+      // for a teacher either.
+      if (!mountedRef.current) return;
+      setErrorMsg(whatsappPhone ? "Upload failed. Try again, or send the video over WhatsApp." : "Upload failed. Please try again.");
       setStep("failed");
     }
+  }
+
+  // Confirm server-side before claiming success. The old code declared done
+  // the moment tus finished, with no row written anywhere. The caption travels
+  // with the completion, not the filename.
+  //
+  // This was `void completeUploadAction(...).then(...)` with no catch: a
+  // dropped connection on that last POST left the screen at 100% for good,
+  // and the only Retry restarted the whole upload of a file already stored.
+  // A network failure is now retried (lib/video/confirm-upload), then shown,
+  // and Retry confirms again.
+  async function confirm(submissionId: string) {
+    const res = await confirmUpload(() => completeUploadAction(submissionId, caption));
+    if (!mountedRef.current) return;
+    if (!res.ok) {
+      unconfirmedRef.current = res.retryable ? submissionId : null;
+      setErrorMsg(res.error);
+      setStep("failed");
+      return;
+    }
+    unconfirmedRef.current = null;
+    setStep("done");
+    // Spec 149 — hold the redirect behind mountedRef and a stored
+    // timer handle so an unmount between completion and the delay
+    // cancels it, and a router teardown surfaces a retry rather than
+    // leaving the user on a dead success screen.
+    redirectTimerRef.current = setTimeout(() => {
+      redirectTimerRef.current = null;
+      if (!mountedRef.current) return;
+      try {
+        router.push("/uploads");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Redirect failed";
+        setErrorMsg(`${msg} — tap Back to return to My Uploads`);
+        setStep("failed");
+      }
+    }, 1200);
+  }
+
+  function retry() {
+    const pending = unconfirmedRef.current;
+    if (!pending) return void startUpload();
+    setStep("uploading");
+    setErrorMsg(null);
+    void confirm(pending);
   }
 
   function cancelUpload() {
     uploadRef.current?.abort();
     uploadRef.current = null;
+    unconfirmedRef.current = null;
     setStep("choose");
     setFile(null);
     setThumb(null);
@@ -319,15 +386,24 @@ export function MobileUploadRunner({
     };
   }, []);
 
-  const waHref = whatsappPhone
-    ? `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(
-        activeCycleCode ? `#${activeCycleCode}` : "#cycle-",
-      )}`
-    : null;
+  // wa.me takes the number as digits only; "+91..." is not a valid path there.
+  // The pre-fill is the caption the webhook reads: the target's own code
+  // (OBS-2026-009, MM-<meeting>), or the "OBS-" prefix for the teacher to
+  // finish. "#cycle-" was never recognised. No link at all for a target
+  // WhatsApp cannot reach: the video would arrive linked to nothing.
+  const waDigits = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : "";
+  const waText = target ? target.whatsappText : "OBS-";
+  const waHref =
+    waDigits && waText !== null ? `https://wa.me/${waDigits}?text=${encodeURIComponent(waText)}` : null;
 
   return (
     <div
       data-testid="mobile-upload-runner"
+      // What a reservation from this flow is for, readable from the markup
+      // (as on UploadProgress).
+      data-upload-context={target?.contextType ?? "generic"}
+      data-upload-context-id={target?.contextId ?? ""}
+      data-upload-quarter={target?.quarter ?? ""}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -426,24 +502,26 @@ export function MobileUploadRunner({
           </div>
 
           {/* WhatsApp PRIMARY-path reminder card. Lichen-soft to read as
-              "this is the recommended path on a slow link". */}
-          <div
-            style={{
-              marginTop: 20,
-              padding: 14,
-              borderRadius: 12,
-              background: "var(--lichen-soft)",
-              border: "1px solid oklch(0.82 0.06 145)",
-            }}
-          >
-            <div style={{ fontWeight: 600, fontSize: 14 }}>
-              On a slow 2G/3G link?
-            </div>
-            <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
-              WhatsApp is faster than direct upload on weak signals — your phone
-              keeps retrying in the background.
-            </p>
-            {waHref ? (
+              "this is the recommended path on a slow link". Only where
+              WhatsApp can take this video (waHref): otherwise it recommended
+              a path that did not exist. */}
+          {waHref ? (
+            <div
+              style={{
+                marginTop: 20,
+                padding: 14,
+                borderRadius: 12,
+                background: "var(--lichen-soft)",
+                border: "1px solid oklch(0.82 0.06 145)",
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: 14 }}>
+                On a slow 2G/3G link?
+              </div>
+              <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
+                WhatsApp is faster than direct upload on weak signals — your phone
+                keeps retrying in the background.
+              </p>
               <a
                 href={waHref}
                 target="_blank"
@@ -464,8 +542,8 @@ export function MobileUploadRunner({
               >
                 Open WhatsApp
               </a>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -528,14 +606,17 @@ export function MobileUploadRunner({
               fontWeight: 500,
             }}
           >
-            Caption — use OBS-&lt;cycle&gt;, TB-&lt;uuid&gt; or MM-&lt;uuid&gt;
+            {/* This said "Caption — use OBS-<cycle>, TB-<uuid> or MM-<uuid>".
+                A direct upload is never routed by its caption -- the page's
+                target decides -- so following it achieved nothing. */}
+            Note for whoever reviews it (optional)
           </label>
           <textarea
             id="mobile-upload-caption"
             data-testid="caption-textarea"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="OBS-c2026-004"
+            placeholder="What the lesson was about"
             rows={3}
             style={{
               width: "100%",
@@ -658,9 +739,8 @@ export function MobileUploadRunner({
               lineHeight: 1.6,
             }}
           >
-            Your video will be watermarked with the viewer&rsquo;s name + email when
-            it is played back — please do not redistribute outside the
-            programme.
+            Whoever plays your video back sees their own name and the time over
+            it — please do not redistribute outside the programme.
           </div>
 
           {waHref ? (
@@ -689,7 +769,7 @@ export function MobileUploadRunner({
                   fontFamily: "var(--mono)",
                 }}
               >
-                wa.me/{whatsappPhone}
+                wa.me/{waDigits}
               </a>
             </div>
           ) : null}
@@ -748,7 +828,9 @@ export function MobileUploadRunner({
             Uploaded
           </div>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
-            Transcoding now. We&rsquo;ll notify your mentor when it&rsquo;s ready (≈ 5 min).
+            {/* This promised "We'll notify your mentor when it's ready": nothing
+                notifies anyone when a transcode finishes. */}
+            Transcoding now. It can be played once that has finished.
             Taking you to My Uploads…
           </p>
         </div>
@@ -761,13 +843,16 @@ export function MobileUploadRunner({
               Upload failed
             </h1>
             <p style={{ color: "var(--rust)", fontSize: 13, marginTop: 6 }}>
-              {errorMsg ?? "Something went wrong. Try again or use WhatsApp."}
+              {errorMsg ?? (whatsappPhone ? "Something went wrong. Try again or use WhatsApp." : "Something went wrong. Please try again.")}
             </p>
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
               type="button"
-              onClick={() => setStep("choose")}
+              onClick={() => {
+                unconfirmedRef.current = null;
+                setStep("choose");
+              }}
               style={{
                 minHeight: 48,
                 padding: "12px 18px",
@@ -785,7 +870,7 @@ export function MobileUploadRunner({
             {file ? (
               <button
                 type="button"
-                onClick={startUpload}
+                onClick={retry}
                 style={{
                   minHeight: 48,
                   padding: "12px 18px",

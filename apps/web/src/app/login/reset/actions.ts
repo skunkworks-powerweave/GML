@@ -1,13 +1,13 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { recoverySessionState } from "@/auth";
+import { passwordPolicyError } from "@/lib/password-policy";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { clearMustChangePassword } from "@/lib/supabase/must-change-password";
+import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 
 export type ResetState = { error?: string };
-
-// Supabase's own floor is 6. Eight is the number this product already told
-// users to expect, and lowering a stated requirement is not an improvement.
-const MIN_PASSWORD_LENGTH = 8;
 
 /**
  * Set a new password for the user holding a recovery session.
@@ -17,7 +17,7 @@ const MIN_PASSWORD_LENGTH = 8;
  * /api/auth/reset-password, which bcrypt-compared it against every unconsumed
  * row in password_reset_tokens -- an unauthenticated, unthrottled, O(N) bcrypt
  * loop. Now the recovery link is exchanged for a real session at
- * /auth/callback, and this action simply asks "who is calling?" and updates
+ * /auth/confirm, and this action simply asks "who is calling?" and updates
  * that account. There is nothing left to leak in a URL, nothing to replay from
  * a browser history entry, and no per-request bcrypt scan.
  */
@@ -28,11 +28,25 @@ export async function resetPasswordAction(
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
 
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return { error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
-  }
+  // The one policy every password-setting path uses (lib/password-policy.ts).
+  const policy = passwordPolicyError(password);
+  if (policy) return { error: policy };
   if (password !== confirm) {
     return { error: "Passwords do not match." };
+  }
+
+  // A RECOVERY session, not merely a session. No current password is asked
+  // for here, which is only sound because following the emailed link proved
+  // control of the mailbox; an ordinary signed-in browser proves nothing about
+  // who is sitting at it. See recoverySessionState() in auth.ts.
+  const recovery = await recoverySessionState();
+  if (recovery === "not_recovery") {
+    return {
+      error: "This page only sets a password from a reset link. To change your password, use Settings.",
+    };
+  }
+  if (recovery !== "recovery") {
+    return { error: "This reset link has expired or was already used. Request a new one." };
   }
 
   const supabase = await createSupabaseServerClient();
@@ -61,8 +75,24 @@ export async function resetPasswordAction(
   // Sign out everywhere else. Recovery is what someone does after losing
   // control of an account, so leaving the attacker's other sessions alive would
   // defeat the exercise. 'others' keeps THIS session so the redirect lands on a
-  // usable dashboard rather than bouncing back to /login.
-  await supabase.auth.signOut({ scope: "others" });
+  // usable dashboard rather than bouncing back to /login. auth-js returns a
+  // failure as {error} rather than throwing; the audit row records which.
+  const { error: signOutError } = await supabase.auth.signOut({ scope: "others" });
+  if (signOutError) console.error("[auth] could not sign out other sessions after a reset:", signOutError);
+
+  // They chose this password themselves, so one an administrator set for them
+  // no longer needs changing.
+  await clearMustChangePassword(data.user.id, supabase);
+
+  // Never the password, its length, or any derivative.
+  const wrote = await recordAudit({
+    action: "auth.password.reset_completed",
+    entityType: "user",
+    entityId: data.user.id,
+    userId: data.user.id,
+    metadata: { otherSessionsEnded: !signOutError },
+  });
+  if (!wrote) noteAuditDegraded("login/reset/resetPasswordAction");
 
   redirect("/dashboard");
 }

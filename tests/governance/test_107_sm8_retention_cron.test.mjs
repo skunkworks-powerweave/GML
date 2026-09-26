@@ -156,8 +156,18 @@ test("spec 107: the once-per-day guarantee is a dedupe key on the calendar date"
   assert.match(
     src,
     /dedupeKey\s*:\s*`retention:\$\{[A-Za-z_$][\w$]*\}`/,
-    "the sweep must be enqueued with dedupeKey `retention:<YYYY-MM-DD>` so the " +
-      "other 23 hourly ticks are absorbed by jobs_dedupe_live_uq",
+    "the sweep must be enqueued with dedupeKey `retention:<YYYY-MM-DD>`",
+  );
+  // CORRECTED (F16). This message used to say the other hourly ticks were
+  // "absorbed by jobs_dedupe_live_uq". They were not: that index covers only
+  // queued and running jobs, so once the day's sweep had SUCCEEDED the next
+  // tick enqueued and ran another, about 21 a day. The enqueue is `once` per
+  // key, which counts the finished job too; tests/behaviour/
+  // retention-schedule.test.ts executes the schedule with a clock.
+  assert.match(
+    src,
+    /dedupeKey\s*:\s*`retention:\$\{[A-Za-z_$][\w$]*\}`[\s\S]{0,80}?once:\s*true/,
+    "the sweep must be enqueued `once` per date key, or every hourly tick after 03:00 UTC re-runs it",
   );
 });
 

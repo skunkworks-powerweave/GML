@@ -21,11 +21,12 @@ import {
   BUCKETS,
   hlsPrefix,
   hlsPlaylistKey,
+  hlsMasterPlaylistKey,
   type BucketName,
 } from "@gml/shared/storage/buckets";
 import { rewritePlaylist, extractSegments, segmentTtlSeconds } from "@gml/shared/storage/playlist";
 
-export { BUCKETS, hlsPrefix, hlsPlaylistKey, segmentTtlSeconds };
+export { BUCKETS, hlsPrefix, hlsPlaylistKey, hlsMasterPlaylistKey, segmentTtlSeconds };
 export type { BucketName, SignedObject };
 
 export const storage = {
@@ -41,6 +42,41 @@ export const storage = {
   remove: (bucket: BucketName, keys: string[]) => removeObjects(supabaseAdmin(), bucket, keys),
 };
 
+/** A master playlist lists variant streams; a media playlist lists segments. */
+export function isMasterPlaylist(playlist: string): boolean {
+  return /^#EXT-X-STREAM-INF:/m.test(playlist);
+}
+
+/** How long a signed poster URL lives: longer than anyone keeps a page open. */
+export const POSTER_TTL_SECONDS = 3600;
+
+/**
+ * Signed URLs for poster frames, keyed by poster key, in ONE round trip.
+ *
+ * The worker has always produced a poster per video (posters/<id>.jpg, in a
+ * PRIVATE bucket, so it needs a signed URL) and recorded poster_key -- and
+ * nothing in the web app read either, so every library card was a grey box and
+ * the player opened black. Callers pass only keys of rows they have already
+ * authorised (the visibility-scoped list, or a row assertCanAccessVideo
+ * returned); this makes no authorization decision.
+ *
+ * Never throws. signObjects throws on a Storage error, and a poster is
+ * decoration: an outage must degrade to the placeholder, not fail /videos.
+ */
+export async function signPosterUrls(
+  keys: Array<string | null | undefined>,
+  ttlSeconds = POSTER_TTL_SECONDS,
+): Promise<Map<string, string>> {
+  const unique = [...new Set(keys.filter((k): k is string => Boolean(k)))];
+  if (unique.length === 0) return new Map();
+  try {
+    const signed = await storage.signMany(BUCKETS.posters, unique, ttlSeconds);
+    return new Map([...signed].map(([key, s]) => [key, s.url]));
+  } catch {
+    return new Map();
+  }
+}
+
 /**
  * Fetch a submission's media playlist and return it with every segment line
  * replaced by an absolute, individually-signed Storage URL.
@@ -52,11 +88,20 @@ export const storage = {
  * Returns null when the playlist object is missing -- a submission marked ready
  * whose output is not there is a real state, and the caller renders "not
  * available" rather than a player pointed at nothing.
+ *
+ * A MASTER playlist (the rendition ladder) lists media playlists, not
+ * segments, and is not signed at all: each variant line becomes whatever
+ * `variantUrl` returns -- the app URL that serves that rendition -- so its
+ * segments are signed on the request that needs them, after the same
+ * authorization check. Signed as if they were segments, the variant lines
+ * became bare Storage URLs whose own relative segment lines then resolved
+ * against Storage with no token, and a ladder would never have played.
  */
 export async function buildSignedPlaylist(
   videoSubmissionId: string,
   playlistKey: string,
   durationSec: number | null,
+  opts: { variantUrl?: (variantName: string) => string } = {},
 ): Promise<{ body: string; expiresAt: Date } | null> {
   const bucket = BUCKETS.videosHls;
   const client = supabaseAdmin();
@@ -72,6 +117,11 @@ export async function buildSignedPlaylist(
 
   const prefix = hlsPrefix(videoSubmissionId);
   const ttl = segmentTtlSeconds(durationSec);
+
+  if (isMasterPlaylist(playlistText)) {
+    const body = rewritePlaylist(playlistText, (name) => opts.variantUrl?.(name) ?? null);
+    return { body, expiresAt: new Date(Date.now() + ttl * 1000) };
+  }
 
   // Sign exactly the names the playlist references. Supabase will not sign a
   // key with no object behind it, so a computed range would silently drop the

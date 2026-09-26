@@ -168,14 +168,18 @@ test("spec 131 — FormRenderer renders savedIndicator in a top-of-card flex row
   );
 });
 
-test("spec 131 — FormRenderer uses the literal 'Save failed — retrying…' error copy", () => {
+// Was: "uses the literal 'Save failed — retrying…' error copy". That copy was
+// the defect -- nothing retried, and an expired session got the same words.
+// The error branch now says what is actually happening (retrying, or sign in
+// again, and that the answers are kept on the device); the messages live in
+// draft-resilience.ts and are executed by tests/behaviour/ui-form-autosave.test.ts.
+test("spec 131 — FormRenderer's error copy comes from the failure it describes", () => {
   const src = read(RENDERER_PATH);
-  // Exact U+2026 ellipsis match — spec brief is specific about the dots.
-  assert.match(
-    src,
-    /Save failed — retrying…/,
-    "FormRenderer must render the literal 'Save failed — retrying…' string (em-dash + U+2026 ellipsis) on the error branch",
-  );
+  assert.match(src, /failureMessage\(saveFailure \?\? "error"\)/);
+  assert.doesNotMatch(src, /Save failed — retrying…/, "a promise of a retry nothing performs");
+  const helper = read("apps/web/src/components/forms/draft-resilience.ts");
+  assert.match(helper, /sign in again/);
+  assert.match(helper, /kept on this device/);
 });
 
 test("spec 131 — FormRenderer keeps 'Saved Ns ago' copy + var(--rust) error color", () => {

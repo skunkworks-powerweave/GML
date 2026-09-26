@@ -1,29 +1,134 @@
 // /rtt/subject/[id] — RTT subject drill-in: modules + sessions + readings.
 
-import { notFound } from "next/navigation";
+import type { Metadata } from "next";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
+import { auth } from "@/auth";
 import {
   rttSubjects,
   rttModules,
+  rttLessons,
   rttSessions,
   rttReadings,
   terms,
   phases,
-  quizzes,
+  districts,
+  zones,
+  videoSubmissions,
 } from "@gml/db/schema";
+import { uploadHref } from "@/app/(authenticated)/uploads/context";
+import { uuidOrNotFound } from "@/lib/ids";
+import { listSubjectAssessments } from "@/lib/rtt/assessments";
+import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
+import { rttScope } from "@/lib/rtt/scope";
+import { webLink } from "@/lib/rtt/links";
+import { launchLabel, statusChip, statusLabel } from "@/lib/scorm/format";
+import { subjectPackages } from "@/lib/scorm/store";
+import { getDeviceType } from "@/lib/device";
+import { markProgressAction } from "./actions";
+
+/** A one-button form that marks a lesson or reading done, or undoes it. */
+function ProgressToggle({ kind, itemId, isDone }: { kind: "lesson" | "reading"; itemId: string; isDone: boolean }) {
+  return (
+    <form action={markProgressAction} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <input type="hidden" name="kind" value={kind} />
+      <input type="hidden" name="itemId" value={itemId} />
+      <input type="hidden" name="done" value={isDone ? "false" : "true"} />
+      {isDone ? <span className="chip chip-lichen">Done</span> : null}
+      <button type="submit" className={isDone ? "btn btn-sm btn-ghost" : "btn btn-sm"}>
+        {isDone ? "Undo" : kind === "lesson" ? "Mark done" : "Mark read"}
+      </button>
+    </form>
+  );
+}
+
+const ATTENDANCE_CHIP: Record<string, string> = {
+  present: "chip chip-lichen",
+  absent: "chip chip-rust",
+  excused: "chip",
+};
+
+/** A teach-back's state for the teacher who sent it: review first, then the pipeline. */
+function teachBackChip(v: { status: string; reviewedAt: Date | null }): { cls: string; label: string } {
+  if (v.reviewedAt) return { cls: "chip chip-lichen", label: "Reviewed" };
+  if (v.status === "ready") return { cls: "chip chip-saffron", label: "Awaiting review" };
+  if (v.status === "failed") return { cls: "chip chip-rust", label: "Failed" };
+  return { cls: "chip", label: v.status.replace(/_/g, " ") };
+}
 
 export const dynamic = "force-dynamic";
 
-export default async function RttSubjectPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const [subject] = await db.select().from(rttSubjects).where(eq(rttSubjects.id, id)).limit(1);
+export const metadata: Metadata = { title: "RTT subject" };
+
+export default async function RttSubjectPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ open?: string }>;
+}) {
+  // A malformed id is a subject that does not exist, not a Postgres 500.
+  const id = uuidOrNotFound((await params).id);
+  // ?open=<module sequence>: the module a progress tick came from stays open
+  // after the form round-trip (actions.ts redirects here with it).
+  const openSeq = Number((await searchParams).open);
+  const session = await auth();
+  if (!session?.user?.id) redirect("/login");
+  const viewer = { id: session.user.id, role: session.user.role };
+  // Only a subject the viewer is shown (lib/rtt/scope.ts): a retired subject
+  // stayed reachable here for everyone, because this page never read `active`.
+  const scope = await rttScope(db, viewer);
+  const [subject] = await db
+    .select()
+    .from(rttSubjects)
+    .where(and(eq(rttSubjects.id, id), scope.subjectWhere))
+    .limit(1);
   if (!subject) notFound();
   const [term] = await db.select().from(terms).where(eq(terms.id, subject.termId)).limit(1);
   const [phase] = term ? await db.select().from(phases).where(eq(phases.id, term.phaseId)).limit(1) : [null];
+  // Where it is taught, when that is not the whole programme (F42).
+  const [taughtIn] = subject.zoneId
+    ? await db
+        .select({ name: sql<string>`${zones.name} || ', ' || ${districts.name}` })
+        .from(zones)
+        .innerJoin(districts, eq(districts.id, zones.districtId))
+        .where(eq(zones.id, subject.zoneId))
+        .limit(1)
+    : subject.districtId
+      ? await db.select({ name: districts.name }).from(districts).where(eq(districts.id, subject.districtId)).limit(1)
+      : [null];
 
   const modules = await db.select().from(rttModules).where(eq(rttModules.rttSubjectId, id)).orderBy(rttModules.sequence);
+  // LESSONS. rtt_lessons existed in the schema and nothing read or wrote it,
+  // while the card below told teachers to "click a module to expand its
+  // lessons" over static rows. They are now authored at /admin/data/rtt-lessons
+  // and listed under their module in a native <details> disclosure, so the
+  // expansion works with no client JavaScript.
+  const lessons = modules.length
+    ? await db
+        .select({
+          id: rttLessons.id,
+          rttModuleId: rttLessons.rttModuleId,
+          title: rttLessons.title,
+          bodyMd: rttLessons.bodyMd,
+        })
+        .from(rttLessons)
+        .where(
+          inArray(
+            rttLessons.rttModuleId,
+            modules.map((m) => m.id),
+          ),
+        )
+        .orderBy(rttLessons.rttModuleId, rttLessons.sequence)
+    : [];
+  const lessonsByModule = new Map<string, typeof lessons>();
+  for (const l of lessons) {
+    const list = lessonsByModule.get(l.rttModuleId) ?? [];
+    list.push(l);
+    lessonsByModule.set(l.rttModuleId, list);
+  }
   // isUpcoming is computed by Postgres, not the app process. Doing it in SQL
   // uses the same clock the scheduled_at timestamps were written against (no
   // app/DB skew), gives every row one consistent "now", and keeps an impure
@@ -38,30 +143,232 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
     .orderBy(rttSessions.sequence);
   const readings = await db.select().from(rttReadings).where(eq(rttReadings.rttSubjectId, id)).orderBy(rttReadings.sequence);
 
-  // DO THE ASSESSMENT QUIZZES EXIST?
-  //
-  // The two links below were hardcoded to /quizzes/mid-unit and
-  // /quizzes/endline. The runner calls notFound() for a slug with no active
-  // quiz, so on a programme that has not created them -- which is every new
-  // deployment, since nothing seeds quizzes -- "Start" was a 404 on every
-  // subject page in the product. A missing quiz is a normal state, not an
-  // error, so it now reads as "not published yet" instead of pretending to be
-  // a working link.
-  const assessmentSlugs = ["mid-unit", "endline"];
-  const publishedQuizzes = await db
-    .select({ slug: quizzes.slug })
-    .from(quizzes)
-    .where(and(inArray(quizzes.slug, assessmentSlugs), eq(quizzes.active, true)));
-  const hasQuiz = new Set(publishedQuizzes.map((q) => q.slug));
+  // Where an empty card points an administrator. Modules, lessons and readings
+  // had no write path anywhere in the product; they are admin grid tables now,
+  // and an empty card that says where to fill it reads as "not loaded yet"
+  // rather than "broken".
+  const viewerIsAdmin = scope.isAdmin;
 
-  // Spec 119 — wire the JSX-prototype "Resume" CTA to the first module by
-  // sequence (anchor jump on this same page). When no modules exist, the
-  // anchor falls back to the modules card heading so the user still lands
-  // somewhere sensible instead of a dead button.
-  const firstModule = modules[0];
-  const resumeHref = firstModule
-    ? `/rtt/subject/${id}#module-${firstModule.sequence}`
+  // THIS SUBJECT'S ASSESSMENTS: the active quizzes bound to it. They were
+  // looked up by the fixed slugs "mid-unit" and "endline" with no subject
+  // predicate, so one programme-wide "mid-unit" quiz ran on every subject and
+  // a quiz under any other slug was offered nowhere (lib/rtt/assessments.ts).
+  const assessments = await listSubjectAssessments(db, id, session.user.id);
+
+  // THIS SUBJECT'S SCORM MODULES (F41), with the learner's own record of
+  // each. The same predicate as the launch page and the content route
+  // (lib/scorm/store.ts), so nothing listed here 404s when opened.
+  const scorm = await subjectPackages(db, viewer, id);
+
+  // THE LEARNER'S OWN PROGRESS (F36): the lessons and readings she has marked
+  // done (rtt_progress, written by ./actions.ts) and the attendance taken of
+  // her at this subject's sessions. None of it was recorded or shown before.
+  const [done, attendance] = await Promise.all([
+    doneItems(
+      db,
+      session.user.id,
+      lessons.map((l) => l.id),
+      readings.map((r) => r.id),
+    ),
+    attendanceOf(
+      db,
+      session.user.id,
+      sessions.map((s) => s.id),
+    ),
+  ]);
+  const presentCount = [...attendance.values()].filter((s) => s === "present").length;
+  const passedCount = assessments.filter((q) => q.passed).length;
+
+  // HER TEACH-BACKS OF THIS SUBJECT (FR-02). The review side -- the
+  // /rtt/teach-back queue, the mentor's "Pending video reviews" card and the
+  // badge -- was built, and nothing a teacher could reach sent one: no page
+  // linked a teach-back upload, and its id had no meaning. A teach-back is now
+  // for a subject (uploads/context.ts), offered here to the teacher learning
+  // it. Staff review teach-backs; they are not asked for one.
+  const teachBacks = scope.isStaff
+    ? []
+    : await db
+        .select({
+          id: videoSubmissions.id,
+          status: videoSubmissions.status,
+          createdAt: videoSubmissions.createdAt,
+          reviewedAt: videoSubmissions.reviewedAt,
+        })
+        .from(videoSubmissions)
+        .where(
+          and(
+            eq(videoSubmissions.contextType, "teach_back"),
+            eq(videoSubmissions.contextId, id),
+            eq(videoSubmissions.submittedByUserId, session.user.id),
+          ),
+        )
+        .orderBy(desc(videoSubmissions.createdAt))
+        .limit(10);
+
+  // "Resume" (spec 119's in-page anchor) goes to the first module with a
+  // lesson she has not done. It always went to module 1, whatever she had
+  // done. No modules: the modules card, so the button is never dead.
+  const resume = resumeModule(modules, lessonsByModule, done.lessons);
+  const resumeHref = resume
+    ? `/rtt/subject/${id}#module-${resume.sequence}`
     : `/rtt/subject/${id}#modules`;
+
+  // The readings and assessment cards, placed per device below.
+  const readingsCard = (
+    <article id="readings" className="card card-hi">
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
+      </div>
+      {readings.length === 0 ? (
+        <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+          No readings linked.
+          {viewerIsAdmin ? (
+            <div style={{ fontSize: 12, marginTop: 6 }}>
+              Add them at <Link href="/admin/data/rtt-readings">Admin → RTT Readings</Link>.
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div>
+          {readings.map((r, i) => (
+            <div
+              key={r.id}
+              style={{
+                display: "grid",
+                // As the module rows: the title column cannot be pushed
+                // wider than the card by a long title.
+                gridTemplateColumns: "30px minmax(0, 1fr) minmax(0, auto)",
+                gap: 10,
+                padding: 12,
+                alignItems: "center",
+                borderTop: i ? "1px solid var(--line)" : "none",
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: "var(--rust)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 4,
+                  padding: "2px 4px",
+                  textAlign: "center",
+                }}
+              >
+                PDF
+              </span>
+              <div style={{ overflowWrap: "anywhere" }}>
+                <div style={{ fontWeight: 500, fontSize: 13 }}>
+                  {r.externalUrl ? (
+                    <a
+                      href={r.externalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: "var(--ink)" }}
+                    >
+                      {r.title}
+                    </a>
+                  ) : (
+                    r.title
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  {r.externalUrl ? "External link" : "Reading"}
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} />
+                </div>
+              </div>
+              {r.externalUrl ? (
+                <a
+                  href={r.externalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-sm"
+                >
+                  Open
+                </a>
+              ) : (
+                // NO "View" BUTTON for a fileKey-only reading. It sent an
+                // rtt_readings id to /repo/resource/[id]/view, which looks
+                // the id up in `resources` -- a different table -- so it
+                // 404'd by construction. The branch could not be reached
+                // honestly anyway: file_key is a MinIO object key and
+                // MinIO is out of the stack, so nothing can set or serve
+                // it. Readings are authored at /admin/data/rtt-readings
+                // as external links, which render "Open" above.
+                <span className="chip">—</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+
+  // Assessment card: one row per active quiz bound to this subject,
+  // with the learner's own best result. Release is the quiz's
+  // `active` flag at /admin/quizzes; there is no sequencing rule (an
+  // endline locked until a mid-unit is passed) because nothing in the
+  // programme defines one, so none is pretended here.
+  const assessmentCard = (
+    <article className="card card-hi">
+      <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
+      </div>
+      {assessments.length === 0 ? (
+        <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+          No assessments published yet.
+          {viewerIsAdmin ? (
+            <div style={{ fontSize: 12, marginTop: 6 }}>
+              Create and activate one for this subject at <Link href="/admin/quizzes">Admin → Quizzes</Link>.
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+          {assessments.map((q, i) => (
+            <li
+              key={q.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                padding: "12px 0",
+                borderTop: i ? "1px solid var(--line)" : "none",
+              }}
+            >
+              <div>
+                <div>{q.title}</div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  {q.attempts === 0
+                    ? `Pass mark ${q.passThreshold}%`
+                    : `Best ${q.bestScore}% · ${q.attempts} ${q.attempts === 1 ? "attempt" : "attempts"}`}
+                  {q.maxAttempts !== null ? ` · ${q.maxAttempts} allowed` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {q.passed ? <span className="chip chip-lichen">Passed</span> : null}
+                <Link
+                  href={q.href}
+                  className={q.attempts === 0 ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                  style={{ textDecoration: "none" }}
+                >
+                  {q.spent ? "Results" : q.attempts === 0 ? "Start" : "Retake"}
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </article>
+  );
+
+  // A phone reads the page as one column, in DOM order; see the section.
+  const phone = (await getDeviceType()) === "mobile";
 
   return (
     <div>
@@ -81,7 +388,14 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
             <div className="label" style={{ marginTop: 8 }}>
               {phase?.label ?? "Phase ?"} · {term?.name ?? "Term ?"}
               {subject.code ? ` · ${subject.code}` : ""}
+              {taughtIn ? ` · ${taughtIn.name} only` : ""}
             </div>
+            {!subject.active ? (
+              // Only an administrator reaches an inactive subject.
+              <span className="chip chip-rust" title="Hidden from teachers until re-activated at Admin → RTT Subjects">
+                Inactive
+              </span>
+            ) : null}
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
               {subject.name}
             </h1>
@@ -98,62 +412,221 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
         </div>
       </header>
 
-      <section style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 18 }}>
-        <div style={{ display: "grid", gap: 14 }}>
+      {/* PHONE WIDTH (F11). This was an inline gridTemplateColumns "1.5fr 1fr",
+          which holds at every width: on a 360 px phone the left column grew to
+          the sessions table's width and Required readings and the Assessment
+          card -- the quiz's Start button -- sat off the right edge of the
+          screen. Below 768 px the columns now stack in DOM order -- on a phone
+          modules, readings, the assessment, sessions, then progress; in a
+          narrow desktop window the desktop's order -- and from 768 px they are
+          the same 1.5fr / 1fr, as minmax(0, ...) so wide content scrolls in
+          its card instead of widening the page. The phone arrangement is one
+          column at every width: the device cookie says "mobile" up to and
+          including 768 px (lib/use-device.ts), where md: already applies. */}
+      <section
+        className={
+          phone
+            ? "grid grid-cols-1 gap-[18px]"
+            : "grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"
+        }
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
           <article id="modules" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Modules ({modules.length})</div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                Click a module to expand its lessons.
+                {/* Only promise the expansion when there is something to
+                    expand; this used to say it over rows that could not. */}
+                {lessons.length > 0
+                  ? "Click a module to expand its lessons."
+                  : "The units of this subject, in teaching order."}
               </div>
             </div>
             {modules.length === 0 ? (
               <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
                 No modules yet.
+                {viewerIsAdmin ? (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    Add them at <Link href="/admin/data/rtt-modules">Admin → RTT Modules</Link>, and
+                    their lessons at <Link href="/admin/data/rtt-lessons">Admin → RTT Lessons</Link>.
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div>
-                {modules.map((m, i) => (
-                  <div
-                    key={m.id}
-                    id={`module-${m.sequence}`}
+                {modules.map((m, i) => {
+                  const moduleLessons = lessonsByModule.get(m.id) ?? [];
+                  const moduleDone = moduleLessons.filter((l) => done.lessons.has(l.id)).length;
+                  // minmax(0, ...): a bare 1fr is at least as wide as its
+                  // content, so one long word in a title or description (a
+                  // URL) pushed the row past a phone's edge; the lesson chip's
+                  // column is still its content's width whenever there is room.
+                  const header = (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "36px minmax(0, 1fr) minmax(0, auto)",
+                        gap: 14,
+                        padding: 14,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 6,
+                          background: "var(--paper-2)",
+                          color: "var(--ink-2)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontFamily: "var(--mono)",
+                          fontSize: 12,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {i + 1}
+                      </div>
+                      <div style={{ overflowWrap: "anywhere" }}>
+                        <div style={{ fontWeight: 500, fontSize: 13 }}>{m.title}</div>
+                        {m.description ? (
+                          <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                            {m.description}
+                          </div>
+                        ) : null}
+                      </div>
+                      {moduleLessons.length > 0 ? (
+                        <span
+                          className={moduleDone === moduleLessons.length ? "chip chip-lichen" : "chip"}
+                          title="Lessons you have marked done"
+                        >
+                          {moduleDone}/{moduleLessons.length} {moduleLessons.length === 1 ? "lesson" : "lessons"}
+                        </span>
+                      ) : (
+                        <span />
+                      )}
+                    </div>
+                  );
+                  const rowStyle = { borderTop: i ? "1px solid var(--line)" : "none" };
+                  // A module with no lessons stays a plain row: a disclosure
+                  // that opens onto nothing is the same false promise the old
+                  // subtitle made.
+                  if (moduleLessons.length === 0) {
+                    return (
+                      <div key={m.id} id={`module-${m.sequence}`} style={rowStyle}>
+                        {header}
+                      </div>
+                    );
+                  }
+                  return (
+                    <details
+                      key={m.id}
+                      id={`module-${m.sequence}`}
+                      style={rowStyle}
+                      // Where she is (the Resume module), or where she just
+                      // ticked a lesson, opens without a tap.
+                      open={m.id === resume?.id || m.sequence === openSeq}
+                    >
+                      <summary style={{ cursor: "pointer", listStyle: "none" }}>{header}</summary>
+                      <ol style={{ margin: 0, padding: "0 14px 14px 64px", display: "grid", gap: 10 }}>
+                        {moduleLessons.map((l) => (
+                          <li key={l.id} style={{ fontSize: 13 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                              <div style={{ fontWeight: 500 }}>{l.title}</div>
+                              <ProgressToggle kind="lesson" itemId={l.id} isDone={done.lessons.has(l.id)} />
+                            </div>
+                            {l.bodyMd ? (
+                              // Plain text with the author's line breaks kept.
+                              // Never rendered as markup: this is typed into an
+                              // admin grid and shown to every teacher.
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: "var(--ink-2)",
+                                  marginTop: 4,
+                                  whiteSpace: "pre-wrap",
+                                  lineHeight: 1.5,
+                                }}
+                              >
+                                {l.bodyMd}
+                              </div>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  );
+                })}
+              </div>
+            )}
+          </article>
+
+          {/* On a phone the readings and the assessment follow the modules
+              here, not the sessions table and the progress card in the
+              other column: one column is read, and tabbed, top to bottom,
+              and those two -- the quiz's Start button among them -- sat
+              about two screens down (F11). Placed in the DOM, not by CSS
+              order, so reading, focus and visual order stay the same. */}
+          {phone ? readingsCard : null}
+          {phone ? assessmentCard : null}
+
+          <article id="scorm" className="card card-hi">
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+              {/* One text node, so the count reads as one string. */}
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{`SCORM modules (${scorm.length})`}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                Interactive modules. Leave one at any point and it opens where you stopped.
+              </div>
+            </div>
+            {scorm.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                No SCORM modules for this subject.
+                {viewerIsAdmin ? (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    Upload one at <Link href="/admin/scorm">Admin → SCORM packages</Link>.
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+                {scorm.map((p, i) => (
+                  <li
+                    key={p.id}
                     style={{
-                      display: "grid",
-                      gridTemplateColumns: "36px 1fr",
-                      gap: 14,
-                      padding: 14,
+                      display: "flex",
+                      justifyContent: "space-between",
                       alignItems: "center",
+                      gap: 10,
+                      padding: "12px 0",
                       borderTop: i ? "1px solid var(--line)" : "none",
                     }}
                   >
-                    <div
-                      style={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: 6,
-                        background: "var(--paper-2)",
-                        color: "var(--ink-2)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontFamily: "var(--mono)",
-                        fontSize: 12,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {i + 1}
-                    </div>
                     <div>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>{m.title}</div>
-                      {m.description ? (
-                        <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                          {m.description}
-                        </div>
-                      ) : null}
+                      <div style={{ fontWeight: 500 }}>
+                        {p.title}
+                        {!p.active ? (
+                          // Only an administrator is shown a withdrawn package.
+                          <span className="chip chip-rust" style={{ marginLeft: 6 }}>
+                            Withdrawn
+                          </span>
+                        ) : null}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, fontSize: 11 }}>
+                        <span className={statusChip(p.lessonStatus)}>{statusLabel(p.lessonStatus)}</span>
+                        {p.scoreRaw !== null ? <span className="mono">{`Score ${p.scoreRaw}`}</span> : null}
+                      </div>
                     </div>
-                  </div>
+                    <Link
+                      href={`/scorm/${p.id}`}
+                      className={p.lessonStatus === "not attempted" ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                      style={{ textDecoration: "none" }}
+                    >
+                      {launchLabel(p.lessonStatus)}
+                    </Link>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
           </article>
 
@@ -169,225 +642,188 @@ export default async function RttSubjectPage({ params }: { params: Promise<{ id:
                 No sessions scheduled.
               </div>
             ) : (
-              <table className="t">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Session</th>
-                    <th>Type</th>
-                    <th>Duration</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((s) => {
-                    // Spec 119: each rtt-session row links to /repo/session/${id}
-                    // (the classroom-session detail page). For sessions that are
-                    // still upcoming (scheduledAt in the future or null) the
-                    // action column shows "Join"; for past sessions "Watch".
-                    // Both render as <Link href=…> so they have real handlers.
-                    // NO LINK. `s.id` is an rtt_sessions id, and
-                    // /repo/session/[id] looks up the CLASSROOM sessions table
-                    // -- a different table entirely -- so every one of these
-                    // rows 404'd. rtt_sessions has no detail page; the calendar
-                    // at /rtt/online/synchronous is where these are listed.
-                    const isUpcoming = s.isUpcoming;
-                    return (
-                      <tr key={s.id}>
-                        <td className="mono" style={{ fontSize: 12 }}>
-                          {s.scheduledAt ? (
-                            new Date(s.scheduledAt).toLocaleString("en-IN", {
-                              dateStyle: "medium",
-                              timeStyle: "short",
-                            })
-                          ) : (
-                            <span className="empty-dash">unscheduled</span>
-                          )}
-                        </td>
-                        <td>
-                          {s.title}
-                        </td>
-                        <td>
-                          {s.type ? (
-                            <span className="chip">{s.type}</span>
-                          ) : (
-                            <em className="dash">—</em>
-                          )}
-                        </td>
-                        <td className="mono" style={{ fontSize: 12 }}>
-                          {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
-                        </td>
-                        <td>
-                          {s.linkOrRecording ? (
-                            <a
-                              href={s.linkOrRecording}
-                              className="btn btn-sm"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ textDecoration: "none" }}
-                            >
-                              {isUpcoming ? "Join" : "Watch"}
-                            </a>
-                          ) : (
-                            <span className="chip" title="No meeting link or recording recorded for this session">
-                              {isUpcoming ? "No link yet" : "No recording"}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              // Scrolls sideways inside the card: six columns are wider than a
+              // phone, and with no scroll box the table widened the page.
+              <div style={{ overflowX: "auto" }}>
+                <table className="t">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Session</th>
+                      <th>Type</th>
+                      <th>Duration</th>
+                      <th title="Your attendance, once it has been taken">You</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sessions.map((s) => {
+                      // Spec 119: each rtt-session row links to /repo/session/${id}
+                      // (the classroom-session detail page). For sessions that are
+                      // still upcoming (scheduledAt in the future or null) the
+                      // action column shows "Join"; for past sessions "Watch".
+                      // Both render as <Link href=…> so they have real handlers.
+                      // NO LINK. `s.id` is an rtt_sessions id, and
+                      // /repo/session/[id] looks up the CLASSROOM sessions table
+                      // -- a different table entirely -- so every one of these
+                      // rows 404'd. rtt_sessions has no detail page; the calendar
+                      // at /rtt/online/synchronous is where these are listed.
+                      const isUpcoming = s.isUpcoming;
+                      // A web link or nothing (lib/rtt/links.ts): a stored
+                      // "meet.google.com/..." was a relative href into the app.
+                      const link = webLink(s.linkOrRecording);
+                      return (
+                        <tr key={s.id}>
+                          <td className="mono" style={{ fontSize: 12 }}>
+                            {s.scheduledAt ? (
+                              new Date(s.scheduledAt).toLocaleString("en-IN", {
+                                dateStyle: "medium",
+                                timeStyle: "short",
+                              })
+                            ) : (
+                              <span className="empty-dash">unscheduled</span>
+                            )}
+                          </td>
+                          <td>
+                            {s.title}
+                          </td>
+                          <td>
+                            {s.type ? (
+                              <span className="chip">{s.type}</span>
+                            ) : (
+                              <em className="dash">—</em>
+                            )}
+                          </td>
+                          <td className="mono" style={{ fontSize: 12 }}>
+                            {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
+                          </td>
+                          <td>
+                            {attendance.has(s.id) ? (
+                              <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
+                                {attendance.get(s.id)!.charAt(0).toUpperCase() + attendance.get(s.id)!.slice(1)}
+                              </span>
+                            ) : (
+                              <em className="dash">—</em>
+                            )}
+                          </td>
+                          <td>
+                            {link ? (
+                              <a
+                                href={link}
+                                className="btn btn-sm"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ textDecoration: "none" }}
+                              >
+                                {isUpcoming ? "Join" : "Watch"}
+                              </a>
+                            ) : (
+                              <span className="chip" title="No meeting link or recording recorded for this session">
+                                {isUpcoming ? "No link yet" : "No recording"}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </article>
         </div>
 
-        <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14, alignContent: "start" }}>
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Your progress</div>
             </div>
-            {readings.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No readings linked.
-              </div>
-            ) : (
-              <div>
-                {readings.map((r, i) => (
-                  <div
-                    key={r.id}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "30px 1fr auto",
-                      gap: 10,
-                      padding: 12,
-                      alignItems: "center",
-                      borderTop: i ? "1px solid var(--line)" : "none",
-                    }}
-                  >
-                    <span
-                      aria-hidden
-                      style={{
-                        fontFamily: "var(--mono)",
-                        fontSize: 10,
-                        fontWeight: 600,
-                        color: "var(--rust)",
-                        border: "1px solid var(--line)",
-                        borderRadius: 4,
-                        padding: "2px 4px",
-                        textAlign: "center",
-                      }}
-                    >
-                      PDF
-                    </span>
-                    <div>
-                      <div style={{ fontWeight: 500, fontSize: 13 }}>
-                        {r.externalUrl ? (
-                          <a
-                            href={r.externalUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: "var(--ink)" }}
-                          >
-                            {r.title}
-                          </a>
-                        ) : (
-                          r.title
-                        )}
-                      </div>
-                      <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                        {r.externalUrl ? "External link" : "Reading"}
-                      </div>
-                    </div>
-                    {r.externalUrl ? (
-                      <a
-                        href={r.externalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn btn-sm"
-                      >
-                        Open
-                      </a>
-                    ) : r.fileKey ? (
-                      // Spec 119: PDF readings (no externalUrl) route through
-                      // the spec 087 in-browser viewer. The viewer route lives
-                      // under /repo/resource/[id]/view; it 404s if the reading
-                      // id doesn't correspond to a resources row (which is
-                      // expected until a future spec links rtt_readings to
-                      // resources). Until then this preserves the JSX-prototype
-                      // affordance instead of leaving a dead button.
-                      <Link
-                        href={`/repo/resource/${r.id}/view`}
-                        className="btn btn-sm"
-                        style={{ textDecoration: "none" }}
-                      >
-                        View
-                      </Link>
-                    ) : (
-                      <span className="chip">—</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <dl
+              style={{
+                margin: 0,
+                padding: 14,
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1fr) minmax(0, auto)",
+                gap: "6px 12px",
+                fontSize: 13,
+              }}
+            >
+              <dt>Lessons</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {done.lessons.size} of {lessons.length}
+              </dd>
+              <dt>Readings</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {done.readings.size} of {readings.length}
+              </dd>
+              <dt>Assessments passed</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {passedCount} of {assessments.length}
+              </dd>
+              <dt>Sessions attended</dt>
+              <dd className="mono" style={{ margin: 0 }}>
+                {attendance.size === 0 ? "not taken yet" : `${presentCount} of ${attendance.size}`}
+              </dd>
+            </dl>
+            <div style={{ padding: "0 14px 12px", fontSize: 11 }}>
+              <Link href="/rtt/progress">All my RTT progress →</Link>
+            </div>
           </article>
 
-          {/* Spec 119: Assessment card — Start/Locked CTAs port the JSX
-              prototype (rtt.jsx lines 236-251). Both link to /quizzes/<slug>
-              with subjectId in the querystring. The /quizzes/* route ships
-              in Run 10's quiz-full-stack spec; until then these links
-              intentionally 404. Rendering them now means we don't have to
-              re-touch this file when the route lands. */}
-          <article className="card card-hi">
-            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
-            </div>
-            <div style={{ padding: 14, fontSize: 13 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "12px 0",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <span>Mid-unit check</span>
-                {hasQuiz.has("mid-unit") ? (
-                  <Link
-                    href={`/quizzes/mid-unit?subjectId=${id}`}
-                    className="btn btn-sm btn-primary"
-                    style={{ textDecoration: "none" }}
-                  >
-                    Start
-                  </Link>
-                ) : (
-                  <span className="chip" title="No active quiz with the address mid-unit">
-                    Not published yet
-                  </span>
-                )}
+          {phone ? null : readingsCard}
+          {phone ? null : assessmentCard}
+
+          {/* Last, on a phone and on a desktop: the readings and the quiz's
+              Start button are what a subject is opened for (F11), and a
+              teach-back comes once the subject has been learned. */}
+          {scope.isStaff ? null : (
+            <article id="teach-back" className="card card-hi">
+              <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>Teach-back</div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  Record yourself teaching a lesson from this subject. Mentors and observers watch it and mark it
+                  reviewed.
+                </div>
               </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  paddingTop: 12,
-                }}
-              >
-                <span style={{ color: "var(--ink-3)" }}>Endline assessment</span>
+              {teachBacks.length > 0 ? (
+                <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+                  {teachBacks.map((v, i) => {
+                    const chip = teachBackChip(v);
+                    return (
+                      <li
+                        key={v.id}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "10px 0",
+                          borderTop: i ? "1px solid var(--line)" : "none",
+                        }}
+                      >
+                        <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                          {`Sent ${new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`}
+                        </Link>
+                        <span className={chip.cls}>{chip.label}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+              {/* The upload page, bound to this subject: the file picker, the
+                  phone flow and -- when the programme has a number -- the
+                  WhatsApp caption TB-<subject> live there. */}
+              <div style={{ padding: "12px 14px" }}>
                 <Link
-                  href={`/quizzes/endline?subjectId=${id}`}
-                  className="chip"
-                  aria-disabled="true"
+                  href={uploadHref({ contextType: "teach_back", contextId: id })}
+                  className="btn btn-sm"
                   style={{ textDecoration: "none" }}
                 >
-                  Locked
+                  {teachBacks.length === 0 ? "Upload a teach-back video →" : "Upload another teach-back →"}
                 </Link>
               </div>
-            </div>
-          </article>
+            </article>
+          )}
         </div>
       </section>
     </div>

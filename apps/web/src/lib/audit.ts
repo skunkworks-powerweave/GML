@@ -1,5 +1,7 @@
 // Audit-log helpers. Use recordAudit() for ad-hoc events; wrap server actions
-// with withAudit() to get automatic before/after logging.
+// with withAudit() to log their success or failure. withAudit records only the
+// metadata it is given (or derives from the result via metadataFrom) -- it
+// does NOT capture a before-image by itself; the caller must read the row.
 
 import "server-only";
 import { headers } from "next/headers";
@@ -7,6 +9,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog, type AuditAction } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { clientIpFrom, UNKNOWN_IP } from "@/lib/request-ip";
 
 export type AuditInput = {
   action: AuditAction;
@@ -17,9 +20,28 @@ export type AuditInput = {
   // (e.g. login flow that has not yet established a session) or that run
   // outside a request scope and so cannot call `auth()` / `headers()`.
   // Both fields are optional; if absent we fall back to the request scope.
-  userId?: string;
+  //
+  // `userId: null` means "this event has no actor on purpose" and skips the
+  // session fallback. A failed sign-in needs it: signInWithPassword leaves
+  // the browser's existing session cookie alone, so on a shared computer the
+  // fallback credited whoever was left signed in with a stranger's attempt.
+  userId?: string | null;
   ipOverride?: string;
 };
+
+/** The actor to store: the caller's, none (`null`), or the request session's. */
+async function resolveActor(userId: string | null | undefined): Promise<string | null> {
+  if (userId === null) return null;
+  if (userId) return userId;
+  // `auth()` only works inside a request scope; outside one (or if it throws)
+  // we treat that as a soft miss and still persist what we have.
+  try {
+    const session = await auth();
+    return session?.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // Spec 167 — process-local degraded-mode counter for the audit channel.
 //
@@ -39,6 +61,13 @@ export type AuditInput = {
 // A per-process tally lets each web container report its own degraded count
 // even when half the cluster has lost backend connectivity.
 let auditDegradedCount = 0;
+
+/**
+ * audit_log is append-only, so it must not store whatever a client sends.
+ * Real browsers send a few hundred characters; Caddy refuses 1000+ at the edge
+ * (docker/Caddyfile), and this bounds the column even without it.
+ */
+const MAX_STORED_USER_AGENT = 512;
 
 export function noteAuditDegraded(callsite: string): void {
   auditDegradedCount += 1;
@@ -102,30 +131,26 @@ export function maskIp(ip: string | undefined): string | undefined {
 
 export async function recordAudit(input: AuditInput): Promise<boolean> {
   try {
-    let userId = input.userId;
+    const userId = await resolveActor(input.userId);
     let ip: string | undefined = input.ipOverride;
     let ua: string | undefined;
-    // `auth()` / `headers()` only work inside a request scope. The login
-    // flow's rate-limit-down branch already has the IP in hand; if either
-    // helper throws (no request scope) we treat that as a soft miss and
-    // still try to persist what we have.
-    try {
-      if (!userId) {
-        const session = await auth();
-        userId = session?.user?.id;
-      }
-    } catch {
-      // No session context available — proceed without userId.
-    }
+    // `headers()` only works inside a request scope. The login flow's
+    // rate-limit-down branch already has the IP in hand; if it throws (no
+    // request scope) we treat that as a soft miss and still try to persist
+    // what we have.
     try {
       const hdr = await headers();
       if (!ip) {
-        ip =
-          hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-          hdr.get("x-real-ip") ??
-          undefined;
+        // lib/request-ip, not the raw X-Forwarded-For head this used to read:
+        // Caddy APPENDS to that header, so its first element is whatever the
+        // client sent, and this column is the forensic record an administrator
+        // reads when investigating exactly that kind of caller. UNKNOWN_IP
+        // becomes undefined so a request with no proxy header still stores
+        // NULL ("not captured") rather than the literal marker.
+        const resolved = clientIpFrom(hdr);
+        ip = resolved === UNKNOWN_IP ? undefined : resolved;
       }
-      ua = hdr.get("user-agent") ?? undefined;
+      ua = hdr.get("user-agent")?.slice(0, MAX_STORED_USER_AGENT) ?? undefined;
     } catch {
       // No request headers (e.g. background job) — proceed without them.
     }
@@ -205,26 +230,17 @@ export async function recordAuditDedup(input: AuditDedupInput): Promise<boolean>
     // Resolve userId / ip / ua the same way recordAudit does so the dedup
     // SELECT matches what a fresh INSERT would store. We need the userId
     // BEFORE the SELECT so the where clause can pin it.
-    let userId = input.userId;
+    const userId = await resolveActor(input.userId);
     let ip: string | undefined = input.ipOverride;
     let ua: string | undefined;
     try {
-      if (!userId) {
-        const session = await auth();
-        userId = session?.user?.id;
-      }
-    } catch {
-      // No session context available.
-    }
-    try {
       const hdr = await headers();
       if (!ip) {
-        ip =
-          hdr.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-          hdr.get("x-real-ip") ??
-          undefined;
+        // Same source as recordAudit above -- see lib/request-ip.ts.
+        const resolved = clientIpFrom(hdr);
+        ip = resolved === UNKNOWN_IP ? undefined : resolved;
       }
-      ua = hdr.get("user-agent") ?? undefined;
+      ua = hdr.get("user-agent")?.slice(0, MAX_STORED_USER_AGENT) ?? undefined;
     } catch {
       // No request headers.
     }
@@ -286,12 +302,31 @@ export async function recordAuditDedup(input: AuditDedupInput): Promise<boolean>
  */
 export function withAudit<TArgs extends unknown[], TResult>(
   fn: (...args: TArgs) => Promise<TResult>,
-  meta: AuditInput,
+  meta: AuditInput & {
+    /**
+     * The audited row's id, read from the action's result. A create cannot
+     * know its id until the INSERT returns, so without this every
+     * `admin.row.create` landed with entity_id NULL and could not be joined to
+     * the row it created. An explicit `entityId` wins.
+     */
+    entityIdFrom?: (result: TResult) => string | null | undefined;
+    /**
+     * Metadata only the action's result can supply -- a before-image or a
+     * from/to diff, which exist only once the row has been read inside the
+     * write's transaction. Merged over `metadata`.
+     */
+    metadataFrom?: (result: TResult) => Record<string, unknown>;
+  },
 ): (...args: TArgs) => Promise<TResult> {
+  const { entityIdFrom, metadataFrom, ...input } = meta;
   return async (...args: TArgs): Promise<TResult> => {
     try {
       const result = await fn(...args);
-      void recordAudit(meta);
+      void recordAudit({
+        ...input,
+        entityId: input.entityId ?? entityIdFrom?.(result) ?? undefined,
+        metadata: metadataFrom ? { ...(input.metadata ?? {}), ...metadataFrom(result) } : input.metadata,
+      });
       return result;
     } catch (err) {
       // A DISTINCT ACTION NAME, not the success one with an `error` key bolted
@@ -301,9 +336,9 @@ export function withAudit<TArgs extends unknown[], TResult>(
       // recorded deletions that never happened, and an operator scanning the
       // action column could not tell them apart.
       void recordAudit({
-        ...meta,
-        action: `${meta.action}.failed`,
-        metadata: { ...(meta.metadata ?? {}), error: String(err).slice(0, 500) },
+        ...input,
+        action: `${input.action}.failed`,
+        metadata: { ...(input.metadata ?? {}), error: String(err).slice(0, 500) },
       });
       throw err;
     }

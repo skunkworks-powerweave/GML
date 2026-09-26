@@ -141,21 +141,36 @@ test("spec 132 — HlsPlayer.tsx exposes a quality select with auto / 480p / 720
     /data-testid="quality-select"/,
     "quality select must carry a data-testid for e2e coverage",
   );
-  // The three options must all be there. 720p must be disabled with the
-  // spec 041 tooltip so a reader of the source sees why.
+  // Auto, then the stream's own renditions, then 720p disabled with a
+  // tooltip so a viewer, and a reader of the source, sees why.
+  //
+  // CORRECTED (F144). This pinned a static `<option value="480p">` and
+  // `currentLevel = next === "auto" ? -1 : 0`: with one rendition, level 0
+  // WAS 480p. The transcoder now writes a 240p/360p/480p ladder, where level 0
+  // is 240p -- so "480p" pinned the lowest rung. The menu is built from the
+  // renditions hls.js parsed, and a choice maps to its own level;
+  // tests/behaviour/hls-ladder.test.ts executes both helpers.
   assert.match(src, /<option value="auto">/, "quality select must offer the Auto option");
-  assert.match(src, /<option value="480p">/, "quality select must offer the 480p option");
+  assert.match(
+    src,
+    /renditionOptions\(levels\)\.map\(/,
+    "quality select must offer the renditions the stream actually has",
+  );
   assert.match(
     src,
     /<option value="720p"\s+disabled/,
     "quality select must offer the 720p option with the disabled attribute",
   );
+  // The tooltip used to be pinned as "720p disabled per programme settings".
+  // No programme setting turns 720p off -- the worker never encodes it -- so
+  // the pin is now the true reason (F13). tests/behaviour/video-copy.test.ts
+  // checks the rendered tooltip against the heights the worker encodes.
   assert.match(
     src,
-    /title="720p disabled per programme settings"/,
-    "the 720p option must carry the 'disabled per programme settings' tooltip",
+    /<option value="720p"\s+disabled\s+title="Not produced: videos stream at up to 480p"/,
+    "the 720p option must carry a tooltip saying why: it is not produced",
   );
-  // The handler must flip hls.currentLevel (= -1 for auto, 0 for 480p).
+  // The handler must flip hls.currentLevel (-1 for auto, else the chosen rendition).
   assert.match(
     src,
     /function applyQuality\(/,
@@ -163,8 +178,8 @@ test("spec 132 — HlsPlayer.tsx exposes a quality select with auto / 480p / 720
   );
   assert.match(
     src,
-    /hls\.currentLevel\s*=\s*next === "auto" \? -1 : 0/,
-    "applyQuality must flip hls.currentLevel (-1 = auto ABR, 0 = pin to the lowest level)",
+    /hls\.currentLevel\s*=\s*levelIndexFor\(levels,\s*next\)/,
+    "applyQuality must set hls.currentLevel to the chosen rendition's level (-1 = auto ABR)",
   );
 });
 
@@ -323,8 +338,8 @@ test("spec 132 — videos/page.tsx imports UploadModal and renders it in the hea
   // a wrong one.
   assert.match(
     src,
-    /whatsappPhone=\{assertEnv\(\)\.whatsappNumber\.value \?\? null\}/,
-    "whatsappPhone must come from the validated env value, or be null",
+    /const whatsappPhone = whatsappPhoneForUsers\(\);[\s\S]*whatsappPhone=\{whatsappPhone\}/,
+    "whatsappPhone must come from whatsappPhoneForUsers() (the validated number, or null while ingest is off; FR-33)",
   );
   assert.ok(
     !/process\.env\.WHATSAPP_PHONE_NUMBER_ID/.test(src),

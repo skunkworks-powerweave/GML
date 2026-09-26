@@ -9,14 +9,14 @@
 //
 //   bash -n scripts/deploy.sh   exits 0 — an undefined variable is a RUNTIME
 //                               failure, not a syntax error.
-//   tests/governance/           cannot execute anything. It does have a related
-//                               assertion — test_108:129 matches the string
-//                               `HEALTH_URL:-http://127.0.0.1/api/health` — but
-//                               that is an UNANCHORED SUBSTRING, so an `echo`
-//                               containing the same default satisfies it just
-//                               as well as an assignment does. (An earlier
-//                               version of this comment called it an assignment
-//                               check. It is not.)
+//   tests/governance/           cannot execute anything. Its related assertion
+//                               in test_108 used to pin the LITERAL string
+//                               `HEALTH_URL:-http://127.0.0.1/api/health` — an
+//                               address that can never reach the app (Host
+//                               127.0.0.1 matches no Caddy site), so governance
+//                               was protecting the defect. It now pins the
+//                               property instead; the behaviour is proven here
+//                               and in deploy-flow.test.mjs.
 //
 // ── RUNNING deploy.sh IN A TEST IS DANGEROUS, AND TWICE WAS NOT ENOUGH ───────
 //
@@ -51,10 +51,13 @@
 // than trusting it — if a future edit moves the gate below the build, the
 // tripwire fails the test instead of eating someone's rollback image.
 //
-// `run()` (tests 1-4) is NOT sandboxed: it spawns from the real repo root,
-// which does have a .env, and is safe only because DEPLOY_DRY_RUN=1 exits
-// before the toolchain check. That is a weaker guarantee than the rest of this
-// file has, and it is stated here rather than glossed.
+// `run()` (tests 1-4) now runs a COPY of the script in a temp directory too.
+// It used to spawn from the real repo root, which in the main checkout holds
+// the PRODUCTION .env, and was safe only because DEPLOY_DRY_RUN=1 exited before
+// anything read it. deploy.sh now resolves DOMAIN — from .env when the shell
+// does not export it — before the dry-run exit, because the health probe's
+// target depends on it; from the repo root that would read a line of the live
+// .env. From a copy there is no .env to read.
 //
 // ── WHAT THESE TESTS DO AND DO NOT PROVE ─────────────────────────────────────
 //
@@ -97,20 +100,32 @@ const SCRIPT = "scripts/deploy.sh";
  */
 const DESTRUCTIVE = /\b(tag|build|up|down|rm)\b/;
 
-function run(extraEnv = {}) {
-  const r = spawnSync("bash", [SCRIPT], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 30_000,
-    env: { ...process.env, DEPLOY_DRY_RUN: "1", ...extraEnv },
-  });
-  if (r.error) {
-    assert.fail(
-      `could not execute bash ${SCRIPT}: ${r.error.message}. ` +
-        `This tier needs bash on PATH (Git Bash on Windows).`,
-    );
+function run(extraEnv = {}, { envFile } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "deploy-sh-dry-"));
+  try {
+    mkdirSync(join(dir, "scripts"));
+    copyFileSync(resolve(root, SCRIPT), join(dir, "scripts", "deploy.sh"));
+    if (envFile !== undefined) writeFileSync(join(dir, ".env"), envFile);
+    const env = { ...process.env, DEPLOY_DRY_RUN: "1", ...extraEnv };
+    // An exported DOMAIN in the developer's shell must not leak into a test
+    // that did not ask for one.
+    if (!("DOMAIN" in extraEnv)) delete env.DOMAIN;
+    const r = spawnSync("bash", [join(dir, "scripts", "deploy.sh")], {
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 30_000,
+      env,
+    });
+    if (r.error) {
+      assert.fail(
+        `could not execute bash ${SCRIPT}: ${r.error.message}. ` +
+          `This tier needs bash on PATH (Git Bash on Windows).`,
+      );
+    }
+    return r;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  return r;
 }
 
 /**
@@ -385,6 +400,57 @@ test("every host binary deploy.sh invokes is in the toolchain check", () => {
         "mid-deploy, rather than a named blocker in preflight.",
     );
   }
+});
+
+test("the health probe and the smoke suite target the host Caddy's site block serves", () => {
+  // THE DEFECT: HEALTH_URL defaulted to http://127.0.0.1/api/health. Caddy's
+  // only site block is {$DOMAIN:localhost}, so it matches on Host, and Host
+  // 127.0.0.1 matches nothing — the probe could never read the app's body, and
+  // every deploy timed out at health before seeding an administrator.
+  //
+  // The property, derived from the Caddyfile rather than restated: whatever
+  // DOMAIN resolves to, the probe's host must be the one Caddy serves.
+  const caddy = readFileSync(resolve(root, "docker/Caddyfile"), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  // Top-level blocks start at column 0 as `<address> {`; the bare `{`
+  // global-options block has no address and is skipped by requiring one. A
+  // `(name) {` snippet is not a site either: it is text other blocks import
+  // (the log redaction, query_secrets, is one).
+  const sites = [...caddy.matchAll(/^(\S[^\n]*?)[ \t]+\{[ \t]*$/gm)]
+    .map((m) => m[1].trim())
+    .filter((s) => s !== "" && !/^:\d+$/.test(s)) // the :2021 health listener is not a site
+    .filter((s) => !/^\([^)]+\)$/.test(s));
+  assert.deepEqual(sites, ["{$DOMAIN:localhost}"], "expected exactly one DOMAIN-matched site block");
+
+  const cases = [
+    { env: { DOMAIN: "lms.example.org" }, envFile: undefined, host: "lms.example.org", why: "exported DOMAIN" },
+    { env: {}, envFile: "DOMAIN=lms.from-env-file.org\r\nACME_EMAIL=x@y.z\r\n", host: "lms.from-env-file.org", why: ".env (CRLF)" },
+    { env: {}, envFile: 'DOMAIN="quoted.example.org"\n', host: "quoted.example.org", why: "quoted .env value" },
+    { env: {}, envFile: undefined, host: "localhost", why: "the Caddyfile's own default" },
+  ];
+  for (const c of cases) {
+    const r = run(c.env, { envFile: c.envFile });
+    assert.equal(r.status, 0, `dry-run failed (${c.why}):\n${r.stderr}`);
+    const v = resolvedVars(r.stdout);
+    const probe = new URL(v.get("HEALTH_URL"));
+    assert.equal(probe.hostname, c.host, `${c.why}: the probe must ask Caddy for the site it serves`);
+    assert.equal(probe.protocol, "https:", "Caddy serves the site on 443; port 80 only redirects");
+    assert.equal(v.get("DOMAIN_VALUE"), c.host);
+    assert.equal(new URL(v.get("SMOKE_BASE_URL")).hostname, c.host, `${c.why}: smoke must target the same site`);
+  }
+
+  // And the request must be pinned to this box, so it neither depends on the
+  // instance's own DNS nor leaves it.
+  const body = readFileSync(resolve(root, SCRIPT), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  const probeFn = body.match(/app_http_healthy\(\)\s*\{\n([\s\S]*?)\n\}/);
+  assert.ok(probeFn, "deploy.sh must define app_http_healthy()");
+  assert.match(probeFn[1], /--resolve "\$\{DOMAIN_VALUE\}:443:127\.0\.0\.1"/);
+  assert.match(probeFn[1], /"\$\{HEALTH_URL\}"/);
 });
 
 test("the host-toolchain check names the missing binary instead of failing later", () => {

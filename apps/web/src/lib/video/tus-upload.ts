@@ -29,7 +29,11 @@
 //                submissions could not exist.
 
 import type { Upload } from "tus-js-client";
-import { accessToken, type SupabaseBrowserConfig } from "@/lib/supabase/browser";
+// A TYPE import only: the browser Supabase client (@supabase/ssr + supabase-js,
+// ~63 KB gzipped) is loaded when an upload starts, like tus-js-client below.
+// The static import put it in the first-load JavaScript of every page that
+// mounts an uploader, /uploads and /videos, for viewers who never upload too.
+import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
 
 export type UploadHandle = { abort: () => void };
 
@@ -37,6 +41,12 @@ export type StartUploadOptions = {
   file: File;
   bucket: string;
   objectKey: string;
+  /**
+   * The reservation's content type (beginUpload): the bucket refuses a type it
+   * does not list, such as the video/x-m4v or video/mp2t a browser reports for
+   * .m4v and .mts, with a 415 that no retry can get past.
+   */
+  contentType: string;
   chunkBytes: number;
   /** Supplied by beginUploadAction — see lib/supabase/browser.ts for why it is
    *  not read from process.env here. */
@@ -59,11 +69,21 @@ export async function startResumableUpload(
     return null;
   }
 
+  let accessToken: typeof import("@/lib/supabase/browser").accessToken;
+  try {
+    // Relative, not "@/": the behaviour suite's alias hook resolves "@/" for
+    // require() but not for a dynamic import(). Same module either way.
+    ({ accessToken } = await import("../supabase/browser"));
+  } catch {
+    opts.onError("Upload library unavailable. Please send the video over WhatsApp instead.");
+    return null;
+  }
   const token = await accessToken(opts.supabase);
   if (!token) {
     opts.onError("Your session has expired. Please sign in again.");
     return null;
   }
+  const supabaseConfig = opts.supabase;
 
   let tus: typeof import("tus-js-client");
   try {
@@ -76,14 +96,48 @@ export async function startResumableUpload(
     return null;
   }
 
+  // THE TOKEN IS ASKED FOR PER REQUEST, not read once. It used to be baked
+  // into `headers` before the transfer began, and Storage checks the JWT's exp
+  // on every PATCH -- so the first request after that token expired came back
+  // 400 '"exp" claim timestamp check failed', tus does not retry a 4xx, and a
+  // teacher whose session had long since been refreshed was told it had
+  // expired. A token can arrive with only minutes left (the deploy README sets
+  // a 15-minute lifetime), and a phone video on a Ladakh link takes longer.
+  //
+  // If Storage refuses a token anyway (the browser's clock disagrees, or a
+  // refresh has not run yet), the request is retried ONCE with a forced
+  // refresh. A refusal of that fresh token is final: the session really is
+  // gone, and the teacher is told to sign in.
+  let refreshNext = false;
+  let refreshedAfterRefusal = false;
+
   const upload: Upload = new tus.Upload(opts.file, {
     endpoint: `${supabaseUrl}/storage/v1/upload/resumable`,
     retryDelays: [0, 3000, 5000, 10000, 20000],
-    headers: {
-      authorization: `Bearer ${token}`,
-      // Supabase requires this on the resumable endpoint even when the
-      // Authorization header is present.
-      "x-upsert": "true",
+    // The bearer token is the only header this sets. No `x-upsert`. It asks Storage to overwrite an existing object, and there
+    // never is one: the key is new for every reservation. It is also refused.
+    // An upsert has to read the existing row, and _post/005 grants
+    // `authenticated` INSERT/UPDATE/DELETE under its own prefix but deliberately
+    // no SELECT. With the header, every teacher's upload came back 403 "new row
+    // violates row-level security policy"; without it, 201. Both were checked
+    // against a local Supabase stack with the same token and key.
+    onBeforeRequest: async (req) => {
+      const refresh = refreshNext;
+      refreshNext = false;
+      const current = (await accessToken(supabaseConfig, { refresh })) ?? token;
+      req.setHeader("authorization", `Bearer ${current}`);
+    },
+    onAfterResponse: (_req, res) => {
+      if (res.getStatus() < 400) refreshedAfterRefusal = false;
+    },
+    onShouldRetry: (err, retryAttempt, options) => {
+      if (isTokenRefusal(err)) {
+        if (refreshedAfterRefusal) return false;
+        refreshedAfterRefusal = true;
+        refreshNext = true;
+        return true;
+      }
+      return tus.defaultOptions.onShouldRetry?.(err, retryAttempt, options) ?? false;
     },
     uploadDataDuringCreation: true,
     // The object key is server-issued and prefixed with the uploader's uuid.
@@ -93,34 +147,99 @@ export async function startResumableUpload(
     metadata: {
       bucketName: opts.bucket,
       objectName: opts.objectKey,
-      contentType: opts.file.type || "video/mp4",
+      contentType: opts.contentType,
       cacheControl: "3600",
     },
     chunkSize: opts.chunkBytes,
-    onError: (err) => opts.onError(friendlyError(err)),
+    // A finished upload's resume entry would otherwise match the next upload
+    // of the same file (see the resume filter below).
+    removeFingerprintOnSuccess: true,
+    onError: (err) => opts.onError(uploadErrorMessage(err)),
     onProgress: (uploaded, total) => opts.onProgress(uploaded, total),
     onSuccess: () => opts.onSuccess(),
   });
 
-  // Resume a previous attempt for the same file if one is still pending. This
+  // Resume a previous attempt at THIS reservation if one is still pending. This
   // is the point of using tus on a Ladakh connection: a dropped link mid-upload
   // continues rather than restarting a 300 MB transfer.
-  const previous = await upload.findPreviousUploads();
+  //
+  // tus finds previous uploads by the file's fingerprint (name, type, size,
+  // modified time), so an upload of the same file to an EARLIER reservation
+  // matches too -- and that upload is bound to the earlier key. Resuming it
+  // sent the bytes there (or, if it had finished, "succeeded" without sending
+  // anything), and this reservation's completion check reported the file
+  // missing on every retry. beginUpload hands back the same reservation for a
+  // file picked again, so a genuine resume still matches on the key.
+  const previous = (await upload.findPreviousUploads()).filter(
+    (p) => p.metadata?.objectName === opts.objectKey,
+  );
   if (previous.length > 0) upload.resumeFromPreviousUpload(previous[0]!);
 
   upload.start();
   return { abort: () => void upload.abort(true).catch(() => undefined) };
 }
 
-function friendlyError(err: Error | unknown): string {
-  const text = String(err);
-  if (/413|too large|exceeded/i.test(text)) {
+type TusFailure = {
+  originalRequest?: unknown;
+  originalResponse?: { getStatus(): number; getBody(): string } | null;
+};
+
+/** Storage's words for a bearer token it will not accept (bad signature, expired). */
+const TOKEN_REFUSED = /jwt|jws|signature verification|unauthorized/i;
+const POLICY_REFUSED = /row-level security|violates .*policy/i;
+
+/**
+ * Did Storage refuse the TOKEN, as opposed to the upload? Storage answers a
+ * bad or expired JWT with HTTP 400 (or 401) and "Unauthorized" in the body. An
+ * RLS refusal is a 403 about the object, which a new token cannot change.
+ */
+function isTokenRefusal(err: unknown): boolean {
+  const res = (typeof err === "object" && err !== null ? (err as TusFailure).originalResponse : null) ?? null;
+  if (!res) return false;
+  const status = res.getStatus();
+  const body = res.getBody() || "";
+  if (POLICY_REFUSED.test(body)) return false;
+  return status === 401 || (status >= 400 && status < 500 && TOKEN_REFUSED.test(body));
+}
+
+/**
+ * What to tell the teacher when an upload fails.
+ *
+ * Classified from the RESPONSE tus carries, never from the error's text. The
+ * text embeds the upload URL, whose id is base64, so a regex over it could read
+ * "413" or "401" out of the id and call a dropped link "too large" or "session
+ * expired".
+ *
+ *   no response at all      the link dropped. A browser XHR that fails at the
+ *                           network level hands tus a bare ProgressEvent, so
+ *                           this used to fall through to "Upload failed" and
+ *                           the teacher was never told the upload can resume.
+ *   RLS refusal (HTTP 403)  a deployment fault, not the teacher's session.
+ *   bad/expired token       Storage answers HTTP 400 with "Unauthorized" in the
+ *                           body. The old `/401|403|jwt|token/` over the text
+ *                           matched the refusal too, and signing in again only
+ *                           produced a fresh token refused the same way.
+ */
+export function uploadErrorMessage(err: unknown): string {
+  const failure = (typeof err === "object" && err !== null ? err : {}) as TusFailure;
+  const res = failure.originalResponse ?? null;
+  if (failure.originalRequest != null && res === null) {
+    return "The connection dropped. Reconnect and choose the same file to resume.";
+  }
+  const status = res ? res.getStatus() : 0;
+  const body = res ? res.getBody() || "" : String(err);
+  if (status === 413 || /too large|exceeded/i.test(body)) {
     return "That file is too large. Send it over WhatsApp instead.";
   }
-  if (/401|403|jwt|token/i.test(text)) {
+  if (POLICY_REFUSED.test(body)) {
+    return "The server refused this upload. Send the video over WhatsApp for now, and tell your programme admin.";
+  }
+  // Reached only after a forced token refresh was refused too (see
+  // onShouldRetry above), so here the session really has ended.
+  if (status === 401 || TOKEN_REFUSED.test(body)) {
     return "Your session expired during the upload. Sign in again and retry.";
   }
-  if (/network|failed to fetch|econn/i.test(text)) {
+  if (!res && /network|failed to fetch|econn|socket hang up/i.test(body)) {
     return "The connection dropped. Reconnect and choose the same file to resume.";
   }
   return "Upload failed. Please try again, or send the video over WhatsApp.";

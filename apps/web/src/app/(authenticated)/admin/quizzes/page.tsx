@@ -4,9 +4,9 @@
 // framing) at the navigation layer.
 
 import Link from "next/link";
-import { asc, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { quizzes, quizQuestions } from "@gml/db/schema";
+import { phases, quizzes, quizQuestions, rttSubjects, terms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { NewQuizForm } from "./new-quiz-form";
 
@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
 export default async function AdminQuizzesIndexPage() {
   await requireRole(["programme_admin", "super_admin"]);
 
-  // Question counts per quiz — small grouped query to keep the index honest.
+  // Question counts per quiz. A join, not a correlated subquery: in a
+  // single-table select Drizzle leaves columns unqualified, and inside the
+  // subquery "id" bound to quiz_questions.id, so every count read 0.
   const rows = await db
     .select({
       id: quizzes.id,
@@ -25,12 +27,28 @@ export default async function AdminQuizzesIndexPage() {
       active: quizzes.active,
       subjectId: quizzes.subjectId,
       rttSubjectId: quizzes.rttSubjectId,
-      questionCount: sql<number>`(
-        SELECT COUNT(*)::int FROM ${quizQuestions} WHERE ${quizQuestions.quizId} = ${quizzes.id}
-      )`,
+      questionCount: sql<number>`count(${quizQuestions.id})::int`,
     })
     .from(quizzes)
+    .leftJoin(quizQuestions, eq(quizQuestions.quizId, quizzes.id))
+    .groupBy(quizzes.id)
     .orderBy(asc(quizzes.title));
+
+  // The subjects a new quiz can be bound to. Labelled with phase and term
+  // because subject names repeat across terms ("English" in every one).
+  const subjectRows = await db
+    .select({
+      id: rttSubjects.id,
+      name: rttSubjects.name,
+      term: terms.name,
+      phase: phases.label,
+    })
+    .from(rttSubjects)
+    .innerJoin(terms, eq(terms.id, rttSubjects.termId))
+    .innerJoin(phases, eq(phases.id, terms.phaseId))
+    .where(eq(rttSubjects.active, true))
+    .orderBy(asc(phases.sequence), asc(terms.sequence), asc(rttSubjects.name));
+  const subjects = subjectRows.map((s) => ({ id: s.id, label: `${s.phase} · ${s.term} · ${s.name}` }));
 
   return (
     <main>
@@ -55,7 +73,7 @@ export default async function AdminQuizzesIndexPage() {
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <NewQuizForm />
+            <NewQuizForm subjects={subjects} />
             <Link
               href="/admin/forms"
               className="chip"

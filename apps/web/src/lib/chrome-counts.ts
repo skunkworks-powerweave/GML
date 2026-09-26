@@ -19,42 +19,15 @@
 
 import "server-only";
 import { cache } from "react";
-import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import {
-  mentorPairings,
-  mentors,
-  observationCycles,
-  videoSubmissions,
-  formDrafts,
-  notifications,
-} from "@gml/db/schema";
+import { notifications } from "@gml/db/schema";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { transcodeQueueDepth } from "@/lib/queue";
 import { notificationKindFilter } from "./notification-kinds";
+import { navCounts, type NavCounts as NavCountsShape } from "./nav-counts";
 
-/**
- * Per-role badge counts. Each role gets only the counts that map to nav
- * items it can see — the loader is cheap (≤4 statements) and short-circuits
- * when the role has no badge-bearing nav rows.
- */
-export type NavCounts = {
-  /** mentor: active pairings owned by this mentor's mentor row */
-  mentees?: number;
-  /** mentor + observer + teacher: cycles relevant to the role */
-  cycles?: number;
-  /** mentor: video_submissions awaiting mentor review */
-  pendingReview?: number;
-  /** teacher: video_submissions submitted by this user in the last 30d */
-  myUploads?: number;
-  /** all roles: form_drafts owned by this user (autosave in flight) */
-  pendingForms?: number;
-};
-
-// Statuses that count an observation cycle as "in flight" (not nominated yet,
-// not yet sealed as complete). Used for the mentor + observer + teacher
-// counts.
-const ACTIVE_CYCLE_STATUSES = ["pre_submitted", "observed", "post_submitted"] as const;
+export type NavCounts = NavCountsShape;
 
 // "Awaiting reviewer attention" is now derived, not a status value.
 //
@@ -66,8 +39,13 @@ const ACTIVE_CYCLE_STATUSES = ["pre_submitted", "observed", "post_submitted"] as
 
 /**
  * Per-request cached nav badge loader. Returns a single object containing the
- * counts that apply to the caller's role. Roles with no badge slots get an
- * empty `{}` (no DB calls at all).
+ * counts that apply to the caller's role.
+ *
+ * The queries are lib/nav-counts.ts, which takes the database as a parameter
+ * so tests/behaviour can execute them; this binds them to the app's db. The
+ * observation badge there is scoped to what the caller may see and is
+ * withheld while their section gate is locked -- it used to count the whole
+ * programme for every teacher and mentor.
  *
  * @param userId  session.user.id — the mentor row is resolved by userId.
  * @param role    RoleName — drives which queries fire.
@@ -77,117 +55,7 @@ export const loadNavCounts = cache(async function loadNavCounts(
   role: RoleName,
 ): Promise<NavCounts> {
   try {
-    if (role === "mentor") {
-      // Resolve the mentor row so the pairings + review counts target the
-      // right mentor_id. If no mentor row exists yet, the counts stay 0.
-      const [mentorRow] = await db
-        .select({ id: mentors.id })
-        .from(mentors)
-        .where(eq(mentors.userId, userId))
-        .limit(1);
-      const mentorId = mentorRow?.id ?? null;
-
-      const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const [mentees, cycles, pendingReview, pendingForms] = await Promise.all([
-        mentorId
-          ? db
-              .select({ c: sql<number>`count(*)::int` })
-              .from(mentorPairings)
-              .where(
-                and(
-                  eq(mentorPairings.mentorId, mentorId),
-                  eq(mentorPairings.status, "active"),
-                ),
-              )
-          : Promise.resolve([{ c: 0 }]),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(observationCycles)
-          .where(inArray(observationCycles.status, [...ACTIVE_CYCLE_STATUSES])),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(videoSubmissions)
-          .where(
-            and(
-              eq(videoSubmissions.contextType, "teach_back"),
-              eq(videoSubmissions.status, "ready"),
-              isNull(videoSubmissions.reviewedAt),
-              gte(videoSubmissions.createdAt, cutoff30d),
-            ),
-          ),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(formDrafts)
-          .where(eq(formDrafts.userId, userId)),
-      ]);
-      return {
-        mentees: mentees[0]?.c ?? 0,
-        cycles: cycles[0]?.c ?? 0,
-        pendingReview: pendingReview[0]?.c ?? 0,
-        pendingForms: pendingForms[0]?.c ?? 0,
-      };
-    }
-
-    if (role === "observer") {
-      const [cycles, pendingForms] = await Promise.all([
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(observationCycles)
-          .where(
-            and(
-              eq(observationCycles.observerId, userId),
-              inArray(observationCycles.status, [...ACTIVE_CYCLE_STATUSES]),
-            ),
-          ),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(formDrafts)
-          .where(eq(formDrafts.userId, userId)),
-      ]);
-      return {
-        cycles: cycles[0]?.c ?? 0,
-        pendingForms: pendingForms[0]?.c ?? 0,
-      };
-    }
-
-    if (role === "teacher") {
-      const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const [cycles, myUploads, pendingForms] = await Promise.all([
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(observationCycles)
-          .where(inArray(observationCycles.status, [...ACTIVE_CYCLE_STATUSES])),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(videoSubmissions)
-          .where(
-            and(
-              eq(videoSubmissions.submittedByUserId, userId),
-              gte(videoSubmissions.createdAt, cutoff30d),
-            ),
-          ),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(formDrafts)
-          .where(eq(formDrafts.userId, userId)),
-      ]);
-      return {
-        cycles: cycles[0]?.c ?? 0,
-        myUploads: myUploads[0]?.c ?? 0,
-        pendingForms: pendingForms[0]?.c ?? 0,
-      };
-    }
-
-    // super_admin + programme_admin: chrome has no count-bearing nav rows in
-    // NAV_BY_ROLE for these roles. We still load pendingForms so the badge
-    // appears if/when these roles ever start drafting forms themselves.
-    const [pendingForms] = await Promise.all([
-      db
-        .select({ c: sql<number>`count(*)::int` })
-        .from(formDrafts)
-        .where(eq(formDrafts.userId, userId)),
-    ]);
-    return { pendingForms: pendingForms[0]?.c ?? 0 };
+    return await navCounts(db, userId, role);
   } catch (err) {
     // Fail-closed: keep the chrome readable when the DB is unavailable.
     console.error("[chrome-counts] loadNavCounts failed", err);
@@ -244,9 +112,10 @@ export type QueueDepth = {
   failed: number;
 };
 
-export const loadQueueDepth = cache(async function loadQueueDepth(): Promise<QueueDepth> {
+export const loadQueueDepth = cache(async function loadQueueDepth(role: RoleName): Promise<QueueDepth> {
   try {
-    const counts = await transcodeQueueDepth();
+    // Programme-wide numbers: zeros (no chip, no query) unless `role` is an admin.
+    const counts = await transcodeQueueDepth(role);
     return { active: counts.running, waiting: counts.queued, failed: counts.dead };
   } catch (err) {
     // Render nothing rather than a wrong number. The chip is decoration; the
@@ -326,7 +195,7 @@ export function applyNavCounts<TSection extends { section: string; items: readon
 const NAV_BADGE_MAP: Record<string, (c: NavCounts) => number | undefined> = {
   mentorship: (c) => c.mentees,
   observation: (c) => c.cycles,
-  videos: (c) => c.pendingReview,
+  "teach-back": (c) => c.pendingReview,
   uploads: (c) => c.myUploads,
   forms: (c) => c.pendingForms,
 };

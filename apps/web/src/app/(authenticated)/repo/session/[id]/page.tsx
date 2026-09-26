@@ -2,10 +2,15 @@
 // Port of repository.jsx::RepoSessionPage (lines 751-824) — 1:1 visual fidelity.
 // Two-column layout: lesson notes + linked observation cycle (left), KV details (right).
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
+import { actorFrom } from "@/lib/authz";
+import { linkedCycle } from "@/lib/gated-reads";
+import { observationAccess } from "@/lib/visibility";
 import { db } from "@gml/db";
 import {
   sessions,
@@ -15,10 +20,11 @@ import {
   teachers,
   outlineLessons,
   courseOutlines,
-  observationCycles,
 } from "@gml/db/schema";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Session" };
 
 const ALLOWED_ROLES = new Set([
   "super_admin",
@@ -48,8 +54,11 @@ export default async function RepoSessionPage({
   const authSession = await auth();
   const role = authSession?.user?.role;
   if (!role || !ALLOWED_ROLES.has(role)) redirect("/forbidden");
+  const actor = actorFrom(authSession);
+  if (!actor) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [s] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
   if (!s) notFound();
@@ -78,15 +87,15 @@ export default async function RepoSessionPage({
     }
   }
 
-  let cycle: (typeof observationCycles.$inferSelect) | undefined;
-  if (s.observationCycleId) {
-    const [c] = await db
-      .select()
-      .from(observationCycles)
-      .where(eq(observationCycles.id, s.observationCycleId))
-      .limit(1);
-    cycle = c;
-  }
+  // The linked cycle's code and UUID are observation-section data, and this page
+  // is outside that section. It used to select the cycle by id alone, so any
+  // signed-in user could read the code of any cycle a session was observed
+  // under and follow its link. Now it is named only when the viewer has
+  // unlocked the observation section AND may see that cycle; otherwise the
+  // session just reads "Observed". See lib/gated-reads.ts.
+  const cycle = s.observationCycleId
+    ? await linkedCycle(db, await observationAccess(db, actor), s.observationCycleId)
+    : null;
 
   const statusChip = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
 
@@ -138,14 +147,10 @@ export default async function RepoSessionPage({
       </div>
 
       {/* Body: two-column */}
-      <div
-        className="page-body"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.6fr 1fr",
-          gap: 18,
-        }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         {/* Left col: notes + linked cycle */}
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
           <SectionCard title="Lesson notes">
@@ -306,7 +311,10 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

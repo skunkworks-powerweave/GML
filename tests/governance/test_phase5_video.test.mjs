@@ -81,17 +81,30 @@ test("WhatsApp webhook has GET verify + POST ingestion + signature check", () =>
 });
 
 test("WhatsApp webhook parses OBS-/TB-/MM- caption prefixes", () => {
-  const src = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
-  for (const tag of ["OBS", "TB", "MM"]) {
-    assert.match(src, new RegExp(`tag === "${tag}"`));
+  // F129: the parser moved to packages/shared so it can be executed without
+  // Next (tests/behaviour/whatsapp-caption.test.ts drives it, and the
+  // webhook, with the captions teachers really type). The route must use it.
+  // The parser now tries every tag in the caption and keeps the first
+  // well-formed code, so the three tags are a table (tag -> context type)
+  // rather than three `tag === "..."` branches; each must still map to its
+  // context.
+  const src = read("packages/shared/src/whatsapp/caption.ts");
+  for (const [tag, type] of [["OBS", "observation_cycle"], ["TB", "teach_back"], ["MM", "mentor_meeting"]]) {
+    assert.match(src, new RegExp(`\\b${tag}\\s*:\\s*"${type}"`), `${tag} must map to ${type}`);
   }
+  const route = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
+  assert.match(route, /import\s*\{\s*parseCaption\s*\}\s*from\s*"@gml\/shared\/whatsapp\/caption"/);
 });
 
 test("WhatsApp webhook uses dotted-notation audit actions", () => {
   const src = read("apps/web/src/app/api/webhooks/whatsapp/route.ts");
-  for (const action of ["whatsapp.message.received", "whatsapp.media.fetched", "whatsapp.signature_failed"]) {
+  for (const action of ["whatsapp.message.received", "whatsapp.signature_failed"]) {
     assert.match(src, new RegExp(action.replace(/\./g, "\\.")));
   }
+  // F93: the media fetch moved to the worker (the webhook ran it after Meta's
+  // 200, so any failure lost the video), and its audit action moved with it.
+  const worker = read("apps/worker/src/whatsapp-fetch.ts");
+  assert.match(worker, /whatsapp\.media\.fetched/);
 });
 
 // Spec 044 — external link embed
@@ -169,11 +182,17 @@ test("uploads go direct to Storage, with no tusd proxy in the application", () =
   const actions = read("apps/web/src/app/(authenticated)/uploads/actions.ts");
   assert.match(actions, /export async function beginUploadAction/, "reservation half of the bracket");
   assert.match(actions, /export async function completeUploadAction/, "verification half of the bracket");
-  assert.match(
-    actions,
-    /enqueueTranscode/,
+  // The completion action no longer enqueues itself: completeUpload verifies
+  // the object, then hands it to finalizeUpload (packages/db/src/uploads.ts),
+  // which the reconciler shares and which queues the transcode.
+  assert.match(actions, /await completeUpload\(/, "the completion action must go through the verifying completeUpload");
+  const lib = read("apps/web/src/lib/video/upload.ts");
+  assert.ok(
+    lib.indexOf("isCompleteSize(stat.size") > -1 &&
+      lib.indexOf("isCompleteSize(stat.size") < lib.indexOf("await finalizeUpload("),
     "the transcode must be queued from the VERIFIED completion, not from the client's claim",
   );
+  assert.match(read("packages/db/src/uploads.ts"), /await enqueue\(tx/, "the finalizer queues the transcode in the same transaction");
 });
 
 // Spec 039 — worker entry
@@ -212,6 +231,17 @@ test("worker entry consumes the transcode queue from Postgres", () => {
     /case\s+["']transcode["']\s*:[\s\S]{0,200}?transcode480p\(/,
     "the transcode job name must still dispatch to transcode480p",
   );
+  // W3-64. The WhatsApp fetch must get the shutdown signal too, or a download
+  // in flight at a deploy runs past the drain deadline and the job is left to
+  // the lease reaper. tests/behaviour/whatsapp-ingest.test.ts executes what the
+  // fetch does with the signal; this line cannot be: the signal is private to
+  // the process and aborted only by main()'s SIGTERM handler, and the worker's
+  // download goes to Meta's fixed Graph host, which no test may contact.
+  assert.match(
+    src,
+    /case\s+["']whatsapp_fetch["']\s*:[\s\S]{0,300}?fetchWhatsAppMedia\([\s\S]{0,200}?signal:\s*stopping\.signal/,
+    "the fetch must be handed the worker's stop signal, as the transcode is",
+  );
   // The lease is what replaced BullMQ's stalled-job detection, and it is not
   // optional: without it a hard-killed worker leaves a job 'running' forever
   // and the video never transcodes, while a naive timeout instead of a
@@ -221,18 +251,39 @@ test("worker entry consumes the transcode queue from Postgres", () => {
     /setInterval\([\s\S]{0,120}?heartbeat\(db,\s*job\.id/,
     "a claimed job must have its lease heartbeated for as long as it runs",
   );
+  // With the handlers' repairs: reaping only the transport row left the killed
+  // attempt's ledger row 'running' and its video 'transcoding' forever (F04),
+  // and a WhatsApp video whose fetch died on its last attempt 'received'
+  // forever (W3-63). The hook is now repairReaped, which runs both.
+  // tests/behaviour/transcode-lifecycle.test.ts and
+  // whatsapp-worker-wiring.test.ts execute it; this pins the wiring.
   assert.match(
     src,
-    /reapExpiredLeases\(db\)/,
+    /reapExpiredLeases\(db,\s*repairReaped\)/,
     "the worker must requeue jobs whose lease lapsed, or a SIGKILL strands them as 'running'",
   );
 });
 
 // Spec 040 — ffmpeg 480p transcode
 test("transcode.ts re-encodes EVERY source, including WhatsApp", () => {
-  const src = read("apps/worker/src/transcode.ts");
+  // The encoder settings moved to encode.ts, as pure functions, so that
+  // tests/behaviour/transcode-output.test.ts can run them through a real ffmpeg
+  // -- which is where the High 10 output (F02) was finally visible. The
+  // invariants pinned here followed them; transcode.ts must still USE them.
+  const src = read("apps/worker/src/transcode.ts") + read("apps/worker/src/encode.ts");
+  assert.match(read("apps/worker/src/transcode.ts"), /runFfmpeg\(hlsEncodeArgs\(/);
   assert.match(src, /libx264/);
-  assert.match(src, /scale=-2:480/);
+  // CORRECTED (F10). This pinned `scale=-2:480`, which fixes the HEIGHT: a
+  // portrait phone clip came out 270 px wide and a 320x180 forward was scaled
+  // up. The short side is capped at 480 instead, with no upscaling;
+  // tests/behaviour/transcode-output.test.ts executes it on real sources.
+  // Per rung since F144; the top rung is still 480p at 800k.
+  assert.match(src, /boundedScale\(r\.short\)/);
+  assert.match(src, /name: "480p", short: 480, maxrate: "800k"/);
+  assert.ok(
+    !/scale=-2:(480|360)/.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1")),
+    "no filter may pin the output height again",
+  );
   assert.match(src, /800k/);
 
   // INVERTED. This used to require `source === "whatsapp"` to take a `-c copy`

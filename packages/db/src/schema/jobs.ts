@@ -27,6 +27,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   jsonb,
@@ -112,6 +113,11 @@ export const jobs = pgTable(
 
     // Admin views and depth counts.
     index("jobs_status_idx").on(t.status, t.createdAt),
+
+    // Created by migration 0024 and declared here so the snapshot describes
+    // the database (F107): the schema is what drizzle-kit diffs against.
+    check("jobs_status_check", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed', 'dead')`),
+    check("jobs_attempts_check", sql`${t.attempts} >= 0 AND ${t.maxAttempts} >= 1`),
   ],
 );
 

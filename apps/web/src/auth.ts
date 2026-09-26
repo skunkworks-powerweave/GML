@@ -27,7 +27,8 @@
 // `getClaims()` verifies the access token's signature LOCALLY against the
 // project's JWKS (this project signs ES256; the key set is fetched once and
 // cached), so reading a session costs no network call and no database query --
-// the same performance the old JWT had.
+// the same performance the old JWT had. The one exception is an administrative
+// role claim, which is confirmed against public.users (see auth()).
 //
 // The claims themselves are minted by `public.custom_access_token_hook`
 // (packages/db/src/migrations/_post/004). GoTrue calls it on sign-in AND on
@@ -42,10 +43,12 @@
 //                         time;
 //   * re-read per mint => role and active are re-checked every refresh, so the
 //                         stale window is one access-token lifetime rather than
-//                         eight hours;
-//   * lockout          => deleted outright. Supabase Auth rate-limits sign-in
-//                         attempts centrally, with no per-account flag an
-//                         attacker can set on someone else's behalf.
+//                         eight hours -- and for the two ADMINISTRATIVE roles
+//                         there is no stale window at all (see auth() below);
+//   * lockout          => deleted outright, with no per-account flag an
+//                         attacker can set on someone else's behalf. Sign-in
+//                         is throttled here instead (see signInAllowed): the
+//                         per-IP limit in Supabase Auth sees only this server.
 //
 // FAIL-CLOSED. If the token carries no `user_role` claim, `auth()` returns
 // null. That is the correct response to the most likely misconfiguration --
@@ -54,9 +57,15 @@
 // principals the hook was supposed to reject.
 
 import "server-only";
+import { cache } from "react";
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
+import { db } from "@gml/db";
+import { users } from "@gml/db/schema";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { rateLimit, rateLimitRefund } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/request-ip";
 
 export type SessionUser = {
   id: string;
@@ -101,57 +110,290 @@ export async function auth(): Promise<Session | null> {
   // enum change should fail closed rather than flow into a role comparison.
   if (!id || !isRoleName(role)) return null;
 
+  // An ADMINISTRATIVE claim is confirmed against the profile, every time.
+  //
+  // The token is verified locally and is honoured until it expires, and
+  // nothing can recall one already issued -- ending a user's sessions only
+  // stops the NEXT mint. For most roles that window is an acceptable cost of
+  // a zero-query session read. For these two it is not: a super_admin demoted
+  // at 10:00 kept /admin/users until their token expired, which was long
+  // enough to create a replacement super_admin account and make the demotion
+  // pointless. Administrators are a handful of people, so the price is one
+  // primary-key read per request for them and nothing for the teachers.
+  let effectiveRole: RoleName = role;
+  if (ADMIN_ROLES.has(role)) {
+    const current = await currentRole(id);
+    if (!current) return null;
+    effectiveRole = current;
+  }
+
   return {
     user: {
       id,
       email: orNull(claims.email),
       name: orNull(claims.user_name),
       image: orNull(claims.user_image),
-      role,
+      role: effectiveRole,
     },
   };
 }
 
+const ADMIN_ROLES: ReadonlySet<RoleName> = new Set<RoleName>(["programme_admin", "super_admin"]);
+
+/** How long after following an emailed link it may be used to set a password. */
+export const RECOVERY_WINDOW_SECONDS = 15 * 60;
+
+/**
+ * How a session that came from an emailed link is recorded in `amr`.
+ *
+ * The /auth/confirm links (README-deploy §2.3) are redeemed with POST /verify,
+ * and GoTrue issues THAT session as "otp" whatever the link's type -- a
+ * recovery link included (internal/api/verify.go:285, v2.196.0). Only the
+ * older PKCE link, through /auth/callback, records "recovery" or "magiclink".
+ * These are exactly the methods GoTrue's own Session.IsRecovery() accepts
+ * (internal/models/factor.go), and it exempts them from its current-password
+ * check for the same reason: each proves recent control of the mailbox.
+ */
+const EMAILED_LINK_METHODS: ReadonlySet<unknown> = new Set(["recovery", "otp", "magiclink"]);
+
+/**
+ * Did the current session come from an emailed link, recently?
+ *
+ *   "recovery"      yes, within RECOVERY_WINDOW_SECONDS
+ *   "expired"       yes, but longer ago than that
+ *   "not_recovery"  a session established some other way (a password)
+ *   "signed_out"    no session
+ *
+ * WHY /login/reset NEEDS THIS. Setting a password there asks for no current
+ * password, which is only acceptable because following the emailed link
+ * proved control of the mailbox. The page used to accept ANY session, so an
+ * unattended, signed-in school computer was enough to change the owner's
+ * password and -- the action then ends every other session -- lock them out
+ * everywhere. GoTrue records how a session was authenticated in the token's
+ * `amr` claim: {"method":"password"} for a password sign-in, one of
+ * EMAILED_LINK_METHODS for a link. The window bounds the same
+ * unattended-computer case for a browser that DID follow a link and was then
+ * left open.
+ *
+ * A MAGIC-LINK session counts too, and cannot be told apart: /auth/confirm
+ * yields "otp" for both. So for fifteen minutes after signing in by magic
+ * link, /login/reset will set a password without the current one. That proves
+ * nothing less than a recovery link does -- whoever can read the mailbox can
+ * request one of those at will.
+ */
+export async function recoverySessionState(): Promise<"recovery" | "expired" | "not_recovery" | "signed_out"> {
+  let amr: unknown;
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data, error } = await supabase.auth.getClaims();
+    if (error || !data?.claims) return "signed_out";
+    amr = (data.claims as unknown as Record<string, unknown>).amr;
+  } catch {
+    return "signed_out";
+  }
+  const entry = Array.isArray(amr)
+    ? (amr as Array<{ method?: unknown; timestamp?: unknown }>).find((a) => EMAILED_LINK_METHODS.has(a?.method))
+    : undefined;
+  if (!entry) return "not_recovery";
+  const at = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+  return Date.now() / 1000 - at <= RECOVERY_WINDOW_SECONDS ? "recovery" : "expired";
+}
+
+/**
+ * The role public.users holds for `id` now, or null when the profile is
+ * missing, inactive or soft-deleted -- the same refusals the access-token hook
+ * applies at mint time. A failed read is also null: auth() fails closed.
+ *
+ * cache(): a page render calls auth() from the layout, the page and its guards;
+ * within one request this is read once.
+ */
+const currentRole = cache(async (id: string): Promise<RoleName | null> => {
+  try {
+    const [row] = await db
+      .select({ role: users.role, active: users.active, deletedAt: users.deletedAt })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+    if (!row || !row.active || row.deletedAt || !isRoleName(row.role)) return null;
+    return row.role;
+  } catch {
+    return null;
+  }
+});
+
+/**
+ * Why a password sign-in failed. A CODE, not a sentence: the login page renders
+ * it in the user's language (login.error.* in the locale bundles), and the
+ * English literals this used to return reached Hindi and Bhoti screens as-is.
+ */
+export type SignInError =
+  | "invalid_credentials"
+  | "inactive"
+  | "email_not_confirmed"
+  | "rate_limited"
+  | "unavailable";
+
 /**
  * Sign in with email + password.
  *
- * Returns an error string rather than throwing, and the string is deliberately
- * the same for every failure mode. Distinguishing "no such account" from "wrong
- * password" -- which the old AccountLockedError path did -- hands an attacker a
+ * Returns an error code rather than throwing. "No such account", "wrong
+ * password" and "deactivated" deliberately share one code: distinguishing them
+ * -- which the old AccountLockedError path did -- hands an attacker a
  * membership oracle for an organisation whose email addresses are guessable.
+ * The other codes are safe because of WHEN they can occur (see
+ * signInErrorCode).
  */
 export async function signInWithPassword(
   email: string,
   password: string,
-): Promise<{ error: string | null }> {
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (!error) return { error: null };
+): Promise<{ error: SignInError | null; userId?: string }> {
+  const allowed = await signInAllowed(email);
+  if (allowed === "unavailable") return { error: "unavailable" };
+  if (allowed === "limited") return { error: "rate_limited" };
 
-  // A 403 from the access-token hook means the credentials were RIGHT but the
-  // account is not permitted a token -- inactive, soft-deleted, or never
-  // invited. Saying "incorrect password" to someone whose password was correct
-  // sends them to reset it, which will not help. This distinction is safe to
-  // surface: the caller already proved they hold the password.
-  const status = (error as { status?: number }).status;
-  if (status === 403) {
-    return { error: "This account is not active. Contact your administrator." };
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: signInErrorCode(error) };
+    await refundSignIn(allowed);
+    return { error: null, userId: data.user?.id };
+  } catch {
+    return { error: "unavailable" };
   }
-  if (status === 429) {
-    return { error: "Too many sign-in attempts. Wait a few minutes and try again." };
+}
+
+/**
+ * Map GoTrue's answer to what the person at the keyboard should be told.
+ *
+ * Everything used to collapse to "Incorrect email or password." except 403 and
+ * 429, so an outage and an unconfirmed address both sent people to reset a
+ * password that was fine.
+ *
+ *   unavailable          no answer, or a 5xx: nothing to do with the account.
+ *   rate_limited         GoTrue's own limit.
+ *   email_not_confirmed  GoTrue checks this AFTER verifying the password, so
+ *                        only someone holding it can see it.
+ *   inactive             a 403 from the access-token hook, which runs after a
+ *                        successful password check: the credentials were right
+ *                        and the profile is inactive or missing.
+ *   invalid_credentials  everything else -- INCLUDING user_banned, which is how
+ *                        a deactivated account answers. GoTrue checks the ban
+ *                        BEFORE the password, so user_banned comes back for any
+ *                        password at all; a distinct message would tell anyone
+ *                        which addresses are deactivated accounts. Instead the
+ *                        shared message says to contact the administrator if the
+ *                        person is sure of their password.
+ */
+function signInErrorCode(error: unknown): SignInError {
+  const e = error as { status?: number; code?: string; name?: string };
+  if (e.status === 429 || e.code === "over_request_rate_limit") return "rate_limited";
+  if (e.name === "AuthRetryableFetchError" || !e.status || e.status >= 500) return "unavailable";
+  if (e.code === "email_not_confirmed") return "email_not_confirmed";
+  if (e.status === 403) return "inactive";
+  return "invalid_credentials";
+}
+
+// ── Sign-in throttle ──────────────────────────────────────────────────────────
+//
+// THIS IS THE REAL CONTROL, NOT SUPABASE'S. GoTrue does rate-limit password
+// sign-in per client IP -- but every call reaches it from this server, so it
+// sees one client for the whole deployment. Where it applies no limit (a
+// self-hosted stack) online guessing was unlimited; on hosted Supabase the one
+// shared bucket means a single attacker exhausts sign-in for everyone.
+//
+// Two counters, both fixed 15-minute windows in Postgres (lib/rate-limit.ts),
+// both counting FAILED attempts:
+//
+//   per account, per address   caps guessing at one person's password from one
+//                              source. Keyed on the address as well as the
+//                              email ON PURPOSE: an email-only key is exactly
+//                              the lockout this codebase deleted -- a stranger
+//                              who knows an address could keep its owner out
+//                              with ten requests every quarter hour.
+//   per address                caps spraying one guess across many accounts.
+//                              Generous, because a training room or a school
+//                              shares one public address behind NAT and a
+//                              whole cohort signs in at once.
+//
+// Every attempt is counted before the password is checked, so concurrent
+// attempts cannot all pass the check first, and a successful sign-in gives
+// its count back. It used to keep it: a venue behind one NAT address was
+// locked out after 100 CORRECT sign-ins, and onboarding costs each teacher two
+// (the sign-in, and /settings re-checking the current password through here).
+// Only a correct password earns a refund, and only of its own count, so
+// guesses stay capped.
+//
+// Distributed guessing from many addresses is beyond what an application
+// limiter can see; README-deploy §2.2 has the Supabase settings for that.
+const SIGN_IN_WINDOW_MS = 15 * 60 * 1000;
+const SIGN_IN_PER_ACCOUNT_PER_ADDRESS = 10;
+const SIGN_IN_PER_ADDRESS = 100;
+
+/** The counters one attempt was charged to. */
+type SignInCharges = Array<{ bucket: string; id: string; windowStart: string }>;
+
+/** Fails CLOSED: a limiter that cannot count answers "unavailable". */
+async function signInAllowed(email: string): Promise<SignInCharges | "limited" | "unavailable"> {
+  try {
+    const ip = await clientIp();
+    const addressKey = { bucket: "sign-in:address", id: ip };
+    const address = await rateLimit({ ...addressKey, limit: SIGN_IN_PER_ADDRESS, windowMs: SIGN_IN_WINDOW_MS });
+    if (!address.ok) return "limited";
+    const accountKey = { bucket: "sign-in:account", id: `${email.trim().toLowerCase()}|${ip}` };
+    const account = await rateLimit({ ...accountKey, limit: SIGN_IN_PER_ACCOUNT_PER_ADDRESS, windowMs: SIGN_IN_WINDOW_MS });
+    if (!account.ok) return "limited";
+    return [
+      { ...addressKey, windowStart: address.windowStart },
+      { ...accountKey, windowStart: account.windowStart },
+    ];
+  } catch {
+    return "unavailable";
   }
-  return { error: "Incorrect email or password." };
+}
+
+/**
+ * Give a successful sign-in's counts back. Best effort: a refund that fails
+ * leaves the count one high, which is the old behaviour, and must never turn
+ * a correct sign-in into a refusal.
+ */
+async function refundSignIn(charges: SignInCharges): Promise<void> {
+  for (const c of charges) {
+    try {
+      await rateLimitRefund(c);
+    } catch (err) {
+      console.error(`[auth] could not refund the ${c.bucket} sign-in count:`, err);
+    }
+  }
 }
 
 /**
  * Sign out and redirect.
  *
- * scope 'local' clears this browser's session only. 'global' -- which kills the
- * user's sessions on every device -- is what the admin deactivate path uses,
- * and is not what someone clicking "sign out" on a shared school computer
- * expects to happen to their phone.
+ * scope 'local' clears this browser's session only. Ending the user's sessions
+ * on every device is what the admin deactivate path does (lib/supabase/
+ * sessions.ts), and is not what someone clicking "sign out" on a shared school
+ * computer expects to happen to their phone.
+ *
+ * Audited first, while auth() can still say who is leaving. lib/audit is
+ * imported lazily: it imports auth() from this module, and a sign-out is the
+ * only place here that writes a row -- auth() itself, called on every render,
+ * stays free of side effects.
  */
 export async function signOut(opts?: { redirectTo?: string }): Promise<never> {
+  try {
+    const session = await auth();
+    if (session) {
+      const { recordAudit } = await import("@/lib/audit");
+      await recordAudit({
+        action: "auth.sign_out",
+        entityType: "user",
+        entityId: session.user.id,
+        userId: session.user.id,
+      });
+    }
+  } catch {
+    // Best effort, like every audit write: never block leaving.
+  }
   try {
     const supabase = await createSupabaseServerClient();
     await supabase.auth.signOut({ scope: "local" });

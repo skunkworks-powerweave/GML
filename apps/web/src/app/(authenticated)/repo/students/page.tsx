@@ -17,15 +17,19 @@
 // page-render audit; the new "learners.search" row is a SEPARATE event
 // keyed on the search query text.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { and, asc, eq, ilike, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit, recordAuditDedup } from "@/lib/audit";
+import { isUuid } from "@/lib/ids";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Learners" };
 
 const PAGE_SIZE = 100;
 
@@ -49,7 +53,10 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
-  const schoolFilter = typeof sp.school === "string" && sp.school.length > 0 ? sp.school : undefined;
+  // A malformed ?school= is ignored, as /repo/teachers and /repo/sessions do:
+  // passed through, it reached a uuid comparison and Postgres answered 22P02,
+  // a 500 for a truncated link.
+  const schoolFilter = isUuid(sp.school) ? sp.school : undefined;
   // Spec 168 — name search. Empty / whitespace-only queries treat as absent
   // so typing then deleting doesn't leave a no-op filter live.
   const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
@@ -205,7 +212,9 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
           </form>
         </div>
 
-        <div className="card" style={{ overflow: "hidden" }}>
+        {/* Scrolls rather than clips: overflow:hidden cut the right-hand
+            columns off on a phone, with no way to reach them. */}
+        <div className="card" style={{ overflowX: "auto" }}>
           <table className="t">
             <thead>
               <tr>

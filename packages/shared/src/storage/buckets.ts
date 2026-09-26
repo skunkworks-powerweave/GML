@@ -14,12 +14,14 @@
 export const BUCKETS = {
   /** Source video as uploaded, from the browser or from WhatsApp. */
   videosOriginal: "videos-original",
-  /** Transcoder output: one media playlist plus its segments. */
+  /** Transcoder output: a master playlist, one media playlist per rendition, their segments. */
   videosHls: "videos-hls",
   /** Poster frames extracted during transcode. */
   posters: "posters",
   /** Reading material served through the media proxy. */
   pdfs: "pdfs",
+  /** SCORM package files, served same-origin by /api/scorm/content (_post/009). */
+  scormPackages: "scorm-packages",
 } as const;
 
 export type BucketName = (typeof BUCKETS)[keyof typeof BUCKETS];
@@ -31,26 +33,65 @@ export function isBucketName(value: unknown): value is BucketName {
   return typeof value === "string" && BUCKET_VALUES.has(value);
 }
 
+/**
+ * The content types the videos-original bucket accepts: its
+ * allowed_mime_types in _post/005, which Supabase enforces on every upload.
+ * Kept equal to that list (tests/behaviour/whatsapp-ingest.test.ts).
+ */
+export const VIDEOS_ORIGINAL_TYPES: ReadonlySet<string> = new Set([
+  "video/mp4",
+  "video/quicktime",
+  "video/x-matroska",
+  "video/webm",
+  "video/3gpp",
+  "video/x-msvideo",
+  "video/mpeg",
+  "application/octet-stream",
+]);
+
+/**
+ * The content type to store a source video under: the declared one when the
+ * bucket lists it, otherwise application/octet-stream.
+ *
+ * A WhatsApp document carries whatever type the sender's phone declared --
+ * video/x-m4v, video/mp2t from a camcorder, video/x-flv -- and Supabase refuses
+ * an upload whose type the bucket does not list. That refusal is
+ * deterministic, so retrying cannot help: the video was lost after every
+ * attempt failed the same way. ffmpeg reads the container from the bytes, so
+ * the stored type does not affect the transcode; the declared type is still
+ * recorded on the files row.
+ */
+export function storableVideoType(declared: string | null | undefined): string {
+  const type = (declared ?? "").split(";")[0]!.trim().toLowerCase();
+  return VIDEOS_ORIGINAL_TYPES.has(type) ? type : "application/octet-stream";
+}
+
 // ── HLS key layout ────────────────────────────────────────────────────────────
 //
-// The playlist is named `index.m3u8`, not `master.m3u8`. With a single ffmpeg
-// output and `-hls_playlist_type vod` there is exactly one rendition, so what
-// ffmpeg writes is a MEDIA playlist -- calling it a master playlist described a
-// variant-stream file that has never existed here and sent readers looking for
-// a level of indirection that is not there.
+// Two layouts exist, both flat under hls/<id>/, and both must keep playing:
 //
-// `video_submissions.hls_master_key` keeps its column name: renaming it would
-// be a migration across every read site for no behavioural gain, and the column
-// comment records the discrepancy.
+//   ladder (current)   master.m3u8 -> v0.m3u8, v1.m3u8, ... (240p, 360p, 480p)
+//                      segments v0_00000.ts, v1_00000.ts, ...
+//   single (before)    index.m3u8, a MEDIA playlist; segments seg_00000.ts ...
+//
+// `video_submissions.hls_master_key` names whichever playlist a video has. The
+// single-rendition videos were written with `index.m3u8` precisely because
+// there was no master then; the column kept its name, and now describes the
+// ladder's key literally.
 
 /** Directory that holds one submission's playlist and segments. */
 export function hlsPrefix(videoSubmissionId: string): string {
   return `hls/${videoSubmissionId}`;
 }
 
-/** Full key of the media playlist for a submission. */
+/** Full key of a SINGLE-rendition submission's media playlist (transcoded before the ladder). */
 export function hlsPlaylistKey(videoSubmissionId: string): string {
   return `${hlsPrefix(videoSubmissionId)}/index.m3u8`;
+}
+
+/** Full key of a submission's master playlist: the rendition ladder. */
+export function hlsMasterPlaylistKey(videoSubmissionId: string): string {
+  return `${hlsPrefix(videoSubmissionId)}/master.m3u8`;
 }
 
 /** Poster frame key for a submission. */

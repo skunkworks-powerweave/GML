@@ -87,10 +87,14 @@ test("spec 123 — FTUXTour reads role + ftuxSeenAt props and mirrors prototype 
     /FTUX_TOURS\.super_admin\s*=\s*FTUX_TOURS\.programme_admin/,
     "super_admin must alias to programme_admin (per help.jsx)",
   );
-  assert.match(
+  // The observer does NOT alias to the mentor any more: that tour opened with
+  // "Your mentees live here", pointing at an item observers do not have. Every
+  // role's steps are checked against its own navigation in
+  // tests/behaviour/ui-help.test.ts.
+  assert.doesNotMatch(
     src,
     /FTUX_TOURS\.observer\s*=\s*FTUX_TOURS\.mentor/,
-    "observer must alias to mentor (per help.jsx)",
+    "the observer tour must be its own, not the mentor's",
   );
 });
 
@@ -149,17 +153,19 @@ test("spec 123 — FTUXTour ports the prototype's ftux-* class names", () => {
 
 test("spec 123 — (authenticated)/layout.tsx selects ftuxSeenAt and mounts <FTUXTour>", () => {
   const src = read(LAYOUT);
-  // Select clause must include ftuxSeenAt alongside whatever else the layout already pulls.
-  assert.match(
-    src,
-    /ftuxSeenAt:\s*userPrefs\.ftuxSeenAt/,
-    "layout must include ftuxSeenAt: userPrefs.ftuxSeenAt in its select object",
-  );
+  // The layout used to run its own `select({ uiLanguage, ftuxSeenAt })`. It
+  // now takes the whole row from the per-request resolver that also decides
+  // the UI language (i18n/resolve.ts, F124), so the invariant is: ftuxSeenAt
+  // comes from that row, and the resolver reads user_prefs. Rendered for real
+  // in tests/behaviour/ui-locale-source.test.ts.
+  assert.match(src, /await viewerPrefs\(\)/, "layout must take user_prefs from the shared viewerPrefs() resolver");
+  assert.match(src, /prefRow\?\.ftuxSeenAt/, "layout must derive ftuxSeenAt from that row");
+  assert.match(read("apps/web/src/i18n/resolve.ts"), /\.from\(userPrefs\)/, "the resolver must read user_prefs");
   // The component must be mounted with the right props.
   assert.match(
     src,
-    /<FTUXTour\s+role=\{user\.role\}\s+ftuxSeenAt=\{ftuxSeenAt\}\s*\/>/,
-    "layout must mount <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />",
+    /<FTUXTour\s+role=\{user\.role\}\s+ftuxSeenAt=\{ftuxSeenAt\}\s+whatsapp=\{whatsappPhoneForUsers\(\) !== null\}\s*\/>/,
+    "layout must mount <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} whatsapp={...} /> (FR-33)",
   );
   // Imports
   assert.match(
@@ -178,12 +184,26 @@ test("spec 123 — Sidebar emits data-help-anchor with the nav- prefix", () => {
   );
 });
 
-test("spec 123 — Topbar tags the bell with data-help-anchor='topbar-help'", () => {
+// This test was titled "Topbar tags the BELL with data-help-anchor='topbar-help'"
+// and the bell -- a link to /inbox -- is where the anchor sat: the tour's
+// "Help is always here" step spotlit the notifications. Corrected in the
+// 2026-09 freeze (fix brief D_ui #5): the anchor belongs on the help control.
+// The rendered markup (exactly one anchor, not on the bell) is checked in
+// tests/behaviour/ui-navigation.test.ts.
+test("spec 123 — Topbar tags its HELP control, not the bell, with data-help-anchor='topbar-help'", () => {
   const src = read(TOPBAR);
   assert.match(
     src,
+    /data-help-anchor=["']topbar-help["'][^>]*>\s*<HelpButton\b/,
+    "Topbar must put data-help-anchor='topbar-help' on the element wrapping <HelpButton> so the FTUX 'Help is always here' step resolves to help",
+  );
+  const bell = src.match(/<Link\b[^>]*data-testid="topbar-bell"[^>]*>/);
+  assert.ok(bell, "the bell link must still render");
+  assert.doesNotMatch(bell[0], /data-help-anchor/, "the notifications bell must not carry the help anchor");
+  assert.doesNotMatch(
+    read("apps/web/src/components/help/HelpHeadbtn.tsx"),
     /data-help-anchor=["']topbar-help["']/,
-    "Topbar must tag a control with data-help-anchor='topbar-help' so the FTUX 'Help is always here' step resolves",
+    "HelpHeadbtn is a per-page-header button; hardcoding the anchor there would add a second match for every page that mounts one",
   );
 });
 

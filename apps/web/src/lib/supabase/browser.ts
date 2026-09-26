@@ -20,8 +20,14 @@
 // from `anon` and enabled RLS with no policies, and _post/005 grants Storage
 // writes only to `authenticated`, only under the caller's own uuid prefix.
 
-import { createBrowserClient } from "@supabase/ssr";
+import {
+  createBrowserClient,
+  parseCookieHeader,
+  serializeCookieHeader,
+  type CookieMethodsBrowser,
+} from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { boundSessionCookie } from "@/lib/supabase/cookies";
 
 /**
  * Config is PASSED IN, not read from process.env.
@@ -45,12 +51,35 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 export type SupabaseBrowserConfig = { url: string; anonKey: string };
 
+/**
+ * document.cookie, with every write bounded as the server's writes are.
+ *
+ * Given no cookie methods, createBrowserClient writes document.cookie itself
+ * with @supabase/ssr's defaults: Max-Age 400 days, no Secure. And in a browser
+ * it refreshes the session on its own, on a timer, for as long as the page is
+ * open -- which on a long upload is many 15-minute tokens -- so each refresh
+ * rewrote the cookie the server had written Secure and bounded
+ * (lib/supabase/cookies.ts) as neither. The library applies
+ * its 400-day Max-Age after any cookieOptions, so the bound goes on each
+ * write here. Secure follows the page: an http page (local development) could
+ * not set a Secure cookie at all.
+ */
+const sessionCookies: CookieMethodsBrowser = {
+  getAll: () => parseCookieHeader(document.cookie),
+  setAll: (toSet) => {
+    const secure = window.location.protocol === "https:";
+    for (const { name, value, options } of toSet) {
+      document.cookie = serializeCookieHeader(name, value, boundSessionCookie(options, secure));
+    }
+  },
+};
+
 let cached: { key: string; client: SupabaseClient } | null = null;
 
 export function supabaseBrowser(config: SupabaseBrowserConfig): SupabaseClient {
   const cacheKey = `${config.url}|${config.anonKey}`;
   if (cached && cached.key === cacheKey) return cached.client;
-  const client = createBrowserClient(config.url, config.anonKey);
+  const client = createBrowserClient(config.url, config.anonKey, { cookies: sessionCookies });
   cached = { key: cacheKey, client };
   return client;
 }
@@ -58,13 +87,27 @@ export function supabaseBrowser(config: SupabaseBrowserConfig): SupabaseClient {
 /**
  * The current access token, or null.
  *
- * Used as the TUS Authorization header. Returns null rather than throwing when
- * there is no session, so the caller can say "please sign in again" instead of
- * surfacing an unhandled error from inside a file picker.
+ * Used as the TUS Authorization header, asked for again before EVERY request of
+ * an upload: getSession() refreshes the session when its token is close to
+ * expiry, so each call returns a token with time left on it. `refresh` forces
+ * a new token for the case where Storage has refused one the browser still
+ * believes valid (clock skew, or a refresh that has not run yet).
+ *
+ * Returns null rather than throwing when there is no session, so the caller
+ * can say "please sign in again" instead of surfacing an unhandled error from
+ * inside a file picker.
  */
-export async function accessToken(config: SupabaseBrowserConfig): Promise<string | null> {
+export async function accessToken(
+  config: SupabaseBrowserConfig,
+  opts: { refresh?: boolean } = {},
+): Promise<string | null> {
   try {
-    const { data } = await supabaseBrowser(config).auth.getSession();
+    const client = supabaseBrowser(config);
+    if (opts.refresh) {
+      const { data } = await client.auth.refreshSession();
+      if (data.session) return data.session.access_token;
+    }
+    const { data } = await client.auth.getSession();
     return data.session?.access_token ?? null;
   } catch {
     return null;

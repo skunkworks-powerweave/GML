@@ -24,9 +24,9 @@ records what was true at the time and is not revised afterwards.
 
 | Layer | Mechanism |
 |---|---|
-| Database (load-bearing) | `BEFORE UPDATE` and `BEFORE DELETE` triggers that unconditionally raise. `_post/001_revoke_audit_writes.sql` |
-| Database (privileges) | `REVOKE UPDATE, DELETE, TRUNCATE` from `PUBLIC` and, on Supabase, explicitly from `anon`, `authenticated`, `service_role` — an explicit grant is not removed by revoking from PUBLIC. `_post/001`, `_post/002` |
-| Test | `tests/behaviour/invariants.test.ts` issues a real UPDATE and a real DELETE and requires the database to refuse both. Mutation-checked: dropping the triggers fails the test. |
+| Database (load-bearing) | Three triggers that unconditionally raise, all calling `audit_log_block_mutations()`: `audit_log_no_update` (`BEFORE UPDATE`) and `audit_log_no_delete` (`BEFORE DELETE`), `FOR EACH ROW`, in `_post/001_revoke_audit_writes.sql`; and `audit_log_no_truncate` (`BEFORE TRUNCATE`, `FOR EACH STATEMENT`) in `_post/007_audit_log_no_truncate.sql`. Triggers fire whichever role issues the statement, the table owner included. |
+| Database (privileges) | `REVOKE UPDATE, DELETE, TRUNCATE` from `PUBLIC` and, on Supabase, explicitly from `anon`, `authenticated`, `service_role` — an explicit grant is not removed by revoking from PUBLIC. `_post/001`, `_post/002`. A REVOKE never touches the owner's own privileges, and the app, the worker and migrate all connect as the owner (`postgres` on Supabase), so for them the triggers are the only thing that stops a TRUNCATE. |
+| Test | `tests/behaviour/invariants.test.ts` issues a real UPDATE, a real DELETE and a real TRUNCATE (the TRUNCATE as the table owner, inside a transaction that is always rolled back) and requires the database to refuse all three. Mutation-checked: dropping the triggers fails the test. The same file requires this table to name every trigger the catalogue shows on `audit_log`. |
 
 **What fought it.** `audit_log.user_id` was declared `REFERENCES users(id) ON
 DELETE SET NULL`. "SET NULL" is implemented as an UPDATE — which the
@@ -38,10 +38,23 @@ referential action was wrong here: SET NULL mutates an immutable table AND
 destroys attribution, CASCADE lets deleting a user erase their own trail, and
 RESTRICT is the undeletable-user bug with a clearer message.
 
+Row triggers never fire on TRUNCATE. Until `_post/007` added the statement
+trigger, one `TRUNCATE audit_log` from the owner emptied the whole log, and on
+a clone of the live database it did.
+
 **Consequence, stated plainly.** `audit_log.user_id` may reference a user who no
 longer exists. That is intentional — it is what preserves attribution across a
 deletion, which is exactly what you want when investigating. Readers must LEFT
 JOIN, never INNER JOIN.
+
+**What it does not stop.** The triggers stop an application bug or a stray psql
+session, not the owner acting on purpose: the owner can `ALTER TABLE audit_log
+DISABLE TRIGGER`, drop the triggers or replace their function, then UPDATE or
+DELETE at will. The app connects as the owner, so a process running arbitrary
+SQL as the app could rewrite the trail. (README-IT's signed-off archiving
+procedure is built on that same DISABLE TRIGGER.) Closing it means running the app and the
+worker as a role that does not own `audit_log` and holds only INSERT and SELECT
+on it, with ownership left to the migrate role; that has not been done.
 
 ---
 
@@ -118,9 +131,14 @@ Save As — does not produce an unwatermarked file.
 production deploy is refused.
 
 **Enforcement.** `scripts/restore.sh` restores the newest dump into a throwaway
-database, asserts ≥40 tables and ≥1 user actually landed, and stamps
-`workspace/last_restore_drill.json`. `scripts/check-restore-drill.mjs` reads the
-stamp and `scripts/deploy.sh` runs it first.
+database (a Postgres container of the dump's own major, started and removed by
+the drill), asserts ≥40 tables and ≥1 user actually landed, and stamps
+`workspace/last_restore_drill.json`, as `"result": "failed"` with the reason
+when it does not pass. `scripts/check-restore-drill.mjs` reads the stamp and
+`scripts/deploy.sh` runs it before building, with `NODE_ENV` defaulting to
+`production`, on every deploy **except a host's first**, when no backup can
+exist yet. (Until this was fixed the gate self-skipped on every deploy, because
+deploy.sh never set `NODE_ENV`.)
 
 **Scope, stated honestly.** The drill covers the **database only**. The stamp
 reports `"storage_verified": false`, because the object mirror is not exercised
@@ -138,7 +156,10 @@ recorded.
 
 **Enforcement.** Drizzle's journal for numbered migrations, plus a
 `_post_migrations_applied` ledger for the raw-SQL lane, each applied inside a
-transaction by `packages/db/scripts/migrate.ts`. A failed `migrate` exits
+transaction by `packages/db/scripts/migrate.ts`. The one exception is
+`_post/always/`: idempotent invariants over "every table" (RLS on every public
+table), re-applied unledgered on every deploy, because a ledgered file only
+ever sees the tables that existed when it first ran. A failed `migrate` exits
 non-zero, and `app`/`worker` block on it via
 `depends_on: service_completed_successfully` — so a bad schema change degrades
 to "no deploy happened" rather than "the site is down".

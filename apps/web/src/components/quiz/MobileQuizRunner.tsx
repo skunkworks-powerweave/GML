@@ -39,6 +39,10 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
+import { PickedMark } from "./PickedMark";
+import { useQuizAnswers } from "./answer-drafts";
+import { loadLatencyMs } from "./deadline";
+import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -52,13 +56,24 @@ export type MobileQuizRunnerProps = {
   questions: MobileQuizRunnerQuestion[];
   // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
   timeLimitSeconds?: number | null;
-  // Server action — receives slug + answers; redirects to
+  // The quiz_attempts row this runner was rendered for. Every submit names it,
+  // so a runner left open on an earlier attempt cannot close a newer one
+  // (W3-19); "" when there is none, which the action refuses.
+  attemptId: string;
+  // Whose attempt it is: with the attempt id, the key the answers are kept
+  // under in this tab so a reload does not lose them (answer-drafts.ts).
+  userId?: string | null;
+  // The database's clock (epoch ms) as the page rendered: what the page took
+  // to arrive comes off the countdown (deadline.ts, W3-18).
+  serverNowMs?: number | null;
+  // Server action — receives slug + attempt id + answers; redirects to
   // /quizzes/[slug]/result/[id]. Drop-in same shape as QuizRunner.
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
   // instead of silently shrinking the denominator.
   submitAction: (
     slug: string,
+    attemptId: string,
     answers: Array<{ questionId: string; selectedIndex: number | null }>,
   ) => Promise<void>;
 };
@@ -81,11 +96,16 @@ export function MobileQuizRunner({
   title,
   questions,
   timeLimitSeconds,
+  attemptId,
+  userId,
+  serverNowMs,
   submitAction,
 }: MobileQuizRunnerProps) {
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
-  const [selected, setSelected] = useState<Record<string, number>>({});
+  // Kept in this tab's sessionStorage as they are picked and restored for
+  // the same attempt, so a reload or a stray tap does not lose them (W3-20).
+  const [selected, pickAnswer] = useQuizAnswers(userId, slug, attemptId, questions);
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
   // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
@@ -93,6 +113,13 @@ export function MobileQuizRunner({
   // below ticks it down to 0 and fires the auto-submit.
   const [remaining, setRemaining] = useState<number | null>(
     typeof timeLimitSeconds === "number" ? timeLimitSeconds : null,
+  );
+  // The limit the attempt opened with, seeded once like `remaining`: which
+  // spoken warnings are due depends on it (time-warning.ts).
+  const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
+  // The time ran out with nothing to send; as in QuizRunner.
+  const [nothingSent, setNothingSent] = useState(
+    () => typeof timeLimitSeconds === "number" && timeLimitSeconds <= 0,
   );
   // Spec 159 — refs let the interval tick read the latest selection /
   // question list / submitted flag without re-arming the timer when those
@@ -113,32 +140,42 @@ export function MobileQuizRunner({
 
   // Spec 159 — countdown effect. Empty dep array (timer mounts once and
   // tears down on unmount). Same shape as the desktop runner so the two
-  // surfaces have identical auto-submit semantics.
+  // surfaces have identical auto-submit semantics: counted against a
+  // deadline (a locked phone runs no interval callbacks, so counting ticks
+  // showed more time than the server allows), and fired ONCE (it used to
+  // re-send the same answers every second after a refused auto-submit), and
+  // a runner that appeared with no time left sends nothing unless something
+  // was chosen (W3-17). See QuizRunner for the full reasoning.
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
+    const mountedAt = Date.now();
+    const deadline = mountedAt + timeLimitSeconds * 1000 - loadLatencyMs(serverNowMs, mountedAt);
+    const hadTime = deadline > mountedAt;
     const autoSubmit = () => {
       if (submittedRef.current) return;
-      submittedRef.current = true;
       const live = selectedRef.current;
+      if (!hadTime && Object.keys(live).length === 0) {
+        setNothingSent(true);
+        return;
+      }
+      setNothingSent(false);
+      submittedRef.current = true;
       const answers = questionsRef.current.map((qq) => ({
         questionId: qq.id,
         selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
       }));
-      submitAction(slug, answers).catch((e: unknown) => {
+      submitAction(slug, attemptId, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
-        submittedRef.current = false;
+        submittedRef.current = false; // a manual Submit may retry
       });
     };
     const id = setInterval(() => {
-      setRemaining((prev) => {
-        if (prev === null) return prev;
-        const next = prev - 1;
-        if (next <= 0) {
-          queueMicrotask(autoSubmit);
-          return 0;
-        }
-        return next;
-      });
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setRemaining(left);
+      if (left === 0) {
+        clearInterval(id);
+        autoSubmit();
+      }
     }, 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,8 +237,7 @@ export function MobileQuizRunner({
   // After the early return above, currentQ is guaranteed non-undefined.
   const q = currentQ as MobileQuizRunnerQuestion;
 
-  const onPick = (i: number) =>
-    setSelected((s) => ({ ...s, [q.id]: i }));
+  const onPick = (i: number) => pickAnswer(q.id, i);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with
@@ -223,7 +259,7 @@ export function MobileQuizRunner({
     setServerErr(null);
     startTransition(async () => {
       try {
-        await submitAction(slug, answers);
+        await submitAction(slug, attemptId, answers);
       } catch (e) {
         setServerErr((e as Error).message);
         submittedRef.current = false;
@@ -274,13 +310,15 @@ export function MobileQuizRunner({
             {/* Spec 159 — countdown chip lives next to the question
                 counter so it stays visible on the narrow mobile header
                 without competing for the question prompt's vertical
-                space. role="timer" + aria-live="polite" matches the
-                desktop runner's a11y contract. */}
+                space. role="timer" and NOT a live region, as on the
+                desktop: aria-live="polite" here had a screen reader read out
+                every second. The status region after it speaks at 5 minutes,
+                1 minute and time up only; the chip's "Time remaining" is for
+                a screen reader, the chip itself was a bare "08:42" (F135). */}
             {remaining !== null ? (
               <span
                 data-testid="mobile-quiz-countdown"
                 role="timer"
-                aria-live="polite"
                 style={{
                   fontFamily: "var(--mono)",
                   fontSize: 12,
@@ -294,7 +332,13 @@ export function MobileQuizRunner({
                     (remaining < 60 ? "var(--rust)" : "var(--line)"),
                 }}
               >
+                <span className="sr-only">Time remaining </span>
                 {formatRemaining(remaining)}
+              </span>
+            ) : null}
+            {remaining !== null ? (
+              <span role="status" className="sr-only" data-testid="mobile-quiz-time-warning">
+                {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
               </span>
             ) : null}
             <div
@@ -328,10 +372,16 @@ export function MobileQuizRunner({
           {questions.map((qq, i) => {
             const answered = selected[qq.id] !== undefined;
             const active = i === idx;
+            // role="img": aria-label is not allowed on a bare <span> (ARIA
+            // 1.2), and assistive technology did not read it there, so these
+            // labels were never heard. The current dot is also taller, so it
+            // is not told from the others by colour alone (F135).
             return (
               <span
                 key={qq.id}
                 data-testid={`mobile-quiz-dot-${i}`}
+                role="img"
+                aria-current={active ? "step" : undefined}
                 aria-label={
                   active
                     ? `Current question ${i + 1}`
@@ -341,7 +391,7 @@ export function MobileQuizRunner({
                 }
                 style={{
                   flex: 1,
-                  height: 4,
+                  height: active ? 8 : 4,
                   borderRadius: 2,
                   background: active
                     ? "var(--saffron)"
@@ -393,6 +443,11 @@ export function MobileQuizRunner({
                 type="button"
                 data-testid={`mobile-quiz-option-${i}`}
                 onClick={() => onPick(i)}
+                // Same contract as the desktop QuizRunner: selection is
+                // announced, not only painted saffron. Not role="radio" (see
+                // QuizRunner for why). Seen, it is the saffron fill AND a
+                // check mark: the fill alone was colour only (F135).
+                aria-pressed={isSel}
                 style={{
                   textAlign: "left",
                   padding: "14px 14px",
@@ -430,11 +485,17 @@ export function MobileQuizRunner({
                   {String.fromCharCode(65 + i)}
                 </span>
                 {opt}
+                {isSel ? <PickedMark /> : null}
               </button>
             );
           })}
         </div>
 
+        {nothingSent ? (
+          <p data-testid="mobile-quiz-time-up" style={{ marginTop: 14, fontSize: 13, color: "var(--rust)" }}>
+            The time for this attempt ran out before the page loaded, so nothing was submitted.
+          </p>
+        ) : null}
         {serverErr ? (
           <div
             data-testid="mobile-quiz-error"
@@ -450,14 +511,26 @@ export function MobileQuizRunner({
         ) : null}
       </div>
 
-      {/* Sticky bottom action bar */}
+      {/* Sticky bottom action bar.
+
+          CLEAR OF THE SHELL'S FIXED CHROME. It stuck at bottom: 0, which is
+          exactly where MobileShell draws its position:fixed tab bar, with the
+          "?" help button floating over the right end. On a 640px phone the
+          centre of "Next →" was the Inbox tab: a tap navigated away and every
+          selected answer, then held only in this component's state, was gone
+          (they are kept in sessionStorage now too, answer-drafts.ts). It
+          now sticks above the 80px the shell reserves for the tab bar (plus
+          the notch inset the tab bar pads itself with), and its right padding
+          keeps the buttons out from under the help button (right 14px,
+          44px wide). */}
       <div
         data-testid="mobile-quiz-actions"
         style={{
           position: "sticky",
-          bottom: 0,
+          bottom: "calc(80px + env(safe-area-inset-bottom, 0px))",
           padding: "12px 16px",
-          paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0))",
+          paddingRight: 66,
+          paddingBottom: 12,
           background: "var(--paper)",
           borderTop: "1px solid var(--line)",
           display: "flex",

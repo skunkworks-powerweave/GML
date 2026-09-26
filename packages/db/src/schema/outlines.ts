@@ -11,7 +11,7 @@ export const courseOutlines = pgTable(
   "course_outlines",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
+    subjectId: uuid("subject_id").notNull().references(() => subjects.id, { onDelete: "restrict" }), // 0031: was cascade
     grade: smallint("grade").notNull(),
     term: smallint("term").notNull(),
     name: varchar("name", { length: 200 }).notNull(),
@@ -37,7 +37,7 @@ export const outlineLessons = pgTable(
   "outline_lessons",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    outlineId: uuid("outline_id").notNull().references(() => courseOutlines.id, { onDelete: "cascade" }),
+    outlineId: uuid("outline_id").notNull().references(() => courseOutlines.id, { onDelete: "restrict" }), // 0031: was cascade
     sequence: integer("sequence").notNull(),
     title: varchar("title", { length: 240 }).notNull(),
     week: integer("week"),

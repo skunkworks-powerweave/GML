@@ -36,16 +36,22 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { saveDraft, type DraftKey } from "@/lib/form-draft";
+import type { DraftKey } from "@/lib/form-draft";
 import { useSwipe } from "@/lib/use-swipe";
 import {
+  HindiText,
+  isGroupKind,
   isHindiNameField,
   normalizeOptions,
+  optionText,
   validateAll,
   validateField,
+  useSubmittingUntilServerAnswers,
   type FormField,
   type FormSchema,
 } from "./FormRenderer";
+import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
+import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -76,6 +82,17 @@ export type MobileFormRunnerProps = {
   schema: FormSchema;
   initialResponses?: Record<string, unknown>;
   draftKey?: DraftKey;
+  /**
+   * The signed-in user. The copy of unsaved answers kept on this device is
+   * theirs alone (draft-resilience.ts); with no user, none is kept.
+   */
+  userId?: string;
+  /**
+   * When the server last wrote what `initialResponses` hold (ms since the
+   * epoch): the draft's updatedAt, or the prior answer's submittedAt; null
+   * when it holds neither. A device copy is restored only if it is newer.
+   */
+  serverSavedAt?: number | null;
   submitLabel?: string;
   action?: (formData: FormData) => Promise<void> | void;
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
@@ -158,6 +175,7 @@ function BigTextLike({
       placeholder={field.placeholder}
       min={field.min}
       max={field.max}
+      maxLength={type === "text" ? MAX_TEXT_LENGTH : undefined}
       inputMode={field.kind === "number" ? "numeric" : undefined}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -187,6 +205,7 @@ function BigTextArea({
       name={field.name}
       autoFocus={autoFocus}
       rows={field.rows ?? 5}
+      maxLength={MAX_TEXT_LENGTH}
       placeholder={field.placeholder}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -222,7 +241,7 @@ function BigSelect({
       <option value="">Choose…</option>
       {normalizeOptions(field.options).map((o) => (
         <option key={o.value} value={o.value}>
-          {o.label}
+          {optionText(o)}
         </option>
       ))}
     </select>
@@ -279,7 +298,10 @@ function BigRadio({
               onChange={() => onChange(o.value)}
               style={{ width: 20, height: 20 }}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.85 }} />
+            </span>
           </label>
         );
       })}
@@ -310,7 +332,9 @@ function BigCheckboxGroup({
     onChange(next);
   };
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    // Named group (the field heading above is not a <label for>; there is no
+    // single control for it to point at). Mirrors FormRenderer.
+    <div role="group" aria-label={field.label} style={{ display: "grid", gap: 10 }}>
       {normalizeOptions(field.options).map((o) => {
         const checked = selected.includes(o.value);
         return (
@@ -338,7 +362,10 @@ function BigCheckboxGroup({
               onChange={() => toggle(o.value)}
               style={{ width: 20, height: 20 }}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.85 }} />
+            </span>
           </label>
         );
       })}
@@ -375,7 +402,12 @@ function BigLikert({
   // path.
   const current = coerceScaleValue(value);
   return (
-    <div data-testid="mobile-likert" style={{ display: "grid", gap: 10 }}>
+    <div
+      data-testid="mobile-likert"
+      role="group"
+      aria-label={field.label}
+      style={{ display: "grid", gap: 10 }}
+    >
       {labels.map((lbl, i) => {
         const n = i + 1;
         const selected = current === n;
@@ -384,6 +416,8 @@ function BigLikert({
             key={n}
             type="button"
             onClick={() => onChange(n)}
+            // Selection announced, not only inverted (same as FormRenderer).
+            aria-pressed={selected}
             data-testid={`mobile-likert-${field.name}-${n}`}
             style={{
               display: "flex",
@@ -436,16 +470,22 @@ function BigRating({
   value: unknown;
   onChange: (v: number) => void;
 }) {
-  // Large tappable star row — each star is a 56x56 tap target (well above
-  // the 44px floor) so the user can pick a rating with their thumb without
-  // mis-hitting the neighbour.
+  // Large tappable star row. The stars share one line and split it evenly,
+  // square, from 56 px down to the 44 px touch floor: five of those and
+  // their 2 px gaps are the 228 px a 360 px phone leaves this row. Five fixed
+  // 56 px stars needed 312 px: the runner clipped the fourth and fifth, and
+  // a wrapping row of them read "3 stars, then 2", which hides the length and
+  // order of the scale. The row still wraps, but only when the stars cannot
+  // fit at 44 px: a longer scale (the schema allows 10) or a narrower screen.
   const max = field.starsMax ?? 5;
   // Same string-vs-number problem as Likert above.
   const current = coerceScaleValue(value) ?? 0;
   return (
     <div
       data-testid="mobile-rating"
-      style={{ display: "flex", gap: 8, justifyContent: "flex-start" }}
+      role="group"
+      aria-label={field.label}
+      style={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "flex-start", justifyContent: "flex-start" }}
     >
       {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const on = current >= n;
@@ -454,11 +494,15 @@ function BigRating({
             key={n}
             type="button"
             onClick={() => onChange(n)}
-            aria-label={`Rate ${n} of ${max}`}
+            // State in the name, once: `on` is cumulative, so aria-pressed
+            // would announce every filled star as a separate answer.
+            aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
             data-testid={`mobile-star-${field.name}-${n}`}
             style={{
-              width: 56,
-              height: 56,
+              flex: "1 1 0",
+              minWidth: TOUCH_TARGET,
+              maxWidth: 56,
+              aspectRatio: "1 / 1",
               borderRadius: "var(--r-2)",
               fontSize: 28,
               lineHeight: 1,
@@ -485,6 +529,8 @@ export function MobileFormRunner({
   schema,
   initialResponses,
   draftKey,
+  userId,
+  serverSavedAt,
   submitLabel,
   action,
   onSubmit,
@@ -510,11 +556,14 @@ export function MobileFormRunner({
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  // Ends when the server answers, not only on unmount: a rejected submission
+  // redirects back to this route and leaves the runner mounted
+  // (FormRenderer.tsx useSubmittingUntilServerAnswers).
+  const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
 
   // Autosave bookkeeping — mirrors FormRenderer exactly so a draft saved on
-  // mobile is byte-identical to one saved on desktop.
-  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  // mobile is byte-identical to one saved on desktop. saveState and flushSave
+  // come from useDraftAutosave below (the same hook FormRenderer uses).
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const valuesRef = useRef(values);
   // Assigned in an effect, never in the render body. Writing to a ref during
@@ -532,16 +581,9 @@ export function MobileFormRunner({
     [draftKey],
   );
 
-  const flushSave = useCallback(async () => {
-    if (!autosaveEnabled || !draftKey) return;
-    setSaveState("pending");
-    try {
-      await saveDraft({ ...draftKey, responses: valuesRef.current });
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-    }
-  }, [autosaveEnabled, draftKey]);
+  // A failed save is kept on the device and, when trying again can help,
+  // tried again -- it used to say "retrying" and do nothing (draft-resilience.ts).
+  const { saveState, failure: saveFailure, flushSave, cancelRetry } = useDraftAutosave(draftKey, autosaveEnabled, valuesRef, userId);
 
   const scheduleSave = useCallback(() => {
     if (!autosaveEnabled) return;
@@ -555,9 +597,30 @@ export function MobileFormRunner({
     };
   }, []);
 
+  // Answers this device kept because the server never got them come back on
+  // the next visit, if newer than the server's, and go to the server at once
+  // (see FormRenderer).
+  useEffect(() => {
+    if (!autosaveEnabled || !draftKey) return;
+    const kept = takeNewerLocalCopy(userId, draftKey, serverSavedAt ?? null);
+    if (!kept) return;
+    // From a timer, once hydration has painted the server's copy.
+    const t = setTimeout(async () => {
+      valuesRef.current = { ...valuesRef.current, ...kept };
+      setValues((prev) => ({ ...prev, ...kept }));
+      await flushSave();
+    }, 0);
+    return () => clearTimeout(t);
+    // Once, on mount: later changes are this component's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setField = useCallback(
     (name: string, raw: unknown) => {
       setValues((prev) => ({ ...prev, [name]: raw }));
+      // Onto the device at once (see FormRenderer.setField).
+      valuesRef.current = { ...valuesRef.current, [name]: raw };
+      if (autosaveEnabled && draftKey) keepLocalCopy(userId, draftKey, valuesRef.current);
       setErrors((prev) => {
         if (!prev[name]) return prev;
         const { [name]: _ignored, ...rest } = prev;
@@ -565,7 +628,7 @@ export function MobileFormRunner({
       });
       scheduleSave();
     },
-    [scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave, userId],
   );
 
   const totalSteps = fields.length + 1; // +1 for the review screen
@@ -653,6 +716,9 @@ export function MobileFormRunner({
       // desktop. await the flushSave so the draft row matches the FormData
       // about to be POSTed (spec 149 race fix).
       await flushSave();
+      // The POST carries the answers; a retried PUT after it would re-create
+      // the draft the submit deletes.
+      cancelRetry();
       formRef.current?.requestSubmit();
       return;
     }
@@ -664,24 +730,29 @@ export function MobileFormRunner({
     try {
       if (autosaveEnabled) await flushSave();
       await onSubmit(values);
+      cancelRetry();
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }
-  }, [action, autosaveEnabled, fields, flushSave, onSubmit, submitting, values]);
+  }, [action, autosaveEnabled, cancelRetry, fields, flushSave, onSubmit, setSubmitting, submitting, values]);
 
   // ---- Progress dots ----
   // One pill per step (field screens + review). Active is a wide pill,
   // others are small dots. Tap an earlier step to jump back; later steps
   // are non-tappable until the user has reached them.
+  //
+  // Each dot is a 24 px button around the 8 px pill, and the current one says
+  // aria-current="step". The pills were the buttons themselves: 8 x 8 px
+  // targets 6 px apart (under WCAG 2.5.8's 24 px), and which step was current
+  // showed by width and colour alone.
   const progressDots = (
     <div
       data-testid="mobile-progress-dots"
       style={{
         display: "flex",
-        gap: 6,
-        padding: "12px 16px 4px",
+        padding: "4px 16px 0",
         alignItems: "center",
         justifyContent: "center",
         flexWrap: "wrap",
@@ -698,22 +769,35 @@ export function MobileFormRunner({
             disabled={!tappable}
             onClick={() => (tappable ? setStep(i) : undefined)}
             aria-label={`Step ${i + 1} of ${totalSteps}`}
+            aria-current={isActive ? "step" : undefined}
             data-testid={`mobile-progress-dot-${i}`}
             style={{
-              height: 8,
-              width: isActive ? 28 : 8,
-              borderRadius: 4,
-              background: isActive
-                ? "var(--ink)"
-                : isPast
-                  ? "var(--ink-3)"
-                  : "var(--paper-3)",
+              height: 24,
+              minWidth: 24,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
               border: "none",
               cursor: tappable ? "pointer" : "default",
               padding: 0,
-              transition: "width 120ms ease",
             }}
-          />
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                height: 8,
+                width: isActive ? 28 : 8,
+                borderRadius: 4,
+                background: isActive
+                  ? "var(--ink)"
+                  : isPast
+                    ? "var(--ink-3)"
+                    : "var(--paper-3)",
+                transition: "width 120ms ease",
+              }}
+            />
+          </button>
         );
       })}
     </div>
@@ -822,6 +906,21 @@ export function MobileFormRunner({
     const value = values[field.name];
     const err = errors[field.name];
     const autoFocus = field.kind === "textarea" || field.kind === "text";
+    const heading = (
+      <>
+        {field.label ?? field.name}
+        {field.required ? (
+          <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
+            *
+          </span>
+        ) : null}
+        {/* lang="hi" so it is voiced as Hindi; same component as desktop. */}
+        <HindiText
+          text={field.hindiLabel}
+          style={{ display: "block", color: "var(--ink-3)", fontSize: 14, marginTop: 2 }}
+        />
+      </>
+    );
     return (
       <div
         data-testid={`mobile-field-screen-${field.name}`}
@@ -838,27 +937,16 @@ export function MobileFormRunner({
         >
           Question {step + 1} of {fields.length}
         </div>
-        <label htmlFor={field.name} style={bigLabelStyle}>
-          {field.label ?? field.name}
-          {field.required ? (
-            <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
-              *
-            </span>
-          ) : null}
-          {field.hindiLabel ? (
-            <span
-              style={{
-                display: "block",
-                fontFamily: "var(--deva)",
-                color: "var(--ink-3)",
-                fontSize: 14,
-                marginTop: 2,
-              }}
-            >
-              {field.hindiLabel}
-            </span>
-          ) : null}
-        </label>
+        {/* Group kinds (radio / checkbox / likert / rating) have no element
+            with id={field.name}, so a <label for> over them named nothing;
+            they name themselves with role + aria-label instead. */}
+        {isGroupKind(field.kind) ? (
+          <div style={bigLabelStyle}>{heading}</div>
+        ) : (
+          <label htmlFor={field.name} style={bigLabelStyle}>
+            {heading}
+          </label>
+        )}
         <div style={{ marginTop: 8 }}>
           {field.kind === "textarea" ? (
             <BigTextArea
@@ -898,6 +986,7 @@ export function MobileFormRunner({
           )}
         </div>
         {field.helpText ? <div style={helpStyle}>{field.helpText}</div> : null}
+        <HindiText text={field.helpHindi} style={{ ...helpStyle, display: "block" }} />
         {err ? (
           <div role="alert" style={errorStyle}>
             {err}
@@ -978,7 +1067,7 @@ export function MobileFormRunner({
               ? "Saving…"
               : saveState === "saved"
                 ? "Saved"
-                : "Save failed — retrying…"}
+                : failureMessage(saveFailure ?? "error")}
           </div>
         ) : null}
       </div>

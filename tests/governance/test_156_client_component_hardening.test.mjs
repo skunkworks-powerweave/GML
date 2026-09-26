@@ -219,10 +219,14 @@ test("spec 156 — UploadProgress renders the error message inline in a role='al
   // — without the guard a successful upload would render an empty alert
   // div, and a row without a message (legacy uploads from before this
   // spec) would render a broken empty alert.
+  // F96 added a second failure state, "unconfirmed" (the bytes are stored but
+  // the completion call failed; the row offers Retry), whose reason must be
+  // announced the same way. The invariant is unchanged: only a row in a
+  // failure state that HAS a message renders the alert.
   assert.match(
     src,
-    /u\.status\s*===\s*"failed"\s*&&\s*u\.errorMessage/,
-    'UploadProgress must gate the alert render on `u.status === "failed" && u.errorMessage` so only failed rows with an actionable reason show the message',
+    /\(u\.status\s*===\s*"failed"\s*\|\|\s*u\.status\s*===\s*"unconfirmed"\)\s*&&\s*u\.errorMessage/,
+    'UploadProgress must gate the alert render on a failure status (failed / unconfirmed) && u.errorMessage so only failed rows with an actionable reason show the message',
   );
   // The data-testid handle so future Playwright tests can scrape the
   // message without fragile CSS selectors.

@@ -3,16 +3,20 @@
 // right column is conditionally rendered for super_admin / programme_admin only — clicking
 // through to /learners is what triggers the SM-9 audit hook (see ./learners/page.tsx).
 
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { and, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, schools, subjects, sessions, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Class" };
 
 // Stage chip kinds — map to the new `.chip` utility class variants in globals.css.
 // The `bg` field is the underlying CSS var the chip-* class resolves to (kept here
@@ -32,7 +36,8 @@ const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
 };
 
 export default async function RepoClassDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
   const session = await auth();
   const role = session?.user?.role ?? "teacher";
   const canSeeRoster = role === "super_admin" || role === "programme_admin";
@@ -105,10 +110,10 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
         </div>
       </div>
 
-      <section
-        className="page-body"
-        style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 18, alignItems: "start" }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <section className="page-body grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div style={{ display: "grid", gap: 16 }}>
           {/* Subjects taught at this grade */}
           <SectionCard title={`Subjects (${subjectRows.length})`} sub="Taught at this grade">
@@ -268,7 +273,7 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                 View learners ({cls.studentsCount}) →
               </div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
-                SM-9: opening this list writes an audit_log entry.
+                Opening this list is recorded in the audit log.
               </div>
             </Link>
           ) : (
@@ -322,7 +327,9 @@ function SectionCard({
           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
         ) : null}
       </header>
-      {children}
+      {/* Scrolls sideways inside the card: a table wider than a phone was
+          otherwise cut off by the card's overflow:hidden. */}
+      <div style={{ overflowX: "auto" }}>{children}</div>
     </div>
   );
 }
@@ -332,7 +339,10 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

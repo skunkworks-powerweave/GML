@@ -8,15 +8,19 @@
 // 80 cycles; now the filter chips submit GET against the same URL so the
 // WHERE clause runs in Postgres, not over an already-fetched mock array.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
-import { observationCycles, teachers, subjects } from "@gml/db/schema";
+import { observationCycles } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
+import { listCycles, parsePage, videoCell } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Observation cycles" };
 
 const KIND_CHIP: Record<string, string> = {
   baseline: "",
@@ -60,12 +64,15 @@ const KIND_TABS = [
   { v: "evaluative", l: "Evaluative" },
 ];
 
-type SearchParams = Promise<{ status?: string; kind?: string }>;
+type SearchParams = Promise<{ status?: string; kind?: string; page?: string }>;
 
-function buildHref(status: string, kind: string): string {
+// A chip link carries no page, so changing a filter starts again at page 1;
+// the pager passes one and keeps the filters.
+function buildHref(status: string, kind: string, page = 1): string {
   const qs = new URLSearchParams();
   if (status !== "all") qs.set("status", status);
   if (kind !== "all") qs.set("kind", kind);
+  if (page > 1) qs.set("page", String(page));
   const s = qs.toString();
   return s ? `/observation?${s}` : "/observation";
 }
@@ -98,6 +105,14 @@ export default async function ObservationListPage({
   if (!actor) redirect("/login");
   const visibility = await cycleVisibilityFilter(actor);
 
+  // WHERE A CYCLE COMES FROM. Nothing in this module creates one -- the four
+  // stages only ever UPDATE a cycle. The only INSERT in the repository was the
+  // demo seed, and purge_demo_data.ts removes those rows at hand-over, so on a
+  // real deployment this list starts empty. Cycles are nominated at
+  // /observation/new (pickers, code minted for you) or bulk-loaded through the
+  // admin grid (admin/entities/observation-cycles.ts).
+  const canNominate = actor.role === "programme_admin" || actor.role === "super_admin";
+
   // Build the WHERE clause server-side — only emit predicates for filters
   // the user actively chose. The visibility predicate is NOT one of them: it
   // is unconditional and cannot be cleared by removing a chip.
@@ -111,25 +126,16 @@ export default async function ObservationListPage({
     conds.push(eq(observationCycles.kind, kindValue));
   }
 
-  const rows = await db
-    .select({
-      id: observationCycles.id,
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      status: observationCycles.status,
-      scheduledAt: observationCycles.scheduledAt,
-      topic: observationCycles.topic,
-      videoMin: observationCycles.videoMin,
-      teacherName: teachers.fullName,
-      teacherHindi: teachers.hindiName,
-      subjectName: subjects.name,
-    })
-    .from(observationCycles)
-    .leftJoin(teachers, eq(observationCycles.teacherId, teachers.id))
-    .leftJoin(subjects, eq(observationCycles.subjectId, subjects.id))
-    .where(conds.length === 0 ? undefined : and(...conds))
-    .orderBy(desc(observationCycles.scheduledAt))
-    .limit(80);
+  // ONE PAGE OF EVERYTHING VISIBLE, not the first 80. The row query was capped
+  // at 80 with no page parameter while the chips below counted every visible
+  // cycle, so past 80 the table silently held less than the chips promised
+  // and the rest could not be reached. lib/observation/list.ts pages with a
+  // total order, and the table says what range it is showing. `page` is the
+  // page actually shown: a stale ?page= past the end becomes the last page.
+  const { rows, total, from, to, hasNext, page } = await listCycles(db, {
+    where: conds.length === 0 ? undefined : and(...conds),
+    page: parsePage(sp.page),
+  });
 
   // Per-tab counts run as a single GROUP BY so the chips can show the
   // current totals even when a filter is active. One extra round-trip.
@@ -166,7 +172,7 @@ export default async function ObservationListPage({
   return (
     <div>
       <div className="page-header">
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="label">Classroom observation</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Observation cycles</h1>
@@ -175,21 +181,37 @@ export default async function ObservationListPage({
               Every step is time-stamped and signed.
             </p>
           </div>
+          {canNominate ? (
+            <Link
+              href="/observation/new"
+              className="btn btn-primary"
+              style={{ textDecoration: "none", whiteSpace: "nowrap" }}
+            >
+              Nominate cycle
+            </Link>
+          ) : null}
         </div>
       </div>
 
-      <div className="page-body" style={{ display: "grid", gap: 16 }}>
+      {/* PHONE WIDTH. A teacher opens this list on her phone, and at 360 px it
+          was 770 px wide: the table had nowhere to scroll but the page, and the
+          chip groups could not wrap, so Chrome widened the layout viewport and
+          the fixed bottom tab bar left the screen. The column is
+          minmax(0, 1fr) because an `auto` track grows to the table's
+          min-content width even while the table scrolls inside its card. */}
+      <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         <div
           className="card"
           style={{ display: "flex", padding: 10, gap: 16, alignItems: "center", flexWrap: "wrap" }}
         >
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {STATUS_TABS.map((f) => {
               const active = statusFilter === f.v;
               return (
                 <Link
                   key={f.v}
                   href={buildHref(f.v, kindFilter)}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink)" : "transparent",
@@ -206,13 +228,14 @@ export default async function ObservationListPage({
             })}
           </div>
           <div style={{ width: 1, height: 20, background: "var(--line)" }} />
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {KIND_TABS.map((f) => {
               const active = kindFilter === f.v;
               return (
                 <Link
                   key={f.v}
                   href={buildHref(statusFilter, f.v)}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink-2)" : "transparent",
@@ -234,70 +257,117 @@ export default async function ObservationListPage({
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
               No observation cycles match this filter.
+              {canNominate ? (
+                <div style={{ fontSize: 12, marginTop: 8 }}>
+                  <Link href="/observation/new">Nominate a cycle</Link> to start one.
+                </div>
+              ) : null}
             </div>
           ) : (
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Cycle</th>
-                  <th>Teacher</th>
-                  <th>Subject / Topic</th>
-                  <th>Kind</th>
-                  <th>Stage</th>
-                  <th>Date</th>
-                  <th>Video</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c) => (
-                  <tr key={c.id}>
-                    <td className="mono" style={{ fontSize: 11 }}>{c.code}</td>
-                    <td>
-                      <div style={{ fontWeight: 500 }}>{c.teacherName ?? "—"}</div>
-                      {c.teacherHindi ? (
-                        <div className="deva" style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--deva)" }}>
-                          {c.teacherHindi}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <div>{c.subjectName ?? "—"}</div>
-                      {c.topic ? (
-                        <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{c.topic}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>{c.kind}</span>
-                    </td>
-                    <td>
-                      <CycleStage status={c.status} />
-                    </td>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {c.scheduledAt
-                        ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
-                        : <span style={{ color: "var(--ink-4)" }}>—</span>}
-                    </td>
-                    <td>
-                      {c.videoMin ? (
-                        <span style={{ fontSize: 12 }}>{c.videoMin}m</span>
-                      ) : (
-                        <span style={{ color: "var(--ink-4)" }}>—</span>
-                      )}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <Link
-                        href={`/observation/${c.id}`}
-                        style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
-                      >
-                        ›
-                      </Link>
-                    </td>
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Cycle</th>
+                    <th>Teacher</th>
+                    <th>Subject / Topic</th>
+                    <th>Kind</th>
+                    <th>Stage</th>
+                    <th>Date</th>
+                    <th>Video</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((c) => (
+                    <tr key={c.id}>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {/* A way in at the row's left edge: on a phone the '›'
+                            in the last column starts off screen. */}
+                        <Link href={`/observation/${c.id}`} style={{ color: "var(--ink)" }}>
+                          {c.code}
+                        </Link>
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 500 }}>{c.teacherName ?? "—"}</div>
+                        {c.teacherHindi ? (
+                          <div className="deva" style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--deva)" }}>
+                            {c.teacherHindi}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <div>{c.subjectName ?? "—"}</div>
+                        {c.topic ? (
+                          <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{c.topic}</div>
+                        ) : null}
+                      </td>
+                      <td>
+                        <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>{c.kind}</span>
+                      </td>
+                      <td>
+                        <CycleStage status={c.status} />
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {c.scheduledAt
+                          ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
+                          : <span style={{ color: "var(--ink-4)" }}>—</span>}
+                      </td>
+                      <td>
+                        {/* From the cycle's linked videos (lib/observation/list.ts),
+                            not video_min, which only the demo seed ever wrote. */}
+                        {videoCell(c) === "—" ? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        ) : (
+                          <span style={{ fontSize: 12 }}>{videoCell(c)}</span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <Link
+                          href={`/observation/${c.id}`}
+                          // The code cell's link is the row's one link for a
+                          // screen reader and the Tab key; this is its mouse twin.
+                          aria-hidden="true"
+                          tabIndex={-1}
+                          style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
+                        >
+                          ›
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
+          {total > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+                padding: "10px 14px",
+                borderTop: "1px solid var(--line)",
+                fontSize: 12,
+                color: "var(--ink-3)",
+              }}
+            >
+              <span>{`Showing ${from}–${to} of ${total}`}</span>
+              <span style={{ display: "flex", gap: 8 }}>
+                {page > 1 ? (
+                  <Link href={buildHref(statusFilter, kindFilter, page - 1)} className="btn btn-sm">
+                    ← Previous
+                  </Link>
+                ) : null}
+                {hasNext ? (
+                  <Link href={buildHref(statusFilter, kindFilter, page + 1)} className="btn btn-sm">
+                    Next →
+                  </Link>
+                ) : null}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

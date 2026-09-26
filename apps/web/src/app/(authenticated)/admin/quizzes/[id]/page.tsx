@@ -5,9 +5,9 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { quizzes, quizQuestions } from "@gml/db/schema";
+import { quizzes, quizQuestions, quizSubmissions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { QuizSchemaEditor } from "./parts";
 
@@ -34,6 +34,14 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     .where(eq(quizQuestions.quizId, row.id))
     .orderBy(asc(quizQuestions.sequence));
 
+  // Said before anyone edits a quiz learners have sat: what happens to their
+  // results. The editor used to give no sign that submissions existed.
+  const [sat] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(quizSubmissions)
+    .where(eq(quizSubmissions.quizId, row.id));
+  const submittedCount = sat?.n ?? 0;
+
   // Spec 159 — Workflow Run 15 audit-closure MISS: time_limit_seconds is
   // now part of the editable JSON. The export shape carries it (NULL =
   // untimed) and the schema reference aside calls out the valid range so
@@ -43,6 +51,12 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     title: row.title,
     passThreshold: row.passThreshold,
     timeLimitSeconds: row.timeLimitSeconds,
+    maxAttempts: row.maxAttempts,
+    // Only when there is one. A quiz on a curriculum subject has none, and
+    // exporting "rttSubjectId": null made this editor's own untouched output
+    // unsaveable: the action reads any value as a move, and null is no RTT
+    // subject (W3-16).
+    ...(row.rttSubjectId ? { rttSubjectId: row.rttSubjectId } : {}),
     active: row.active,
     questions: qs.map((q) => ({
       prompt: q.prompt,
@@ -93,8 +107,9 @@ export default async function AdminQuizDetailPage({ params }: Props) {
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6 }}>
               Edit the JSON below. <strong>Save</strong> validates the payload and
-              replaces all questions for this quiz in a single transaction. The
-              change is recorded in the audit log.
+              replaces this quiz&apos;s questions with the <code>questions</code> array
+              in a single transaction; leave the array out to change only the
+              settings. The change is recorded in the audit log.
             </p>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -159,6 +174,25 @@ export default async function AdminQuizDetailPage({ params }: Props) {
       </header>
 
       <section style={{ display: "grid", gap: 18 }}>
+        {submittedCount > 0 ? (
+          <p
+            data-testid="quiz-editor-submissions"
+            style={{
+              margin: 0,
+              padding: "8px 12px",
+              border: "1px solid var(--saffron)",
+              background: "var(--saffron-soft)",
+              borderRadius: "var(--r-2)",
+              fontSize: 12,
+              color: "var(--ink-2)",
+            }}
+          >
+            {submittedCount} submitted attempt{submittedCount === 1 ? "" : "s"}. Each result keeps
+            the questions exactly as that learner was asked them, so changes here apply to new
+            attempts only. The questions cannot all be removed; set <code>active</code> to{" "}
+            <code>false</code> to take the quiz offline.
+          </p>
+        ) : null}
         <QuizSchemaEditor quizId={row.id} initialJson={pretty} />
         <aside
           style={{
@@ -174,8 +208,13 @@ export default async function AdminQuizDetailPage({ params }: Props) {
           <strong style={{ color: "var(--ink-2)" }}>Schema reference.</strong>{" "}
           The payload accepts <code>title</code>, <code>passThreshold</code>,
           <code> active</code>, an optional <code>timeLimitSeconds</code>
-          (Spec 159; <code>null</code> = untimed; otherwise an integer
-          between 60 and 7200 = 1 min to 2 h), and a{" "}
+          (<code>null</code> = untimed; otherwise an integer
+          between 60 and 7200 = 1 min to 2 h), an optional{" "}
+          <code>maxAttempts</code> (<code>null</code> = unlimited; otherwise a
+          whole number from 1 to 20 — attempts each learner may submit),{" "}
+          <code>rttSubjectId</code> (the RTT subject the quiz belongs to; it can be
+          changed, not removed; a quiz on a curriculum subject has none, and
+          setting one moves it to that RTT subject), and a{" "}
           <code>questions[]</code> array. Each question must have{" "}
           <code>prompt</code> (string), <code>options</code> (array of ≥ 2
           strings), <code>correctIndex</code> (0-based integer into options),

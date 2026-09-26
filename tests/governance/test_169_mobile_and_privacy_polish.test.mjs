@@ -9,9 +9,9 @@
 //   C. lib/env.ts exports assertEnv(); the authenticated layout calls
 //      it; UploadModal + HelpPanel hide the WhatsApp affordance when
 //      the validated phone is missing or invalid.
-//   D. i18n bundles ship the new login.forgot.* / login.reset.* /
-//      forbidden.* keys in en (English) + hi (Devanagari) + bo
-//      (empty-string placeholders awaiting Ladakhi translator).
+//   D. (SUPERSEDED 2026-09) i18n bundles shipped login.forgot.* /
+//      login.reset.* / forbidden.* keys that no page read. They were
+//      deleted; see the §D test below.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -249,7 +249,7 @@ test("spec 169 — authenticated layout calls assertEnv()", () => {
   const src = read(AUTH_LAYOUT);
   assert.match(
     src,
-    /import\s*\{\s*assertEnv\s*\}\s*from\s*["']@\/lib\/env["']/,
+    /import\s*\{[^}]*\bassertEnv\b[^}]*\}\s*from\s*["']@\/lib\/env["']/,
     "(authenticated)/layout.tsx must `import { assertEnv } from \"@/lib/env\"` so the validation runs once per render",
   );
   assert.match(
@@ -295,77 +295,38 @@ test("spec 169 — HelpPanel hides the WhatsApp action row when contact phone is
 
 // ---------- D. i18n coverage ----------
 
-test("spec 169 — en.json declares login.forgot.*, login.reset.*, forbidden.* keys", () => {
-  const en = readJson(EN_JSON);
-  // login namespace with nested forgot + reset.
-  assert.ok(en.login, "en.json must declare a top-level `login` namespace");
-  assert.ok(en.login.forgot, "en.json must declare `login.forgot` for the forgot-password surface");
-  assert.ok(en.login.reset, "en.json must declare `login.reset` for the reset-password surface");
-  for (const k of ["title", "email_label", "submit_label", "smtp_unavailable"]) {
-    assert.ok(
-      typeof en.login.forgot[k] === "string" && en.login.forgot[k].length > 0,
-      `en.json must declare login.forgot.${k} as a non-empty English string`,
-    );
+// §D SUPERSEDED (2026-09 freeze, fix brief D_ui #8). These three tests
+// asserted only that the bundles DECLARED login.forgot.* / login.reset.* /
+// forbidden.* -- keys no page ever read. forgot/page.tsx, reset/page.tsx and
+// forbidden/page.tsx hardcode their copy, and the keys described a product
+// that no longer exists: a 15-minute account lock that was deliberately
+// removed, an "SMTP not configured" framing forgot/page.tsx rejects, a single
+// "Access denied" title where the page has four distinct reasons. Rendering
+// them would have told users false things; declaring them told the IT team
+// three pages were translated when none was. The namespaces were deleted, and
+// the test below pins that, so they cannot quietly come back unread. If those
+// pages are ever localised: wire getTranslations/useTranslations in the page
+// first, then add keys whose copy matches what the page actually says.
+// tests/behaviour/ui-i18n.test.ts checks the general rule for every namespace.
+//
+// UPDATED (F90). The login page's sign-in errors are now localised the way this
+// comment prescribes: app/login/login-error.tsx reads useTranslations("login")
+// and renders login.error.* (tests/behaviour/ui-login-errors.test.ts renders it
+// in Hindi and Bhoti). So a `login` namespace exists again, READ. What stays
+// pinned is the part that was dead: login.forgot.* / login.reset.* and
+// forbidden.*, whose pages still hardcode their copy.
+test("spec 169 §D (superseded) — the dead login / forbidden namespaces stay deleted from every bundle", () => {
+  for (const [name, path] of [["en", EN_JSON], ["hi", HI_JSON], ["bo", BO_JSON]]) {
+    const bundle = readJson(path);
+    assert.equal(bundle.login?.forgot, undefined, `${name}.json must not re-declare the unread login.forgot.* namespace`);
+    assert.equal(bundle.login?.reset, undefined, `${name}.json must not re-declare the unread login.reset.* namespace`);
+    assert.equal(bundle.forbidden, undefined, `${name}.json must not re-declare the unread forbidden.* namespace`);
   }
-  for (const k of ["title", "new_password_label", "submit_label", "token_expired"]) {
-    assert.ok(
-      typeof en.login.reset[k] === "string" && en.login.reset[k].length > 0,
-      `en.json must declare login.reset.${k} as a non-empty English string`,
-    );
-  }
-  // forbidden namespace flat.
-  assert.ok(en.forbidden, "en.json must declare a top-level `forbidden` namespace for the access-denied surface");
-  for (const k of ["title", "locked", "smtp_unconfigured", "session_expired", "default"]) {
-    assert.ok(
-      typeof en.forbidden[k] === "string" && en.forbidden[k].length > 0,
-      `en.json must declare forbidden.${k} as a non-empty English string`,
-    );
-  }
-});
-
-test("spec 169 — hi.json mirrors the login + forbidden keys with Devanagari translations", () => {
-  const hi = readJson(HI_JSON);
-  assert.ok(hi.login?.forgot, "hi.json must mirror `login.forgot` so the spec-125 namespace-parity test still passes");
-  assert.ok(hi.login?.reset, "hi.json must mirror `login.reset`");
-  assert.ok(hi.forbidden, "hi.json must mirror the `forbidden` namespace");
-  // Spot-check at least one Devanagari codepoint per branch — guards
-  // against a future drive-by that overwrites the bundle with English.
-  for (const k of ["title", "email_label", "submit_label", "smtp_unavailable"]) {
-    const v = hi.login.forgot[k] ?? "";
-    assert.ok(
-      /[ऀ-ॿ]/.test(v),
-      `hi.login.forgot.${k} must contain at least one Devanagari codepoint (got "${v}")`,
-    );
-  }
-  for (const k of ["title", "locked"]) {
-    const v = hi.forbidden[k] ?? "";
-    assert.ok(
-      /[ऀ-ॿ]/.test(v),
-      `hi.forbidden.${k} must contain at least one Devanagari codepoint (got "${v}")`,
-    );
-  }
-});
-
-test("spec 169 — bo.json declares the new login + forbidden keys (empty placeholders OK)", () => {
-  const bo = readJson(BO_JSON);
-  // The keys MUST be declared (even as empty strings) so the
-  // spec-125 namespace-parity test still passes and so loadMessages
-  // can warn-and-fallback per-leaf rather than per-namespace.
-  assert.ok(bo.login?.forgot, "bo.json must declare `login.forgot` (empty placeholders OK)");
-  assert.ok(bo.login?.reset, "bo.json must declare `login.reset` (empty placeholders OK)");
-  assert.ok(bo.forbidden, "bo.json must declare the `forbidden` namespace (empty placeholders OK)");
-  // Every key SHOULD be present (the value can be empty — that's
-  // the signal to loadMessages to fall back to English with a warn).
-  for (const k of ["title", "email_label", "submit_label", "smtp_unavailable"]) {
-    assert.ok(
-      Object.prototype.hasOwnProperty.call(bo.login.forgot, k),
-      `bo.json must list the bo.login.forgot.${k} key even when empty so loadMessages can fall back per-leaf`,
-    );
-  }
-  for (const k of ["title", "locked", "smtp_unconfigured", "session_expired", "default"]) {
-    assert.ok(
-      Object.prototype.hasOwnProperty.call(bo.forbidden, k),
-      `bo.json must list the bo.forbidden.${k} key even when empty`,
+  if (readJson(EN_JSON).login !== undefined) {
+    assert.match(
+      read("apps/web/src/app/login/login-error.tsx"),
+      /useTranslations\("login"\)/,
+      "a login namespace is only allowed while the login page reads it",
     );
   }
 });

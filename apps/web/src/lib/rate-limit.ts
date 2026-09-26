@@ -61,7 +61,11 @@ export type RateLimitResult = {
   ok: boolean;
   remaining: number;
   retryAfterMs: number;
+  /** The window this request was counted in, as the database stores it; for rateLimitRefund. */
+  windowStart: string;
 };
+
+const keyOf = (bucket: string, id: string) => `${bucket}:${id}`.slice(0, 256);
 
 export async function rateLimit({
   bucket,
@@ -69,7 +73,7 @@ export async function rateLimit({
   limit,
   windowMs,
 }: RateLimitOptions): Promise<RateLimitResult> {
-  const key = `${bucket}:${id}`.slice(0, 256);
+  const key = keyOf(bucket, id);
   const windowSeconds = Math.max(1, Math.round(windowMs / 1000));
 
   // ONE statement, atomic. The upsert either starts a fresh window (when the
@@ -90,10 +94,11 @@ export async function rateLimit({
             THEN now()
             ELSE rate_limits.window_start
           END
-    RETURNING count, extract(epoch from (window_start + make_interval(secs => ${windowSeconds}) - now())) AS retry_after_s
+    RETURNING count, extract(epoch from (window_start + make_interval(secs => ${windowSeconds}) - now())) AS retry_after_s,
+              window_start::text AS window_start
   `);
 
-  const rows = (res as unknown as { rows: { count: number; retry_after_s: string }[] }).rows ?? [];
+  const rows = (res as unknown as { rows: { count: number; retry_after_s: string; window_start: string }[] }).rows ?? [];
   const row = rows[0];
   // A RETURNING that yields nothing means the statement did not do what it
   // claims to. Throwing here is the fail-closed contract, not a defensive
@@ -104,24 +109,43 @@ export async function rateLimit({
   const count = Number(row.count);
   const retryAfterMs = Math.max(0, Math.round(Number(row.retry_after_s) * 1000));
 
+  const windowStart = row.window_start;
+
   if (count > limit) {
-    return { ok: false, remaining: 0, retryAfterMs };
+    return { ok: false, remaining: 0, retryAfterMs, windowStart };
   }
-  return { ok: true, remaining: Math.max(0, limit - count), retryAfterMs: 0 };
+  return { ok: true, remaining: Math.max(0, limit - count), retryAfterMs: 0, windowStart };
 }
 
 /**
- * Drop counters whose window has long passed.
+ * Give back one request rateLimit() counted, for a limit meant to count only
+ * some outcomes (the sign-in throttle counts failures: auth.ts). Counting
+ * first and refunding after, rather than counting only once the outcome is
+ * known, keeps concurrent requests from all passing the check before any is
+ * counted.
  *
- * Called from the nightly retention job. Without it the table grows by one row
- * per distinct caller forever, and the sweep gets slowest exactly when the
- * system is under the load that created the rows.
+ * Only the window that counted the request is decremented: if it has since
+ * rolled over, the new window never included this request. The text form of
+ * window_start keeps its microseconds, which a JS Date would drop.
  */
-export async function pruneRateLimits(olderThanHours = 24): Promise<number> {
-  const res = await db.execute(sql`
-    DELETE FROM rate_limits
-     WHERE window_start < now() - make_interval(hours => ${olderThanHours})
-    RETURNING key
+export async function rateLimitRefund({
+  bucket,
+  id,
+  windowStart,
+}: {
+  bucket: string;
+  id: string;
+  windowStart: string;
+}): Promise<void> {
+  await db.execute(sql`
+    UPDATE rate_limits SET count = count - 1
+    WHERE key = ${keyOf(bucket, id)} AND window_start = ${windowStart}::timestamptz AND count > 0
   `);
-  return ((res as unknown as { rows: unknown[] }).rows ?? []).length;
 }
+
+// EXPIRED COUNTERS ARE DELETED BY pruneRateLimits() IN @gml/db
+// (packages/db/src/scripts/retention.ts), which the worker's nightly retention
+// job runs. A copy used to sit here, documented as nightly and called by
+// nothing -- and unreachable from the worker, because this file is
+// `server-only`. Every row it was meant to remove, each keyed by a client IP,
+// was kept forever.

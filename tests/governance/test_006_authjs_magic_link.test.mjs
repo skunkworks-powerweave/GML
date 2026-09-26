@@ -79,9 +79,11 @@ test("the magic-link UI is hidden when no mail relay is configured", () => {
 test("email links land on a PKCE exchange route", () => {
   const src = read("apps/web/src/app/auth/callback/route.ts");
   assert.match(src, /exchangeCodeForSession\(/);
+  // The guard is now the shared safeInternalPath (apps/web/src/lib/safe-redirect.ts),
+  // executed against an attack table in tests/behaviour/redirects.test.ts.
   assert.match(
     src,
-    /startsWith\("\/\/"\)/,
+    /safeInternalPath\(searchParams\.get\("next"\)\)/,
     "the ?next= target arrives inside a mailed URL — the most effective possible " +
       "open-redirect vector, because the link genuinely authenticates first",
   );

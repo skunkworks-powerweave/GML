@@ -6,6 +6,7 @@ import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
+import { poolConfig } from "../src/client.js";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
@@ -60,19 +61,91 @@ async function applyPostMigrations(pool: Pool): Promise<void> {
   }
 }
 
+/**
+ * Apply `_post/always/*.sql` on EVERY run, after the ledgered _post files and
+ * without a ledger entry.
+ *
+ * The ledgered lane is right for one-off changes and wrong for an invariant
+ * over "every table": a file that loops over the tables that exist when it
+ * runs never sees a table a later migration creates. _post/002's RLS lockdown
+ * was exactly that, so tables added after it (jobs, rate_limits,
+ * quiz_attempts, and every one to come) kept RLS off on any database it had
+ * already run on. Files here must be idempotent and must touch nothing once
+ * the invariant holds -- a deploy runs while the previous app is serving.
+ */
+async function applyEveryDeploySql(pool: Pool): Promise<void> {
+  const alwaysDir = resolve(__dirname, "..", "src", "migrations", "_post", "always");
+  if (!existsSync(alwaysDir)) return;
+  const files = readdirSync(alwaysDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+  for (const file of files) {
+    const sql = readFileSync(join(alwaysDir, file), "utf8");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(sql);
+      await client.query("COMMIT");
+      console.log(`[migrate] ran _post/always/${file}`);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error(`[migrate] FAILED _post/always/${file}:`, err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+/**
+ * Print every NOTICE a migration raises into the migrate log.
+ *
+ * A migration's RAISE NOTICE is its report of what it changed: 0033 names each
+ * teacher/mentor record it unlinked from a login (and then sets user_id to
+ * NULL, so the notice is the only record of which login that was), 0034 each
+ * gate version it renumbered, _post/always/001 each table it locked down.
+ * node-postgres delivers a NOTICE only as a 'notice' event on the client that
+ * received it, and this runner never listened, so all of them were dropped.
+ *
+ * Registered on 'connect', before drizzle's migrate() opens its first
+ * connection: every client the pool ever hands out -- the drizzle phase's and
+ * the _post lanes' alike -- carries the listener. A listener added later would
+ * miss the idle client the pool reuses.
+ *
+ * The "already exists, skipping" / "does not exist, skipping" notices of
+ * IF [NOT] EXISTS are left out: they report that nothing was done, and the
+ * runners' own bookkeeping (drizzle's schema and ledger, _post's ledger) would
+ * print them on every deploy, burying the lines an operator needs to read.
+ */
+function reportNotices(pool: Pool): void {
+  pool.on("connect", (client) => {
+    client.on("notice", (notice) => {
+      const message = notice.message ?? "";
+      if (/(already exists|does not exist), skipping$/.test(message)) return;
+      console.log(`[migrate] NOTICE: ${message}`);
+    });
+  });
+}
+
 async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error("DATABASE_URL not set. Aborting.");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // TLS exactly as the app's own pool negotiates it. This was a bare
+  // `new Pool({ connectionString: url })`: with the documented DATABASE_URL
+  // (no sslmode) every DDL statement, run as the owner role, went to the
+  // pooler in plaintext, and the CA mounted into this container was never read.
+  const pool = new Pool(poolConfig());
+  reportNotices(pool);
   const db = drizzle(pool);
   const migrationsFolder = resolve(__dirname, "..", "src", "migrations");
   console.log(`[migrate] applying drizzle migrations from ${migrationsFolder} ...`);
   await migrate(db, { migrationsFolder });
   console.log("[migrate] drizzle migrations done; applying _post SQL ...");
   await applyPostMigrations(pool);
+  await applyEveryDeploySql(pool);
   console.log("[migrate] all done.");
   await pool.end();
 }

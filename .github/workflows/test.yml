@@ -27,6 +27,18 @@ jobs:
       DATABASE_URL: postgres://build:build@127.0.0.1:5432/build
     steps:
       - uses: actions/checkout@v4
+
+      # The runbook's first command is `./scripts/deploy.sh`, and the cron lines
+      # run backup.sh and restore.sh the same way. Every script was once
+      # committed 100644, so each of those was "Permission denied" on a fresh
+      # clone. A regex over file text cannot see a mode bit; this checks the
+      # checked-out files the way an operator's shell would.
+      - name: Operator shell scripts are executable
+        run: |
+          for f in scripts/*.sh; do
+            test -x "$f" || { echo "::error::$f is not executable -- git update-index --chmod=+x $f"; exit 1; }
+          done
+
       - uses: pnpm/action-setup@v4        # version comes from packageManager
       - uses: actions/setup-node@v4
         with:
@@ -77,7 +89,14 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgres://gml:gml@127.0.0.1:5432/gml_ci
+      # sslmode=disable because this service container has no TLS. Without it
+      # the application's pool (packages/db/src/client.ts) forces TLS -- the
+      # right default for the Supabase pooler -- and every test that goes
+      # through the app's own connection fails with "The server does not
+      # support SSL connections". An explicit sslmode is the override that
+      # pool honours; tests/behaviour/health-probe.test.ts relies on exactly
+      # that distinction.
+      DATABASE_URL: postgres://gml:gml@127.0.0.1:5432/gml_ci?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -97,8 +116,16 @@ jobs:
       - name: Apply migrations from empty
         run: pnpm --filter @gml/db exec tsx scripts/migrate.ts
 
+      # tests/behaviour/transcode-output.test.ts runs the worker's real encoder
+      # settings through a real ffmpeg and probes the output; without ffmpeg it
+      # skips, and GML_REQUIRE_FFMPEG turns that skip into a failure here.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Behavioural tests
         run: pnpm test:behaviour
+        env:
+          GML_REQUIRE_FFMPEG: "1"
 
   images:
     name: container images
@@ -178,6 +205,20 @@ jobs:
         run: |
           docker run --rm --entrypoint sh gml-worker:ci -c 'ffmpeg -version && ffprobe -version' >/dev/null \
           || { echo "::error::ffmpeg/ffprobe missing from worker image"; exit 1; }
+
+      # Having ffmpeg is not the same as producing video a phone can play. Run
+      # the encoder tests INSIDE the image, against the Debian ffmpeg that ships
+      # (the HDR path needs its zscale), with the image's own copy of the worker
+      # source. That ffmpeg is older than the others these tests meet -- 5.1
+      # while node:22-slim is bookworm -- so the tests use no CLI option it
+      # lacks. They were run locally only against the static 7.1, with 5.1's
+      # missing -display_rotation simulated; this step is the first run on the
+      # real Debian binary.
+      - name: Worker image encodes playable HLS
+        run: |
+          docker run --rm -e GML_REQUIRE_FFMPEG=1 -v "$PWD/tests:/repo/tests:ro" \
+            --workdir /repo --entrypoint node gml-worker:ci \
+            --import tsx --test tests/behaviour/transcode-output.test.ts
 
       # The compose file must remain parseable and must not reacquire the
       # services that were removed. A stray `redis:` block would come back as a

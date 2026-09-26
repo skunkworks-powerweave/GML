@@ -132,6 +132,17 @@ export default async function AdminIndexPage() {
               </div>
             </Link>
           </li>
+          <li>
+            <Link
+              href="/admin/scorm"
+              className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
+            >
+              <div className="text-sm font-medium">SCORM packages</div>
+              <div className="text-xs text-neutral-500">
+                SCORM 1.2 modules for RTT subjects · learners&apos; completion and scores
+              </div>
+            </Link>
+          </li>
           {/* /admin/whatsapp-log had no entry here at all, despite being the
               operator surface for the programme's PRIMARY video ingest path. */}
           <li>
@@ -163,7 +174,7 @@ export default async function AdminIndexPage() {
             >
               <div className="text-sm font-medium">Transcode jobs</div>
               <div className="text-xs text-neutral-500">
-                Inspect the dead-letter queue · retry or drop failed transcodes (spec 162)
+                Inspect the dead-letter queue · retry or drop failed transcodes
               </div>
             </Link>
           </li>

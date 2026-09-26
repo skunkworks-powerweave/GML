@@ -30,6 +30,8 @@ import { useRouter } from "next/navigation";
 type ImportResult = {
   ok: boolean;
   inserted: number;
+  /** Rows whose id named an existing row and were updated in place. */
+  updated?: number;
   skipped: number;
   errors: { row: number; message: string }[];
 };
@@ -47,11 +49,14 @@ export function ImportCsv({
   entitySlug,
   entityLabel,
   acceptedColumns,
+  reportsDuplicates = false,
 }: {
   entitySlug: string;
   entityLabel: string;
   /** The entity's form fields — what the importer will actually read. */
   acceptedColumns: string[];
+  /** The entity declares a duplicateKey: an id-less row matching a stored record is reported (csv.ts). */
+  reportsDuplicates?: boolean;
 }) {
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -99,11 +104,13 @@ export function ImportCsv({
       // 200 all-good, 207 partial. Both carry the same body; anything else is
       // a refusal (403/404) and has no per-row detail to show.
       if (res.status !== 200 && res.status !== 207) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        const body = (await res.json().catch(() => null)) as { error?: string; gate?: string } | null;
         setError(
           body?.error === "unknown_entity"
             ? "That table does not accept imports."
-            : res.status === 403
+            : body?.error === "gate_required"
+              ? `Unlock the ${body.gate ?? "section"} section first, then import again.`
+              : res.status === 403
               ? "You do not have permission to import into this table."
               : `The import failed (HTTP ${res.status}).`,
         );
@@ -111,7 +118,7 @@ export function ImportCsv({
       }
       const body = (await res.json()) as ImportResult;
       setResult(body);
-      if (body.inserted > 0) {
+      if (body.inserted > 0 || (body.updated ?? 0) > 0) {
         // Rows landed; the grid behind this panel is now stale.
         router.refresh();
       }
@@ -161,6 +168,13 @@ export function ImportCsv({
         A CSV with a header row. Recognised columns:{" "}
         <code className="text-[11px]">{acceptedColumns.join(", ")}</code>. Every row is validated
         before it is written; rows that fail are reported and skipped, and the rest still land.
+        A row with an <code className="text-[11px]">id</code> (as in an export) updates that row;
+        a row without one is added
+        {reportsDuplicates ? ", unless it matches a record already on the table: that row is reported, not added again" : ""}.
+        {/* Uploading the whole file again after a partial import used to add
+            every row that had landed a second time. */}
+        {" "}After a partial import, import again only the rows reported as failed, or an export,
+        which carries ids.
       </p>
 
       <input
@@ -206,13 +220,15 @@ export function ImportCsv({
           }`}
         >
           <div className="font-medium">
-            {result.inserted} inserted · {result.skipped} skipped
+            {result.inserted} inserted · {result.updated ?? 0} updated · {result.skipped} skipped
           </div>
           {result.errors.length > 0 ? (
             <ul className="mt-1 max-h-40 list-disc space-y-0.5 overflow-auto pl-4">
               {result.errors.map((e, i) => (
                 <li key={`${e.row}-${i}`}>
-                  {e.row >= 0 ? `Row ${e.row + 2}: ` : ""}
+                  {/* The server already reports the spreadsheet line (header =
+                      line 1); adding 2 again sent the operator two lines too far. */}
+                  {e.row >= 0 ? `Row ${e.row}: ` : ""}
                   {e.message}
                 </li>
               ))}

@@ -36,8 +36,11 @@ export const quizzes = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     slug: varchar("slug", { length: 60 }).notNull().unique(),
     title: varchar("title", { length: 200 }).notNull(),
-    subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "set null" }),
-    rttSubjectId: uuid("rtt_subject_id").references(() => rttSubjects.id, { onDelete: "set null" }),
+    // RESTRICT, not SET NULL (migration 0029): nulling the only scope column
+    // writes a row quizzes_one_scope forbids, so a SET NULL delete could never
+    // succeed -- it failed as a CHECK violation the admin grid cannot explain.
+    subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "restrict" }),
+    rttSubjectId: uuid("rtt_subject_id").references(() => rttSubjects.id, { onDelete: "restrict" }),
     passThreshold: smallint("pass_threshold").notNull().default(60),
     // Spec 159 — Workflow Run 15 audit-closure MISS: optional time limit on
     // the quiz attempt. NULL = untimed (the default for every legacy quiz);
@@ -105,6 +108,15 @@ export const quizQuestions = pgTable(
   ],
 );
 
+/** One question as it stood when a submission was made. */
+export type QuizQuestionSnapshot = {
+  id: string;
+  prompt: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string | null;
+};
+
 export const quizSubmissions = pgTable(
   "quiz_submissions",
   {
@@ -118,6 +130,14 @@ export const quizSubmissions = pgTable(
       .$type<Array<{ questionId: string; selectedIndex: number | null }>>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    // The questions exactly as this learner was asked them, frozen at submit
+    // time (migration 0030). The quiz editor rewrites quiz_questions rows in
+    // place by position, so a result read against the LIVE rows re-attached
+    // every past answer to whatever question now sits at that position, and
+    // re-graded it against the current correctIndex while the stored score
+    // stayed as it was. The result page reads this; NULL only on a row written
+    // before the column existed and not backfilled.
+    questionSnapshot: jsonb("question_snapshot").$type<QuizQuestionSnapshot[]>(),
     // Percentage correct (0-100).
     score: smallint("score").notNull(),
     passed: boolean("passed").notNull(),
@@ -160,7 +180,10 @@ export const quizAttempts = pgTable(
     closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
   },
   (t) => [
-    index("quiz_attempts_user_quiz_idx").on(t.userId, t.quizId, t.startedAt),
+    // started_at DESC, as migration 0026 created it (F107: the snapshot must
+    // describe the database). NULLS FIRST is Postgres's default for DESC;
+    // drizzle's is NULLS LAST, so it is spelled out.
+    index("quiz_attempts_user_quiz_idx").on(t.userId, t.quizId, t.startedAt.desc().nullsFirst()),
     // At most ONE open attempt per learner per quiz. Partial, so a closed
     // attempt does not block a legitimate retry -- opening the runner in two
     // tabs would otherwise create two attempts and the earlier one becomes an

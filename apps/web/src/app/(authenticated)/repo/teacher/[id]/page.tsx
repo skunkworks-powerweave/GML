@@ -3,6 +3,7 @@
 // KV details (name+Hindi, subject, school, phase, phone, joined), active mentor
 // pairing card, recent observation cycles, sessions-taught list.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
@@ -15,15 +16,18 @@ import {
   sessions as classroomSessions,
   subjects,
   classes,
-  mentorPairings,
-  mentors,
-  observationCycles,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
+import { actorFrom } from "@/lib/authz";
+import { teacherCycleHistory, teacherPairingHistory } from "@/lib/gated-reads";
+import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Teacher" };
 
 const SUBJECT_COLOR: Record<string, { chip: string }> = {
   English: { chip: "chip-indigo" },
@@ -68,8 +72,13 @@ export default async function RepoTeacherDetailPage({
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
+  // READ_ROLES answers "may you read /repo at all" and stays. The actor is what
+  // the section-access checks below need; actorFrom only narrows a null session.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [teacher] = await db
     .select()
@@ -119,41 +128,31 @@ export default async function RepoTeacherDetailPage({
     .orderBy(desc(classroomSessions.scheduledDate))
     .limit(12);
 
-  const recentCycles = await db
-    .select({
-      id: observationCycles.id,
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      status: observationCycles.status,
-      scheduledAt: observationCycles.scheduledAt,
-      topic: observationCycles.topic,
-    })
-    .from(observationCycles)
-    .where(eq(observationCycles.teacherId, id))
-    .orderBy(desc(observationCycles.scheduledAt))
-    .limit(6);
-
-  const pairings = await db
-    .select({
-      id: mentorPairings.id,
-      status: mentorPairings.status,
-      startedAt: mentorPairings.startedAt,
-      currentQuarter: mentorPairings.currentQuarter,
-      meetingsCount: mentorPairings.meetingsCount,
-      lastMeetingAt: mentorPairings.lastMeetingAt,
-      mentorId: mentors.id,
-      mentorName: mentors.name,
-      mentorHindi: mentors.hindiName,
-      mentorBase: mentors.baseLocation,
-    })
-    .from(mentorPairings)
-    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
-    .where(eq(mentorPairings.teacherId, id))
-    .orderBy(desc(mentorPairings.startedAt))
-    .limit(5);
+  // The teacher's own profile -- name, subject, school, phase, sessions -- is
+  // directory data and stays visible to any signed-in user; that is what /repo
+  // is for. THE OBSERVATION HISTORY AND THE MENTOR PAIRING ARE NOT. Both were
+  // bare `teacher_id = $1` selects on a page outside the observation and
+  // mentorship section gates, so any teacher could open a colleague from
+  // /repo/teachers and read her cycle codes, topics, evaluative-vs-developmental
+  // kind and stage, plus who mentors her, where, and how often they meet -- the
+  // rows /observation and /mentorship guard with a section password AND a
+  // per-actor predicate. Both controls now apply here too: without the section
+  // grant the card is locked and no query runs (so not even the count
+  // escapes); with it, the actor's visibility predicate is in the SQL.
+  // Executed in tests/behaviour/access-control.test.ts.
+  const [observation, mentorship] = await Promise.all([
+    observationAccess(db, actor),
+    mentorshipAccess(db, actor),
+  ]);
+  const [recentCycles, pairings] = await Promise.all([
+    teacherCycleHistory(db, observation, id),
+    teacherPairingHistory(db, mentorship, id),
+  ]);
 
   const activePairing =
-    pairings.find((p) => p.status === "active") ?? pairings[0] ?? null;
+    pairings?.find((p) => p.status === "active") ?? pairings?.[0] ?? null;
+  const unlockHref = (slug: "observation" | "mentorship") =>
+    `/gate/${slug}?next=${encodeURIComponent(`/repo/teacher/${id}`)}`;
 
   const subjColor =
     (teacher.subjectSpecialism &&
@@ -220,15 +219,10 @@ export default async function RepoTeacherDetailPage({
         </div>
       </div>
 
-      <div
-        className="page-body"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.6fr 1fr",
-          gap: 18,
-          alignItems: "start",
-        }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <div className="page-body grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         {/* LEFT: Sessions list */}
         <section className="card card-hi" style={{ overflow: "hidden" }}>
           <div
@@ -260,50 +254,52 @@ export default async function RepoTeacherDetailPage({
               No sessions recorded yet.
             </p>
           ) : (
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Time</th>
-                  <th>Grade</th>
-                  <th>Subject</th>
-                  <th>Topic</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentSessions.map((s) => (
-                  <tr key={s.id}>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
-                        day: "numeric",
-                        month: "short",
-                      })}
-                    </td>
-                    <td className="mono" style={{ fontSize: 12 }}>
-                      {s.scheduledTime ? s.scheduledTime.slice(0, 5) : "—"}
-                    </td>
-                    <td>{s.classGrade ? `Grade ${s.classGrade}` : "—"}</td>
-                    <td>{s.subjectName ?? "—"}</td>
-                    <td>{s.topic ?? "—"}</td>
-                    <td>
-                      <span
-                        className="mono"
-                        style={{
-                          fontSize: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          color:
-                            SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
-                        }}
-                      >
-                        {s.status.replace("_", " ")}
-                      </span>
-                    </td>
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Grade</th>
+                    <th>Subject</th>
+                    <th>Topic</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {recentSessions.map((s) => (
+                    <tr key={s.id}>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                        })}
+                      </td>
+                      <td className="mono" style={{ fontSize: 12 }}>
+                        {s.scheduledTime ? s.scheduledTime.slice(0, 5) : "—"}
+                      </td>
+                      <td>{s.classGrade ? `Grade ${s.classGrade}` : "—"}</td>
+                      <td>{s.subjectName ?? "—"}</td>
+                      <td>{s.topic ?? "—"}</td>
+                      <td>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 10,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.06em",
+                            color:
+                              SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
+                          }}
+                        >
+                          {s.status.replace("_", " ")}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 
@@ -398,7 +394,12 @@ export default async function RepoTeacherDetailPage({
               <div style={{ fontWeight: 600, fontSize: 13 }}>Mentor pairing</div>
             </div>
             <div style={{ padding: 14 }}>
-              {activePairing && activePairing.mentorId ? (
+              {pairings === null ? (
+                <LockedNote
+                  what="Mentorship details are"
+                  href={unlockHref("mentorship")}
+                />
+              ) : activePairing && activePairing.mentorId ? (
                 <Link
                   href={`/mentorship/${activePairing.id}`}
                   style={{
@@ -473,11 +474,17 @@ export default async function RepoTeacherDetailPage({
               }}
             >
               <div style={{ fontWeight: 600, fontSize: 13 }}>
-                Recent observation cycles ({recentCycles.length})
+                Recent observation cycles
+                {recentCycles ? ` (${recentCycles.length})` : ""}
               </div>
             </div>
             <div style={{ padding: 14 }}>
-              {recentCycles.length === 0 ? (
+              {recentCycles === null ? (
+                <LockedNote
+                  what="Observation history is"
+                  href={unlockHref("observation")}
+                />
+              ) : recentCycles.length === 0 ? (
                 <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
                   No cycles yet.
                 </p>
@@ -550,6 +557,22 @@ export default async function RepoTeacherDetailPage({
   );
 }
 
+/**
+ * A gated card's content when the viewer has not unlocked that section. Says
+ * why the card is empty and offers the unlock, returning here afterwards,
+ * rather than rendering "No cycles yet." -- which would be a false statement.
+ */
+function LockedNote({ what, href }: { what: string; href: string }) {
+  return (
+    <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
+      {what} behind the section password.{" "}
+      <Link href={href} style={{ color: "var(--indigo)" }}>
+        Unlock →
+      </Link>
+    </p>
+  );
+}
+
 function KVRow({
   label,
   children,
@@ -561,7 +584,10 @@ function KVRow({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

@@ -1,5 +1,10 @@
 // GET /api/user-prefs — return current user's prefs (creating defaults if missing)
-// PUT /api/user-prefs — update current user's prefs (audit-on-change)
+// PUT /api/user-prefs — update current user's prefs (each save audited with the keys it set)
+//
+// 401 { error: "unauthenticated" } without a session; 400 { error:
+// "invalid_json" } for a body that is not JSON; 400 { error:
+// "validation_failed", issues: [{ path, message }] } for one that is; 400
+// { error: "empty_patch" } for a valid body that sets no preference.
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -8,7 +13,10 @@ import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { apiRateLimit } from "@/lib/api-guards";
+import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { LOCALE_COOKIE } from "@/i18n/config";
+import { cookieLocale } from "@/i18n/resolve";
 
 const PrefsSchema = z.object({
   density: z.enum(["dense", "regular", "loose"]).optional(),
@@ -21,6 +29,8 @@ const PrefsSchema = z.object({
   ftuxSeenAt: z.string().datetime().optional().nullable(),
 });
 
+// No uiLanguage here: a user with no row is seeing the gml-locale cookie's
+// language (i18n/resolve.ts), so that is their default -- see PUT.
 const DEFAULT_PREFS = {
   density: "regular" as const,
   navStyle: "labelled" as const,
@@ -28,31 +38,47 @@ const DEFAULT_PREFS = {
   highContrast: false,
   reducedMotion: false,
   showWatermark: true,
-  uiLanguage: "en" as const,
 };
 
 export async function GET() {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
   const [row] = await db.select().from(userPrefs).where(eq(userPrefs.userId, session.user.id)).limit(1);
   if (row) return NextResponse.json(row);
   // No row yet → return defaults
-  return NextResponse.json({ userId: session.user.id, ...DEFAULT_PREFS });
+  return NextResponse.json({ userId: session.user.id, ...DEFAULT_PREFS, uiLanguage: await cookieLocale() });
 }
 
 export async function PUT(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
-  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const parse = PrefsSchema.safeParse(body);
+  // Each save is a permanent user_prefs.update audit row (FR-19). A person
+  // flipping settings saves a few times a minute; a loop is refused.
+  const limited = await apiRateLimit("user-prefs", session.user.id, 30, 60_000);
+  if (limited) return limited;
+  // Not `.catch(() => ({}))`: that read a body that was not JSON as an empty
+  // patch, upserted the defaults, audited an update and answered 200 ok.
+  const read = await readJsonBody(req);
+  if (read.response) return read.response;
+  const parse = PrefsSchema.safeParse(read.body);
   if (!parse.success) {
-    return NextResponse.json({ error: "validation_failed", issues: parse.error.issues }, { status: 400 });
+    return NextResponse.json({ error: "validation_failed", issues: publicIssues(parse.error) }, { status: 400 });
   }
   const patch = parse.data;
+  // NOTHING TO SET, NOTHING TO DO. Every field is optional and unknown keys
+  // are stripped, so `{}` -- or a body of keys this route does not know --
+  // parsed to an empty patch that still upserted the row, wrote an audit row
+  // with `keys: []` and answered 200 ok, on every call. Checked on the PARSED
+  // patch so the unknown-keys body is refused too; `{ ftuxSeenAt: null }` is
+  // one key and is not affected. No client sends an empty patch
+  // (settings-form returns early on an empty delta). As system-settings does.
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ error: "empty_patch" }, { status: 400 });
+  }
   // NULL MUST SURVIVE AS NULL.
   //
   // This read `patch.ftuxSeenAt ? new Date(...) : undefined`, and Drizzle's
@@ -68,10 +94,25 @@ export async function PUT(req: Request) {
         ? null
         : new Date(patch.ftuxSeenAt);
 
-  // Upsert
+  // Upsert.
+  //
+  // THE FIRST ROW KEEPS THE LANGUAGE ON SCREEN. With no row, the UI is in the
+  // cookie's language (the login-page picker's); once a row exists, the row
+  // decides (i18n/resolve.ts). The insert used to take uiLanguage 'en' from
+  // the defaults whatever field was being saved, so the first-run tour's
+  // {ftuxSeenAt} -- sent on every first sign-in -- or a Settings toggle
+  // switched a user who had picked हिन्दी at sign-in to English. The cookie
+  // seeds the INSERT only: the conflict branch below sets just the patch, so
+  // a saved language is never overwritten by a device's cookie.
   await db
     .insert(userPrefs)
-    .values({ userId: session.user.id, ...DEFAULT_PREFS, ...patch, ftuxSeenAt })
+    .values({
+      userId: session.user.id,
+      ...DEFAULT_PREFS,
+      ...patch,
+      uiLanguage: patch.uiLanguage ?? (await cookieLocale()),
+      ftuxSeenAt,
+    })
     .onConflictDoUpdate({
       target: userPrefs.userId,
       set: { ...patch, ftuxSeenAt, updatedAt: new Date() },
@@ -87,13 +128,11 @@ export async function PUT(req: Request) {
 
   const res = NextResponse.json({ ok: true });
 
-  // Mirror the locale into the `gml-locale` cookie. user_prefs.uiLanguage stays
-  // the source of truth, but the next-intl request config (src/i18n/request.ts)
-  // runs on every server render and cannot afford a DB round-trip, so it reads
-  // this cookie instead. Without the mirror, changing the language would update
-  // the database while every server-rendered string kept the previous locale.
-  // A route handler is the right place for this: Server Components cannot write
-  // cookies.
+  // Mirror the locale into the `gml-locale` cookie. Signed in, user_prefs is
+  // what every render uses (src/i18n/resolve.ts); the cookie is what the
+  // signed-out pages (/login after sign-out) fall back to, so this keeps them
+  // in the language the user last chose on this device. A route handler is
+  // the right place for this: Server Components cannot write cookies.
   if (patch.uiLanguage) {
     res.cookies.set(LOCALE_COOKIE, patch.uiLanguage, {
       path: "/",

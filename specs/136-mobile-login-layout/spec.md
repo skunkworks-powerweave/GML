@@ -21,7 +21,7 @@ The prototype's answer is a single-column shell with:
 - a **prominent "Sign in" CTA** that fills the form width;
 - a **mode toggle** between password and magic-link sign-in;
 - the **language picker as a horizontal pill row at the bottom**,
-  EN / हिं / لد, sitting above the home-indicator inset so notch
+  EN / हिं / བོད་, sitting above the home-indicator inset so notch
   devices don't overlap it;
 - a **programme footer** disclosure (audit + build version) so the
   field user sees they're inside the official LMS.
@@ -89,7 +89,7 @@ Structure:
   anchored at the bottom with
   `paddingBottom: calc(12px + env(safe-area-inset-bottom, 0px))`
   so the home indicator on iPhones doesn't overlap. Three
-  44×44 buttons: EN / हिं / لد. Each writes the `gml-locale`
+  44×44 buttons: EN / हिं / བོད་. Each writes the `gml-locale`
   cookie and calls `router.refresh()` — the same contract as
   `LoginLanguagePicker`, inlined here so the row's geometry can
   be tuned independently.
@@ -119,7 +119,7 @@ log, rate-limit, and redirect story is identical across devices.
   data-testids `mobile-email`, `mobile-password`,
   `mobile-signin-button`, `mobile-mode-toggle`.
 - `MobileLogin.tsx` renders the language pill row
-  (`mobile-language-row`) with EN, हिं, and لد buttons.
+  (`mobile-language-row`) with EN, हिं, and བོད་ buttons.
 - `MobileLogin.tsx` references `env(safe-area-inset-bottom)` for
   notch / home-indicator clearance.
 - `MobileLogin.tsx` renders the footer disclosure with the

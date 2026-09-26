@@ -13,8 +13,15 @@
 // Method matrix:
 //   POST                          → 200 { ok:true, delivered:number }
 //   POST (no session)             → 401 { error:"unauthenticated" }
-//   POST (malformed body)         → 400 { error:"validation_failed", issues }
+//   POST (body not JSON)          → 400 { error:"invalid_json" }
+//   POST (malformed body)         → 400 { error:"validation_failed", issues:[{path,message}] }
+//   POST (over 5 per user / hour) → 429 { error:"rate_limited", retryAfterMs } + Retry-After;
+//                                   audited once per user per hour, not per refusal
 //   GET / PUT / DELETE / PATCH    → 405 { error:"method_not_allowed" }
+//
+// An EMPTY body is still a ticket with the defaults (every field is optional).
+// A body that is not JSON is not: it used to be read as `{}` too, which put
+// whatever a broken client or a script sent into every administrator's inbox.
 //
 // SM-1 (audit on every mutation): writes action="helpdesk.ticket_opened" with
 // metadata.{topic,pageSlug,deliveredTo}. Best-effort — a failed audit insert
@@ -32,6 +39,7 @@ import { db } from "@gml/db";
 import { notifications, users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +57,29 @@ const BodySchema = z.object({
 // per-user key (session.user.id) so a shared device / VPN doesn't collide.
 const HELPDESK_LIMIT = 5;
 const HELPDESK_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Whether this refusal may write its helpdesk.ticket_rate_limited row: once
+ * per user per throttle window. audit_log is append-only by trigger (_post/001)
+ * and never pruned, and the throttle keeps refusing for the rest of the hour,
+ * so a row per refused POST let one signed-in caller grow it without bound.
+ * The slot is counted atomically in rate_limits so a concurrent burst cannot
+ * slip past the way a read-then-insert dedup (recordAuditDedup) does. A
+ * counter we cannot reach means no row, never an unbounded write: the request
+ * is refused either way.
+ */
+async function takeRateLimitedAuditSlot(userId: string): Promise<boolean> {
+  const slot = await rateLimit({
+    bucket: "helpdesk-429-audit",
+    id: userId,
+    limit: 1,
+    windowMs: HELPDESK_WINDOW_MS,
+  }).catch((err: unknown) => {
+    console.warn("[helpdesk] rate-limit audit counter unavailable; not auditing this refusal", String(err));
+    return null;
+  });
+  return slot?.ok === true;
+}
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -73,12 +104,14 @@ export async function POST(req: Request) {
     });
     if (!rl.ok) {
       const retryAfterSec = Math.ceil(rl.retryAfterMs / 1000);
-      void recordAudit({
-        action: "helpdesk.ticket_rate_limited",
-        entityType: "helpdesk",
-        entityId: userId,
-        metadata: { retryAfterMs: rl.retryAfterMs },
-      });
+      if (await takeRateLimitedAuditSlot(userId)) {
+        void recordAudit({
+          action: "helpdesk.ticket_rate_limited",
+          entityType: "helpdesk",
+          entityId: userId,
+          metadata: { retryAfterMs: rl.retryAfterMs },
+        });
+      }
       return NextResponse.json(
         { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
         {
@@ -96,19 +129,12 @@ export async function POST(req: Request) {
     console.warn("[helpdesk] rate-limit redis error — failing open", String(err));
   }
 
-  const raw = await req.text();
-  let body: unknown = {};
-  if (raw.trim().length > 0) {
-    try {
-      body = JSON.parse(raw);
-    } catch {
-      body = {};
-    }
-  }
-  const parsed = BodySchema.safeParse(body);
+  const read = await readJsonBody(req, { allowEmpty: true });
+  if (read.response) return read.response;
+  const parsed = BodySchema.safeParse(read.body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "validation_failed", issues: parsed.error.issues },
+      { error: "validation_failed", issues: publicIssues(parsed.error) },
       { status: 400 },
     );
   }

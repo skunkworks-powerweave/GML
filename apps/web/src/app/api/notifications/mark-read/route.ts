@@ -34,6 +34,7 @@ import { db } from "@gml/db";
 import { notifications } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { publicUrl } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
 
@@ -99,7 +100,8 @@ export async function POST(req: Request) {
   // (fetch with Content-Type: application/json) get the structured response.
   const ct = req.headers.get("content-type") ?? "";
   if (!ct.includes("application/json")) {
-    return NextResponse.redirect(new URL("/inbox", req.url), 303);
+    // The public origin: req.url is Next's bind address behind Caddy.
+    return NextResponse.redirect(await publicUrl("/inbox"), 303);
   }
   return NextResponse.json({ ok: true, marked: updated.length }, { status: 200 });
 }

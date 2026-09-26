@@ -29,6 +29,7 @@ const PATHS: Record<string, string> = {
   upload: "M12 16V4M6 10l6-6 6 6M4 20h16",
   chat: "M3 4h18v12H8l-5 5z",
   plus: "M5 12h14M12 5v14",
+  menu: "M4 6h16M4 12h16M4 18h16",
   download: "M12 4v12M6 14l6 6 6-6M4 20h16",
   chev: "M9 6l6 6-6 6",
   chevd: "M6 9l6 6 6-6",

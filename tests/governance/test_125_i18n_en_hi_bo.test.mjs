@@ -122,10 +122,29 @@ test("spec 125 — all three locale JSON bundles exist and seed ≥40 keys in en
 test("spec 125 — authenticated layout reads user_prefs.uiLanguage and provides NextIntlClientProvider", () => {
   const src = read(AUTH_LAYOUT);
   assert.match(src, /NextIntlClientProvider/, "authenticated layout must mount NextIntlClientProvider");
-  assert.match(src, /userPrefs/, "authenticated layout must query user_prefs (the locale source of truth)");
-  assert.match(src, /uiLanguage/, "authenticated layout must select user_prefs.uiLanguage");
-  assert.match(src, /normalizeLocale/, "authenticated layout must call normalizeLocale on the column value");
+  // F124: the layout used to query user_prefs.uiLanguage itself while
+  // i18n/request.ts read the cookie, and the two disagreed. The invariant is
+  // now ONE resolver for both: the layout takes its locale from viewerPrefs(),
+  // and that resolver reads and normalises user_prefs.uiLanguage. (The
+  // destructuring may take more than these two: the layout also reads the
+  // resolver's `failed` flag, so a failed read does not replay the tour.)
+  assert.match(src, /\{\s*locale,\s*prefs:\s*prefRow\b[^}]*\}\s*=\s*await viewerPrefs\(\)/, "authenticated layout must take its locale from the shared resolver");
+  const resolver = read("apps/web/src/i18n/resolve.ts");
+  assert.match(resolver, /userPrefs/, "the resolver must query user_prefs (the locale source of truth)");
+  assert.match(resolver, /normalizeLocale\(row\.uiLanguage\)/, "the resolver must normalise user_prefs.uiLanguage");
+  assert.match(read("apps/web/src/i18n/request.ts"), /resolveUiLocale\(\)/, "the request config (every string) must use the same resolver");
   assert.match(src, /loadMessages/, "authenticated layout must call loadMessages for the resolved locale");
+});
+
+// 2026-09 freeze (fix brief D_ui #2). The layout computed LOCALE_HTML_LANG and
+// spent it on `data-html-lang`, a data attribute the browser and assistive tech
+// ignore, under a root <html lang="en">. Source-text pin only, because this
+// layout needs a session and a database to render; the root and login layouts
+// are rendered for real in tests/behaviour/ui-i18n.test.ts.
+test("spec 125 — authenticated layout DECLARES the language on its locale wrapper", () => {
+  const src = read(AUTH_LAYOUT);
+  assert.match(src, /\slang=\{htmlLang\}/, "the locale wrapper must carry lang={htmlLang}");
+  assert.doesNotMatch(src, /^\s*data-html-lang=\{[^}]*\}\s*$/m, "data-html-lang is invisible to the browser; it must not stand in for lang");
 });
 
 test("spec 125 — Topbar is an async server component with next-intl/server translations", () => {
@@ -166,7 +185,9 @@ test("spec 125 — gate/[slug] page is a server component that reads user_prefs 
   const src = read(GATE_PAGE);
   assert.match(src, /NextIntlClientProvider/, "gate page must provide NextIntlClientProvider (it's outside (authenticated))");
   assert.match(src, /getTranslations/, "gate page must resolve translated copy via getTranslations");
-  assert.match(src, /userPrefs/, "gate page must read user_prefs to find the locale");
+  // F124: through the shared resolver (which reads user_prefs), not a query
+  // of its own that ignored the pre-auth cookie <html lang> was using.
+  assert.match(src, /await resolveUiLocale\(\)/, "gate page must resolve the locale like every other surface");
   // The page must still reference verifyGate (spec 035 contract).
   assert.match(src, /verifyGate/, "gate page still references the verifyGate server action (spec 035 contract)");
   // GATE_BY_SLUG meta must cover every spec-035 slug.
@@ -182,7 +203,19 @@ test("spec 125 — gate/[slug] page is a server component that reads user_prefs 
 test("spec 125 — /login has a server-rendered NextIntlClientProvider layout and useTranslations() in page", () => {
   const layoutSrc = read(LOGIN_LAYOUT);
   assert.match(layoutSrc, /NextIntlClientProvider/, "login/layout.tsx must wrap with NextIntlClientProvider");
-  assert.match(layoutSrc, /gml-locale/, "login layout must read the pre-auth gml-locale cookie");
+  // The layout used to read the gml-locale cookie itself. It now resolves the
+  // locale through the shared per-request resolver (F124), so that on a
+  // signed-in login route (/login/reset) it agrees with <html lang>; signed
+  // out, the resolver answers the pre-auth cookie. The invariant is therefore
+  // both halves: the layout uses the resolver, and the resolver's fallback is
+  // the cookie. Rendered for real in tests/behaviour/ui-i18n.test.ts (D2) and
+  // ui-locale-source.test.ts.
+  assert.match(layoutSrc, /await resolveUiLocale\(\)/, "login layout must take its locale from the shared resolver");
+  assert.match(
+    read("apps/web/src/i18n/resolve.ts"),
+    /cookies\(\)\)\.get\(LOCALE_COOKIE\)/,
+    "the resolver must fall back to the pre-auth gml-locale cookie",
+  );
   const pageSrc = read(LOGIN_PAGE);
   assert.match(pageSrc, /from\s+["']next-intl["']/, "login page must import useTranslations from next-intl");
   assert.match(pageSrc, /useTranslations/, "login page must call useTranslations() for label copy");
@@ -194,10 +227,18 @@ test("spec 125 — dashboard uses getTranslations() for the greeting + headings 
   const src = read(DASHBOARD);
   assert.match(src, /from\s+["']next-intl\/server["']/);
   assert.match(src, /tDash/, "dashboard must hold a tDash translator handle");
+  // The greeting's key now comes from dashboard/greeting.ts (F132: it picked
+  // the key from the UTC hour inline), so the translation is tDash(<key>) and
+  // the key set lives there. Its behaviour is in dashboard-greeting.test.ts.
   assert.match(
     src,
-    /tDash\("morning"\)/,
-    "dashboard greeting must translate the morning string via tDash",
+    /tDash\(greetingKey\(/,
+    "dashboard greeting must translate its time-of-day key via tDash",
+  );
+  assert.match(
+    read("apps/web/src/app/(authenticated)/dashboard/greeting.ts"),
+    /return "morning"/,
+    "the greeting keys include the morning string",
   );
   assert.match(
     src,

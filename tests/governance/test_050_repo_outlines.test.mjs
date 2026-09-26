@@ -69,8 +69,10 @@ test("050 — detail renders learning outcomes, lessons table, sessions, details
   assert.match(src, /Sessions delivered/);
   assert.match(src, /Details/);
   assert.match(src, /Reading material/);
-  // Two-column grid 1.6fr / 1fr (matches JSX prototype)
-  assert.match(src, /gridTemplateColumns:\s*"1\.6fr 1fr"/);
+  // Two-column grid 1.6fr / 1fr (matches JSX prototype) from 768 px; one
+  // column on a phone (F11: the inline template this pinned held at every
+  // width). Rendered at both widths in ui-phone-layout.test.ts.
+  assert.match(src, /grid-cols-1\b[^"]*md:grid-cols-\[minmax\(0,1\.6fr\)_minmax\(0,1fr\)\]/);
 });
 
 test("050 — Hindi name (SM-7) rendered with --deva font when present", () => {

@@ -7,8 +7,9 @@
 // The runner is a server component; the only client surface is <FormRenderer>
 // (spec 072), which owns autosave + field rendering. `submitFormAction` is a
 // top-level `"use server"` action this file owns; it inserts into
-// `feedback_responses`, deletes the matching draft, and fires `form.submit`
-// audit, then redirects to /forms/[slug]/thanks.
+// `feedback_responses` (for a quarter's form sent again, it replaces the
+// respondent's earlier answers), deletes the matching draft, and fires
+// `form.submit` audit, then redirects to /forms/[slug]/thanks.
 //
 // Spec 155 — the runner now enforces an audience-vs-role gate BEFORE
 // rendering. Any logged-in user used to be able to GET /forms/<slug> regardless
@@ -20,22 +21,38 @@
 // `mentor | mentee`; `mentee` maps to the `teacher` role because in this
 // codebase a mentee IS the classroom teacher being mentored.
 
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
+import { notify } from "@gml/db/notify";
 import {
   feedbackForms,
   feedbackResponses,
   formDrafts,
   mentorPairings,
+  mentors,
+  teachers,
+  users,
   type FeedbackForm,
 } from "@gml/db/schema";
 
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
+import { actorFrom, assertCanAccessPairing, pairingClosed } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
-import { validateResponses, audienceAllows, type FormField } from "@/lib/forms/validate";
+import { assertSectionGate } from "@/lib/gates";
+import {
+  validateResponses,
+  audienceAllows,
+  type FormField,
+  type FormFieldOption,
+} from "@/lib/forms/validate";
+import { decodeFormSlug, formRunnerHref } from "@/lib/forms/catalogue-links";
+import { templateDraftWhere } from "@/lib/forms/drafts";
+import { isUuid } from "@/lib/ids";
+import { formTitle, isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
+import { parseFormSchema } from "@/lib/forms/schema";
 import { getDeviceType } from "@/lib/device";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
@@ -45,20 +62,9 @@ import { FormRenderer } from "@/components/forms/FormRenderer";
 // screen, big touch targets, sticky Prev/Next, review screen at the end).
 import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
 
-/**
- * The quarter a pairing moves INTO once a form of this kind is submitted.
- *
- * `final` is absent deliberately: it closes the pairing rather than opening a
- * quarter, and completePairingAction owns that transition.
- */
-const QUARTER_AFTER: Record<string, number | undefined> = {
-  baseline: 2,
-  progress_1: 3,
-  progress_2: 4,
-};
-
-
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Feedback form" };
 
 // ---------------------------------------------------------------------------
 // Slug parsing — `${kind}-${audience}-${version}`.
@@ -115,7 +121,11 @@ type FormSchemaShape = {
     label?: string;
     hindiLabel?: string;
     required?: boolean;
-    options?: string[];
+    // Strings OR {value,label,hindiLabel} objects -- seed_forms_mentee.ts writes
+    // the latter. Declaring `string[]` here let the `as FormField[]` cast below
+    // hide that validate.ts compared submitted values against object
+    // references, which made the mentee final form unsubmittable.
+    options?: string[] | Array<Extract<FormFieldOption, object> & { label: string }>;
     min?: number;
     max?: number;
     helpText?: string;
@@ -124,10 +134,12 @@ type FormSchemaShape = {
   purpose?: string;
 };
 
-function readSchema(form: FeedbackForm): FormSchemaShape {
-  const raw = form.schema as unknown;
-  if (raw && typeof raw === "object") return raw as FormSchemaShape;
-  return {};
+// Checked, not cast: a stored `{"fields": {...}}` used to reach
+// `(schema.fields ?? []).map(...)` and 500 the runner for every user. null
+// means the stored schema is not one the renderers can draw
+// (lib/forms/schema.ts); the page shows BrokenFormShell and the action refuses.
+function readSchema(form: FeedbackForm): FormSchemaShape | null {
+  return parseFormSchema(form.schema) as FormSchemaShape | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -236,8 +248,11 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // below, prefill the form with another pairing's previously submitted answers.
   const pairingId = String(formData.get("__pairingId") ?? "").trim();
 
-  if (!formId || !slug) {
-    redirect(`/inbox?error=invalid_form_submit`);
+  // A uuid too: the hidden __formId goes into eq(feedbackForms.id, ...) below,
+  // and a tampered or truncated one was a Postgres 22P02 and an HTTP 500.
+  if (!formId || !slug || !isUuid(formId)) {
+    // To /forms, which shows these errors; /inbox ignored them.
+    redirect(`/forms?error=invalid_form_submit`);
   }
   if (!pairingId) {
     redirect(`/forms/${slug}?error=missing_pairing`);
@@ -249,7 +264,14 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // user could file mentorship feedback against any pairing in the programme.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
-  await assertCanAccessPairing(actor, pairingId);
+  // SECTION GATE, asserted in the action for the reason every /mentorship
+  // action asserts it: a server action runs before any layout renders, and a
+  // gate that guards reading and not writing does not meet the requirement.
+  // This form files mentorship feedback and advances the pairing's quarter,
+  // and it lives outside /mentorship, so nothing else asked for the password.
+  await assertSectionGate(actor.id, "mentorship", formRunnerHref(slug, pairingId));
+  const pairing = await assertCanAccessPairing(actor, pairingId);
+  if (pairingClosed(pairing)) redirect(`${formRunnerHref(slug, pairingId)}&error=pairing_closed`);
 
   // Pull the form back so we know which field ids to accept. Drop unknown keys.
   const [form] = await db
@@ -258,10 +280,11 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     .where(eq(feedbackForms.id, formId))
     .limit(1);
   if (!form || !form.active) {
-    redirect(`/inbox?error=form_not_found`);
+    redirect(`/forms?error=form_not_found`);
   }
 
   const schema = readSchema(form);
+  if (!schema) redirect(`${formRunnerHref(slug, pairingId)}&error=form_broken`);
   const fieldIds = new Set((schema.fields ?? []).map((f) => f.name));
 
   // Spec 130 — pick up the context hidden inputs the renderer planted on the
@@ -314,8 +337,12 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       .slice(0, 3)
       .map((e) => e.message)
       .join(" ");
+    // KEEP THE PAIRING. This redirect used to drop it, so the page came back
+    // with no pairingId and the corrected resubmission was refused as
+    // missing_pairing -- one wrong answer turned into a dead end. pairingId
+    // was already checked by assertCanAccessPairing above.
     redirect(
-      `/forms/${slug}?error=invalid&detail=${encodeURIComponent(summary)}`,
+      `${formRunnerHref(slug, pairingId)}&error=invalid&detail=${encodeURIComponent(summary)}`,
     );
   }
 
@@ -332,23 +359,65 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     responses.__context = context;
   }
 
+  // ONE RECORD PER QUARTER'S FORM, PAIRING AND RESPONDENT. The form stays
+  // live after it is sent -- the runner pre-fills the earlier answers, and
+  // spec 131 has the most recent retake win -- but this always INSERTed, so
+  // sending it again filed a second record beside the first, and the pairing's
+  // record listed both with nothing saying which counts. Sending it again now
+  // REPLACES the earlier answers (the runner says so). A form with a purpose
+  // (the School visit checklist) is repeatable: each visit is its own record.
+  // The advisory lock makes two submits at once -- a double tap on a slow
+  // link -- take turns, so the second finds the first's row.
+  const isQuarterly = isQuarterlyForm(form.schema);
+  // The pairing's FINAL (Q4) form, sent by this respondent for the first
+  // time: the notice after the transaction. The Endline survey borrows kind
+  // 'final' and is not one (lib/forms/quarterly.ts).
+  const isFinalForm = isQuarterly && form.kind === "final";
+  let firstFinal = false;
+  let replaced = false;
+
   let newResponseId = "";
   await db.transaction(async (tx) => {
-    const [inserted] = await tx
-      .insert(feedbackResponses)
-      .values({
-        formId: form.id,
-        pairingId,
-        respondentUserId: userId,
-        responses,
-      })
-      .returning({ id: feedbackResponses.id });
-    newResponseId = inserted?.id ?? "";
+    let earlierId: string | null = null;
+    if (isQuarterly) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`feedback_responses:${form.id}:${pairingId}:${userId}`}))`);
+      const [earlier] = await tx
+        .select({ id: feedbackResponses.id })
+        .from(feedbackResponses)
+        .where(
+          and(
+            eq(feedbackResponses.formId, form.id),
+            eq(feedbackResponses.pairingId, pairingId),
+            eq(feedbackResponses.respondentUserId, userId),
+          ),
+        )
+        .orderBy(desc(feedbackResponses.submittedAt))
+        .limit(1);
+      earlierId = earlier?.id ?? null;
+    }
+    firstFinal = isFinalForm && !earlierId;
+    replaced = earlierId !== null;
+    const [saved] = earlierId
+      ? await tx
+          .update(feedbackResponses)
+          .set({ responses, submittedAt: sql`now()` })
+          .where(eq(feedbackResponses.id, earlierId))
+          .returning({ id: feedbackResponses.id })
+      : await tx
+          .insert(feedbackResponses)
+          .values({
+            formId: form.id,
+            pairingId,
+            respondentUserId: userId,
+            responses,
+          })
+          .returning({ id: feedbackResponses.id });
+    newResponseId = saved?.id ?? "";
 
-    // Clear the autosave draft for this user+template, if any.
-    await tx
-      .delete(formDrafts)
-      .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)));
+    // Clear the autosave draft for this user, template AND PAIRING. Keyed by
+    // user+template alone, submitting one mentee's form deleted the unfinished
+    // draft about every other mentee of the same mentor.
+    await tx.delete(formDrafts).where(templateDraftWhere(userId, form.id, pairingId));
 
     // ADVANCE THE PAIRING'S QUARTER.
     //
@@ -365,7 +434,20 @@ export async function submitFormAction(formData: FormData): Promise<void> {
     // because re-submitting an earlier quarter's form must never walk the
     // pairing backwards, and it makes concurrent submissions safe without a
     // read-modify-write. Capped at 4: there is no Q5.
-    if (pairingId) {
+    //
+    // ONLY A QUARTERLY FORM closes a quarter. The School visit checklist is
+    // stored as kind 'baseline' (feedback_kind has no value of its own for it)
+    // and advanced the pairing to Q2 when submitted, though it is a repeatable
+    // field-visit form; lib/forms/quarterly.ts.
+    //
+    // AND ONLY THE MENTOR'S. The pairing page's own rule is "Mentor must
+    // complete [the] feedback form at the end of each quarter ... Closes the
+    // quarter on submit". This advanced on the first submission of the kind by
+    // ANYONE: the mentee's baseline closed Q1 before the mentor had filled
+    // hers, which then stopped being asked for, and an administrator's
+    // submission closed it too. assertCanAccessPairing above means a mentor
+    // here is this pairing's mentor.
+    if (pairingId && isQuarterlyForm(form.schema) && form.audience === "mentor" && actor.role === "mentor") {
       const nextQuarter = QUARTER_AFTER[form.kind];
       if (nextQuarter) {
         await tx
@@ -390,11 +472,67 @@ export async function submitFormAction(formData: FormData): Promise<void> {
       kind: form.kind,
       audience: form.audience,
       version: form.version,
+      replaced,
       ...context,
     },
   });
 
-  redirect(`/forms/${slug}/thanks`);
+  if (firstFinal) await notifyFinalSubmitted(pairing, pairingId, actor.id);
+
+  // With the pairing, so the thank-you card can link back to it and to its
+  // read-only record of submitted feedback.
+  redirect(`/forms/${slug}/thanks?pairingId=${encodeURIComponent(pairingId)}`);
+}
+
+/**
+ * THE FINAL FORM IS IN. It is what makes a pairing ready for an administrator
+ * to close (completePairingAction; the form advances no quarter), and nothing
+ * said it had happened: the pairing sat active at Q4 until someone opened it.
+ * The programme admins and the other party on the pairing are told, minus
+ * whoever sent it; the row opens the pairing.
+ *
+ * NOTHING THE SECTION PASSWORD GUARDS goes into the row -- no names, no
+ * answers: /inbox has no gate (see logMeetingAction). And nothing here can
+ * fail the submission, which has already been saved: notify() never throws,
+ * and a failed lookup is logged and dropped.
+ */
+async function notifyFinalSubmitted(
+  pairing: { mentorId: string; teacherId: string },
+  pairingId: string,
+  actorId: string,
+): Promise<void> {
+  try {
+    const [mentor] = await db.select({ userId: mentors.userId }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+    const [mentee] = await db.select({ userId: teachers.userId }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+    const admins = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.active, true), inArray(users.role, ["programme_admin", "super_admin"] as const)));
+    const recipients = new Set(
+      [...admins.map((a) => a.id), mentor?.userId, mentee?.userId].filter((u): u is string => Boolean(u)),
+    );
+    // One insert per person: notify() writes its rows in a single INSERT, and
+    // an account deleted between the lookup above and that INSERT (a foreign
+    // key violation) would cost everyone else their notice.
+    for (const userId of recipients) {
+      await notify(
+        db,
+        [
+          {
+            userId,
+            kind: "pairing.final_submitted",
+            subject: "Final (Q4) feedback was submitted on a mentorship pairing",
+            body: null,
+            entityType: "mentor_pairing",
+            entityId: pairingId,
+          },
+        ],
+        { excludeUserId: actorId },
+      );
+    }
+  } catch (err) {
+    console.error("[forms] final-form notification failed", { pairingId, err });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,7 +555,8 @@ export default async function FormRunnerPage({
   if (!session?.user?.id) redirect("/login");
   const userId = session.user.id;
 
-  const { slug } = await params;
+  // Decoded: Next passes the segment still percent-encoded (decodeFormSlug).
+  const slug = decodeFormSlug((await params).slug);
   const sp = await searchParams;
   // Spec 133 — pick renderer by device cookie. Mobile gets one-field-per-screen
   // with sticky Prev/Next + review; desktop keeps the stacked FormRenderer.
@@ -477,10 +616,51 @@ export default async function FormRunnerPage({
     redirect("/forbidden");
   }
 
+  // A FORM ABOUT A PAIRING IS MENTORSHIP DATA. The runner pre-fills what this
+  // user last wrote about the mentee, and it sat outside /mentorship, whose
+  // layout is where the section password is asked -- so a borrowed session read
+  // a mentor's assessments of every mentee without the password. Asked here,
+  // before any draft or answer is read, returning to this form once unlocked.
+  //
+  // WITH OR WITHOUT A PAIRING. Every feedback form is a mentorship form, and
+  // the draft of one opened without a pairing includes each draft written
+  // before drafts had a pairing: the one a mentor shared across all her
+  // mentees, about one of them. Asked only when the URL named a pairing, the
+  // bare /forms/<slug> showed it with no password. /api/form-drafts asks the
+  // same (lib/forms/drafts.ts pairingDraftAccess).
+  await assertSectionGate(userId, "mentorship", pairingId ? formRunnerHref(slug, pairingId) : `/forms/${slug}`);
+
+  // assertCanAccessPairing 404s a pairing that is malformed, absent or someone
+  // else's, which used to render the whole fillable form (and, for a truncated
+  // id, a Postgres 22P02 as HTTP 500).
+  let aboutLine: string | null = null;
+  if (pairingId) {
+    const actor = actorFrom(session);
+    if (!actor) redirect("/login");
+    const pairing = await assertCanAccessPairing(actor, pairingId);
+
+    // WHOSE FORM THIS IS. A mentor fills the same form for four or five
+    // mentees, and the runner never named the one it was about, so nothing
+    // stopped her rating the wrong teacher before sealing the record.
+    const [mentee] = await db.select({ name: teachers.fullName }).from(teachers).where(eq(teachers.id, pairing.teacherId)).limit(1);
+    const [mentor] = await db.select({ name: mentors.name }).from(mentors).where(eq(mentors.id, pairing.mentorId)).limit(1);
+    // Only a quarter 1..4 from the URL (sanitizeContextValue); it was printed
+    // verbatim, so a crafted link could put any text after the "Q".
+    const quarter = sanitizeContextValue("quarter", readParam(sp.quarter)) ?? String(pairing.currentQuarter ?? 1);
+    aboutLine =
+      sessionRole === "teacher"
+        ? `With your mentor ${mentor?.name ?? "—"} · Q${quarter}`
+        : `About ${mentee?.name ?? "—"} · Q${quarter}`;
+  }
+
+  // THE DRAFT FOR THIS PAIRING. Selected by user+template alone, a mentor's
+  // half-written answers about one mentee loaded -- as "Draft loaded" -- into
+  // the same form for every other mentee, and outranked that mentee's own
+  // prior response below. See lib/forms/drafts.ts.
   const [draft] = await db
     .select({ responses: formDrafts.responses, updatedAt: formDrafts.updatedAt })
     .from(formDrafts)
-    .where(and(eq(formDrafts.userId, userId), eq(formDrafts.templateId, form.id)))
+    .where(templateDraftWhere(userId, form.id, pairingId || null))
     .limit(1);
 
   // Spec 131-A — prior-response prefill.
@@ -492,9 +672,10 @@ export default async function FormRunnerPage({
   // are indexable on feedback_responses; ordering by submittedAt DESC + limit
   // 1 picks the most recent canonical answer if multiple exist (re-takes).
   let priorResponses: Record<string, unknown> | null = null;
+  let priorSubmittedAt: Date | null = null;
   if (pairingId) {
     const [prior] = await db
-      .select({ responses: feedbackResponses.responses })
+      .select({ responses: feedbackResponses.responses, submittedAt: feedbackResponses.submittedAt })
       .from(feedbackResponses)
       .where(
         and(
@@ -506,9 +687,11 @@ export default async function FormRunnerPage({
       .orderBy(desc(feedbackResponses.submittedAt))
       .limit(1);
     priorResponses = (prior?.responses as Record<string, unknown> | undefined) ?? null;
+    priorSubmittedAt = prior?.submittedAt ?? null;
   }
 
   const schema = readSchema(form);
+  if (!schema) return <BrokenFormShell slug={slug} />;
   const fieldNames = new Set((schema.fields ?? []).map((f) => f.name));
 
   // Spec 130 — extract the closed context set from the query string. Anything
@@ -543,6 +726,13 @@ export default async function FormRunnerPage({
     draftResponses ??
     priorResponses ??
     {};
+  // When the server wrote what the form starts from. A copy of unsaved answers
+  // kept on the device is restored only if it is newer (draft-resilience.ts).
+  const serverSavedAt = draft
+    ? new Date(draft.updatedAt).getTime()
+    : priorSubmittedAt
+      ? new Date(priorSubmittedAt).getTime()
+      : null;
 
   // Layer prefill UNDER baseResponses so a draft / prior response always wins
   // — prefill is a starting hint, never an override of work the user has
@@ -555,19 +745,23 @@ export default async function FormRunnerPage({
     }
   }
 
-  const title = schema.title ?? `${parsed.kind.replace("_", " ")} · ${parsed.audience}`;
+  // The four seeded mentor forms carry no title; the fallback used to be
+  // "baseline · mentor". lib/forms/quarterly.ts formTitle.
+  const title = formTitle(schema, parsed.kind, parsed.audience);
   const hindiTitle = schema.hindiTitle;
   const description = schema.description;
 
   return (
     <div>
       <div className="page-header">
+        {/* Back to where the form was opened from: the pairing, or the
+            catalogue. It was "← Inbox", and the inbox has no forms. */}
         <Link
-          href="/inbox"
+          href={pairingId ? `/mentorship/${pairingId}` : "/forms"}
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 6, textDecoration: "none" }}
         >
-          ← Inbox
+          {pairingId ? "← Pairing" : "← Forms"}
         </Link>
         <div className="label">
           Form · {parsed.kind.replace("_", " ")} · {parsed.audience}
@@ -587,6 +781,11 @@ export default async function FormRunnerPage({
             </span>
           ) : null}
         </h1>
+        {aboutLine ? (
+          <p data-testid="form-about" style={{ marginTop: 4, fontSize: 14, fontWeight: 500, color: "var(--ink-2)" }}>
+            {aboutLine}
+          </p>
+        ) : null}
         {description ? (
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>{description}</p>
         ) : null}
@@ -624,6 +823,15 @@ export default async function FormRunnerPage({
             <span className="chip">No draft yet</span>
           )}
         </div>
+        {priorSubmittedAt && isQuarterlyForm(form.schema) ? (
+          // Sending a quarter's form again replaces the record rather than
+          // filing a second one (submitFormAction); nothing used to say so.
+          <p data-testid="form-already-sent" style={{ marginTop: 8, fontSize: 13, color: "var(--ink-2)" }}>
+            You already sent this form on{" "}
+            {new Date(priorSubmittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}. Sending
+            it again replaces your earlier answers.
+          </p>
+        ) : null}
       </div>
 
       <div className="page-body" style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -653,12 +861,19 @@ export default async function FormRunnerPage({
           >
             {error === "missing_pairing" ? (
               <>
-                This form must be opened from your inbox so we can attach the
-                response to the right mentorship pairing. Head back to{" "}
-                <Link href="/inbox" style={{ color: "var(--indigo)" }}>
-                  your inbox
+                {/* Pointed at /inbox, which has no feedback-form card: the
+                    advice was a dead end. The pairing pages and /forms both
+                    carry per-pairing links now. */}
+                This form has to be opened for a specific mentorship pairing so we
+                can attach your answers to it. Choose the pairing from{" "}
+                <Link href="/mentorship" style={{ color: "var(--indigo)" }}>
+                  Mentorship
                 </Link>{" "}
-                and click the form card.
+                or pick the name under the form on{" "}
+                <Link href="/forms" style={{ color: "var(--indigo)" }}>
+                  Forms
+                </Link>
+                .
               </>
             ) : error === "wrong_audience" ? (
               <>
@@ -666,6 +881,10 @@ export default async function FormRunnerPage({
                 your account. If you think that is wrong, contact your programme
                 administrator.
               </>
+            ) : error === "pairing_closed" ? (
+              <>This pairing is complete, so its record is closed and no more forms can be filed for it. Nothing was saved.</>
+            ) : error === "form_broken" ? (
+              <>This form&apos;s definition is broken, so it cannot be submitted. Please tell your programme administrator.</>
             ) : error === "invalid" ? (
               <>
                 <strong>Your answers could not be saved.</strong>
@@ -699,7 +918,9 @@ export default async function FormRunnerPage({
             <MobileFormRunner
               schema={schema}
               initialResponses={initialResponses}
-              draftKey={{ templateId: form.id }}
+              draftKey={{ templateId: form.id, pairingId: pairingId || null }}
+              userId={userId}
+              serverSavedAt={serverSavedAt}
               action={submitFormAction}
               formId={form.id}
               slug={slug}
@@ -710,7 +931,9 @@ export default async function FormRunnerPage({
             <FormRenderer
               schema={schema}
               initialResponses={initialResponses}
-              draftKey={{ templateId: form.id }}
+              draftKey={{ templateId: form.id, pairingId: pairingId || null }}
+              userId={userId}
+              serverSavedAt={serverSavedAt}
               action={submitFormAction}
               formId={form.id}
               slug={slug}
@@ -738,6 +961,27 @@ export default async function FormRunnerPage({
 }
 
 // ---------------------------------------------------------------------------
+// A stored schema the renderers cannot draw. Said plainly, with nothing to
+// submit, rather than an HTTP 500 for everyone who opens the form.
+// ---------------------------------------------------------------------------
+
+function BrokenFormShell({ slug }: { slug: string }) {
+  return (
+    <div className="page-body" style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }} role="alert">
+      <div className="label">Form unavailable</div>
+      <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
+        This form cannot be shown right now.
+      </h1>
+      <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 8 }}>
+        The definition of <code className="mono">{slug}</code> is not one the form runner can draw.
+        Nothing you have already submitted is affected. Please let your programme administrator
+        know so they can correct it in Admin → Forms.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // In-route 404 — keeps the global error boundary out of it.
 // ---------------------------------------------------------------------------
 
@@ -752,8 +996,8 @@ function NotFoundShell({ slug }: { slug: string }) {
         Slug <code className="mono">{slug}</code> doesn&apos;t resolve to any
         active <code className="mono">feedback_forms</code> row. Head back to
         your{" "}
-        <Link href="/inbox" style={{ color: "var(--indigo)" }}>
-          inbox
+        <Link href="/forms" style={{ color: "var(--indigo)" }}>
+          forms
         </Link>{" "}
         and open the form from there.
       </p>

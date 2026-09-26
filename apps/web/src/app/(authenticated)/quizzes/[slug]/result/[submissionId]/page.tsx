@@ -1,12 +1,14 @@
 // /quizzes/[slug]/result/[submissionId] — quiz result screen.
 // Server-renders the submission summary (score + pass/fail banner) and a
-// per-question breakdown (correct/incorrect + explanation). "Retake" links
-// back to the runner. Mirrors the JSX prototype's done-state in
+// per-question breakdown (correct/incorrect; the correct option and the
+// explanation only once retaking cannot gain from them -- see revealKey).
+// "Retake" links back to the runner while an attempt remains. Mirrors the JSX prototype's done-state in
 // `LMS GML Frontend/forms.jsx::QuizRunner` (lines 166-200).
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
   quizzes,
@@ -14,8 +16,11 @@ import {
   quizSubmissions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { quizShownTo } from "../../quiz-scope";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Quiz results" };
 
 export default async function QuizResultPage({
   params,
@@ -51,11 +56,29 @@ export default async function QuizResultPage({
     redirect("/forbidden");
   }
 
-  const questions = await db
-    .select()
-    .from(quizQuestions)
-    .where(eq(quizQuestions.quizId, quiz.id))
-    .orderBy(asc(quizQuestions.sequence));
+  // WHAT THE LEARNER WAS ASKED, NOT WHAT THE QUIZ SAYS NOW.
+  //
+  // This page read the live quiz_questions rows, which the editor rewrites in
+  // place by position -- so inserting, reordering or rewording a question on a
+  // live quiz re-attached every past answer to a different question and
+  // re-graded it against the current key, beside a stored score that did not
+  // move. The submission carries the questions it was graded against
+  // (migration 0030); the live rows are the fallback for a row without them.
+  const questions =
+    submission.questionSnapshot ??
+    (
+      await db
+        .select()
+        .from(quizQuestions)
+        .where(eq(quizQuestions.quizId, quiz.id))
+        .orderBy(asc(quizQuestions.sequence))
+    ).map((q) => ({
+      id: q.id,
+      prompt: q.prompt,
+      options: Array.isArray(q.options) ? q.options : [],
+      correctIndex: q.correctIndex,
+      explanation: q.explanation,
+    }));
 
   const answerMap = new Map(
     (submission.answers ?? []).map((a) => [a.questionId, a.selectedIndex] as const),
@@ -64,6 +87,43 @@ export default async function QuizResultPage({
   const passed = submission.passed;
   const score = submission.score;
   const threshold = quiz.passThreshold;
+
+  // ── THE ANSWER KEY IS SHOWN ONLY WHEN IT CAN NO LONGER BE USED ────────────
+  //
+  // This page printed "Correct: <option>" and the explanation for every
+  // question after every attempt, next to a Retake button. A learner who
+  // failed -- or submitted blanks on purpose -- read the key and retook for
+  // 100%, so the pass mark measured nothing and max_attempts (added so that
+  // resubmitting until you pass would not turn an assessment into a
+  // formality) was defeated after one try.
+  //
+  // So the key and the explanations wait until retaking cannot gain anything:
+  // the learner has passed this quiz (on any attempt), or has used every
+  // attempt a capped quiz allows. Until then they still see which of their
+  // answers were wrong. Counted the same way the runner counts: submissions.
+  const [mine] = await db
+    .select({
+      used: sql<number>`count(*)::int`,
+      everPassed: sql<boolean>`coalesce(bool_or(${quizSubmissions.passed}), false)`,
+    })
+    .from(quizSubmissions)
+    .where(and(eq(quizSubmissions.quizId, quiz.id), eq(quizSubmissions.userId, session.user.id)));
+  const attemptsLeft =
+    quiz.maxAttempts == null ? null : Math.max(0, quiz.maxAttempts - (mine?.used ?? 0));
+  const canRetake = attemptsLeft === null || attemptsLeft > 0;
+  const revealKey = Boolean(mine?.everPassed) || !canRetake;
+  // Whether the quiz can be taken now: switched off, or on an RTT subject this
+  // learner is no longer shown (W3-21), the runner 404s, so no Retake is
+  // offered -- and the subject's page is not there to go back to.
+  const shown = await quizShownTo(db, { id: session.user.id, role: session.user.role }, quiz);
+  const offerRetake = canRetake && quiz.active && shown;
+
+  // WHERE "CONTINUE" GOES (W3-22). A pass said "you may proceed to the next
+  // module" while Continue went to the dashboard, which does not lead to the
+  // subject either. An RTT quiz now goes back to its subject page, where the
+  // modules are; a quiz on a curriculum subject has no module to promise and
+  // continues to the dashboard (there is no quiz list to send it to).
+  const subjectHref = quiz.rttSubjectId && shown ? `/rtt/subject/${quiz.rttSubjectId}` : null;
 
   // Spec 146 — grading-bug fix surfaces a separate "answered" vs
   // "correct" count. Skipped (null/undefined) and explicitly-answered
@@ -145,8 +205,14 @@ export default async function QuizResultPage({
             }}
           >
             {passed
-              ? "Well done — you may proceed to the next module."
-              : "Review the explanations below and retake when you are ready."}
+              ? subjectHref
+                ? "Well done — continue with the next module on the subject page."
+                : "Well done — you passed this quiz."
+              : revealKey
+                ? "The correct answers and explanations are shown below."
+                : attemptsLeft === null
+                  ? "Your wrong answers are marked below. Retake when you are ready; the correct answers are shown once you pass."
+                  : `Your wrong answers are marked below. You have ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} left; the correct answers are shown once you pass or use your last attempt.`}
           </div>
           {/* Spec 146 — answered vs total breakdown. Skipped questions
               are counted as wrong against the denominator (same
@@ -252,19 +318,21 @@ export default async function QuizResultPage({
                           <em>Skipped</em>
                         )}
                       </div>
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color: "var(--ink-3)",
-                          marginTop: 2,
-                        }}
-                      >
-                        Correct:{" "}
-                        <span style={{ color: "var(--lichen)" }}>
-                          {q.options[q.correctIndex] ?? `(option ${q.correctIndex})`}
-                        </span>
-                      </div>
-                      {q.explanation ? (
+                      {revealKey ? (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "var(--ink-3)",
+                            marginTop: 2,
+                          }}
+                        >
+                          Correct:{" "}
+                          <span style={{ color: "var(--lichen)" }}>
+                            {q.options[q.correctIndex] ?? `(option ${q.correctIndex})`}
+                          </span>
+                        </div>
+                      ) : null}
+                      {revealKey && q.explanation ? (
                         <div
                           style={{
                             fontSize: 12,
@@ -294,9 +362,13 @@ export default async function QuizResultPage({
               flexWrap: "wrap",
             }}
           >
-            <Link href={`/quizzes/${slug}`} className="btn">
-              Retake
-            </Link>
+            {/* Only while an attempt remains: the runner sends a learner with
+                none left straight to their history. */}
+            {offerRetake ? (
+              <Link href={`/quizzes/${slug}`} className="btn">
+                Retake
+              </Link>
+            ) : null}
             {/* Spec 159 — link to the per-user attempts history. The
                 history page is server-rendered and scopes to the
                 current user, so this link is safe to surface
@@ -308,8 +380,8 @@ export default async function QuizResultPage({
             >
               View history
             </Link>
-            <Link href="/dashboard" className="btn btn-primary">
-              Continue
+            <Link href={subjectHref ?? "/dashboard"} className="btn btn-primary">
+              {subjectHref ? "Back to the subject" : "Continue"}
             </Link>
           </div>
         </div>

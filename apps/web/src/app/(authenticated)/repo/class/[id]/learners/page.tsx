@@ -7,18 +7,23 @@
 //   3. The page reads learners.name + guardian + age + attendance% (the PII columns)
 //      — that's why the audit is mandatory.
 
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, learners, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
+import { uuidOrNotFound } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "Class learners" };
+
 export default async function RepoClassLearnersPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   // SM-9 step 1: gate on role. Non-privileged callers never reach the audit hook OR the DB.
   await requireRole(["super_admin", "programme_admin"]);
@@ -67,7 +72,7 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
           <div className="label">Roster · {school?.code ?? "—"} · Grade {cls.grade}</div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Learners</h1>
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            {rows.length} of {cls.studentsCount} on record. PII access is logged (SM-9): your view of
+            {rows.length} of {cls.studentsCount} on record. PII access is logged: your view of
             this page is recorded in audit_log under <code className="mono">learners.view</code>.
           </p>
         </div>
@@ -80,55 +85,57 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
               No learners on record for this class.
             </p>
           ) : (
-            <table className="t">
-              <thead>
-                <tr>
-                  <th>Roll</th>
-                  <th>Name</th>
-                  <th>Section</th>
-                  <th>Age</th>
-                  <th>Guardian</th>
-                  <th>Attendance</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const att = r.attendancePct ?? null;
-                  const attColor =
-                    att == null
-                      ? "var(--ink-3)"
-                      : att >= 90
-                        ? "var(--lichen)"
-                        : att >= 75
-                          ? "var(--ink-2)"
-                          : "var(--rust)";
-                  return (
-                    <tr key={r.id}>
-                      <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                        {r.rollNumber ?? "—"}
-                      </td>
-                      <td style={{ fontWeight: 500 }}>{r.name}</td>
-                      <td className="mono" style={{ fontSize: 12 }}>{r.section ?? "—"}</td>
-                      <td style={{ fontSize: 12 }}>{r.age ?? "—"}</td>
-                      <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.guardian ?? "—"}</td>
-                      <td
-                        className="mono"
-                        style={{ fontSize: 12, color: attColor, fontWeight: 600 }}
-                      >
-                        {att == null ? "—" : `${att}%`}
-                      </td>
-                      <td>
-                        <span className={r.active ? "chip chip-lichen" : "chip"}>
-                          <span className={r.active ? "dot dot-green" : "dot dot-gray"} />
-                          {r.active ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={{ overflowX: "auto" }}>
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Roll</th>
+                    <th>Name</th>
+                    <th>Section</th>
+                    <th>Age</th>
+                    <th>Guardian</th>
+                    <th>Attendance</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const att = r.attendancePct ?? null;
+                    const attColor =
+                      att == null
+                        ? "var(--ink-3)"
+                        : att >= 90
+                          ? "var(--lichen)"
+                          : att >= 75
+                            ? "var(--ink-2)"
+                            : "var(--rust)";
+                    return (
+                      <tr key={r.id}>
+                        <td className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                          {r.rollNumber ?? "—"}
+                        </td>
+                        <td style={{ fontWeight: 500 }}>{r.name}</td>
+                        <td className="mono" style={{ fontSize: 12 }}>{r.section ?? "—"}</td>
+                        <td style={{ fontSize: 12 }}>{r.age ?? "—"}</td>
+                        <td style={{ fontSize: 12, color: "var(--ink-2)" }}>{r.guardian ?? "—"}</td>
+                        <td
+                          className="mono"
+                          style={{ fontSize: 12, color: attColor, fontWeight: 600 }}
+                        >
+                          {att == null ? "—" : `${att}%`}
+                        </td>
+                        <td>
+                          <span className={r.active ? "chip chip-lichen" : "chip"}>
+                            <span className={r.active ? "dot dot-green" : "dot dot-gray"} />
+                            {r.active ? "Active" : "Inactive"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 

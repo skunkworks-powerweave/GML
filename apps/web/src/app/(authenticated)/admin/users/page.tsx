@@ -46,6 +46,7 @@ export default async function AdminUsersPage() {
       name: users.name,
       role: users.role,
       active: users.active,
+      phone: users.phone,
       lastSeenAt: users.lastSeenAt,
       createdAt: users.createdAt,
       deletedAt: users.deletedAt,
@@ -115,6 +116,7 @@ export default async function AdminUsersPage() {
                 name: u.name,
                 role: u.role as RoleName,
                 active: u.active,
+                phone: u.phone,
                 deleted: u.deletedAt !== null,
                 lastSeenAt: u.lastSeenAt ? u.lastSeenAt.toISOString() : null,
               }}

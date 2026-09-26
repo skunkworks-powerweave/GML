@@ -29,13 +29,16 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessVideo } from "@/lib/authz";
-import { buildSignedPlaylist } from "@/lib/video/storage";
+import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
+import { buildSignedPlaylist, hlsMasterPlaylistKey, hlsPrefix } from "@/lib/video/storage";
 
 export const dynamic = "force-dynamic";
 
+/** A rendition's playlist name as the transcoder writes it (apps/worker/src/encode.ts). */
+const VARIANT_NAME = /^v\d{1,2}\.m3u8$/;
+
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -51,11 +54,37 @@ export async function GET(
   // a real video, which is exactly the enumeration a guessed-uuid attack wants.
   const video = await assertCanAccessVideo(actor, id);
 
+  // Section gate, before anything is signed: without it a user who had not
+  // unlocked mentorship (or whose grant a password rotation had just deleted)
+  // was handed signed segment URLs for mentorship recordings. JSON rather than
+  // a redirect -- the player fetches this, it does not navigate to it -- and
+  // only after ownership passed, so it reveals nothing to a stranger.
+  const gate = await videoGateRequired(actor, video);
+  if (gate) {
+    return NextResponse.json({ error: "gate_required", gate }, { status: 403 });
+  }
+
   if (video.status !== "ready" || !video.hlsMasterKey) {
     return NextResponse.json({ error: "not_ready", status: video.status }, { status: 409 });
   }
 
-  const playlist = await buildSignedPlaylist(id, video.hlsMasterKey, video.durationSec ?? null);
+  // THE RENDITION LADDER. A video's master playlist lists its renditions, and
+  // each comes back through this same route as ?variant=<its playlist name>,
+  // authorised exactly as the master was. The name must be one the transcoder
+  // writes -- never a path -- and the video must HAVE a master: one transcoded
+  // before the ladder points at its single index.m3u8 and has no variants.
+  const variant = new URL(req.url).searchParams.get("variant");
+  let playlistKey = video.hlsMasterKey;
+  if (variant !== null) {
+    if (!VARIANT_NAME.test(variant) || video.hlsMasterKey !== hlsMasterPlaylistKey(id)) {
+      return NextResponse.json({ error: "not_found" }, { status: 404 });
+    }
+    playlistKey = `${hlsPrefix(id)}/${variant}`;
+  }
+
+  const playlist = await buildSignedPlaylist(id, playlistKey, video.durationSec ?? null, {
+    variantUrl: (name) => `/api/media/playlist/${id}?variant=${encodeURIComponent(name)}`,
+  });
   if (!playlist) {
     // Marked ready, output missing. Real state, worth distinguishing from a
     // permission failure so an operator reading logs can tell them apart.

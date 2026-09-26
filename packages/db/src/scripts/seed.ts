@@ -14,8 +14,9 @@ import bcrypt from "bcryptjs";
 import { createClient } from "@supabase/supabase-js";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, max, sql } from "drizzle-orm";
 import * as schema from "../schema/index.js";
+import { poolConfig } from "../client.js";
 
 const DRY_RUN = process.env.SEED_DRY_RUN === "true";
 
@@ -25,7 +26,9 @@ export async function main() {
     console.error("DATABASE_URL not set");
     process.exit(1);
   }
-  const pool = new Pool({ connectionString: url });
+  // client.ts's TLS, not a bare connection string: this session reads
+  // auth.users and writes the gate hashes and the super_admin profile.
+  const pool = new Pool(poolConfig());
   const db = drizzle(pool);
 
   // Spec 103 — super_admin bootstrap (runs first, idempotent, independent of district seed).
@@ -167,12 +170,22 @@ export async function main() {
   const subjectByCode = Object.fromEntries(curricularInsert.map((s) => [s.code, s.id]));
 
   // RTT phases + terms + RTT subjects (training units)
+  //
+  // A phase is a run of CALENDAR DAYS IN IST, stored the way /admin/data/phases
+  // stores one (apps/web/src/admin/dates.ts, which packages/db cannot import):
+  // from 00:00 IST on the first day to the last millisecond of the last. This
+  // was `new Date("2026-09-30")`, which JS reads as UTC midnight -- 05:30 IST --
+  // so every phase began 5.5 h into its first day and ended 5.5 h into its
+  // last, and the dashboard (`end_date >= now()`) dropped "RTT Phase 3" at
+  // 05:30 IST on 30 September.
+  const istDayStart = (ymd: string) => new Date(`${ymd}T00:00:00.000+05:30`);
+  const istDayEnd = (ymd: string) => new Date(`${ymd}T23:59:59.999+05:30`);
   const phaseInsert = await db
     .insert(schema.phases)
     .values([
-      { label: "Phase 1", sequence: 1, startDate: new Date("2025-04-01"), endDate: new Date("2025-09-30") },
-      { label: "Phase 2", sequence: 2, startDate: new Date("2025-10-01"), endDate: new Date("2026-03-31") },
-      { label: "Phase 3", sequence: 3, startDate: new Date("2026-04-01"), endDate: new Date("2026-09-30") },
+      { label: "Phase 1", sequence: 1, startDate: istDayStart("2025-04-01"), endDate: istDayEnd("2025-09-30") },
+      { label: "Phase 2", sequence: 2, startDate: istDayStart("2025-10-01"), endDate: istDayEnd("2026-03-31") },
+      { label: "Phase 3", sequence: 3, startDate: istDayStart("2026-04-01"), endDate: istDayEnd("2026-09-30") },
     ])
     .returning({ id: schema.phases.id, label: schema.phases.label });
   const phaseByLabel = Object.fromEntries(phaseInsert.map((p) => [p.label, p.id]));
@@ -229,8 +242,11 @@ export async function main() {
     teacherId: t.id,
     status: i < 7 ? ("active" as const) : i < 9 ? ("review" as const) : ("complete" as const),
     currentQuarter: ((i % 4) + 1),
-    meetingsCount: 3 + (i % 5),
-    lastMeetingAt: new Date(Date.now() - i * 86400000 * 7),
+    // No meetings: the counters describe mentor_meetings rows, and the seed
+    // writes none. Invented counts ("7 meetings · last 27 Aug") sat over an
+    // empty "No meetings logged yet" list on every demo pairing.
+    meetingsCount: 0,
+    lastMeetingAt: null,
     conceptNote: i === 0 ? "Focus on phonics and reading aloud routines." : null,
   }));
   // The insert must still run; only the unused binding is dropped. The
@@ -257,6 +273,13 @@ export async function main() {
   await db.insert(schema.observationCycles).values(cyclesValues);
 
   console.log("[seed] DONE: 2 districts, 11 zones, 10 schools, 10 teachers, 2 mentors, 10 pairings, 8 cycles, 9 curriculum subjects, 3 phases, 5 terms, 3 RTT subjects.");
+  // Said at the moment the operator is watching deploy.sh, which is when "why
+  // does the Repository read zero?" gets asked. README-deploy.md section 3.2.
+  console.log(
+    "[seed] NOT SEEDED, by design: classes, course_outlines, outline_lessons, sessions, learners, " +
+      "resources, resource_subjects, rtt_modules, rtt_lessons, rtt_readings, rtt_sessions. The Repository and RTT " +
+      "subject pages stay empty until you load them at /admin (Import CSV per table; see README-deploy.md 3.2).",
+  );
   await pool.end();
 }
 
@@ -270,7 +293,8 @@ export async function main() {
 // nobody can reach. So it has to be seeded.
 //
 // Password source, in order:
-//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION)
+//   1. GATE_PASSWORD_<SLUG> from the environment (e.g. GATE_PASSWORD_OBSERVATION),
+//      when it holds more than whitespace
 //   2. a generated 16-char random password, PRINTED ONCE so the operator can
 //      distribute it. It is not recoverable afterwards -- only the bcrypt hash
 //      is stored -- which is the same contract as the super_admin bootstrap.
@@ -278,25 +302,50 @@ export async function main() {
 // Idempotent: a slug that already has a row is left alone, so re-running seed
 // never rotates a live password out from under its users. Rotation is an
 // explicit admin action (/admin/gates), not a side effect of deployment.
-async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
+//
+// ONE EXCEPTION: a gate whose current password is the EMPTY string. The seed
+// wrote exactly that while the `??` defect below was live, the gate form
+// cannot submit an empty password, so such a gate admits nobody -- and
+// because an existing slug was skipped, every later deploy left observation,
+// mentorship and the audit log locked, printing only "exists — skipping".
+// Replacing it takes a working password away from no one, so the deploy
+// repairs it the way /admin/gates rotates one: a new version, the slug's
+// grants ended, under the rotation route's per-slug lock.
+export async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<void> {
   // 'tkt' and 'ttt' are deliberately NOT seeded: they gate /rtt/tkt and
   // /rtt/ttt, and neither route exists in the app.
   const slugs = ["observation", "mentorship", "admin"] as const;
 
-  for (const slug of slugs) {
-    const existing = await db
-      .select({ id: schema.sectionGates.id })
-      .from(schema.sectionGates)
-      .where(eq(schema.sectionGates.slug, slug))
-      .limit(1);
+  /** The slug's current (highest-version) hash, or null when it has no row. */
+  const currentHash = async (q: Pick<typeof db, "select">, slug: (typeof slugs)[number]) =>
+    (
+      await q
+        .select({ hash: schema.sectionGates.passwordHash })
+        .from(schema.sectionGates)
+        .where(eq(schema.sectionGates.slug, slug))
+        .orderBy(desc(schema.sectionGates.version))
+        .limit(1)
+    )[0]?.hash ?? null;
+  const admitsNobody = (hash: string) => bcrypt.compare("", hash);
 
-    if (existing.length > 0) {
+  for (const slug of slugs) {
+    const existing = await currentHash(db, slug);
+
+    if (existing !== null && !(await admitsNobody(existing))) {
       console.log(`[seed] exists — skipping section gate '${slug}'`);
       continue;
     }
 
     const envKey = `GATE_PASSWORD_${slug.toUpperCase()}`;
-    const fromEnv = process.env[envKey];
+    // EMPTY MEANS UNSET. docker-compose.yml forwards each of these to the
+    // migrate container as `${GATE_PASSWORD_X:-}`, which for a key .env leaves
+    // out -- the documented default -- is the EMPTY STRING, not undefined. This
+    // was `fromEnv ?? random`, and `??` falls back only on null/undefined, so
+    // every gate was hashed from "" and the log printed a blank GENERATED
+    // PASSWORD. The gate form cannot submit an empty password, so nobody,
+    // super_admin included, could open observation, mentorship or the audit
+    // log -- and a redeploy skips existing gates, so it never repaired itself.
+    const fromEnv = process.env[envKey]?.trim() || undefined;
     const password = fromEnv ?? randomBytes(12).toString("base64url").slice(0, 16);
 
     // Spec 167 — cost 10 mirrors BCRYPT_COST in apps/web/src/lib/password.ts,
@@ -305,17 +354,40 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
     // the dependency direction), so the value is duplicated here with this
     // paired comment as the contract. The governance test pins both literals -
     // a future cost bump that misses one side fails the test.
-    await db.insert(schema.sectionGates).values({
-      slug,
-      passwordHash: await bcrypt.hash(password, 10),
-      version: 1,
-    });
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    let done = "created";
+    if (existing === null) {
+      await db.insert(schema.sectionGates).values({ slug, passwordHash, version: 1 });
+    } else {
+      // The repair (see above), as /api/admin/gates/[slug]/rotate does it:
+      // the same advisory lock, the version computed under it, the slug's
+      // grants ended. Re-checked under the lock, so a super_admin who has
+      // just rotated this gate by hand keeps the password they distributed.
+      const repaired = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`section_gate_rotate:${slug}`}))`);
+        const now = await currentHash(tx, slug);
+        if (now === null || !(await admitsNobody(now))) return false;
+        const [top] = await tx
+          .select({ v: max(schema.sectionGates.version) })
+          .from(schema.sectionGates)
+          .where(eq(schema.sectionGates.slug, slug));
+        await tx.insert(schema.sectionGates).values({ slug, passwordHash, version: (top?.v ?? 0) + 1 });
+        await tx.delete(schema.sectionGateGrants).where(eq(schema.sectionGateGrants.gateSlug, slug));
+        return true;
+      });
+      if (!repaired) {
+        console.log(`[seed] exists — skipping section gate '${slug}' (rotated while this deploy ran)`);
+        continue;
+      }
+      done = "had an EMPTY password, which nobody can enter — repaired";
+    }
 
     if (fromEnv) {
-      console.log(`[seed] ✓ section gate '${slug}' created from ${envKey}`);
+      console.log(`[seed] ✓ section gate '${slug}' ${done} from ${envKey}`);
     } else {
       console.log(
-        `[seed] ✓ section gate '${slug}' created — GENERATED PASSWORD: ${password}`,
+        `[seed] ✓ section gate '${slug}' ${done} — GENERATED PASSWORD: ${password}`,
       );
       console.log(
         `[seed]   ^ store this now; only the hash is kept. Set ${envKey} to choose your own.`,
@@ -347,11 +419,27 @@ async function bootstrapSectionGates(db: ReturnType<typeof drizzle>): Promise<vo
 // unverified and refuses password sign-in -- the account would exist, look
 // correct in the dashboard, and simply not work.
 //
-// Idempotent in all four states: no auth user + no profile, auth user but no
-// profile (possible if the trigger was added later), profile but wrong role,
-// and fully-provisioned. Re-running never rotates the password of a live
-// account -- that is an explicit admin action, not a deploy side effect.
-async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
+// ONCE ANY ACTIVE super_admin EXISTS, THIS DOES NOTHING AT ALL. deploy.sh runs
+// the seed on every deploy, and this function used to end, unconditionally, in
+// `ON CONFLICT (id) DO UPDATE SET role='super_admin', active=true,
+// deleted_at=NULL` against whichever account SUPER_ADMIN_EMAIL named. An
+// administrator who demoted, deactivated or offboarded that account -- the
+// founding admin leaving, the IT contractor handing over -- found it an active
+// super_admin again after the next routine deploy, with no audit row, and with
+// the GoTrue ban a deactivation sets still in place, so profile and auth record
+// disagreed. The bootstrap exists to create the FIRST administrator; after that
+// an existing profile is an administrator's decision, not a state to repair,
+// and accounts are managed at /admin/users. "Active super_admin" is the same
+// test /admin/users' last-super-admin guard (wouldStrandTheOrg) applies, so the
+// UI can never produce the state in which this runs again.
+//
+// Before that point it is idempotent in every state a first deploy can leave:
+// no auth user + no profile, auth user but no profile (possible if the trigger
+// was added later), and auth user whose profile the trigger wrote but this
+// function never promoted (a run that failed in between). Re-running never
+// rotates the password of a live account -- that is an explicit admin action,
+// not a deploy side effect.
+export async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void> {
   const email = process.env.SUPER_ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.SUPER_ADMIN_INITIAL_PASSWORD;
 
@@ -367,6 +455,19 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
       "[seed] ✗ super_admin bootstrap FAILED — NEXT_PUBLIC_SUPABASE_URL and " +
         "SUPABASE_SECRET_KEY are required to create an account. " +
         "Nobody can sign in until this runs.",
+    );
+    return;
+  }
+
+  // `users` is unqualified here and in the promotion below, like every drizzle
+  // statement in this seed, so the check and the write always name one table.
+  const admins = await db.execute(
+    sql`SELECT 1 FROM users WHERE role = 'super_admin' AND active AND deleted_at IS NULL LIMIT 1`,
+  );
+  if (((admins as unknown as { rows?: unknown[] }).rows ?? []).length > 0) {
+    console.log(
+      "[seed] super_admin bootstrap not needed — an active super_admin already exists, so " +
+        "SUPER_ADMIN_* were ignored and no account was changed (manage accounts at /admin/users)",
     );
     return;
   }
@@ -392,6 +493,15 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
       password,
       email_confirm: true,
       user_metadata: { name: "Super Admin" },
+      // SUPER_ADMIN_INITIAL_PASSWORD was chosen by whoever ran the deploy and
+      // stays in .env, so this account is handed over with a password someone
+      // else knows -- exactly like one /admin/users creates, and marked the
+      // same way: proxy.ts sends the holder to Settings until they choose
+      // their own. The key is MUST_CHANGE_PASSWORD in
+      // apps/web/src/lib/password-policy.ts, which packages/db cannot import.
+      // Only here: an auth user that already exists (above) may long since
+      // have been given its own password, and is left alone.
+      app_metadata: { must_change_password: true },
     });
     if (error || !data?.user) {
       console.error(`[seed] ✗ super_admin bootstrap FAILED — ${error?.message ?? "no user returned"}`);
@@ -407,15 +517,31 @@ async function bootstrapSuperAdmin(db: ReturnType<typeof drizzle>): Promise<void
   // The INSERT arm covers the case where no profile exists -- an auth user
   // predating the trigger. Without it the bootstrap would report success on an
   // account that still cannot obtain a token.
-  await db.execute(sql`
-    INSERT INTO public.users (id, email, name, role, active, default_locale)
-    VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
-    ON CONFLICT (id) DO UPDATE
-      SET role = 'super_admin',
-          active = true,
-          deleted_at = NULL,
-          updated_at = now()
-  `);
+  //
+  // AUDITED, in the same transaction, so the grant never exists without its
+  // row. This is the one place super_admin is granted with no super_admin
+  // acting, and it wrote nothing but a line in the deploy output. user_id is
+  // NULL (no actor), entity_id the account; `(xmax = 0)` is true when the
+  // INSERT arm ran, i.e. the profile did not exist. No password, in any form.
+  const authUserCreated = existingRows.length === 0;
+  await db.transaction(async (tx) => {
+    const promoted = await tx.execute(sql`
+      INSERT INTO users (id, email, name, role, active, default_locale)
+      VALUES (${userId}::uuid, ${email}, 'Super Admin', 'super_admin', true, 'en')
+      ON CONFLICT (id) DO UPDATE
+        SET role = 'super_admin',
+            active = true,
+            deleted_at = NULL,
+            updated_at = now()
+      RETURNING (xmax = 0) AS inserted
+    `);
+    const profileCreated = (promoted.rows[0] as { inserted?: boolean } | undefined)?.inserted === true;
+    await tx.execute(sql`
+      INSERT INTO audit_log (user_id, action, entity_type, entity_id, metadata)
+      VALUES (NULL, 'admin.user.super_admin_bootstrapped', 'users', ${userId},
+              ${JSON.stringify({ source: "seed", authUserCreated, profileCreated })}::jsonb)
+    `);
+  });
 
   console.log(`[seed] ✓ super_admin profile ready: ${email}`);
 }

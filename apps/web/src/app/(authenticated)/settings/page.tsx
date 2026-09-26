@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { resolveUiLocale } from "@/i18n/resolve";
 import { SettingsForm, type SettingsFormValues } from "./settings-form";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,11 @@ export default async function SettingsPage() {
     .where(eq(userPrefs.userId, userId))
     .limit(1);
 
+  // The language pill shows the locale the chrome around it is rendered in
+  // (i18n/resolve.ts), not the row's value or the "en" default: with nothing
+  // saved and Hindi picked on the login page, the pill said English under
+  // Hindi menus, and tapping हिन्दी then "changed" nothing.
+  const uiLanguage = await resolveUiLocale();
   const initial: SettingsFormValues = row
     ? {
         density: (row.density as SettingsFormValues["density"]) ?? "regular",
@@ -58,9 +64,9 @@ export default async function SettingsPage() {
         highContrast: row.highContrast ?? false,
         reducedMotion: row.reducedMotion ?? false,
         showWatermark: row.showWatermark ?? true,
-        uiLanguage: (row.uiLanguage as SettingsFormValues["uiLanguage"]) ?? "en",
+        uiLanguage,
       }
-    : DEFAULT_PREFS;
+    : { ...DEFAULT_PREFS, uiLanguage };
 
   return (
     <div>
@@ -70,8 +76,8 @@ export default async function SettingsPage() {
           Your preferences
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13, maxWidth: 640 }}>
-          Persisted to your account. Display + accessibility tweaks apply on the next page load;
-          watermark + language take effect immediately on new requests.
+          Saved to your account as you change them, and applied straight away on every device you
+          sign in on.
         </p>
       </div>
 
@@ -79,7 +85,9 @@ export default async function SettingsPage() {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            // Two cards a row where they fit, one on a phone: a fixed
+            // "1fr 1fr" left each card ~130px there and clipped its buttons.
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))",
             gap: 18,
             marginBottom: 24,
           }}

@@ -43,17 +43,24 @@
 //   Sort + bulk delete are role-gated identically to the existing single-row
 //   delete (entity.mutateRoles via mutateRolesFor in actions.ts).
 
+import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { and, asc, desc, eq, ilike, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableName, gte, ilike, lt, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { requireRole } from "@/lib/guards";
+import { assertSectionGate, getActiveGrant } from "@/lib/gates";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
+import { referenceLabels, referenceOptions, withCurrentValues, type RefContext } from "@/admin/references";
+import { exportRolesFor } from "@/admin/access";
+import { istDayRange, toIstDate, toIstDateTime } from "@/admin/dates";
+import { dateInputType, enumOptions } from "@/admin/zod-shape";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
 import { ImportCsv } from "./import-csv";
@@ -124,67 +131,124 @@ function unwrapZod(zodType: z.ZodTypeAny): z.ZodTypeAny {
  * only when the dispatcher returns an SQL fragment. The skipped-key list is
  * surfaced in `appliedFilters._skipped` so the SM-9 audit row records the
  * user's intent even when the filter didn't reach the DB.
+ *
+ * DISPATCH ON THE SQL COLUMN, NOT THE ZOD TYPE. Every foreign key is
+ * z.string().uuid(), so the ZodString branch sent School, Mentor, Class ...
+ * filters through `uuid ILIKE text`: Postgres has no such operator, and the
+ * whole grid 500'd into the error boundary -- 28 filter boxes on 17 of 20
+ * entities, a complete valid UUID included. sessions.scheduledDate
+ * (z.string() over a DATE) did the same, and date/timestamp columns with no
+ * string schema were dropped silently, returning the unfiltered table. The
+ * Drizzle column's own type decides the operator now; zod only contributes
+ * an enum's allowed values. A value the column cannot hold is skipped and
+ * `note` records why, which the page shows.
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `%value%` for ILIKE, with the operator's own wildcards taken literally. */
+function containsPattern(value: string): string {
+  return `%${value.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+}
+
 function buildColumnFilter(
   zodType: z.ZodTypeAny | undefined,
   col: unknown,
   value: string,
+  note: (why: string) => void = () => undefined,
 ): SQL | null {
-  if (!zodType) {
-    if (process.env.NODE_ENV !== "production") {
-      console.warn(`[admin-grid] filter skipped — no Zod schema for column`);
-    }
-    return null;
-  }
-  const inner = unwrapZod(zodType);
-  const typeName = ((inner as unknown as { _def?: { typeName?: string } })._def
-    ?.typeName) as string | undefined;
+  const column = col as { columnType?: string; enumValues?: readonly string[] };
+  const inner = zodType ? unwrapZod(zodType) : undefined;
+  const typeName = (inner as unknown as { _def?: { typeName?: string } } | undefined)?._def?.typeName;
 
-  if (typeName === "ZodString") {
-    return ilike(col as never, `%${value}%`);
-  }
-  if (typeName === "ZodEnum") {
-    const options = ((inner as unknown as { options?: readonly string[] })
-      .options) ?? [];
+  // An enum -- a ZodEnum over a varchar, or a Postgres enum column -- matches
+  // exactly, and only one of its values.
+  const options =
+    typeName === "ZodEnum"
+      ? (((inner as unknown as { options?: readonly string[] }).options) ?? [])
+      : column.columnType === "PgEnumColumn"
+        ? (column.enumValues ?? [])
+        : null;
+  if (options) {
     if (!options.includes(value)) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(
-          `[admin-grid] filter skipped — enum value "${value}" not in ${JSON.stringify(options)}`,
-        );
-      }
+      note(`not one of ${options.join(", ")}`);
       return null;
     }
     return eq(col as never, value as never);
   }
-  if (typeName === "ZodBoolean") {
-    return eq(col as never, (value === "true") as never);
-  }
-  if (typeName === "ZodNumber") {
-    const n = Number(value);
-    if (!Number.isFinite(n)) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`[admin-grid] filter skipped — "${value}" is not numeric`);
+
+  switch (column.columnType) {
+    case "PgUUID":
+      // A link to another row: the filter's picker submits its id.
+      if (!UUID_RE.test(value)) {
+        // Past REF_OPTION_LIMIT there is no list to pick from, only a box.
+        note("paste the row's id, shown at the top of its Edit panel");
+        return null;
       }
-      return null;
+      return eq(col as never, value as never);
+    case "PgText":
+    case "PgVarchar":
+    case "PgChar":
+      // ZodString's case: case-insensitive "contains".
+      return ilike(col as never, containsPattern(value));
+    case "PgBoolean": {
+      // ZodBoolean's case.
+      const v = value.toLowerCase();
+      if (v !== "true" && v !== "false" && v !== "yes" && v !== "no") {
+        note("yes or no");
+        return null;
+      }
+      return eq(col as never, (v === "true" || v === "yes") as never);
     }
-    return eq(col as never, n as never);
+    case "PgInteger":
+    case "PgSmallInt":
+    case "PgBigInt53":
+    case "PgNumeric":
+    case "PgReal":
+    case "PgDoublePrecision": {
+      // ZodNumber's case.
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+        note("not a number");
+        return null;
+      }
+      return eq(col as never, n as never);
+    }
+    case "PgDate":
+    case "PgDateString":
+      if (!istDayRange(value)) {
+        note("not a date (YYYY-MM-DD)");
+        return null;
+      }
+      return eq(col as never, value.trim() as never);
+    case "PgTimestamp": {
+      // That calendar day in the programme's timezone.
+      const day = istDayRange(value);
+      if (!day) {
+        note("not a date (YYYY-MM-DD)");
+        return null;
+      }
+      return and(gte(col as never, day[0] as never), lt(col as never, day[1] as never))!;
+    }
+    default:
+      note("this column cannot be filtered");
+      return null;
   }
-  if (process.env.NODE_ENV !== "production") {
-    console.warn(
-      `[admin-grid] filter skipped — unsupported Zod type "${typeName}"`,
-    );
-  }
-  return null;
 }
 
 export default async function AdminGridPage({ params, searchParams }: PageProps) {
   const { entity: slug } = await params;
   const sp = await searchParams;
-  const entity = ADMIN_ENTITIES[slug];
+  const entity = lookupOwn(ADMIN_ENTITIES, slug);
   if (!entity) notFound();
 
   // Role gate — readRoles guards the page; mutateRoles enforced in actions.ts.
   const session = await requireRole(entity.readRoles);
+  // Section gate, for entities whose rows a section password protects
+  // (observation-cycles, mentor-pairings): without it the grid was a way to
+  // read and export them round /observation's own gate. admin/access.ts.
+  if (entity.gate) {
+    await assertSectionGate(session.user.id, entity.gate, `/admin/data/${slug}`);
+  }
 
   // Can THIS caller actually export?
   //
@@ -194,8 +258,8 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // and was navigated away to /forbidden. Offering an action and then refusing
   // it reads as a broken permission rather than a deliberate one.
   const canExport =
-    !(entity.piiAudited && entity.slug === "learners") ||
-    session.user.role === "super_admin";
+    hasAnyRole(session.user.role, exportRolesFor(entity)) &&
+    (!(entity.piiAudited && entity.slug === "learners") || session.user.role === "super_admin");
 
   // Same reasoning as canExport, in the other direction: readRoles gets you
   // onto this page, mutateRoles is what the import endpoint enforces. Rendering
@@ -257,11 +321,16 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   const whereClauses: SQL[] = [];
   const appliedFilters: Record<string, string> = {};
   const skippedFilters: Record<string, string> = {};
+  // Why each skipped filter did not apply, shown above the grid: a filter
+  // that is quietly dropped reads as "these are the matching rows".
+  const skippedWhy: Record<string, string> = {};
   for (const [key, value] of Object.entries(filters)) {
     if (!columnsByKey.has(key)) continue; // ignore unknown columns
     const col = tableColumns[key];
     if (!col) continue;
-    const clause = buildColumnFilter(formShape[key], col, value);
+    const clause = buildColumnFilter(formShape[key], col, value, (why) => {
+      skippedWhy[key] = why;
+    });
     if (clause === null) {
       skippedFilters[key] = value;
       continue;
@@ -338,6 +407,40 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     });
   }
 
+  // FOREIGN KEYS BY NAME. Every link to another row used to render as its
+  // UUID, in the grid and on the mobile cards alike, so "which school is this
+  // teacher at?" meant copying a UUID into another grid's filter. displayRows
+  // carries the referenced row's label in place of the id for rendering only;
+  // `rows` keeps the ids for edit links, selection and delete.
+  // (admin/references.ts derives the FK fields from the table itself.)
+  // Links into a gated table are named only for a viewer holding its
+  // password (admin/references.ts).
+  const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
+  const refLabels = await referenceLabels(db, entity, rows, refCtx);
+  const displayRows = rows.map((r) => {
+    const out: Record<string, unknown> = { ...r };
+    for (const [field, labels] of Object.entries(refLabels)) {
+      const v = r[field];
+      if (typeof v === "string" && labels[v]) out[field] = labels[v];
+    }
+    // Timestamps in the programme's timezone, with their time: the cells used
+    // to show the UTC date alone, so a webinar at 10:30 IST and one at 23:00
+    // IST the day before looked identical (admin/dates.ts).
+    for (const [field, v] of Object.entries(r)) {
+      if (v instanceof Date && !Number.isNaN(v.getTime())) {
+        out[field] =
+          dateInputType(entity, field) === "date" ? toIstDate(v) : toIstDateTime(v).replace("T", " ");
+      }
+    }
+    return out;
+  });
+  // The form's pickers: every row each FK field may point at, by name.
+  const refOptions = await referenceOptions(db, entity, refCtx);
+  // ...and the edit form offers each link it already has, even one the
+  // picker would not list (an account since given another role), so the
+  // select never falls back to "— none —" and unlinks it on save.
+  const editOptions = editRow ? await withCurrentValues(db, entity, refOptions, editRow) : refOptions;
+
   const fmt = (col: { key: string; format?: (v: unknown) => string }, row: Record<string, unknown>) => {
     const v = row[col.key];
     if (col.format) return col.format(v);
@@ -398,8 +501,34 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     duplicate: "That change conflicts with an existing row.",
     delete_failed: "That delete could not be completed. Nothing was changed.",
   };
+  // `ref` is the table that still references the row (actions.ts
+  // gridErrorQuery). Named by its entity label, so the operator knows where to
+  // go; an unregistered table falls back to the generic sentence.
+  const rawRef = typeof sp.ref === "string" ? sp.ref : undefined;
+  const refEntity = rawRef
+    ? Object.values(ADMIN_ENTITIES).find((e) => getTableName(e.table) === rawRef)
+    : undefined;
+  // `locked` names the row a guard refused to delete (actions.ts
+  // gridErrorQuery); the sentence -- why a signed-off cycle cannot be deleted
+  // -- is the entity guard's own, asked again here. Nothing typed into the
+  // URL is printed.
+  const lockedRowId = typeof sp.row === "string" && UUID_RE.test(sp.row) ? sp.row : undefined;
+  let lockedReason: string | null = null;
+  if (rawError === "locked" && lockedRowId && entity.guardMutation) {
+    const idCol = (entity.table as unknown as { id: unknown }).id;
+    const [locked] = (await db
+      .select()
+      .from(entity.table as never)
+      .where(eq(idCol as never, lockedRowId))
+      .limit(1)) as Record<string, unknown>[];
+    lockedReason = locked ? entity.guardMutation("delete", locked) : null;
+  }
   const gridError = rawError
-    ? (GRID_ERRORS[rawError] ?? "That action could not be completed.")
+    ? rawError === "locked"
+      ? (lockedReason ?? "That row is locked in its current state and cannot be deleted from the grid.")
+      : rawError === "still_referenced" && refEntity
+      ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
+      : (lookupOwn(GRID_ERRORS, rawError) ?? "That action could not be completed.")
     : null;
 
   return (
@@ -426,7 +555,9 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             <ImportCsv
               entitySlug={slug}
               entityLabel={entity.label}
-              acceptedColumns={[...entity.formFields]}
+              // `id` too: a row carrying one updates that row (csv.ts importCsv).
+              acceptedColumns={["id", ...entity.formFields]}
+              reportsDuplicates={Boolean(entity.duplicateKey)}
             />
           ) : null}
           {canExport ? (
@@ -454,30 +585,110 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               Close
             </Link>
           </div>
-          <RowForm entitySlug={slug} mode="edit" rowId={editRowId} initialValues={editRow} />
+          {/* The row's id, whole and selectable: what another table's UUID box
+              (a link past REF_OPTION_LIMIT) and a CSV id column ask for. The
+              grid shows every link by name and nowhere else shows an id. */}
+          <p className="mb-3 text-xs text-amber-900">
+            Row id:{" "}
+            <code data-testid="edit-row-id" className="select-all font-mono">{String(editRow.id)}</code>
+          </p>
+          <RowForm
+            entitySlug={slug}
+            mode="edit"
+            rowId={editRowId}
+            initialValues={editRow}
+            options={editOptions}
+          />
         </section>
       ) : (
         <section className="mb-8 rounded-lg border border-neutral-200 bg-white p-4">
           <h2 className="mb-3 text-sm font-medium text-neutral-700">Add new</h2>
-          <RowForm entitySlug={slug} mode="create" />
+          <RowForm entitySlug={slug} mode="create" options={refOptions} />
         </section>
       )}
 
       {/* Spec 114: column-filter toolbar. URL-driven (`?filter[<col>]=<value>`).
           Mirrors admin.jsx::AdminTable toolbar (lines 111-114). */}
       <section className="mb-4 rounded-lg border border-neutral-200 bg-white p-3">
+        {Object.keys(skippedFilters).length > 0 ? (
+          <p
+            role="status"
+            data-testid="grid-filters-skipped"
+            className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900"
+          >
+            Not applied:{" "}
+            {Object.entries(skippedFilters)
+              .map(([k, v]) => `${columnsByKey.get(k)?.label ?? k} "${v}" (${skippedWhy[k] ?? "unusable"})`)
+              .join("; ")}
+            . The rows below are not narrowed by {Object.keys(skippedFilters).length === 1 ? "it" : "them"}.
+          </p>
+        ) : null}
         <form method="get" className="flex flex-wrap items-end gap-2" data-filter-form="true">
-          {entity.displayColumns.map((c) => (
-            <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">
-              <span className="font-medium">{c.label}</span>
-              <input
-                name={`filter[${c.key}]`}
-                defaultValue={appliedFilters[c.key] ?? ""}
-                placeholder="contains…"
-                className="rounded-md border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-900 focus:outline-none"
-              />
-            </label>
-          ))}
+          {entity.displayColumns.map((c) => {
+            // Each column's filter is the control its type needs: a picker of
+            // the linked rows for a foreign key, the allowed values for an
+            // enum or a flag, a date picker for a date -- a "contains…" box on
+            // a UUID column was what crashed the page.
+            const name = `filter[${c.key}]`;
+            const current = filters[c.key] ?? "";
+            const cls =
+              "rounded-md border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-900 focus:outline-none";
+            const col = tableColumns[c.key] as { columnType?: string; enumValues?: readonly string[] } | undefined;
+            const refs = refOptions[c.key];
+            const choices =
+              enumOptions(formShape[c.key]) ??
+              (col?.columnType === "PgEnumColumn" ? [...(col.enumValues ?? [])] : null);
+            let control: ReactNode;
+            if (Array.isArray(refs)) {
+              control = (
+                <select name={name} defaultValue={current} className={cls}>
+                  <option value="">any</option>
+                  {refs.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              );
+            } else if (choices) {
+              control = (
+                <select name={name} defaultValue={current} className={cls}>
+                  <option value="">any</option>
+                  {choices.map((v) => (
+                    <option key={v} value={v}>
+                      {v.replace(/_/g, " ")}
+                    </option>
+                  ))}
+                </select>
+              );
+            } else if (col?.columnType === "PgBoolean") {
+              control = (
+                <select name={name} defaultValue={current} className={cls}>
+                  <option value="">any</option>
+                  <option value="true">yes</option>
+                  <option value="false">no</option>
+                </select>
+              );
+            } else if (col?.columnType === "PgTimestamp" || col?.columnType === "PgDate" || col?.columnType === "PgDateString") {
+              control = <input type="date" name={name} defaultValue={current} className={cls} />;
+            } else {
+              // A link past REF_OPTION_LIMIT has no list: it takes a whole id.
+              control = (
+                <input
+                  name={name}
+                  defaultValue={current}
+                  placeholder={refs === null ? "paste the row's id" : "contains…"}
+                  className={cls}
+                />
+              );
+            }
+            return (
+              <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">
+                <span className="font-medium">{c.label}</span>
+                {control}
+              </label>
+            );
+          })}
           <div className="flex gap-2 pb-1">
             <button
               type="submit"
@@ -503,7 +714,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             <MobileEntityCardList
               entitySlug={slug}
               entityLabel={entity.label}
-              rows={rows}
+              rows={displayRows}
               columns={entity.displayColumns.map((c) => ({
                 key: c.key,
                 label: c.label,
@@ -595,7 +806,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                   </td>
                 </tr>
               ) : (
-                rows.map((row, i) => {
+                displayRows.map((row, i) => {
                   const rowId = row.id != null ? String(row.id) : "";
                   const rowLabel = entity.describeRow?.(row);
                   return (

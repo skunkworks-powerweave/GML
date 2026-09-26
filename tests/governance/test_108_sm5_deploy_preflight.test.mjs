@@ -24,9 +24,9 @@
 //      double-quoted string), so the operator was directed to a placeholder.
 //      The old success-message test matched loosely enough not to notice.
 //
-// New flow: preflight -> tag :previous -> build -> up (migrate gates app) ->
-// check migrate's exit code -> health THROUGH CADDY -> seed in the migrate
-// image -> verify-auth. The assertions below follow that order and additionally
+// New flow: preflight -> build -> migrate on its own (stop on failure, nothing
+// serving touched) -> tag :previous -> up -> health THROUGH CADDY -> seed in the
+// migrate image -> verify-auth. The assertions below follow that order and additionally
 // pin the absence of each defect above, so a revert would be caught.
 
 import { test } from "node:test";
@@ -107,15 +107,22 @@ test("spec 108: deploy.sh waits on /api/health AFTER the migrate gate, through c
   // step moved: `migrate` is a compose service that `app` blocks on, so by the
   // time anything can answer /api/health the migrations have already succeeded.
   // Health is therefore the LAST gate, not a step before migrating.
+  //
+  // RE-ORDERED again. This required `docker compose up` BEFORE a migrate exit
+  // code read back from `compose ps -a` -- the order that took the site down:
+  // up's create phase removes the serving app before migrate even runs, and up
+  // itself then exits non-zero, so under set -e the check after it never ran.
+  // Migrations now run on their own first, and up only once they succeeded
+  // (tests/scripts/deploy-flow.test.mjs executes the failing case).
   const upIdx = src.indexOf("docker compose up");
-  const migrateGateIdx = src.search(/migrate_exit=/);
+  const migrateGateIdx = src.search(/if ! docker compose run --rm --no-deps migrate; then/);
   const curlIdx = src.search(/until\s+curl|curl[^\n]*HEALTH_URL/);
   assert.ok(upIdx >= 0, "deploy.sh must invoke 'docker compose up'");
-  assert.ok(migrateGateIdx >= 0, "deploy.sh must capture the migrate service's exit code");
+  assert.ok(migrateGateIdx >= 0, "deploy.sh must run the migrations on their own and stop when they fail");
   assert.ok(curlIdx >= 0, "deploy.sh must contain a curl-based health-wait loop");
   assert.ok(
-    upIdx < migrateGateIdx && migrateGateIdx < curlIdx,
-    "order must be: docker compose up -> check migrate exit code -> health-wait",
+    migrateGateIdx < upIdx && upIdx < curlIdx,
+    "order must be: migrate (stop on failure) -> docker compose up -> health-wait",
   );
 
   // The defect that made the old loop unsatisfiable. Nothing publishes 3000.
@@ -124,11 +131,47 @@ test("spec 108: deploy.sh waits on /api/health AFTER the migrate gate, through c
     "the health probe must not target port 3000 — only caddy publishes ports (80/443), " +
       "so polling 3000 could never succeed and timed the deploy out every single run",
   );
+
+  // INVERTED. This used to pin the LITERAL default
+  //     HEALTH_URL:-http://127.0.0.1/api/health
+  // as "what is actually listening". It is what is listening, and it can never
+  // reach the app: docker/Caddyfile has one site block, {$DOMAIN:localhost},
+  // so Caddy matches on Host, and Host 127.0.0.1 matches no site. Every deploy
+  // timed out at the health step and never seeded an administrator — and this
+  // assertion held that address under governance protection, so fixing it
+  // turned the suite red. Pinning a literal address is how a URL that cannot
+  // work stayed protected; what is pinned now is the PROPERTY: the probe asks
+  // for the site Caddy serves (derived from DOMAIN), pinned to this box.
+  // tests/scripts/deploy-flow.test.mjs proves it behaviourally.
+  assert.ok(
+    !/127\.0\.0\.1\/api\/health/.test(src),
+    "the probe must not address Caddy by raw loopback IP — Host 127.0.0.1 matches no site block",
+  );
   assert.match(
     src,
-    /HEALTH_URL:-http:\/\/127\.0\.0\.1\/api\/health/,
-    "the health probe must go through caddy on port 80, which is what is actually listening",
+    /HEALTH_URL="\$\{HEALTH_URL:-https:\/\/\$\{DOMAIN_VALUE\}\/api\/health\}"/,
+    "the probe target must be derived from DOMAIN, the name Caddy's site block matches",
   );
+  assert.match(
+    src,
+    /curl[^\n]*--resolve "\$\{DOMAIN_VALUE\}:443:127\.0\.0\.1"[^\n]*"\$\{HEALTH_URL\}"/,
+    "the probe must pin DOMAIN to this box (--resolve), so it neither depends on the box's DNS nor leaves it",
+  );
+  assert.match(
+    read("docker/Caddyfile"),
+    /^\{\$DOMAIN:localhost\} \{/m,
+    "deriving the probe from DOMAIN is only right while DOMAIN is the Caddyfile's site address",
+  );
+});
+
+test("spec 108: rollback.sh's health verdict can reach the app too", () => {
+  // Same defect, worse: rollback.sh hard-coded http://127.0.0.1/api/health with
+  // no override, so every rollback ended "still unhealthy after 120s" AFTER
+  // the containers had been restarted — a wrong verdict on a rollback that
+  // worked. tests/scripts/rollback-sh.test.mjs proves the fix behaviourally.
+  const src = code(read("scripts/rollback.sh"));
+  assert.ok(!/127\.0\.0\.1\/api\/health/.test(src), "rollback.sh must not probe Caddy by raw loopback IP");
+  assert.match(src, /curl[^\n]*--resolve "\$\{DOMAIN_VALUE\}:443:127\.0\.0\.1"[^\n]*"\$\{HEALTH_URL\}"/);
 });
 
 test("spec 108: migrations run in the migrate service, and the seed runs in the migrate IMAGE", () => {
@@ -154,11 +197,12 @@ test("spec 108: migrations run in the migrate service, and the seed runs in the 
       "what makes it impossible for the stack to come up against an unmigrated database",
   );
 
-  // Migration failure must be surfaced, not left in the logs.
+  // Migration failure must be surfaced, not left in the logs -- and must stop
+  // the deploy before anything that is serving is touched.
   assert.match(
     src,
-    /migrate_exit/,
-    "deploy.sh must read the migrate service's exit code and stop the deploy on non-zero",
+    /if ! docker compose run --rm --no-deps migrate; then[\s\S]*?migrations FAILED[\s\S]*?exit 1/,
+    "deploy.sh must stop the deploy, saying so, when the migrations fail",
   );
 
   // The seed still runs, and still after migrations — but in the one image that
@@ -169,7 +213,7 @@ test("spec 108: migrations run in the migrate service, and the seed runs in the 
     "deploy.sh must run seed_all.ts in the migrate image (the only one with pnpm + tsx + packages/db)",
   );
   assert.ok(
-    src.search(/migrate_exit=/) < src.indexOf("seed_all.ts"),
+    src.search(/if ! docker compose run --rm --no-deps migrate; then/) < src.indexOf("seed_all.ts"),
     "migrations must be confirmed before the seed runs",
   );
 });
@@ -211,14 +255,32 @@ test("spec 108: deploy.sh leaves a rollback target behind, and rollback.sh exist
   // old container keeps serving), which covers a bad migration and nothing
   // else. Re-tagging :current -> :previous before a build is what gives
   // scripts/rollback.sh something to go back to, so the two are pinned together.
+  //
+  // RE-SHAPED. This pinned `docker tag :current :previous`, unconditional and
+  // before the build. Every re-run of the same code -- which the runbook
+  // prescribes after a failed health check or a config change -- then moved
+  // :previous onto the release just deployed, and rollback.sh restarted the
+  // image it was rolling back from. The invariant is: the serving image IDs
+  // are recorded BEFORE the build moves :current, and one becomes :previous
+  // only when the build produced a different image.
+  // tests/scripts/deploy-flow.test.mjs executes both cases.
+  const recorded = src.search(/was_current\[\$\{svc\}\]="\$\(docker image inspect --format '\{\{\.Id\}\}' "gml-lms-\$\{svc\}:current"/);
+  assert.ok(
+    recorded >= 0 && recorded < src.indexOf("docker compose build"),
+    "deploy.sh must record the serving image IDs BEFORE the build overwrites :current",
+  );
+  // FR-20: a release is a unit -- when any image changed, every service's
+  // :previous moves to what it was serving, so an app-only release does not
+  // leave the worker's rollback target two releases back.
   assert.match(
     src,
-    /docker tag "gml-lms-\$\{svc\}:current" "gml-lms-\$\{svc\}:previous"/,
-    "deploy.sh must demote the running images to :previous before building",
+    /\[ "\$\{was_current\[\$\{svc\}\]\}" != "\$\{built\}" \]; then\s+release_changed=true/,
+    "deploy.sh must notice whether the build changed any image",
   );
-  assert.ok(
-    src.indexOf(":previous") < src.indexOf("docker compose build"),
-    "the :previous tag must be taken BEFORE the build overwrites anything",
+  assert.match(
+    src,
+    /elif \[ "\$\{release_changed\}" = true \]; then\s+docker tag "\$\{was_current\[\$\{svc\}\]\}" "gml-lms-\$\{svc\}:previous"/,
+    "deploy.sh must move every :previous to the serving image only when the release changed",
   );
   assert.ok(existsSync(resolve(root, "scripts/rollback.sh")), "scripts/rollback.sh must exist");
   assert.match(

@@ -92,7 +92,13 @@ test("spec 128 — chrome-counts.ts wraps each loader in React.cache", () => {
 });
 
 test("spec 128 — chrome-counts.ts queries the right tables", () => {
-  const src = read(COUNTS);
+  // loadNavCounts' queries moved to lib/nav-counts.ts, which takes the db as a
+  // parameter so tests/behaviour/nav-counts.test.ts can execute them (the
+  // observation badge counted the whole programme for teachers and mentors,
+  // and nothing could run this module to notice). chrome-counts.ts delegates
+  // to it, so the tables are pinned across the pair.
+  const src = read(COUNTS) + read("apps/web/src/lib/nav-counts.ts");
+  assert.match(read(COUNTS), /navCounts\(db, userId, role\)/, "loadNavCounts must delegate to lib/nav-counts.ts");
   // The mentor branch resolves the mentors row by userId so the pairings
   // count is keyed on the correct mentor.id.
   assert.match(
@@ -167,10 +173,15 @@ test("spec 128 — chrome-counts.ts reads queue depth from Postgres via @/lib/qu
     /import\s*\{\s*transcodeQueueDepth\s*\}\s*from\s*"@\/lib\/queue"/,
     "loadQueueDepth must import transcodeQueueDepth from @/lib/queue",
   );
+  // CORRECTED (F145). This pinned `transcodeQueueDepth()` with no argument,
+  // which is how every signed-in user -- teachers included -- was shown the
+  // programme-wide "N failed" chip. The viewer's role is now a required
+  // argument and only admins get non-zero counts;
+  // tests/behaviour/queue-visibility.test.ts executes that.
   assert.match(
     src,
-    /await\s+transcodeQueueDepth\(\)/,
-    "loadQueueDepth must call transcodeQueueDepth()",
+    /await\s+transcodeQueueDepth\(role\)/,
+    "loadQueueDepth must call transcodeQueueDepth(role) for the viewer's role",
   );
   assert.match(
     src,

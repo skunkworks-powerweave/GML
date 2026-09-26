@@ -6,6 +6,7 @@
 // Counts come from a single GROUP BY so the chip totals stay accurate
 // even when the visible slice has narrowed.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
@@ -15,6 +16,8 @@ import { auth } from "@/auth";
 import { actorFrom, pairingVisibilityFilter } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Pairings" };
 
 const STATUS_CHIP: Record<string, string> = {
   active: "chip-lichen",
@@ -37,7 +40,24 @@ const STATUS_TABS = [
 
 type PairingStatus = "active" | "review" | "paused" | "ended" | "complete";
 
-type SearchParams = Promise<{ status?: string }>;
+type SearchParams = Promise<{ status?: string; page?: string }>;
+
+/**
+ * Cards per page. The list used to be one `.limit(80)` with no way past it,
+ * while the chips counted everything: at launch scale (about 500 paired
+ * teachers) an administrator saw "All 95" over 80 cards and could not reach
+ * the rest from the module's own list.
+ */
+const PAGE_SIZE = 50;
+
+/** /mentorship with this status and page; page 1 and "all" stay out of the URL. */
+function listHref(status: string, page: number): string {
+  const q = new URLSearchParams();
+  if (status !== "all") q.set("status", status);
+  if (page > 1) q.set("page", String(page));
+  const s = q.toString();
+  return s ? `/mentorship?${s}` : "/mentorship";
+}
 
 export default async function MentorshipListPage({
   searchParams,
@@ -46,6 +66,7 @@ export default async function MentorshipListPage({
 }) {
   const sp = await searchParams;
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
+  let page = Math.min(1000, Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1));
 
   // OWNERSHIP. The detail page refuses to show a teacher anyone else's
   // pairing (assertCanAccessPairing); this list was showing her all of them --
@@ -63,28 +84,35 @@ export default async function MentorshipListPage({
     conds.push(eq(mentorPairings.status, statusFilter as PairingStatus));
   }
 
-  const rows = await db
-    .select({
-      id: mentorPairings.id,
-      status: mentorPairings.status,
-      currentQuarter: mentorPairings.currentQuarter,
-      meetingsCount: mentorPairings.meetingsCount,
-      lastMeetingAt: mentorPairings.lastMeetingAt,
-      startedAt: mentorPairings.startedAt,
-      mentorName: mentors.name,
-      mentorBase: mentors.baseLocation,
-      teacherName: teachers.fullName,
-      teacherHindi: teachers.hindiName,
-    })
-    .from(mentorPairings)
-    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
-    .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
-    .where(conds.length === 0 ? undefined : and(...conds))
-    .orderBy(desc(mentorPairings.startedAt))
-    .limit(80);
+  const pageRows = (p: number) =>
+    db
+      .select({
+        id: mentorPairings.id,
+        status: mentorPairings.status,
+        currentQuarter: mentorPairings.currentQuarter,
+        meetingsCount: mentorPairings.meetingsCount,
+        lastMeetingAt: mentorPairings.lastMeetingAt,
+        startedAt: mentorPairings.startedAt,
+        mentorName: mentors.name,
+        mentorBase: mentors.baseLocation,
+        teacherName: teachers.fullName,
+        teacherHindi: teachers.hindiName,
+      })
+      .from(mentorPairings)
+      .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
+      .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
+      .where(conds.length === 0 ? undefined : and(...conds))
+      // id breaks ties: the seed gives every pairing the same started_at, and
+      // without a unique tail the pages would not be a partition -- a pairing
+      // could appear on two of them, or on none.
+      .orderBy(desc(mentorPairings.startedAt), desc(mentorPairings.id))
+      // One extra row says whether there is a next page without a second COUNT.
+      .limit(PAGE_SIZE + 1)
+      .offset((p - 1) * PAGE_SIZE);
+  let rowsPlusOne = await pageRows(page);
 
   // Per-status counts so the filter chips remain truthful regardless of
-  // the active filter. Cheap — pairing count is ≤ a few hundred.
+  // the active filter. One GROUP BY; it also gives the pager its total.
   //
   // Scoped by the same predicate as the rows: an unscoped GROUP BY would keep
   // publishing programme-wide pairing totals even once the rows were fixed.
@@ -99,6 +127,22 @@ export default async function MentorshipListPage({
   const totalPairings = statusCountRows.reduce((acc, r) => acc + r.n, 0);
   const statusCount = (v: string) =>
     v === "all" ? totalPairings : (statusCountRows.find((r) => r.status === v)?.n ?? 0);
+  const filteredTotal = statusCount(statusFilter);
+
+  // PAST THE END IS THE LAST PAGE. A stale ?page= -- a link kept after
+  // pairings were removed or changed status -- rendered "Showing 0–950 of 87"
+  // and "No pairings match this filter." with a Previous link to another empty
+  // page. As /observation does (lib/observation/list.ts); only that case pays
+  // a second query.
+  const lastPage = Math.max(1, Math.ceil(filteredTotal / PAGE_SIZE));
+  if (page > lastPage) {
+    page = lastPage;
+    rowsPlusOne = await pageRows(page);
+  }
+  const hasNext = rowsPlusOne.length > PAGE_SIZE;
+  const rows = rowsPlusOne.slice(0, PAGE_SIZE);
+  const firstShown = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const lastShown = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + rows.length;
 
   return (
     <div>
@@ -118,11 +162,15 @@ export default async function MentorshipListPage({
           <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>Status</span>
           {STATUS_TABS.map((f) => {
             const active = statusFilter === f.v;
-            const href = f.v === "all" ? "/mentorship" : `/mentorship?status=${f.v}`;
+            // A chip starts its filter at page 1.
+            const href = listHref(f.v, 1);
             return (
               <Link
                 key={f.v}
                 href={href}
+                // The chip that is on was marked by its fill alone; a screen
+                // reader could not tell which status the list was showing.
+                aria-current={active ? "page" : undefined}
                 className="btn btn-sm"
                 style={{
                   background: active ? "var(--ink)" : "transparent",
@@ -141,7 +189,9 @@ export default async function MentorshipListPage({
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            // min(100%, ...): a 320 px minimum is wider than a phone's content
+            // box, so each card overflowed it and the page scrolled sideways.
+            gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 320px), 1fr))",
             gap: 14,
           }}
         >
@@ -193,6 +243,27 @@ export default async function MentorshipListPage({
             })
           )}
         </section>
+
+        {filteredTotal > 0 ? (
+          <nav
+            aria-label="Pairing pages"
+            style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "var(--ink-3)" }}
+          >
+            <span data-testid="pairings-range">
+              Showing {firstShown}–{lastShown} of {filteredTotal}
+            </span>
+            {page > 1 ? (
+              <Link href={listHref(statusFilter, page - 1)} className="btn btn-sm" style={{ textDecoration: "none" }}>
+                ← Previous
+              </Link>
+            ) : null}
+            {hasNext ? (
+              <Link href={listHref(statusFilter, page + 1)} className="btn btn-sm" style={{ textDecoration: "none" }}>
+                Next →
+              </Link>
+            ) : null}
+          </nav>
+        ) : null}
       </div>
     </div>
   );

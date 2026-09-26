@@ -1,8 +1,18 @@
 "use client";
 
 // HLS video player with watermark overlay (SM-4 deterrence) and signed-URL refresh.
-// Uses hls.js for browsers without native HLS support (most desktops, all Androids).
-// Safari uses native HLS via the <video> src attribute.
+//
+// WHICH ENGINE PLAYS (see playbackPath). hls.js, wherever it can run -- every
+// browser with Media Source Extensions, iOS 17.1+ included -- and the
+// browser's native HLS only where it cannot (iOS before 17.1). The player used
+// to go native whenever canPlayType("application/vnd.apple.mpegurl") was
+// non-empty, and current desktop and Android Chrome answer "maybe". The
+// playlist is same-origin (/api/media/playlist/<id>), every segment line in it
+// a signed Storage URL on another origin, and Chrome's native player failed
+// the stream with MEDIA_ERR_SRC_NOT_SUPPORTED: no transcoded video played in
+// Chrome, and the message that followed blamed the connection. hls.js fetches
+// segments with CORS, which Storage answers (Access-Control-Allow-Origin: *);
+// tests/behaviour/hls-source-selection.test.ts runs this choice.
 //
 // Spec 132 (Workflow Run 11 frontend-parity) — adds the speed + quality
 // control row that the JSX prototype (LMS GML Frontend/videos.jsx lines
@@ -19,13 +29,76 @@
 // path and the Safari native-HLS path.
 //
 // Quality controls live on `hls.currentLevel`: -1 = auto-select per
-// ABR algorithm, 0 = pin to the lowest level. Because spec 041 ships
-// only a 480p rendition the practical effect is "Auto" and "480p" are
-// the same stream; we still expose the toggle so the keyboard contract
-// matches the prototype and so a future spec that re-enables 720p only
-// needs to flip the disabled flag.
+// ABR algorithm, otherwise the index of a rendition. The transcoder writes a
+// 240p / 360p / 480p ladder (apps/worker/src/encode.ts), so the menu is built
+// from the renditions the stream actually offers once hls.js has parsed it --
+// "480p" used to set currentLevel = 0, which in a ladder is 240p. A video
+// transcoded before the ladder has one rendition and no master playlist, so
+// hls.js knows nothing of its size and the menu offers only Auto (which is
+// that rendition). 720p stays a disabled option: 480p is the ceiling (SM-4).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  attachHls,
+  attachNative,
+  createPlaybackRecovery,
+  type FailReason,
+  type HlsLike,
+  type PlaybackRecovery,
+} from "@/lib/video/playback-recovery";
+
+type Level = { width: number; height: number };
+
+/**
+ * A rendition's label: its SHORT side, so a portrait 480x854 rung is "480p".
+ * Null when the stream does not say how big it is. hls.js takes a level's size
+ * only from a master playlist's RESOLUTION, and a bare media playlist (every
+ * video transcoded before the ladder) is one level of size 0x0 -- which this
+ * used to label "0p".
+ */
+function label(l: Level): string | null {
+  const short = Math.min(l.width || l.height, l.height || l.width);
+  return short > 0 ? `${short}p` : null;
+}
+
+/** The quality menu's rendition entries, in the stream's own order (lowest first). */
+export function renditionOptions(levels: Level[]): string[] {
+  return levels.map(label).filter((l): l is string => l !== null);
+}
+
+/** hls.currentLevel for a menu choice: -1 for Auto, else that rendition's index. */
+export function levelIndexFor(levels: Level[], choice: string): number {
+  if (choice === "auto") return -1;
+  return levels.findIndex((l) => label(l) === choice);
+}
+
+export type PlaybackPath = "hls.js" | "native" | "unsupported";
+
+/**
+ * The engine for this browser: hls.js whenever Hls.isSupported(), else native
+ * HLS when the element claims it (canPlayType's answer, "" for no), else none.
+ * A native "maybe" never outranks hls.js -- Chrome says "maybe" and then
+ * cannot play the stream.
+ */
+export function playbackPath(hlsSupported: boolean, nativeHls: string): PlaybackPath {
+  if (hlsSupported) return "hls.js";
+  return nativeHls !== "" ? "native" : "unsupported";
+}
+
+/**
+ * Whether this browser has a MediaSource of any kind -- hls.js's own first
+ * test (ManagedMediaSource is iOS 17.1+'s). Without one hls.js cannot run, so
+ * its bundle is not fetched: an older iPhone on a 2G link starts its native
+ * player at once instead of first downloading a library it cannot use.
+ */
+function hasMediaSource(): boolean {
+  const g = globalThis as Record<string, unknown>;
+  return Boolean(g.ManagedMediaSource || g.MediaSource || g.WebKitMediaSource);
+}
+
+/** Shown when neither engine can play here. It is the browser, not the connection. */
+export const UNSUPPORTED_BROWSER_MESSAGE =
+  "This browser cannot play these videos. Open this page in an up-to-date Chrome, Firefox or Safari.";
 
 type HlsPlayerProps = {
   /** Pre-signed master playlist URL — /api/media/<token>. Refresh from server before expiry. */
@@ -61,7 +134,10 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
   // 40-minute lesson silently restarted it from the beginning -- worse, on a
   // Ladakh connection, than the error it replaced.
   const resumeAtRef = useRef<number>(0);
-  const hlsRef = useRef<{ destroy: () => void; currentLevel?: number } | null>(null);
+  const hlsRef = useRef<{ destroy: () => void; currentLevel?: number; levels?: Level[] } | null>(null);
+  // The renditions of the current stream, once hls.js has read its playlist.
+  const [levels, setLevels] = useState<Level[]>([]);
+  const recoveryRef = useRef<PlaybackRecovery>(createPlaybackRecovery());
   const [currentSrc, setCurrentSrc] = useState(src);
 
   // Re-request the same server route, past the HTTP cache. The route mints new
@@ -72,14 +148,18 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     return `${base}${base.includes("?") ? "&" : "?"}r=${Date.now()}`;
   }, [onRefresh, src]);
   const [error, setError] = useState<string | null>(null);
+  // Why the recovery policy gave up, when it did: a signed-out viewer is
+  // offered sign-in, which comes back to this video.
+  const [failReason, setFailReason] = useState<FailReason | null>(null);
   const [playbackRate, setPlaybackRateState] = useState<number>(1);
-  const [quality, setQuality] = useState<"auto" | "480p">("auto");
+  const [quality, setQuality] = useState<string>("auto");
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    let hlsInstance: { destroy: () => void; currentLevel?: number } | undefined;
+    let cancelled = false;
+    let detach: (() => void) | undefined;
 
     // Restore the position a refresh interrupted. Fires once per source load;
     // resumeAtRef is cleared so an ordinary replay is not hijacked.
@@ -92,41 +172,47 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     };
     video.addEventListener("loadedmetadata", onLoaded);
 
-    const isNative = video.canPlayType("application/vnd.apple.mpegurl") !== "";
-    if (isNative) {
-      // SAFARI AND iOS. This branch had no error handling and no cleanup at
-      // all: a failed or expired playlist left a silent black player with no
-      // message and no retry, while the hls.js branch beside it recovered. iOS
-      // is a primary target here -- field mentors watch on phones -- so the
-      // platform that plays HLS natively was the one with no recovery path.
-      const onNativeError = async () => {
-        try {
-          resumeAtRef.current = video.currentTime || resumeAtRef.current;
-          const next = await refreshSrc();
-          video.src = next;
-          video.load();
-        } catch {
-          setError("Playback failed. Refresh the page.");
-        }
-      };
-      video.addEventListener("error", onNativeError);
-      video.src = currentSrc;
+    // What happens when playback dies is lib/video/playback-recovery.ts, on
+    // both branches: bounded re-signs with backoff, and a message saying why
+    // when a re-sign cannot help (signed out, no access, output missing). It
+    // used to re-sign on EVERY fatal error, forever, and show nothing. The
+    // policy lives in a ref, so its budget survives the effect re-run that
+    // each new source causes.
+    const hooks = {
+      src: currentSrc,
+      refreshSrc,
+      onSource: setCurrentSrc,
+      onFail: (message: string, reason: FailReason) => {
+        if (cancelled) return;
+        setError(message);
+        setFailReason(reason);
+      },
+      resumeAt: resumeAtRef,
+      policy: recoveryRef.current,
+    };
 
-      return () => {
-        video.removeEventListener("error", onNativeError);
-        video.removeEventListener("loadedmetadata", onLoaded);
-      };
+    const nativeHls = video.canPlayType("application/vnd.apple.mpegurl");
+    // Where hls.js cannot run the choice is made now, without its bundle.
+    // Native is iOS before 17.1 here; this branch once had no error handling
+    // at all, and iOS is a primary target (field mentors watch on phones).
+    const withoutHlsJs = (path: PlaybackPath) => {
+      if (path === "native") detach = attachNative(video, hooks);
+      else setError(UNSUPPORTED_BROWSER_MESSAGE);
+    };
+    if (!hasMediaSource()) {
+      withoutHlsJs(playbackPath(false, nativeHls));
     } else {
       // Lazy-load hls.js so it doesn't bloat first paint.
-      let cancelled = false;
       // Spec 156 (Run 14 audit-closure MEDIUM): chain a .catch so a
       // bundle-load failure surfaces as a user-visible error instead of a
       // silent black <video> element. Otherwise the dynamic import rejects,
       // nothing renders, and the user has no idea why the player is dead.
       import("hls.js")
         .then(({ default: Hls }) => {
-          if (cancelled || !Hls.isSupported()) {
-            if (!cancelled) setError("HLS playback not supported in this browser.");
+          if (cancelled) return;
+          const path = playbackPath(Hls.isSupported(), nativeHls);
+          if (path !== "hls.js") {
+            withoutHlsJs(path);
             return;
           }
           const hls = new Hls({
@@ -135,38 +221,24 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
             backBufferLength: 30,
             lowLatencyMode: false,
           });
-          hls.loadSource(currentSrc);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.ERROR, async (_e, data) => {
-            if (!data.fatal) return;
-            // A media error is recoverable in place and must NOT cost a
-            // re-sign round trip -- hls.js can rebuild its buffer itself.
-            if (data.type === "mediaError") {
-              hls.recoverMediaError();
-              return;
-            }
-            // Anything else fatal is most likely an expired segment URL.
-            try {
-              resumeAtRef.current = video.currentTime || resumeAtRef.current;
-              setCurrentSrc(await refreshSrc());
-            } catch {
-              setError("Playback failed. Refresh the page.");
-            }
+          // The renditions this stream offers, for the quality menu.
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            setLevels(hls.levels.map((l) => ({ width: l.width, height: l.height })));
           });
-          hlsInstance = hls;
           hlsRef.current = hls;
+          detach = attachHls(video, hls as unknown as HlsLike, Hls.Events.ERROR, hooks);
         })
         .catch((err) => {
           if (!cancelled) setError("Failed to load HLS player: " + String(err));
         });
-
-      return () => {
-        cancelled = true;
-        video.removeEventListener("loadedmetadata", onLoaded);
-        hlsInstance?.destroy();
-        hlsRef.current = null;
-      };
     }
+
+    return () => {
+      cancelled = true;
+      video.removeEventListener("loadedmetadata", onLoaded);
+      detach?.();
+      hlsRef.current = null;
+    };
   }, [currentSrc, refreshSrc]);
 
   // Apply playbackRate every time it changes. hls.js + native HLS both
@@ -177,15 +249,14 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     if (v) v.playbackRate = rate;
   }
 
-  // Apply quality change. -1 = auto (ABR), 0 = pin to lowest level
-  // (currently the only level, since spec 041 dropped 720p). On Safari
-  // native HLS hlsRef is null and the choice is a no-op — the stream is
-  // single-rendition anyway.
-  function applyQuality(next: "auto" | "480p") {
+  // Apply quality change. -1 = auto (ABR), otherwise the chosen rendition. On
+  // native HLS (iOS before 17.1) hlsRef is null and the menu offers only Auto:
+  // Safari switches renditions by itself and exposes no way to pin one.
+  function applyQuality(next: string) {
     setQuality(next);
     const hls = hlsRef.current;
     if (!hls) return;
-    hls.currentLevel = next === "auto" ? -1 : 0;
+    hls.currentLevel = levelIndexFor(levels, next);
   }
 
   // Emit audit events (the server records `video.play`/`video.pause`)
@@ -211,8 +282,13 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           overflow: "hidden",
         }}
       >
+        {/* crossOrigin: a native player fetches media itself, and the segments
+            are on Storage's origin, which answers CORS. The same-origin
+            playlist route still gets its cookies ("anonymous" withholds them
+            only cross-origin). hls.js plays from a blob: URL, unaffected. */}
         <video
           ref={videoRef}
+          crossOrigin="anonymous"
           controls
           playsInline
           poster={poster}
@@ -251,8 +327,11 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           {watermark}
         </div>
 
+        {/* role="alert": the message replaces the picture, so a screen reader
+            must hear it; it is rendered once, when playback has given up. */}
         {error ? (
           <div
+            role="alert"
             style={{
               position: "absolute",
               inset: 0,
@@ -266,16 +345,32 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
               textAlign: "center",
             }}
           >
-            {error}
+            <div>
+              {error}
+              {failReason === "signed_out" ? (
+                <>
+                  {" "}
+                  <a
+                    href={`/login?from=${encodeURIComponent(videoId ? `/videos/${videoId}` : "/videos")}`}
+                    style={{ color: "var(--paper)", textDecoration: "underline" }}
+                  >
+                    Sign in
+                  </a>
+                </>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>
 
-      {/* Player controls — speed + quality. JSX prototype lines 169-191. */}
+      {/* Player controls — speed + quality. JSX prototype lines 169-191.
+          Both rows wrap: speed and quality side by side are ~400 px, wider
+          than the player on a phone. */}
       <div
         className="player-controls"
         style={{
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
           gap: 8,
           marginTop: 10,
@@ -284,7 +379,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
         data-testid="player-controls"
       >
         <span style={{ color: "var(--ink-3)", fontSize: 11 }}>Speed</span>
-        <div style={{ display: "flex", gap: 4 }} role="group" aria-label="Playback speed">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }} role="group" aria-label="Playback speed">
           {SPEED_PRESETS.map((rate) => {
             const isActive = playbackRate === rate;
             return (
@@ -314,15 +409,19 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           <select
             id="hls-quality"
             value={quality}
-            onChange={(e) => applyQuality(e.target.value as "auto" | "480p")}
+            onChange={(e) => applyQuality(e.target.value)}
             className="btn btn-sm"
             data-testid="quality-select"
             style={{ padding: "2px 6px" }}
           >
             <option value="auto">Auto</option>
-            <option value="480p">480p</option>
-            <option value="720p" disabled title="720p disabled per programme settings">
-              720p (disabled — spec 041)
+            {renditionOptions(levels).map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+            <option value="720p" disabled title="Not produced: videos stream at up to 480p">
+              720p (not available)
             </option>
           </select>
         </div>

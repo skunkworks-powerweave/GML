@@ -91,7 +91,7 @@ test("spec 146 — desktop QuizRunner widens submitAction to number | null", () 
   const src = read(DESKTOP_PATH);
   assert.match(
     src,
-    /submitAction:\s*\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
+    /submitAction:\s*\(\s*slug:\s*string,\s*attemptId:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
     "QuizRunner submitAction must accept `selectedIndex: number | null` per spec 146",
   );
 });
@@ -121,7 +121,7 @@ test("spec 146 — mobile MobileQuizRunner widens submitAction to number | null"
   const src = read(MOBILE_PATH);
   assert.match(
     src,
-    /submitAction:\s*\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
+    /submitAction:\s*\(\s*slug:\s*string,\s*attemptId:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>,?\s*\)\s*=>\s*Promise<void>/,
     "MobileQuizRunner submitAction must accept `selectedIndex: number | null` per spec 146",
   );
 });
@@ -143,10 +143,11 @@ test("spec 146 — mobile MobileQuizRunner sends ALL questions on submit (no .fi
 
 test("spec 146 — submitQuizAttempt accepts widened answers type and tracks answeredCount", () => {
   const src = read(PAGE_PATH);
-  // The signature must accept null.
+  // The signature must accept null. (W3-19 put the attempt id the runner was
+  // rendered for between slug and answers; the answers shape is unchanged.)
   assert.match(
     src,
-    /export\s+async\s+function\s+submitQuizAttempt\(\s*slug:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>/,
+    /export\s+async\s+function\s+submitQuizAttempt\(\s*slug:\s*string,[\s\S]*?attemptId:\s*string,\s*answers:\s*Array<\{\s*questionId:\s*string;\s*selectedIndex:\s*number\s*\|\s*null\s*\}>/,
     "submitQuizAttempt must accept `selectedIndex: number | null` per spec 146",
   );
   // Server-side: we must guard for null AND undefined when counting.

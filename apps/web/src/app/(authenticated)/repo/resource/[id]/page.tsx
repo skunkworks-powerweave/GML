@@ -4,14 +4,18 @@
 // SectionCard and a Details KV sidebar (Kind / Owner / Pages / Updated / Subjects /
 // Tags). The "View PDF" button routes to the in-browser viewer shipped in spec 087.
 
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources, resourceSubjects, subjects } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Reading" };
 
 export default async function RepoResourceDetailPage({
   params,
@@ -21,7 +25,8 @@ export default async function RepoResourceDetailPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [res] = await db
     .select()
@@ -122,14 +127,12 @@ export default async function RepoResourceDetailPage({
         </div>
       </div>
 
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
       <section
-        className="page-body"
-        style={{
-          padding: 0,
-          display: "grid",
-          gridTemplateColumns: "1.6fr 1fr",
-          gap: 18,
-        }}
+        className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]"
+        style={{ padding: 0 }}
       >
         <SectionCard title="About this document">
           <div
@@ -220,7 +223,10 @@ function KVRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

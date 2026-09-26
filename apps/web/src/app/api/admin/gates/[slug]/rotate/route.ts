@@ -69,7 +69,7 @@
 
 import { NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
-import { eq, max } from "drizzle-orm";
+import { eq, max, sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { db } from "@gml/db";
 import { sectionGates, sectionGateGrants } from "@gml/db/schema";
@@ -127,14 +127,6 @@ export async function POST(
   const plaintext = generatePassword();
   const passwordHash = await bcrypt.hash(plaintext, BCRYPT_COST);
 
-  // Determine next version = max(version) + 1. We SELECT first because the
-  // section_gates row count per slug is tiny (one per rotation, lifetime) and
-  // an explicit version is cleaner than a unique-violation retry loop.
-  const [latest] = await db
-    .select({ v: max(sectionGates.version) })
-    .from(sectionGates)
-    .where(eq(sectionGates.slug, gateSlug));
-  const nextVersion = (latest?.v ?? 0) + 1;
 
   // Spec 148 — wrap INSERT new section_gates row + DELETE old
   // section_gate_grants in a single db.transaction so the two writes commit or
@@ -152,7 +144,22 @@ export async function POST(
   // grant is harmless (the row was about to be reaped anyway), and the index
   // is keyed on (userId, gateSlug, expiresAt) so the unfiltered DELETE is
   // still cheap.
-  const deleted = await db.transaction(async (tx) => {
+  //
+  // THE VERSION IS COMPUTED INSIDE THE TRANSACTION, UNDER A PER-SLUG LOCK.
+  // It used to be max(version)+1 read BEFORE the transaction, so two
+  // rotations of one gate at once (two super admins, or two tabs) both
+  // inserted version N; getCurrentGate() picks arbitrarily between equal
+  // versions, so one of the two passwords shown "once" did not work -- and if
+  // that one was distributed, the section was locked for everyone. The
+  // advisory lock serialises rotations of this slug for the length of the
+  // transaction; UNIQUE (slug, version) (migration 0034) backs it.
+  const { deleted, nextVersion } = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`section_gate_rotate:${gateSlug}`}))`);
+    const [latest] = await tx
+      .select({ v: max(sectionGates.version) })
+      .from(sectionGates)
+      .where(eq(sectionGates.slug, gateSlug));
+    const nextVersion = (latest?.v ?? 0) + 1;
     await tx.insert(sectionGates).values({
       slug: gateSlug,
       passwordHash,
@@ -160,10 +167,11 @@ export async function POST(
       rotatedAt: new Date(),
       rotatedByUserId: session.user.id,
     });
-    return tx
+    const deleted = await tx
       .delete(sectionGateGrants)
       .where(eq(sectionGateGrants.gateSlug, gateSlug))
       .returning({ id: sectionGateGrants.id });
+    return { deleted, nextVersion };
   });
 
   // Audit hook (SM-1): records the rotation with the version and the count

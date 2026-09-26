@@ -33,10 +33,12 @@ import Link from "next/link";
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions } from "@gml/db/schema";
-import { transcodeQueueDepthOrNull } from "@/lib/queue";
+import { deadJobs, transcodeQueueDepthOrNull, type DeadJob } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { lookupOwn } from "@/lib/lookup";
 import { retryTranscodeJobAction, dropTranscodeJobAction } from "./actions";
+import { loadSubmissionStates, verbsFor } from "./state";
 
 export const dynamic = "force-dynamic";
 
@@ -67,7 +69,7 @@ const STATUS_CHIP: Record<string, string> = {
 };
 
 // The four "live" queue states we surface at the top. delayed is
-// included because spec 151 added exponential backoff (5s, 10s, 20s)
+// included because failures back off exponentially (1 min, 10 min, 1 h)
 // and a job between attempts shows up as 'delayed' — the operator
 // needs to see that depth too or they'll mistake delayed jobs for
 // stuck ones.
@@ -152,8 +154,14 @@ export default async function TranscodeJobsAdminPage({
       "Only a failed job can be retried. This one has since changed state; reload to see its current status.",
     not_droppable_status:
       "Only a failed job can be dropped. Reload to see its current status.",
+    not_failed_attempt: "Only a failed attempt can be retried or dropped. Reload to see its current status.",
+    not_latest_attempt:
+      "That was an older attempt of this video. Only its latest attempt can be retried or dropped.",
+    job_live: "That video already has a transcode queued or running. Reload to see its current status.",
+    submission_not_failed:
+      "That video is no longer failed — it has been retried or has become ready since. Reload to see it.",
   };
-  const dlqError = sp.error ? DLQ_ERRORS[sp.error] ?? "That action could not be completed." : null;
+  const dlqError = sp.error ? lookupOwn(DLQ_ERRORS, sp.error) ?? "That action could not be completed." : null;
 
   // Audit the surface view itself — DLQ inspection is a programme-admin
   // oversight tool, same as /admin/whatsapp-log.
@@ -224,6 +232,18 @@ export default async function TranscodeJobsAdminPage({
     }
   }
 
+  // Which rows are actionable is the SUBMISSION's call, not the row's (see
+  // ./state.ts): the same rule the actions enforce.
+  const states = await loadSubmissionStates(db, submissionIds);
+
+  // What the QUEUE holds that needs a human, every queue, with the error it
+  // recorded -- including jobs with no ledger row, which the table below
+  // (transcode attempts) cannot show. Empty rather than failing the page.
+  const dead: DeadJob[] = await deadJobs().catch((err) => {
+    console.error("[transcode-jobs] deadJobs failed", err);
+    return [];
+  });
+
   const depth = await loadDlqDepth();
   // Spec 168 — explicit "Redis unreachable" flag drives the banner
   // ABOVE the table. loadDlqDepth already returns null on error; this
@@ -237,8 +257,10 @@ export default async function TranscodeJobsAdminPage({
         <p className="text-sm text-neutral-500">
           Inspect and operate the ffmpeg → HLS 480p pipeline. Failed
           rows are listed first; click Retry to re-enqueue a job onto
-          the queue, or Drop to bury it without retry. Every action is
-          logged to the audit trail.
+          the queue, or Drop to bury it without retry. Each attempt is its
+          own row; only a video&apos;s latest attempt, while the video is
+          failed, can be retried or dropped. Every action is logged to the
+          audit trail.
         </p>
       </header>
 
@@ -299,6 +321,67 @@ export default async function TranscodeJobsAdminPage({
         )}
       </section>
 
+      <section
+        aria-label="dead jobs"
+        data-testid="dlq-dead-jobs"
+        className="rounded-lg border border-neutral-200 bg-white p-3 text-sm"
+      >
+        <h2 className="font-semibold">Dead jobs, every queue ({dead.length})</h2>
+        <p className="text-xs text-neutral-500">
+          Jobs whose attempts are exhausted, with the error the queue recorded. To
+          retry a dead transcode, use Retry on the video&apos;s latest failed
+          attempt below. A dead retention sweep runs again the next day by itself.
+        </p>
+        {dead.length === 0 ? (
+          <p className="mt-2 text-xs text-neutral-500">None.</p>
+        ) : (
+          <table className="mt-2 w-full text-xs">
+            <thead className="text-left uppercase tracking-wide text-neutral-500">
+              <tr>
+                <th className="py-1 pr-3">Queue</th>
+                <th className="py-1 pr-3">Job</th>
+                <th className="py-1 pr-3">Attempts</th>
+                <th className="py-1 pr-3">Died</th>
+                <th className="py-1">Last error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dead.map((j) => {
+                // The verdict is at the END of an error (ffmpeg's last lines, the
+                // reaper's note), so the preview shows the tail.
+                const err = (j.lastError ?? "").trim();
+                const tail = err.length > 120 ? `…${err.slice(-120)}` : err || "—";
+                return (
+                  <tr key={j.id} className="border-t border-neutral-100" data-dead-job-id={j.id}>
+                    <td className="py-1 pr-3">
+                      <span className="chip">{j.queue}</span>
+                    </td>
+                    <td className="py-1 pr-3 font-mono">
+                      {j.videoSubmissionId ? (
+                        <Link href={`/videos/${j.videoSubmissionId}`} className="underline">
+                          {j.name} {j.videoSubmissionId.slice(0, 10)}
+                        </Link>
+                      ) : (
+                        j.name
+                      )}
+                    </td>
+                    <td className="py-1 pr-3 font-mono">
+                      {j.attempts}/{j.maxAttempts}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {j.completedAt?.toISOString().slice(0, 19).replace("T", " ") ?? "—"}
+                    </td>
+                    <td className="py-1" title={err}>
+                      {tail}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
       <nav
         aria-label="Filter transcode jobs"
         className="flex flex-wrap gap-2"
@@ -331,6 +414,7 @@ export default async function TranscodeJobsAdminPage({
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Submission</th>
               <th className="px-3 py-2">Source</th>
+              <th className="px-3 py-2">Video now</th>
               <th className="px-3 py-2">Error</th>
               <th className="px-3 py-2">Attempts</th>
               <th className="px-3 py-2">Updated</th>
@@ -340,21 +424,22 @@ export default async function TranscodeJobsAdminPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
+                <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
                   No transcode jobs match the current filter.
                 </td>
               </tr>
             ) : (
               rows.map((r) => {
-                const canRetry = r.status === "failed";
-                const canDrop = r.status === "failed";
+                const state = states.get(r.videoSubmissionId);
+                const { retry: canRetry, drop: canDrop } = verbsFor(r, state);
+                const superseded = r.status === "failed" && state?.latestAttemptId !== r.jobId;
                 const errorShort = (r.error ?? "").trim();
                 const errorPreview =
                   errorShort.length > 60 ? `${errorShort.slice(0, 60)}…` : errorShort || "—";
                 const attempts = attemptsBySubmission.get(r.videoSubmissionId) ?? 1;
                 const updated = r.endedAt ?? r.startedAt ?? r.createdAt;
                 return (
-                  <tr key={r.jobId} className="border-t border-neutral-100">
+                  <tr key={r.jobId} data-job-id={r.jobId} className="border-t border-neutral-100">
                     <td className="px-3 py-2 text-xs">
                       <span className={STATUS_CHIP[r.status] ?? "chip"}>{r.status}</span>
                     </td>
@@ -368,6 +453,9 @@ export default async function TranscodeJobsAdminPage({
                     </td>
                     <td className="px-3 py-2 text-xs">
                       <span className="chip">{r.source}</span>
+                    </td>
+                    <td className="px-3 py-2 text-xs" data-testid="dlq-video-status">
+                      {state?.status ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-xs" title={errorShort}>
                       {errorPreview}
@@ -403,7 +491,9 @@ export default async function TranscodeJobsAdminPage({
                           </form>
                         ) : null}
                         {!canRetry && !canDrop ? (
-                          <span className="text-neutral-400">—</span>
+                          <span className="text-neutral-400">
+                            {superseded ? "superseded by a later attempt" : "—"}
+                          </span>
                         ) : null}
                       </div>
                     </td>

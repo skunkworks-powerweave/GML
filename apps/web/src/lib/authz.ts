@@ -1,16 +1,24 @@
 import "server-only";
-import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, notInArray, or, type SQL } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { db } from "@gml/db";
 import {
   mentorMeetings,
   mentorPairings,
-  mentors,
   observationCycles,
-  teachers,
   videoSubmissions,
 } from "@gml/db/schema";
-import { ADMIN_ROLES, hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
+import { hasAnyRole } from "@gml/shared/auth/roles";
+import {
+  activeGrant,
+  cycleVisibility,
+  isAdmin,
+  menteeTeacherIds as menteeTeacherIdsIn,
+  mentorIdFor as mentorIdIn,
+  pairingVisibility,
+  teacherIdFor as teacherIdIn,
+  type Actor,
+} from "./visibility";
 
 /**
  * Object-level authorization.
@@ -35,9 +43,16 @@ import { ADMIN_ROLES, hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
  * existing SELECT rather than paying for a second round-trip.
  */
 
-export type Actor = { id: string; role: RoleName | string };
+// Ownership lookups and list predicates live in lib/visibility.ts, which takes
+// the database as a parameter so the behaviour suite can execute them. These
+// are the same functions bound to the app's db; every existing import of
+// cycleVisibilityFilter / pairingVisibilityFilter / actorFrom is unchanged.
+export type { Actor } from "./visibility";
+export { actorFrom } from "./visibility";
 
-const isAdmin = (actor: Actor): boolean => hasAnyRole(actor.role, ADMIN_ROLES);
+const teacherIdFor = (actor: Actor) => teacherIdIn(db, actor);
+const mentorIdFor = (actor: Actor) => mentorIdIn(db, actor);
+const menteeTeacherIds = (mentorId: string) => menteeTeacherIdsIn(db, mentorId);
 
 /**
  * Every id these helpers take arrives from a URL segment or a form body.
@@ -54,37 +69,13 @@ const isAdmin = (actor: Actor): boolean => hasAnyRole(actor.role, ADMIN_ROLES);
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** The same test, for callers that answer a malformed id themselves. */
+export function isUuid(id: unknown): id is string {
+  return typeof id === "string" && UUID_RE.test(id);
+}
+
 function assertUuid(id: string): void {
   if (!UUID_RE.test(id)) notFound();
-}
-
-/** teachers.id for the signed-in user, or null if they are not a teacher. */
-async function teacherIdFor(actor: Actor): Promise<string | null> {
-  const [row] = await db
-    .select({ id: teachers.id })
-    .from(teachers)
-    .where(eq(teachers.userId, actor.id))
-    .limit(1);
-  return row?.id ?? null;
-}
-
-/** mentors.id for the signed-in user, or null if they are not a mentor. */
-async function mentorIdFor(actor: Actor): Promise<string | null> {
-  const [row] = await db
-    .select({ id: mentors.id })
-    .from(mentors)
-    .where(eq(mentors.userId, actor.id))
-    .limit(1);
-  return row?.id ?? null;
-}
-
-/** teachers.id values this mentor is actively paired with. */
-async function menteeTeacherIds(mentorId: string): Promise<string[]> {
-  const rows = await db
-    .select({ teacherId: mentorPairings.teacherId })
-    .from(mentorPairings)
-    .where(and(eq(mentorPairings.mentorId, mentorId), eq(mentorPairings.status, "active")));
-  return rows.map((r) => r.teacherId);
 }
 
 /**
@@ -162,6 +153,16 @@ export async function assertCanAccessPairing(actor: Actor, pairingId: string) {
   }
 
   notFound();
+}
+
+/**
+ * Whether a pairing's record is closed: completed or ended. Its meetings,
+ * forms, commitments and videos stay readable; nothing is added or changed.
+ * 'complete' used to close nothing, so records kept arriving on a finished
+ * mentorship (FR-12). 'paused' is not closed: it resumes.
+ */
+export function pairingClosed(pairing: { status: string }): boolean {
+  return pairing.status === "complete" || pairing.status === "ended";
 }
 
 /**
@@ -324,14 +325,68 @@ export async function videoVisibilityFilter(actor: Actor): Promise<SQL | undefin
   return clauses.length === 1 ? clauses[0] : (or(...clauses) as SQL);
 }
 
+// ── The section gate, on the video surfaces ─────────────────────────────────
+//
+// Mentorship recordings, mentee quarterly videos and observation evidence
+// belong to the two gated sections. The rule (lib/visibility.ts,
+// observationAccess; lib/gated-reads.ts) is that a surface serving their data
+// OUTSIDE the section applies BOTH controls: the ownership predicate above, and
+// a live grant for the section. /videos, /videos/[id], /api/media/playlist/[id]
+// and /api/videos/[id]/event applied only the first, so a user who had not
+// unlocked mentorship -- or whose grant had expired, or been revoked by
+// rotating the password (the rotate route deletes the grant rows) -- could
+// still list and stream the product's most sensitive recordings.
+//
+// Admins are gated too, as the section layouts gate them. One exemption, on
+// purpose: your OWN upload. The uploader already holds the bytes, and /uploads
+// links each teacher to her own videos without sending her through a
+// password she may never have been given.
+//
+// Order at each call site: assertCanAccessVideo first (an unauthorised id is a
+// 404), then the gate -- so a gate answer never confirms a row exists to
+// someone who may not see it.
+
+type VideoGateSlug = "mentorship" | "observation";
+
+const GATED_VIDEO_CONTEXTS: Record<VideoGateSlug, string[]> = {
+  mentorship: ["mentor_meeting", "mentee_quarterly"],
+  observation: ["observation_cycle"],
+};
+
+/** The gated section a video's context belongs to, or null. */
+export function videoGateSlug(contextType: string): VideoGateSlug | null {
+  if (GATED_VIDEO_CONTEXTS.mentorship.includes(contextType)) return "mentorship";
+  if (GATED_VIDEO_CONTEXTS.observation.includes(contextType)) return "observation";
+  return null;
+}
+
 /**
- * Never-matches predicate, for a role with no legitimate rows in a list.
- *
- * Returning `undefined` here would mean "no restriction" and show the caller
- * EVERYTHING -- the exact inversion these filters exist to prevent -- so the
- * deny case has to be an explicit false rather than an absent clause.
+ * The section `actor` must unlock before this video may be served, or null.
+ * Call after assertCanAccessVideo, with the row it returned.
  */
-const DENY_ALL: SQL = sql`false`;
+export async function videoGateRequired(
+  actor: Actor,
+  video: { contextType: string; submittedByUserId: string | null },
+): Promise<VideoGateSlug | null> {
+  const slug = videoGateSlug(video.contextType);
+  if (!slug) return null;
+  if (video.submittedByUserId && video.submittedByUserId === actor.id) return null;
+  return (await activeGrant(db, actor.id, slug)) ? null : slug;
+}
+
+/**
+ * WHERE predicate hiding the videos of every gated section `actor` has not
+ * unlocked (their own uploads excepted). undefined when both are unlocked.
+ * ANDed into a video list independently of videoVisibilityFilter, which is
+ * undefined for admins.
+ */
+export async function lockedVideoScope(actor: Actor): Promise<SQL | undefined> {
+  const slugs = Object.keys(GATED_VIDEO_CONTEXTS) as VideoGateSlug[];
+  const grants = await Promise.all(slugs.map((slug) => activeGrant(db, actor.id, slug)));
+  const locked = slugs.filter((_, i) => !grants[i]).flatMap((slug) => GATED_VIDEO_CONTEXTS[slug]);
+  if (locked.length === 0) return undefined;
+  return or(eq(videoSubmissions.submittedByUserId, actor.id), notInArray(videoSubmissions.contextType, locked)) as SQL;
+}
 
 /**
  * WHERE predicate scoping an observation-cycle LIST to what `actor` may see.
@@ -345,30 +400,16 @@ const DENY_ALL: SQL = sql`false`;
  * already guarded; the list was not.
  *
  * The section gate cannot substitute for this: it is one shared rotatable
- * password per section and answers "may you enter", never "whose rows".
+ * password per section and answers "may you enter", never "whose rows". A
+ * surface OUTSIDE the section needs both -- see observationAccess() in
+ * lib/visibility.ts and the reads in lib/gated-reads.ts.
  *
  * Must be ANDed into the query. Filtering in JS would still transfer every row
  * out of Postgres and would leave the GROUP BY chip counts unscoped -- the same
  * half-fix /videos had to correct once already.
  */
 export async function cycleVisibilityFilter(actor: Actor): Promise<SQL | undefined> {
-  if (isAdmin(actor)) return undefined;
-
-  if (actor.role === "observer") return eq(observationCycles.observerId, actor.id);
-
-  if (actor.role === "teacher") {
-    const tid = await teacherIdFor(actor);
-    return tid ? eq(observationCycles.teacherId, tid) : DENY_ALL;
-  }
-
-  if (actor.role === "mentor") {
-    const mid = await mentorIdFor(actor);
-    if (!mid) return DENY_ALL;
-    const teacherIds = await menteeTeacherIds(mid);
-    return teacherIds.length ? inArray(observationCycles.teacherId, teacherIds) : DENY_ALL;
-  }
-
-  return DENY_ALL;
+  return cycleVisibility(db, actor);
 }
 
 /**
@@ -383,27 +424,6 @@ export async function cycleVisibilityFilter(actor: Actor): Promise<SQL | undefin
  * assertCanAccessPairing: observers have no role in mentorship at all.
  */
 export async function pairingVisibilityFilter(actor: Actor): Promise<SQL | undefined> {
-  if (isAdmin(actor)) return undefined;
-
-  if (actor.role === "mentor") {
-    const mid = await mentorIdFor(actor);
-    return mid ? eq(mentorPairings.mentorId, mid) : DENY_ALL;
-  }
-
-  if (actor.role === "teacher") {
-    const tid = await teacherIdFor(actor);
-    return tid ? eq(mentorPairings.teacherId, tid) : DENY_ALL;
-  }
-
-  return DENY_ALL;
+  return pairingVisibility(db, actor);
 }
 
-/** Narrow a possibly-null session into the Actor shape these helpers take. */
-export function actorFrom(session: {
-  user?: { id?: string | null; role?: string | null } | null;
-} | null): Actor | null {
-  const id = session?.user?.id;
-  const role = session?.user?.role;
-  if (!id || !role) return null;
-  return { id, role };
-}

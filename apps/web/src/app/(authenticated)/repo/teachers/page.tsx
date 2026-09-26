@@ -14,6 +14,7 @@
 // the existing 200-row cap still applies. Filter form submits via native
 // HTML GET (no client component) and bookmarkable URLs are first-class.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, ilike, sql, type SQL } from "drizzle-orm";
@@ -23,15 +24,19 @@ import {
   schools,
   phases,
   sessions as classroomSessions,
-  observationCycles,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { cycleCountsByTeacher } from "@/lib/gated-reads";
+import { observationAccess } from "@/lib/visibility";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Teachers" };
 
 // Mirrors `subjectColor(...)` in the JSX prototype (repository.jsx line 854):
 // English/Science → blue → chip-indigo; Mathematics/EVS → green → chip-lichen;
@@ -74,6 +79,8 @@ export default async function RepoTeachersIndexPage({
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
 
   const sp = await searchParams;
   const schoolFilter = sp.school && UUID_RE.test(sp.school) ? sp.school : null;
@@ -82,24 +89,21 @@ export default async function RepoTeachersIndexPage({
   const qRaw = (sp.q ?? "").slice(0, SEARCH_Q_MAX);
   const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
-  // Per-teacher session counter joined inline so the index hits the DB once.
-  const sessionCounts = db
-    .select({
-      teacherId: classroomSessions.teacherId,
-      sessionsTotal: sql<number>`count(*)::int`.as("sessions_total"),
-    })
-    .from(classroomSessions)
-    .groupBy(classroomSessions.teacherId)
-    .as("session_counts");
+  // Per-teacher session count, still in the one query, but correlated: it
+  // counts only the teachers listed, from sessions_teacher_date_idx. It was a
+  // derived table GROUPing the whole sessions table, LEFT JOINed; Postgres
+  // cannot push the join condition into a GROUP BY, so every load -- even
+  // ?school=<one school> -- aggregated every session ever logged (~130 ms at
+  // the projected 350k rows; ~1 ms counted for one school's teachers).
+  const sessionsTotal = sql<number>`(select count(*)::int from ${classroomSessions} where ${classroomSessions.teacherId} = ${teachers.id})`;
 
-  const cycleCounts = db
-    .select({
-      teacherId: observationCycles.teacherId,
-      cyclesTotal: sql<number>`count(*)::int`.as("cycles_total"),
-    })
-    .from(observationCycles)
-    .groupBy(observationCycles.teacherId)
-    .as("cycle_counts");
+  // Observation counts are observation-section data: counted only over cycles
+  // the viewer may see, and only once the section is unlocked. This used to
+  // count every cycle in the programme, telling any signed-in user how often
+  // each colleague had been observed. See lib/gated-reads.ts.
+  const observation = await observationAccess(db, actor);
+  const cycleCounts = cycleCountsByTeacher(db, observation);
+  const cyclesLabel = (n: number | null) => (observation.granted ? String(n ?? 0) : "—");
 
   const conds: SQL[] = [eq(teachers.active, true)];
   if (schoolFilter) conds.push(eq(teachers.schoolId, schoolFilter));
@@ -118,13 +122,12 @@ export default async function RepoTeachersIndexPage({
       schoolCode: schools.code,
       schoolName: schools.name,
       phaseLabel: phases.label,
-      sessionsTotal: sessionCounts.sessionsTotal,
+      sessionsTotal,
       cyclesTotal: cycleCounts.cyclesTotal,
     })
     .from(teachers)
     .leftJoin(schools, eq(teachers.schoolId, schools.id))
     .leftJoin(phases, eq(teachers.currentPhaseId, phases.id))
-    .leftJoin(sessionCounts, eq(sessionCounts.teacherId, teachers.id))
     .leftJoin(cycleCounts, eq(cycleCounts.teacherId, teachers.id))
     .where(and(...conds))
     .orderBy(asc(teachers.fullName))
@@ -248,7 +251,7 @@ export default async function RepoTeachersIndexPage({
                   { label: "School", value: t.schoolCode ?? "—", mono: true },
                   { label: "Phase", value: t.phaseLabel ?? "—" },
                   {
-                    value: `${t.sessionsTotal ?? 0} sessions · ${t.cyclesTotal ?? 0} obs. cycles`,
+                    value: `${t.sessionsTotal ?? 0} sessions · ${cyclesLabel(t.cyclesTotal)} obs. cycles`,
                   },
                 ],
               };
@@ -332,7 +335,7 @@ export default async function RepoTeachersIndexPage({
                         className="mono"
                         style={{ fontSize: 12, textAlign: "right" }}
                       >
-                        {t.cyclesTotal ?? 0}
+                        {cyclesLabel(t.cyclesTotal)}
                       </td>
                       <td style={{ textAlign: "right", color: "var(--ink-4)" }}>
                         <Link

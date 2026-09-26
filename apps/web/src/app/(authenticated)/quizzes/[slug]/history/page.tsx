@@ -19,14 +19,19 @@
 //     so the ORDER BY submitted_at DESC scan is an index range scan,
 //     not a seqscan.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { quizzes, quizSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { lookupOwn } from "@/lib/lookup";
+import { quizShownTo } from "../quiz-scope";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Quiz attempts" };
 
 // Spec 159 — render a `submittedAt` Date as a deterministic ISO YYYY-MM-DD
 // HH:MM string in UTC. We deliberately avoid `toLocaleString` here because
@@ -56,11 +61,26 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
   // somewhere useful (their past scores) rather than a dead end. This page
   // read no searchParams, so they arrived at their history with no idea why
   // the quiz would not open.
+  //
+  // submitQuizAttempt sends every refused submission here too, rather than
+  // back to the runner: rendering the runner opens a fresh attempt, and after
+  // a time-out that let the still-mounted runner submit the same answers into
+  // it. From here nothing starts until the learner presses "Take quiz again".
   const sp = searchParams ? await searchParams : {};
-  const historyError =
-    sp.error === "attempts_exhausted"
-      ? "You have used all your attempts at this quiz. Your previous scores are below."
-      : null;
+  const HISTORY_ERRORS: Record<string, string> = {
+    attempts_exhausted:
+      "You have used all your attempts at this quiz. Your previous scores are below.",
+    time_expired:
+      "Your time ran out before the answers reached us, so that attempt was not scored.",
+    // The runner page sends a learner here when they come back to a timed
+    // attempt with no time left but inside the submit grace: answers already
+    // sent may still arrive and be scored, so the attempt is not closed yet.
+    time_up:
+      "The time for that attempt is up. Answers already sent may still arrive and be scored; you can start a new attempt shortly.",
+    attempt_closed:
+      "That attempt had already been submitted or closed, so those answers were not recorded again. Your attempts are below.",
+  };
+  const historyError = sp.error ? lookupOwn(HISTORY_ERRORS, sp.error) ?? null : null;
 
   // Resolve the quiz first so we 404 cleanly for bad slugs (rather than
   // rendering an empty history page for a non-existent quiz).
@@ -99,7 +119,12 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
   // abandoned attempt does not consume a try.
   const attemptsLeft =
     quiz.maxAttempts == null ? null : Math.max(0, quiz.maxAttempts - rows.length);
-  const canRetake = attemptsLeft === null || attemptsLeft > 0;
+  // A quiz switched off, or on an RTT subject this learner is not shown (a
+  // retired one, one taught elsewhere: W3-21), cannot be started from here:
+  // the runner answers it with a 404. Her own past results stay readable.
+  const open =
+    quiz.active && (await quizShownTo(db, { id: userId, role: session.user.role }, quiz));
+  const canRetake = open && (attemptsLeft === null || attemptsLeft > 0);
 
   return (
     <main>
@@ -166,144 +191,130 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
               </Link>
             ) : (
               <p style={{ marginTop: 16, fontSize: 13, color: "var(--ink-3)" }}>
-                You have no attempts left at this quiz.
+                {open ? "You have no attempts left at this quiz." : "This quiz is not open."}
               </p>
             )}
           </div>
         ) : (
+          // PHONE WIDTH (F11). This was an ARIA grid of divs with four
+          // minmax(0, ...) columns at every width: on a phone the score,
+          // result and "View result" columns were ~48 px each, narrower than
+          // their contents, so the three ran into each other and the button
+          // was cut off by the card's overflow:hidden. It is a table now, the
+          // native semantics the divs imitated, and it scrolls sideways inside
+          // its card when a phone is too narrow for it; the date links to the
+          // result too, so the attempt can be opened from the row's left edge.
+          // That date is the row's one link for a keyboard and a screen reader,
+          // named for what it opens; "View result" beside it goes to the same
+          // place and is for a pointer only (out of the tab order and hidden),
+          // or every attempt would be two tab stops, one named by a timestamp.
           <div
             data-testid="quiz-history-table"
             className="card card-hi"
-            style={{ padding: 0, overflow: "hidden" }}
+            style={{ padding: 0, overflowX: "auto" }}
           >
-            <div
-              role="table"
-              aria-label="Your quiz attempts"
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "minmax(0, 1.5fr) minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 0.6fr)",
-                rowGap: 0,
-              }}
-            >
-              <div
-                role="row"
-                style={{
-                  display: "contents",
-                  // Header row.
-                }}
-              >
-                {["Submitted", "Score", "Result", ""].map((label, i) => (
-                  <div
-                    key={i}
-                    role="columnheader"
-                    style={{
-                      padding: "10px 14px",
-                      fontSize: 11,
-                      fontFamily: "var(--mono)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                      color: "var(--ink-3)",
-                      borderBottom: "1px solid var(--line)",
-                      background: "var(--paper-2)",
-                    }}
-                  >
-                    {label}
-                  </div>
-                ))}
-              </div>
-              {rows.map((r, i) => (
-                <div
-                  key={r.id}
-                  role="row"
-                  data-testid="quiz-history-row"
-                  style={{ display: "contents" }}
-                >
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      fontFamily: "var(--mono)",
-                      fontSize: 12,
-                      color: "var(--ink)",
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    {formatSubmittedAt(r.submittedAt)}
-                  </div>
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      fontFamily: "var(--mono)",
-                      fontSize: 14,
-                      color: r.passed ? "var(--lichen)" : "var(--saffron)",
-                      fontWeight: 600,
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    {r.score}%
-                  </div>
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      fontSize: 12,
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    <span
+            <table className="t" aria-label="Your quiz attempts">
+              <thead>
+                <tr>
+                  <th>Submitted</th>
+                  <th>Score</th>
+                  <th>Result</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.id} data-testid="quiz-history-row">
+                    <td
                       style={{
-                        display: "inline-block",
-                        padding: "2px 8px",
-                        borderRadius: 999,
-                        fontSize: 11,
+                        padding: "12px 14px",
                         fontFamily: "var(--mono)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                        background: r.passed
-                          ? "var(--lichen-soft)"
-                          : "var(--saffron-soft)",
-                        color: r.passed ? "var(--lichen)" : "var(--saffron)",
-                      }}
-                    >
-                      {r.passed ? "Pass" : "Retry"}
-                    </span>
-                  </div>
-                  <div
-                    role="cell"
-                    style={{
-                      padding: "12px 14px",
-                      textAlign: "right",
-                      borderBottom:
-                        i === rows.length - 1
-                          ? "none"
-                          : "1px solid var(--line)",
-                    }}
-                  >
-                    <Link
-                      href={`/quizzes/${slug}/result/${r.id}`}
-                      className="btn btn-sm btn-ghost"
-                      style={{
-                        textDecoration: "none",
                         fontSize: 12,
+                        color: "var(--ink)",
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
                       }}
                     >
-                      View result
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
+                      <Link
+                        href={`/quizzes/${slug}/result/${r.id}`}
+                        aria-label={`Attempt of ${formatSubmittedAt(r.submittedAt)}: view result`}
+                        style={{ color: "inherit" }}
+                      >
+                        {formatSubmittedAt(r.submittedAt)}
+                      </Link>
+                    </td>
+                    <td
+                      style={{
+                        padding: "12px 14px",
+                        fontFamily: "var(--mono)",
+                        fontSize: 14,
+                        color: r.passed ? "var(--lichen)" : "var(--saffron)",
+                        fontWeight: 600,
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
+                      }}
+                    >
+                      {r.score}%
+                    </td>
+                    <td
+                      style={{
+                        padding: "12px 14px",
+                        fontSize: 12,
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "inline-block",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontFamily: "var(--mono)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          background: r.passed
+                            ? "var(--lichen-soft)"
+                            : "var(--saffron-soft)",
+                          color: r.passed ? "var(--lichen)" : "var(--saffron)",
+                        }}
+                      >
+                        {r.passed ? "Pass" : "Retry"}
+                      </span>
+                    </td>
+                    <td
+                      style={{
+                        padding: "12px 14px",
+                        textAlign: "right",
+                        borderBottom:
+                          i === rows.length - 1
+                            ? "none"
+                            : "1px solid var(--line)",
+                      }}
+                    >
+                      <Link
+                        href={`/quizzes/${slug}/result/${r.id}`}
+                        aria-hidden="true"
+                        tabIndex={-1}
+                        className="btn btn-sm btn-ghost"
+                        style={{
+                          textDecoration: "none",
+                          fontSize: 12,
+                        }}
+                      >
+                        View result
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
         <div
@@ -321,7 +332,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             </Link>
           ) : (
             <span className="btn" aria-disabled="true" style={{ opacity: 0.5, cursor: "default" }}>
-              No attempts left
+              {open ? "No attempts left" : "Quiz not open"}
             </span>
           )}
           <Link href="/dashboard" className="btn btn-ghost">

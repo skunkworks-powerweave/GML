@@ -17,6 +17,10 @@
 //     re-enqueue; the dead-letter queue entry, if any, is left alone — Redis
 //     ages it out via the queues.ts removeOnFail policy (7 days).
 //
+// Both act only on a submission's LATEST attempt, while the submission itself
+// is failed and nothing is queued or running for it -- see ./state.ts for why
+// the attempt row's own status is not enough.
+//
 // Both actions share the same role gate as the page
 // (programme_admin + super_admin), defence in depth against a
 // hand-crafted POST from a non-admin session. The audit row carries
@@ -25,12 +29,13 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions, files } from "@gml/db/schema";
 import { enqueueTranscode } from "@/lib/queue";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
+import { cancelQueuedRetry, loadSubmissionStates, moveSubmission, refusalFor, verbsFor } from "./state";
 
 const DLQ_PATH = "/admin/transcode-jobs";
 
@@ -78,38 +83,47 @@ export async function retryTranscodeJobAction(formData: FormData): Promise<void>
     redirect(`${DLQ_PATH}?error=job_not_found`);
   }
 
-  // Only failed rows are retry-eligible. The page hides the Retry
-  // button for other statuses, but defence in depth catches a
-  // hand-crafted POST that targets a running / queued / succeeded /
-  // dropped row.
-  if (row.jobStatus !== "failed") {
-    redirect(`${DLQ_PATH}?error=not_retriable_status`);
-  }
+  // Eligibility is the SUBMISSION's, not this row's (see ./state.ts): only the
+  // latest attempt of a submission that is failed now, with nothing queued or
+  // running for it. Re-checked here under a lock on the submission row, then
+  // written compare-and-set, because the page that rendered the button may be
+  // minutes old -- and a Retry on a superseded failed row used to un-ready a
+  // playable video and transcode it again.
+  const refusal = await db.transaction(async (tx) => {
+    const state = (await loadSubmissionStates(tx, [row.videoSubmissionId], { forUpdate: true })).get(
+      row.videoSubmissionId,
+    );
+    const attempt = { jobId: row.jobId, status: row.jobStatus };
+    if (!verbsFor(attempt, state).retry) return refusalFor(attempt, state);
 
-  // Flip the parent submission back to 'queued' so the videos page
-  // and the topbar queue indicator reflect the truth — the worker will
-  // pick the job up shortly and the worker will move it through
-  // 'transcoding' → 'ready' as normal.
-  await db
-    .update(videoSubmissions)
-    .set({ status: "queued" })
-    .where(eq(videoSubmissions.id, row.videoSubmissionId));
+    // Flip the parent submission back to 'queued' so the videos page and the
+    // topbar queue indicator reflect the truth -- the worker will pick the job
+    // up shortly and move it through 'transcoding' -> 'ready' as normal.
+    if (!(await moveSubmission(tx, row.videoSubmissionId, ["failed"], "queued"))) {
+      return "submission_not_failed";
+    }
 
-  // Re-enqueue with the same payload the webhook and direct-upload call sites
-  // use. `source` is no longer carried: the worker used to branch on it to take
-  // a `-c copy` shortcut for WhatsApp video, which failed outright on arbitrary
-  // phone-camera output and, when it worked, preserved a multi-megabit stream
-  // on the path that exists to serve low bandwidth. Every source is re-encoded.
-  //
-  // The dedupe key is scoped to LIVE jobs, so this deliberate retry is allowed
-  // even though the submission has been enqueued before -- which is exactly the
-  // distinction jobs_dedupe_live_uq's partial predicate exists to make.
-  await enqueueTranscode({
-    videoSubmissionId: row.videoSubmissionId,
-    fileId: row.fileId,
-    bucket: row.bucket,
-    objectKey: row.objectKey,
+    // Re-enqueue with the same payload the webhook and direct-upload call sites
+    // use. `source` is no longer carried: the worker used to branch on it to take
+    // a `-c copy` shortcut for WhatsApp video, which failed outright on arbitrary
+    // phone-camera output and, when it worked, preserved a multi-megabit stream
+    // on the path that exists to serve low bandwidth. Every source is re-encoded.
+    //
+    // The dedupe key is scoped to LIVE jobs, so this deliberate retry is allowed
+    // even though the submission has been enqueued before -- which is exactly the
+    // distinction jobs_dedupe_live_uq's partial predicate exists to make.
+    await enqueueTranscode(
+      {
+        videoSubmissionId: row.videoSubmissionId,
+        fileId: row.fileId,
+        bucket: row.bucket,
+        objectKey: row.objectKey,
+      },
+      tx as unknown as Parameters<typeof enqueueTranscode>[1],
+    );
+    return null;
   });
+  if (refusal) redirect(`${DLQ_PATH}?error=${refusal}`);
 
   void recordAudit({
     action: "transcode.retry_requested",
@@ -159,27 +173,43 @@ export async function dropTranscodeJobAction(formData: FormData): Promise<void> 
     redirect(`${DLQ_PATH}?error=job_not_found`);
   }
 
-  // Drop only applies to failed rows — running / queued / succeeded
-  // jobs must NOT be marked dropped (the worker is the only writer
-  // for those statuses, and 'dropped' implies the operator already
-  // saw a failure they don't want to retry).
-  if (row.jobStatus !== "failed") {
-    redirect(`${DLQ_PATH}?error=not_droppable_status`);
-  }
+  // Same rule as Retry (./state.ts), re-checked under a lock on the
+  // submission. Drop used to accept any row whose own status was 'failed' and
+  // then write status='failed' unconditionally -- so dropping the old failed
+  // attempt of a video that a later attempt had made ready broke a playable
+  // video, and for a direct upload nothing in the product could undo it.
+  const refusal = await db.transaction(async (tx) => {
+    const state = (await loadSubmissionStates(tx, [row.videoSubmissionId], { forUpdate: true })).get(
+      row.videoSubmissionId,
+    );
+    if (!verbsFor({ jobId: row.jobId, status: row.jobStatus }, state).drop) {
+      return refusalFor({ jobId: row.jobId, status: row.jobStatus }, state);
+    }
+    // A retry the queue is still holding goes with the drop. If a worker took
+    // it between the read above and here, it is running now: refuse.
+    if (state?.liveJob === "queued" && !(await cancelQueuedRetry(tx, row.videoSubmissionId))) {
+      return "job_live";
+    }
 
-  await db
-    .update(transcodeJobs)
-    .set({ status: "dropped", endedAt: new Date() })
-    .where(eq(transcodeJobs.id, jobId));
+    await tx
+      .update(transcodeJobs)
+      .set({ status: "dropped", endedAt: new Date() })
+      .where(eq(transcodeJobs.id, jobId));
+    // Drop resolves the failure: its dead queue rows stop feeding the
+    // "N failed" chip and the DLQ list. The ledger keeps the record.
+    await tx.execute(sql`
+      DELETE FROM jobs
+       WHERE queue = 'transcode' AND dedupe_key = ${`submission:${row.videoSubmissionId}`} AND status = 'dead'
+    `);
 
-  // Flip the parent submission to 'failed' so /videos surfaces tell
-  // the truth — the operator decided this submission won't get a
-  // playable HLS render. Mentors looking at the videos library see
-  // a stable failure state rather than a misleadingly 'queued' row.
-  await db
-    .update(videoSubmissions)
-    .set({ status: "failed" })
-    .where(eq(videoSubmissions.id, row.videoSubmissionId));
+    // The parent submission ends 'failed' (from 'queued' when a retry was
+    // pending), so /videos surfaces tell the truth -- the operator decided this
+    // submission won't get a playable HLS render. Compare-and-set, so it can
+    // never be written over a result.
+    await moveSubmission(tx, row.videoSubmissionId, ["failed", "queued"], "failed");
+    return null;
+  });
+  if (refusal) redirect(`${DLQ_PATH}?error=${refusal}`);
 
   void recordAudit({
     action: "transcode.dropped",

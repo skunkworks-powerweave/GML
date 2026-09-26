@@ -17,7 +17,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { authEmailEnabled, appOrigin } from "@/lib/auth-email";
 import { rateLimit } from "@/lib/rate-limit";
-import { headers } from "next/headers";
+import { clientIp } from "@/lib/request-ip";
 
 export type EmailActionState = { ok?: boolean; error?: string; message?: string };
 
@@ -28,17 +28,13 @@ export type EmailActionState = { ok?: boolean; error?: string; message?: string 
 const NEUTRAL =
   "If that address has an account, a message is on its way. Check your inbox, including spam.";
 
-async function clientIp(): Promise<string> {
-  const h = await headers();
-  return (
-    h.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    h.get("x-real-ip") ??
-    "unknown"
-  );
-}
-
 /**
- * Throttle by IP. Supabase rate-limits its own send endpoint, but that limit is
+ * Throttle by IP -- the peer Caddy saw, from lib/request-ip. A private copy of
+ * the header read used to live here and took the FIRST X-Forwarded-For element,
+ * which the client writes: one new header value per request and this limit
+ * never fired.
+ *
+ * Supabase rate-limits its own send endpoint, but that limit is
  * per-project: without a local limit, one caller looping addresses burns the
  * whole deployment's hourly send quota and denies email to everyone else.
  *

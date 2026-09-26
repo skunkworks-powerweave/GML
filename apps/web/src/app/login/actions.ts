@@ -1,34 +1,18 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { signInWithPassword } from "@/auth";
-
-export type LoginState = { error?: string };
+import { signInWithPassword, type SignInError } from "@/auth";
+import { safeInternalPath } from "@/lib/safe-redirect";
+import { recordSignIn, recordSignInFailure } from "@/lib/sign-in-events";
 
 /**
- * Where to send the user after a successful sign-in.
- *
- * proxy.ts puts the originally-requested path in `?from=`, and that value is
- * attacker-controllable: anyone can send a staff member a link to
- * `/login?from=https://evil.example/harvest`. Accepting it verbatim would turn
- * the login page into an open redirect off the back of a real authentication,
- * which is the shape phishing wants most.
- *
- * So: same-site absolute paths only. It must start with a single "/" and not
- * "//" (protocol-relative, which browsers resolve to a foreign origin) and not
- * "/\" (which some parsers normalise the same way). Anything else -- including
- * a full URL that happens to point back at us -- falls back to /dashboard.
- * Bouncing to the dashboard is a minor annoyance; the alternative is not.
+ * A code, rendered by ./login-error.tsx in the user's language. The English
+ * sentences this used to carry were shown verbatim on the Hindi and Bhoti
+ * login screens.
  */
-function safeNext(raw: string | null | undefined): string {
-  if (!raw) return "/dashboard";
-  if (!raw.startsWith("/")) return "/dashboard";
-  if (raw.startsWith("//") || raw.startsWith("/\\")) return "/dashboard";
-  // Never bounce back to the login page itself -- that reads as a failed
-  // sign-in even though it succeeded.
-  if (raw === "/login" || raw.startsWith("/login/")) return "/dashboard";
-  return raw;
-}
+export type LoginErrorCode = SignInError | "missing_fields";
+export type LoginState = { error?: LoginErrorCode };
+
 
 export async function loginAction(
   _prev: LoginState | undefined,
@@ -37,14 +21,21 @@ export async function loginAction(
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   if (!email || !password) {
-    return { error: "Enter your email and password." };
+    return { error: "missing_fields" };
   }
 
-  const { error } = await signInWithPassword(email, password);
-  if (error) return { error };
+  const { error, userId } = await signInWithPassword(email, password);
+  if (error) {
+    // Only attempts that reached the credential check are recorded. A
+    // throttled one is not: recording it would let the caller the throttle is
+    // refusing write to the append-only log without limit.
+    if (error !== "rate_limited" && error !== "unavailable") await recordSignInFailure(email, error);
+    return { error };
+  }
+  if (userId) await recordSignIn(userId, "password");
 
   // Outside the try/catch that used to wrap this: redirect() signals by
   // throwing, and the old code caught that throw before re-raising it. Keeping
   // it out of any catch removes the chance of a future edit swallowing it.
-  redirect(safeNext(String(formData.get("from") ?? "")));
+  redirect(safeInternalPath(String(formData.get("from") ?? "")));
 }

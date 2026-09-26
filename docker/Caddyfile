@@ -6,10 +6,44 @@
 # (POST /api/uploads/tus, no trailing segment), and `handle_path` stripped a
 # prefix that tusd's own `-base-path=/uploads/` expected.
 
+# SECRETS IN QUERY STRINGS, REDACTED FROM EVERY LOG LINE THAT RECORDS A REQUEST.
+# A request line records request>uri, query string included, and three routes
+# take a secret there: the WhatsApp webhook's hub.verify_token (a long-lived
+# shared secret), the PKCE `code` on /auth/callback and the `token_hash` on
+# /auth/confirm (a single-use recovery or sign-in token that needs nothing
+# from the browser, and stays redeemable when the request carrying it failed
+# -- which is exactly when the error log below records it). With a plain
+# `format json` all three were written into the host's log files. Imported by
+# the default logger (errors) and by the site's access log. The filter
+# re-encodes the logged query string, so its parameters appear sorted. A new
+# secret-bearing query parameter must be added here
+# (tests/governance/test_edge_access_log.test.mjs lists them).
+(query_secrets) {
+	request>uri query {
+		replace hub.verify_token REDACTED
+		replace code REDACTED
+		replace token_hash REDACTED
+	}
+}
+
 {
 	email {$ACME_EMAIL:admin@example.com}
 	# Caddy obtains and renews certificates automatically. Nothing here needs
 	# a cron job or a renewal script.
+
+	# The default logger, as it was (JSON to stderr), plus the redaction. It
+	# carries the site's http.log.error lines -- a request the proxy could not
+	# complete, such as any request while app is restarting -- and each of
+	# those records the request's full URI too.
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				import query_secrets
+			}
+		}
+	}
 }
 
 # CONTAINER HEALTH LISTENER.
@@ -34,6 +68,26 @@
 {$DOMAIN:localhost} {
 	encode gzip zstd
 
+	# ACCESS LOG. Caddy records requests only for a site with a `log`
+	# directive, and this one had none -- nor does Next.js log requests -- so
+	# the stack kept no record of any request: no client IP, path, status or
+	# latency for a sign-in, a media fetch or a webhook call, although
+	# docs/operations.md calls these lines the forensic record. JSON to stdout,
+	# where docker-compose.yml's rotation for this container bounds it. Caddy
+	# redacts Cookie, Set-Cookie, Authorization and Proxy-Authorization here by
+	# default; leave `log_credentials` off -- the session cookies carry tokens.
+	# The secrets some routes take in the query string are redacted as well
+	# (query_secrets, at the top of this file).
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				import query_secrets
+			}
+		}
+	}
+
 	# Request bodies are small now. Video never passes through this proxy in
 	# either direction — uploads go browser → Supabase Storage, and playback
 	# segments are fetched from Supabase's CDN via signed URLs. The old 5 GB
@@ -41,6 +95,20 @@
 	# invite a 5 GB body at an endpoint with no legitimate use for one.
 	request_body {
 		max_size 25MB
+	}
+
+	# REFUSE ABSURD USER-AGENTS HERE, NOT IN THE APP. Next.js tests every
+	# request's User-Agent against a bot regex (HTML_LIMITED_BOT_UA_RE,
+	# next/dist/shared/lib/router/utils/html-bots.js) whose `[\w-]+-Google`
+	# branch is quadratic on a long run of word characters. A 15 KB User-Agent
+	# held the single app process for ~2 s on every route, /api/ping included,
+	# and six concurrent anonymous requests made a normal one wait 11 s. No
+	# application code runs before that check, so the edge is the only place it
+	# can be stopped; Caddy's RE2 matching is linear. Real browsers send a few
+	# hundred characters. (1000 is also RE2's largest repeat count.)
+	@oversized_ua header_regexp User-Agent "^.{1000}"
+	handle @oversized_ua {
+		respond "Request header too large" 431
 	}
 
 	# WhatsApp webhook. Meta re-delivers on timeout, and the handler does its

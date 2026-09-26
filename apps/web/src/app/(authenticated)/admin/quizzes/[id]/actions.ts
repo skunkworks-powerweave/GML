@@ -1,12 +1,14 @@
 "use server";
 
 // Server actions for /admin/quizzes/[id].
-// `saveQuizSchema` validates incoming JSON shape, replaces the quiz_questions
-// rows in a transaction, and updates quiz metadata. Audits `quiz.schema.update`.
+// `saveQuizSchema` validates incoming JSON shape, updates quiz metadata and --
+// only when the payload carries a `questions` array -- rewrites the
+// quiz_questions rows, in one transaction. Audits `quiz.schema.update`.
 
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { quizzes, quizQuestions } from "@gml/db/schema";
+import { quizzes, quizQuestions, quizSubmissions, rttSubjects } from "@gml/db/schema";
+import { isUuid } from "@/lib/ids";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 
@@ -26,6 +28,16 @@ type IncomingPayload = {
   // (no change to the existing value). A finite integer between 60 and
   // 7200 = the new time limit in seconds.
   timeLimitSeconds?: number | null;
+  // Attempts allowed per learner: `null` = unlimited, `undefined` = no
+  // change, an integer 1..20 (the quizzes_max_attempts_range CHECK) = the
+  // cap. The runner and submit action enforced a cap nothing could set --
+  // this editor was the only admin surface for a quiz and did not accept it.
+  maxAttempts?: number | null;
+  // The RTT subject the quiz belongs to. A quiz must have exactly one scope
+  // (quizzes_one_scope), so this can be changed but not cleared; the create
+  // form sets it, and this is how a wrong choice there is corrected. `null`
+  // is accepted only where there is none to clear (see below).
+  rttSubjectId?: string | null;
   active?: boolean;
   questions?: IncomingQuestion[];
 };
@@ -35,11 +47,12 @@ export type SaveQuizResult =
   | { ok: false; error: string; message?: string };
 
 /**
- * Save the quiz schema (metadata + replace-all questions).
+ * Save the quiz schema (metadata, and the questions when `questions` is sent).
  *
  *  - Validates JSON parses
  *  - Validates each question has prompt + options[] + correctIndex within bounds
- *  - Replaces quiz_questions for the quiz in a single transaction
+ *  - Rewrites quiz_questions only when the payload has a `questions` array,
+ *    in the same transaction as the metadata
  *  - Records `quiz.schema.update` audit with metadata
  */
 export async function saveQuizSchema(
@@ -60,7 +73,16 @@ export async function saveQuizSchema(
   }
 
   // Validate questions if present.
-  const incoming = Array.isArray(parsed.questions) ? parsed.questions : [];
+  //
+  // ABSENT MEANS "LEAVE THEM ALONE", NOT "DELETE THEM". An omitted array used
+  // to be read as an empty one, so saving {"active": false} to take a quiz
+  // offline deleted every question and reported "Saved · 0 questions" -- and
+  // every past result's review lost the questions it answered.
+  if (parsed.questions !== undefined && !Array.isArray(parsed.questions)) {
+    return { ok: false, error: "invalid_questions", message: "questions must be an array." };
+  }
+  const replaceQuestions = Array.isArray(parsed.questions);
+  const incoming = parsed.questions ?? [];
   for (let i = 0; i < incoming.length; i++) {
     const q = incoming[i];
     if (!q || typeof q !== "object") {
@@ -104,6 +126,24 @@ export async function saveQuizSchema(
     return { ok: false, error: "not_found" };
   }
 
+  // Emptying a quiz on purpose is still possible -- until learners have sat
+  // it. After that it would leave their results with nothing to review, and
+  // switching the quiz off ("active": false) is what taking it down means.
+  if (replaceQuestions && incoming.length === 0) {
+    const [sat] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(quizSubmissions)
+      .where(eq(quizSubmissions.quizId, quizId));
+    if ((sat?.n ?? 0) > 0) {
+      return {
+        ok: false,
+        error: "questions_in_use",
+        message:
+          'Learners have already submitted this quiz, so its questions cannot all be removed. Set "active": false to take it offline.',
+      };
+    }
+  }
+
   // Build the update set for metadata.
   const updateSet: Partial<typeof quizzes.$inferInsert> = {
     updatedAt: new Date(),
@@ -144,12 +184,63 @@ export async function saveQuizSchema(
     }
     updateSet.timeLimitSeconds = parsed.timeLimitSeconds;
   }
+  if (parsed.maxAttempts === null) {
+    updateSet.maxAttempts = null;
+  } else if (parsed.maxAttempts !== undefined) {
+    if (
+      typeof parsed.maxAttempts !== "number" ||
+      !Number.isInteger(parsed.maxAttempts) ||
+      parsed.maxAttempts < 1 ||
+      parsed.maxAttempts > 20
+    ) {
+      return {
+        ok: false,
+        error: "invalid_max_attempts",
+        message: "maxAttempts must be null (unlimited) or a whole number between 1 and 20.",
+      };
+    }
+    updateSet.maxAttempts = parsed.maxAttempts;
+  }
+  // null on a quiz that has no RTT subject (one on a curriculum subject) asks
+  // for what is already there, and is no change: an export taken before the
+  // editor stopped writing that null must still save (W3-16). On an RTT quiz
+  // null would clear the scope, and is refused below like any non-subject.
+  if (parsed.rttSubjectId === null && existing.rttSubjectId === null) {
+    // Nothing to change.
+  } else if (parsed.rttSubjectId !== undefined) {
+    const [subject] = isUuid(parsed.rttSubjectId)
+      ? await db
+          .select({ id: rttSubjects.id })
+          .from(rttSubjects)
+          .where(eq(rttSubjects.id, parsed.rttSubjectId))
+          .limit(1)
+      : [];
+    if (!subject) {
+      return {
+        ok: false,
+        error: "invalid_rtt_subject",
+        message: "rttSubjectId must be the id of an existing RTT subject.",
+      };
+    }
+    updateSet.rttSubjectId = subject.id;
+    // One scope only: a quiz moved to an RTT subject leaves any curriculum one.
+    updateSet.subjectId = null;
+  }
   if (typeof parsed.active === "boolean") {
     updateSet.active = parsed.active;
   }
 
-  await db.transaction(async (tx) => {
+  const questionCount = await db.transaction(async (tx) => {
     await tx.update(quizzes).set(updateSet).where(eq(quizzes.id, quizId));
+
+    // Settings only: report the questions the quiz still has.
+    if (!replaceQuestions) {
+      const [kept] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(quizQuestions)
+        .where(eq(quizQuestions.quizId, quizId));
+      return kept?.n ?? 0;
+    }
 
     // UPDATE IN PLACE BY SEQUENCE. NOT delete-all-then-insert.
     //
@@ -167,11 +258,10 @@ export async function saveQuizSchema(
     // positions are inserted and only genuinely removed tail positions are
     // deleted.
     //
-    // HONEST LIMIT: reordering questions still repoints history, because
-    // sequence is then the wrong identity. Fixing that properly means
-    // versioning a quiz so past attempts keep the questions they were actually
-    // asked, which is a schema change and a larger piece of work than this.
-    // What this removes is the case where an unrelated edit destroys history.
+    // Reordering, inserting or rewording still rewrites these rows by
+    // position, so they are not history. History is the question snapshot
+    // each submission now carries (migration 0030): the result page reads
+    // what the learner was asked from there, not from these rows.
     const existing = await tx
       .select({ id: quizQuestions.id, sequence: quizQuestions.sequence })
       .from(quizQuestions)
@@ -201,6 +291,7 @@ export async function saveQuizSchema(
         .delete(quizQuestions)
         .where(and(eq(quizQuestions.quizId, quizId), gt(quizQuestions.sequence, incoming.length)));
     }
+    return incoming.length;
   });
 
   void recordAudit({
@@ -208,7 +299,9 @@ export async function saveQuizSchema(
     entityType: "quizzes",
     entityId: quizId,
     metadata: {
-      questionCount: incoming.length,
+      questionCount,
+      // Whether this save rewrote the questions or only the settings.
+      questionsReplaced: replaceQuestions,
       title: updateSet.title,
       passThreshold: updateSet.passThreshold,
       // Spec 159 — record the time-limit change in audit. `undefined`
@@ -217,9 +310,11 @@ export async function saveQuizSchema(
       // this key being present at all (the key is dropped from the
       // metadata when undefined per JSON serialization rules).
       timeLimitSeconds: updateSet.timeLimitSeconds,
+      maxAttempts: updateSet.maxAttempts,
+      rttSubjectId: updateSet.rttSubjectId,
       active: updateSet.active,
     },
   });
 
-  return { ok: true, questionCount: incoming.length };
+  return { ok: true, questionCount };
 }

@@ -56,6 +56,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { hasAnyRole, isRoleName, type RoleName } from "@gml/shared/auth/roles";
+import { buildCsp } from "@/lib/csp";
+import { boundSessionCookie, isSecureOrigin, sessionCookieOptions } from "@/lib/supabase/cookies";
+import { mustChangePassword } from "@/lib/password-policy";
 
 type PolicyRule = {
   prefix: string;
@@ -76,10 +79,12 @@ const POLICIES: PolicyRule[] = [
   { prefix: "/videos", loggedIn: true },
   { prefix: "/forms", loggedIn: true },
   { prefix: "/quizzes", loggedIn: true },
+  { prefix: "/scorm", loggedIn: true },
   { prefix: "/repo", loggedIn: true },
   { prefix: "/settings", loggedIn: true },
   { prefix: "/uploads", loggedIn: true },
   { prefix: "/inbox", loggedIn: true },
+  { prefix: "/menu", loggedIn: true },
 ];
 
 function matchPolicy(pathname: string): PolicyRule | undefined {
@@ -130,23 +135,7 @@ function matchPolicy(pathname: string): PolicyRule | undefined {
  *   connect-src  Supabase over both https and wss: the browser client talks to
  *                Storage directly for resumable uploads.
  */
-function buildCsp(nonce: string): string {
-  const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://*.supabase.co";
-  return [
-    "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data: blob: ${supabase}`,
-    `media-src 'self' blob: ${supabase}`,
-    `connect-src 'self' ${supabase} wss://*.supabase.co`,
-    "font-src 'self' data:",
-    "frame-ancestors 'self'",
-    "base-uri 'self'",
-    "form-action 'self'",
-    "object-src 'none'",
-    "upgrade-insecure-requests",
-  ].join("; ");
-}
+// Built in lib/csp.ts (unit-tested there, per environment).
 
 /**
  * The baseline security headers, set by the APPLICATION.
@@ -233,13 +222,19 @@ export default async function proxy(request: NextRequest) {
   // layouts reads the same env, every protected page fails closed there too.
   if (!url || !key) return response;
 
+  // The refreshed session is written with the same attributes sign-in used
+  // (Secure behind https, bounded Max-Age); see lib/supabase/cookies.ts.
+  const secure = isSecureOrigin(process.env.APP_URL, request.headers.get("x-forwarded-proto"));
   const supabase = createServerClient(url, key, {
+    cookieOptions: sessionCookieOptions(secure),
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll: (toSet) => {
         for (const { name, value } of toSet) request.cookies.set(name, value);
         response = nextWithCsp();
-        for (const { name, value, options } of toSet) response.cookies.set(name, value, options);
+        for (const { name, value, options } of toSet) {
+          response.cookies.set(name, value, boundSessionCookie(options, secure));
+        }
       },
     },
   });
@@ -249,11 +244,14 @@ export default async function proxy(request: NextRequest) {
   // near expiry. Calling it is what makes job 1 happen; the claims are a bonus.
   let role: unknown;
   let signedIn = false;
+  let mustChange = false;
   try {
     const { data, error } = await supabase.auth.getClaims();
     if (!error && data?.claims) {
       signedIn = true;
-      role = (data.claims as unknown as Record<string, unknown>).user_role;
+      const claims = data.claims as unknown as Record<string, unknown>;
+      role = claims.user_role;
+      mustChange = mustChangePassword(claims.app_metadata);
     }
   } catch {
     // Treated as signed-out: fail closed.
@@ -279,6 +277,19 @@ export default async function proxy(request: NextRequest) {
     target.search = "";
     target.searchParams.set("from", nextUrl.pathname + (nextUrl.search ?? ""));
     target.searchParams.set("next", nextUrl.pathname);
+    return carryCookies(response, NextResponse.redirect(target));
+  }
+
+  // A password somebody else chose (an administrator created the account or
+  // set it) must be replaced before anything else. The flag is in the token's
+  // app_metadata -- see lib/password-policy.ts -- so this costs no query.
+  // /settings is where it is changed, so it stays reachable. This is a
+  // hand-holding step, not an authorization boundary: the person does hold a
+  // valid session, and the API routes are not redirected.
+  if (mustChange && policy.prefix !== "/settings") {
+    const target = nextUrl.clone();
+    target.pathname = "/settings";
+    target.search = "?password=required";
     return carryCookies(response, NextResponse.redirect(target));
   }
 
@@ -314,6 +325,18 @@ export const config = {
     //   api/health
     //       Probed by Docker and the load balancer, which have no session and
     //       must not be redirected.
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
+    //   api/scorm/content/*
+    //       SCORM package files. They carry their OWN policy
+    //       (buildScormContentCsp), which permits the inline script SCORM
+    //       content is built on. Passing through here would add the nonce
+    //       policy as well, and a browser enforces both: the intersection
+    //       blocks the content. The route authenticates itself (auth()), and
+    //       sets the baseline headers applySecurityHeaders would have.
+    //   api/scorm/packages
+    //       The SCORM upload (up to 20 MiB). Next buffers the body of any
+    //       request this file runs on, to at most 10 MB, and passes the
+    //       TRUNCATED body on without an error; the route checks its own role
+    //       with auth().
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/media|api/health|api/scorm/content/|api/scorm/packages|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|css|js|map|woff|woff2|ttf|otf|mp4|webm|m3u8|ts)$).*)",
   ],
 };

@@ -24,8 +24,9 @@ import { loginAction, type LoginState } from "./actions";
 import type { LoginShellProps } from "./shell-props";
 import { EmailLinkForm } from "./email-link-form";
 import { LoginLanguagePicker } from "./language-picker";
+import { LoginError } from "./login-error";
 
-export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
+export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps) {
   const [state, formAction, pending] = useActionState<LoginState | undefined, FormData>(
     loginAction,
     {},
@@ -118,7 +119,7 @@ export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
             A learning system designed for the long road from Leh to Drass.
           </div>
           <p style={{ marginTop: 18, fontSize: 14, lineHeight: 1.55, color: "oklch(0.85 0.03 60)", maxWidth: 420 }}>
-            Goldenmile RTT — Recruit, Train &amp; Transform — supports teachers and mentor pairings across Leh and
+            Goldenmile RTT — Refresher Teacher Training — supports teachers and mentor pairings across Leh and
             Kargil, with WhatsApp-first video review and a paperwork system that respects how schools actually run.
           </p>
           <div
@@ -166,8 +167,11 @@ export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
         <div style={{ width: "100%", maxWidth: 380 }}>
           <div className="label">{tAction("signIn")}</div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 30, marginTop: 4 }}>{tAction("welcomeBack")}</h1>
+          {/* The email half only where the magic-link tab below is shown: it
+              said so unconditionally, also where email is off. */}
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, marginBottom: 24 }}>
-            Use the credentials your programme administrator gave you, or request a sign-in link by email.
+            Use the credentials your programme administrator gave you
+            {emailEnabled ? ", or request a sign-in link by email." : "."}
           </p>
 
           {/* The magic-link tab only exists when outbound email does. On a
@@ -243,9 +247,9 @@ export function DesktopLogin({ from, emailEnabled }: LoginShellProps) {
                   }}
                 />
               </label>
-              {state?.error ? (
-                <p style={{ fontSize: 12, color: "var(--rust)" }} role="alert">{state.error}</p>
-              ) : null}
+              {/* A failed sign-in attempt replaces the email-link notice. */}
+              <LoginError code={state?.error ?? linkError} />
+
               <button
                 type="submit"
                 disabled={pending}

@@ -1,0 +1,201 @@
+// Can a user reach it, and does assistive tech know where she is? The mobile
+// tab bar, the sidebar landmarks and the skip link, rendered for real. See _ui.ts.
+
+import { test, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { h, render, request, resetRequest, withAppRouter, withIntl, openingTags, elements, attr, SRC_DIR } from "./_ui.js";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
+
+beforeEach(() => resetRequest());
+
+const USER = { id: "u1", name: "Tsering Dolma", email: "t@example.org", role: "teacher" as const };
+
+// ── Defect D6: /uploads reachable on a phone ─────────────────────────────────
+
+test("D6: a teacher's mobile tab bar reaches /uploads, labelled in her language", async () => {
+  const { TABS_BY_ROLE } = await import("../../apps/web/src/config/nav.ts");
+  assert.ok(TABS_BY_ROLE.teacher.some((t) => t.href === "/uploads"), "the teacher tab bar is the only navigation on a phone");
+  const { BottomTabs } = await import("../../apps/web/src/components/nav/BottomTabs.tsx");
+  for (const locale of ["en", "hi", "bo"] as const) {
+    resetRequest();
+    request.locale = locale;
+    const html = await render(h(BottomTabs, { role: "teacher" }));
+    const link = elements(html, "a").find((a) => attr(a.open, "href") === "/uploads");
+    assert.ok(link, `${locale}: the uploads tab must render`);
+    assert.equal(link.text, (loadMessages(locale).nav as Record<string, string>).uploads, `${locale}: the tab label must come from nav.uploads, not an English literal`);
+  }
+});
+
+test("D6: the rendered mobile shell for a teacher links to /uploads", async () => {
+  const { MobileShell } = await import("../../apps/web/src/components/shells/MobileShell.tsx");
+  const html = await render(withAppRouter(h(MobileShell, { user: USER }, h("p", null, "x"))));
+  assert.ok(openingTags(html, "a").some((t) => attr(t, "href") === "/uploads"));
+});
+
+// ── Defect D7: landmarks, current page, skip link ────────────────────────────
+
+test("D7: the mobile tab bar is a named landmark and marks the current tab", async () => {
+  const { BottomTabs } = await import("../../apps/web/src/components/nav/BottomTabs.tsx");
+  for (const locale of ["en", "hi"] as const) {
+    resetRequest();
+    request.locale = locale;
+    const html = await render(h(BottomTabs, { role: "teacher", activeTab: "home" }));
+    const nav = openingTags(html, "nav")[0];
+    assert.equal(attr(nav, "aria-label"), (loadMessages(locale).nav as Record<string, string>).primary, `${locale}: the tab bar must be named, in the user's language`);
+    const links = openingTags(html, "a");
+    const current = links.filter((t) => attr(t, "aria-current") === "page");
+    assert.equal(current.length, 1, "exactly one tab is the current page");
+    assert.equal(attr(current[0], "href"), "/dashboard");
+  }
+});
+
+test("D7: each sidebar section is a distinctly named landmark and the active item is aria-current", async () => {
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const html = await render(h(Sidebar, { role: "super_admin", activeId: "dashboard" }));
+  const navs = openingTags(html, "nav");
+  assert.ok(navs.length >= 4, "super_admin has several sections");
+  const names = navs.map((t) => attr(t, "aria-label"));
+  assert.ok(names.every((n) => n && n.length > 0), `every <nav> must be named, got ${JSON.stringify(names)}`);
+  assert.equal(new Set(names).size, names.length, "sibling navigation landmarks must not share a name");
+  const current = openingTags(html, "a").filter((t) => attr(t, "aria-current") === "page");
+  assert.equal(current.length, 1);
+  assert.equal(attr(current[0], "href"), "/dashboard");
+});
+
+
+test("D7: the desktop shell's first focusable element skips to the main content", async () => {
+  const { DesktopShell } = await import("../../apps/web/src/components/shells/DesktopShell.tsx");
+  const html = await render(withAppRouter(await withIntl(h(DesktopShell, { user: USER, locale: "en" }, h("p", null, "page body")), "en")));
+  const firstFocusable = html.match(/<(a|button|input|select|textarea)\b[^>]*>/)![0];
+  assert.equal(attr(firstFocusable, "href"), "#main-content", "a keyboard user must be able to skip the sidebar's links");
+  assert.match(attr(firstFocusable, "class") ?? "", /\bskip-link\b/);
+  const main = openingTags(html, "main")[0];
+  assert.equal(attr(main, "id"), "main-content", "the skip link must have somewhere to land");
+  assert.equal(attr(main, "tabindex"), "-1", "the landing target must accept focus so the next Tab starts inside it");
+  const css = readFileSync(join(SRC_DIR, "app", "globals.css"), "utf8");
+  assert.match(css, /\.skip-link:focus/, "the skip link must become visible, with its own focus style, when focused");
+});
+
+test("D7: the mobile shell's main content is a skip target too", async () => {
+  const { MobileShell } = await import("../../apps/web/src/components/shells/MobileShell.tsx");
+  const html = await render(withAppRouter(h(MobileShell, { user: USER }, h("p", null, "page body"))));
+  const main = openingTags(html, "main")[0];
+  assert.equal(attr(main, "id"), "main-content");
+  const firstFocusable = html.match(/<(a|button|input|select|textarea)\b[^>]*>/)![0];
+  assert.equal(attr(firstFocusable, "href"), "#main-content");
+});
+
+// ── F136: the connection status on a phone ───────────────────────────────────
+//
+// NetworkStatus ("Offline — not saving") was mounted only in the desktop
+// Sidebar. A phone gets MobileShell, which had no indicator of any kind, so
+// the phone-heavy, 2G-bound audience it was built for never saw it: a teacher
+// filling a form learnt the server was unreachable only when a save failed.
+
+test("F136: the phone shell shows the connection status in its header, translated", async () => {
+  const { MobileShell } = await import("../../apps/web/src/components/shells/MobileShell.tsx");
+  request.locale = "hi";
+  const html = await render(withAppRouter(await withIntl(h(MobileShell, { user: USER }, h("p", null, "x")), "hi")));
+  const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+  const tags = openingTags(header, "div").filter((t) => attr(t, "data-testid") === "network-status");
+  assert.equal(tags.length, 1, "the sticky header carries the indicator, so it stays in view while scrolling");
+  const [tag] = tags;
+  assert.equal(attr(tag, "role"), "status");
+  assert.equal(attr(tag, "aria-live"), "polite");
+  assert.equal(attr(tag, "data-status"), "checking", "server-rendered as checking, as on desktop");
+  assert.equal(attr(tag, "title"), (loadMessages("hi").status as Record<string, string>).checkingHint);
+  assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1, "once per page");
+});
+
+test("F136: the desktop sidebar keeps exactly one indicator", async () => {
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const html = await render(h(Sidebar, { role: "teacher" }));
+  assert.equal(openingTags(html, "div").filter((t) => attr(t, "data-testid") === "network-status").length, 1);
+});
+
+// ── F137: the name in the topbar ─────────────────────────────────────────────
+//
+// On desktop the user pill -- initials, name, role -- WAS the sign-out submit
+// button, with no menu and no confirmation: clicking your own name, which is
+// how people look for their profile, ended the session (live: 303 to /login,
+// auth cookie cleared). Its accessible name was the name itself, so a
+// screen-reader user heard nothing about signing out either. The phone
+// header already split the two: the avatar links to /settings, and a
+// separate, labelled button signs out.
+
+test("F137: your name in the topbar links to your settings; signing out is its own labelled button", async () => {
+  const { Topbar } = await import("../../apps/web/src/components/nav/Topbar.tsx");
+  for (const locale of ["en", "hi", "bo"] as const) {
+    resetRequest();
+    request.locale = locale;
+    const html = await render(withAppRouter(await withIntl(h(Topbar, { user: USER, locale }), locale)));
+    const signOut = elements(html, "button").filter((b) => attr(b.open, "data-testid") === "signout-button");
+    assert.equal(signOut.length, 1);
+    const action = loadMessages(locale).action as Record<string, string>;
+    assert.equal(signOut[0].text.trim(), action.signOut, `${locale}: the sign-out button says what it does`);
+    assert.ok(!signOut[0].text.includes(USER.name), `${locale}: the name is not part of the sign-out button`);
+    const pill = elements(html, "a").find((a) => attr(a.open, "data-testid") === "topbar-settings-link");
+    assert.ok(pill, `${locale}: the user pill must be a link`);
+    assert.equal(attr(pill.open, "href"), "/settings");
+    assert.ok(pill.text.includes(USER.name), `${locale}: and it is the one that shows the name`);
+  }
+});
+
+// ── FR-29: the highlight follows client navigation ───────────────────────────
+
+test("FR-29: the sidebar and the tab bar mark the page the browser is on, not the one first loaded", async () => {
+  // The layout computed the active item once, from the hard-loaded URL, and a
+  // layout does not re-render on client navigation: after one click the
+  // highlight and aria-current named the previous page. The links read the
+  // live pathname now; the layout's answer ("dashboard", "home") is stale here.
+  const { createRequire } = await import("node:module");
+  const { PathnameContext } = createRequire(new URL("../../apps/web/package.json", import.meta.url))(
+    "next/dist/shared/lib/hooks-client-context.shared-runtime",
+  ) as { PathnameContext: import("react").Context<string | null> };
+  const at = (pathname: string, child: unknown) => h(PathnameContext.Provider, { value: pathname }, child as never);
+  const current = (html: string) =>
+    openingTags(html, "a").filter((t) => attr(t, "aria-current") === "page").map((t) => attr(t, "href"));
+
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const side = await render(at("/admin/users/abc", await Sidebar({ role: "super_admin", activeId: "dashboard" })));
+  assert.deepEqual(current(side), ["/admin/users"]);
+
+  const { BottomTabs } = await import("../../apps/web/src/components/nav/BottomTabs.tsx");
+  const tabs = await render(at("/observation/abc", await BottomTabs({ role: "teacher", activeTab: "home" })));
+  assert.deepEqual(current(tabs), ["/observation"]);
+});
+
+// ── FR-28: every destination is reachable on a phone ─────────────────────────
+
+test("FR-28: every role's tab bar ends in Menu, and Menu lists the role's whole navigation", async () => {
+  // A phone has no sidebar: a mentee could not reach her pairing or her forms,
+  // a mentor the review queue, anyone Forms & quizzes -- except by URL.
+  const { TABS_BY_ROLE, NAV_BY_ROLE } = await import("../../apps/web/src/config/nav.ts");
+  for (const [role, tabs] of Object.entries(TABS_BY_ROLE)) {
+    assert.equal(tabs.at(-1)?.href, "/menu", `${role}: the last tab is Menu`);
+    assert.ok(tabs.length <= 6, `${role}: ${tabs.length} tabs do not fit a 360px phone`);
+  }
+  const teacherHrefs = NAV_BY_ROLE.teacher.flatMap((s) => s.items.map((i) => i.href));
+  for (const href of ["/mentorship", "/forms", "/repo"]) assert.ok(teacherHrefs.includes(href), `teacher nav lacks ${href}`);
+
+  (globalThis as Record<string, unknown>).__gmlTestSession = {
+    user: { id: "00000000-0000-4000-8000-000000000001", email: "t@example.test", name: "Teacher", image: null, role: "teacher" },
+  };
+  try {
+    const { default: MenuPage } = await import("../../apps/web/src/app/(authenticated)/menu/page.tsx");
+    for (const locale of ["en", "hi"] as const) {
+      resetRequest();
+      request.locale = locale;
+      const html = await render(await MenuPage());
+      const hrefs = openingTags(html, "a").map((t) => attr(t, "href"));
+      assert.deepEqual(hrefs, teacherHrefs, `${locale}: /menu lists exactly the teacher's navigation`);
+      const nav = loadMessages(locale).nav as Record<string, string>;
+      const text = html.replace(/&amp;/g, "&");
+      assert.ok(text.includes(nav.mentorship) && text.includes(nav.forms), `${locale}: labels in the reader's language`);
+    }
+  } finally {
+    delete (globalThis as Record<string, unknown>).__gmlTestSession;
+  }
+});

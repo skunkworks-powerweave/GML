@@ -23,6 +23,11 @@
 // "480p" only. The UI dropdown shows 720p/1080p as disabled options with a
 // tooltip explaining spec 041's deferral. Accepting a different value would
 // silently break the SM-4 quality ceiling the worker enforces.
+//
+// PUT errors: 400 { error: "invalid_json" } for a body that is not JSON (it
+// used to be read as `{}` and reported as "empty_patch", i.e. "you sent
+// nothing"); 400 { error: "validation_failed", issues: [{ path, message }] };
+// 400 { error: "empty_patch" } for a valid body that changes nothing.
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -31,6 +36,7 @@ import { db } from "@gml/db";
 import { systemSettings, SYSTEM_SETTINGS_ID } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { NOTIFICATION_KEYS } from "@/lib/notification-kinds";
 
@@ -95,11 +101,12 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-  const parsed = SystemSettingsPatchSchema.safeParse(body);
+  const read = await readJsonBody(req);
+  if (read.response) return read.response;
+  const parsed = SystemSettingsPatchSchema.safeParse(read.body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "validation_failed", issues: parsed.error.issues },
+      { error: "validation_failed", issues: publicIssues(parsed.error) },
       { status: 400 },
     );
   }

@@ -49,10 +49,26 @@ export function NetworkStatus({
   labelOnline,
   labelOffline,
   labelChecking,
+  hintOnline,
+  hintOffline,
+  hintChecking,
+  variant = "sidebar",
 }: {
   labelOnline: string;
   labelOffline: string;
   labelChecking: string;
+  /** Tooltip text per state. Translated by the caller like the labels: these
+   *  were English literals for every locale, including Hindi, whose bundle
+   *  was otherwise complete. */
+  hintOnline: string;
+  hintOffline: string;
+  hintChecking: string;
+  /**
+   * "sidebar": the desktop sidebar's footer row. "compact": an inline line
+   * for the phone header -- this was mounted in the sidebar only, so phones,
+   * the programme's main device and the ones on 2G, never showed it.
+   */
+  variant?: "sidebar" | "compact";
 }) {
   // Server-rendered as "checking" rather than "online": we genuinely do not
   // know yet, and starting at a confident green is how the old one lied. It
@@ -138,19 +154,12 @@ export function NetworkStatus({
       // cannot distinguish these two.
       role="status"
       aria-live="polite"
-      title={
-        status === "offline"
-          ? "The server cannot be reached. Anything you save will fail until this clears."
-          : status === "online"
-            ? "The server is reachable."
-            : "Checking whether the server is reachable…"
-      }
+      title={status === "offline" ? hintOffline : status === "online" ? hintOnline : hintChecking}
       style={{
-        marginTop: "auto",
-        padding: "8px 8px 4px",
-        fontSize: 11,
+        ...(variant === "sidebar"
+          ? { marginTop: "auto", padding: "8px 8px 4px", fontSize: 11, borderTop: "1px solid var(--line)" }
+          : { marginTop: 2, fontSize: 10 }),
         color: status === "offline" ? "var(--rust)" : "var(--ink-3)",
-        borderTop: "1px solid var(--line)",
         display: "flex",
         alignItems: "center",
         gap: 6,

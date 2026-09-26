@@ -45,17 +45,25 @@ const REQUIRED = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
   "SUPABASE_SECRET_KEY",
-  "WHATSAPP_APP_SECRET",
   "ACME_EMAIL",
 ];
 
-test("FR-001: docker-compose.yml declares WHATSAPP_APP_SECRET with strict-fail form", () => {
+test("FR-001: WHATSAPP_APP_SECRET is passed to the app but optional; the route is what refuses without it", () => {
+  // INVERTED. This required the ${VAR:?} strict-fail form, from when an unset
+  // secret made the webhook accept unsigned POSTs. The route now fails closed
+  // (503 whatsapp_not_configured for every request -- executed in
+  // tests/behaviour/whatsapp-unconfigured.test.ts), so requiring the secret here
+  // protected nothing and stopped the LMS starting before WhatsApp was set up.
   const yaml = readText("docker-compose.yml");
-  // pattern: WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?<some non-empty message>}
   assert.match(
     yaml,
-    /WHATSAPP_APP_SECRET:\s*\$\{WHATSAPP_APP_SECRET:\?[^}]+\}/,
-    "WHATSAPP_APP_SECRET must use the ${VAR:?message} strict-fail form in docker-compose.yml",
+    /WHATSAPP_APP_SECRET:\s*\$\{WHATSAPP_APP_SECRET:-\}/,
+    "WHATSAPP_APP_SECRET must still reach the app container, as an optional value",
+  );
+  assert.match(
+    readText("apps/web/src/app/api/webhooks/whatsapp/route.ts"),
+    /if \(!process\.env\.WHATSAPP_APP_SECRET\) \{[\s\S]{0,120}?status: 503/,
+    "the webhook must refuse every request while the secret is unset",
   );
 });
 

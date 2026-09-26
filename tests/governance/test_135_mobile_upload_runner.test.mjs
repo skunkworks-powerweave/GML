@@ -326,22 +326,28 @@ test("spec 135 — uploads/page.tsx still imports + renders UploadProgress for d
     /import\s*\{\s*UploadProgress\s*\}\s*from\s*"@\/components\/video\/UploadProgress"/,
     "uploads page must keep the UploadProgress import — desktop still uses it",
   );
+  // Bound to what the page resolved the video is FOR, not hard-wired to
+  // 'generic'. The old pin required contextType="generic" -- the defect (F18):
+  // every upload from /uploads, including the one the teacher's "Upload lesson
+  // video" to-do sends her to make, was linked to nothing and invisible to her
+  // observer and mentor. tests/behaviour/uploads-context-page.test.ts renders
+  // the page and reads the context the tray is bound to.
   assert.match(
     src,
-    /<UploadProgress\s+contextType="generic"/,
-    "uploads page must still render <UploadProgress contextType='generic' /> for desktop",
+    /<UploadProgress[\s\S]*?contextType=\{target\.contextType\}/,
+    "uploads page must bind the desktop tray to the resolved target's context",
   );
 });
 
 test("spec 135 — uploads/page.tsx wires whatsappPhone from the spec 132 env chain", () => {
   const src = read(PAGE_PATH);
   // Same env contract as UploadModal (spec 132) — no new env vars.
-  // GML_WHATSAPP_NUMBER is read THROUGH assertEnv(), which validates it, so the
-  // literal now lives in lib/env.ts rather than in this page.
+  // GML_WHATSAPP_NUMBER is read THROUGH whatsappPhoneForUsers(), which
+  // validates it (assertEnv) and returns null while ingest is off (FR-33).
   assert.match(
     src,
-    /assertEnv\(\)\.whatsappNumber\.value/,
-    "uploads page must read the validated GML_WHATSAPP_NUMBER via assertEnv()",
+    /const whatsappPhone = whatsappPhoneForUsers\(\)/,
+    "uploads page must read the WhatsApp number via whatsappPhoneForUsers()",
   );
   // THE WHATSAPP_PHONE_NUMBER_ID FALLBACK IS GONE, AND MUST STAY GONE.
   //

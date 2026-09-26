@@ -33,8 +33,11 @@ lines 38-39), so no enum migration is required.
   `observer` roles — anything else falls through to `/forbidden`.
 - **FR-003**: Query `video_submissions` left-joined to `users` (via `submittedByUserId`) and
   `teachers` (via `teachers.userId = users.id`), filtered to `context_type = 'teach_back'`,
-  ordered by `createdAt DESC`, limit 80 (matches the index-page limits used in `/mentorship` and
-  `/videos`). Returns: submission id, status, createdAt, durationSec, source, teacherName,
+  ordered by `createdAt DESC` (oldest first on the Pending review tab), 80 rows a page with
+  "Showing a–b of N" and Previous/Next links. The active tab's predicate is part of the SQL WHERE,
+  and the tab counts are aggregates over every teach-back. (It was originally "limit 80, then
+  filter in memory", which hid every unreviewed clip older than the 80 newest teach-backs.)
+  Returns: submission id, status, createdAt, durationSec, source, teacherName,
   teacherHindi, teacherSubject (`teachers.subjectSpecialism`).
 - **FR-004**: Two-column layout — left column (40% width on desktop, full-width when no id is
   selected) shows the list of submissions; right column shows either the preview for the selected
@@ -45,14 +48,15 @@ lines 38-39), so no enum migration is required.
 - **FR-006**: Each list row shows: teacher full name, Hindi name in Devanagari (`var(--deva)`)
   only when present (SM-7 — never render a phantom span when null), subject specialism, the
   submission timestamp formatted in `en-IN` short style, and the status pill.
-- **FR-007**: Status pill colour mapping (CSS variables only, no hex): `review_pending` →
-  `--saffron-soft` / `--saffron`; `reviewed` → `--lichen-soft` / `--lichen`; anything else (e.g.
-  `received`, `queued`, `transcoding`, `ready`, `failed`) → `--paper-2` / `--ink-3`. Status text
-  shown in lowercase with underscore replaced by a space.
+- **FR-007**: Status pill colour mapping (CSS variables only, no hex), by REVIEW STATE (review is
+  `reviewed_at`, not a `status` value, since migration 0022): pending review (ready, unreviewed) →
+  `--saffron-soft` / `--saffron`; reviewed → `--lichen-soft` / `--lichen`; anything else (e.g.
+  `received`, `queued`, `transcoding`, `failed`) → `--paper-2` / `--ink-3` showing the pipeline
+  status in lowercase with underscore replaced by a space.
 - **FR-008**: Filter pills at the top — All / Pending review / Reviewed. Active pill = `--ink`
   background with `--paper` text; inactive = transparent with `--ink-2`. Filter is driven by the
-  `?status=` searchParam; selecting a filter keeps `?id=` if it's still in the filtered list, else
-  clears `id`.
+  `?status=` searchParam; selecting a filter keeps `?id=` if the row still matches the filter, else
+  clears `id`. The selected row is loaded by id, so a deep link opens it on any page.
 - **FR-009**: Right-column preview, when a valid id is selected, renders:
   - A SectionCard-style header with teacher name + Hindi (when set) and current status pill.
   - Submission metadata KV grid: Source (chip), Submitted (mono date+time), Duration (mono `Nm Ss`

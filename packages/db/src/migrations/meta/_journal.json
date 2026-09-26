@@ -197,6 +197,111 @@
       "when": 1780729000000,
       "tag": "0027_pairing_commitments",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780730000000,
+      "tag": "0028_audit_log_created_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780731000000,
+      "tag": "0029_quizzes_scope_fk_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780732000000,
+      "tag": "0030_quiz_submission_question_snapshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780733000000,
+      "tag": "0031_admin_deletes_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780734000000,
+      "tag": "0032_phase_term_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780735000000,
+      "tag": "0033_one_record_per_login",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780736000000,
+      "tag": "0034_gate_version_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780737000000,
+      "tag": "0035_form_drafts_pairing",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1780738000000,
+      "tag": "0036_whatsapp_media_id_and_sender",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1780739000000,
+      "tag": "0037_rtt_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1780740000000,
+      "tag": "0038_rtt_subject_place",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790323469030,
+      "tag": "0039_quiz_attempts_fk_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790323603704,
+      "tag": "0040_sessions_subject_and_date_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790335358330,
+      "tag": "0041_scorm",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790350418297,
+      "tag": "0042_video_context_quarter",
+      "breakpoints": true
     }
   ]
 }

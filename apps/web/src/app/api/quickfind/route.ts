@@ -13,6 +13,9 @@
 // Method matrix:
 //   GET ?q=<2+ chars>          → 200 { ok:true, q, results: [...] }
 //   GET ?q=<<2 chars>          → 200 { ok:true, q, results: [] } (no-op, but still 200)
+//   GET ?q=<over 240 chars>    → 400 { error: "query_too_long" }
+//   GET (over the throttle)    → 429 { error: "rate_limited", retryAfterMs } + Retry-After
+//   GET (limiter unavailable)  → 503 { error: "rate_limit_unavailable" } (fail closed)
 //   GET (no session)           → 401 { error: "unauthenticated" }
 //   POST / PUT / DELETE        → 405 { error: "method_not_allowed" }
 //
@@ -20,11 +23,32 @@
 // and metadata { q, resultCount }. Audit-on-completion so resultCount is
 // accurate. Best-effort `void` — never block the 200 response.
 //
+// BOUNDED, because that row is permanent: audit_log is append-only by trigger
+// and never pruned. This route stored the whole `q` of every call with nothing
+// in front of it, so a 6,000-character q was searched, echoed and kept, and a
+// loop of distinct queries grew the table for as long as it ran. The query is
+// capped at MAX_QUERY and each user at QUICKFIND_LIMIT searches a minute. A
+// refused call runs no search and writes no row, so every search that IS
+// answered is still audited.
+//
 // SM-9: learner rows are NOT exposed here. The endpoint only walks
 // teachers / schools / classes / subjects / outlines / observation cycles
 // / mentor pairings / classroom sessions. If a future spec adds learners,
 // the role gate documented in the spec body (super_admin/programme_admin)
 // belongs HERE, not in the client.
+//
+// PER-ACTOR SCOPING -- two of the eight branches are scoped, six are not, and
+// the split is deliberate. Observation cycles and mentor pairings come from
+// lib/gated-reads.ts under the caller's SectionAccess: nothing of either kind
+// unless the caller holds that section's gate grant, and then only the rows
+// cycleVisibilityFilter / pairingVisibilityFilter allow -- the same two
+// controls /observation and /mentorship apply. This endpoint was the third list
+// surface over those tables and the only one with neither: a teacher could
+// press Cmd+K, type "OBS", and read other teachers' cycle codes, topics and
+// real UUIDs, or type a colleague's name and get "Mentor X -> Teacher Y" with
+// the pairing UUID, without ever entering a section password (no /api prefix
+// is gated by proxy.ts). The other six branches mirror /repo, which is
+// programme-wide directory data by design, and stay unscoped.
 
 import { NextResponse } from "next/server";
 import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
@@ -34,19 +58,40 @@ import {
   schools,
   classes,
   subjects,
-  observationCycles,
-  mentorPairings,
-  mentors,
   courseOutlines,
   sessions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { searchCycles, searchPairings } from "@/lib/gated-reads";
+import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { recordAudit } from "@/lib/audit";
+import { rateLimit } from "@/lib/rate-limit";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
 const MIN_QUERY = 2;
+// In characters, as Postgres counts varchar. The widest column searched below
+// is sessions.topic, varchar(240) (outline names 200, person and school names
+// 160, codes shorter), and `%q%` cannot match a value shorter than q -- so a
+// longer q would find nothing, and is refused rather than stored whole. A
+// person's real search never reaches it.
+const MAX_QUERY = 240;
+// Per user, and sized for the log: every answered search is a permanent
+// quickfind.query row. A person looking names up sends about one search per
+// character -- QuickFind fetches whenever typing pauses for 180 ms, and phone
+// typing runs at 300-500 ms a character -- so eight 15-character names in a
+// minute is 120. A loop meets it at once.
+//
+// It was 400, above the 334 a minute one palette can send at most, because
+// QuickFind showed every refusal as "No results for <q>": reaching the limit
+// told a person that the teacher or school they wanted did not exist. That
+// let one account add 576,000 rows a day. The palette now says "Too many
+// searches -- try again in N s" (refusalFor), so the limit no longer has to be
+// out of a person's reach. audit-flood.test.ts bounds it from both sides.
+const QUICKFIND_LIMIT = 120;
+const QUICKFIND_WINDOW_MS = 60_000;
 const MAX_PER_KIND = 4; // 8 kinds × 4 ≈ 20-row cap after the flat merge.
 const HARD_CAP = 20;
 
@@ -73,6 +118,12 @@ export async function GET(req: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
+  // A session with no role cannot be scoped, and two branches below need
+  // scoping -- so it is unauthenticated for our purposes, not a wildcard.
+  const actor = actorFrom(session);
+  if (!actor) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
 
   const url = new URL(req.url);
   const rawQ = (url.searchParams.get("q") ?? "").trim();
@@ -86,6 +137,31 @@ export async function GET(req: Request) {
       { status: 200 },
     );
   }
+  // Code points, not .length: an emoji is one character to varchar(240) and
+  // two UTF-16 units to JavaScript, so a full-length topic holding one would
+  // otherwise be refused.
+  if ([...rawQ].length > MAX_QUERY) {
+    return NextResponse.json({ error: "query_too_long" }, { status: 400 });
+  }
+
+  // Fail closed (lib/rate-limit.ts): without the counter the search would be
+  // unthrottled, and the counter lives in the database the search needs anyway.
+  try {
+    const rl = await rateLimit({
+      bucket: "quickfind",
+      id: session.user.id,
+      limit: QUICKFIND_LIMIT,
+      windowMs: QUICKFIND_WINDOW_MS,
+    });
+    if (!rl.ok) {
+      return NextResponse.json(
+        { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
+        { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil(rl.retryAfterMs / 1000))) } },
+      );
+    }
+  } catch {
+    return NextResponse.json({ error: "rate_limit_unavailable" }, { status: 503 });
+  }
 
   // ESCAPED. `%`, `_` and `\` are LIKE metacharacters, and this route
   // interpolated the raw query straight into the pattern -- so `?q=%` matched
@@ -95,6 +171,15 @@ export async function GET(req: Request) {
   // eight tables on each keystroke did not.
   const pattern = `%${escapeIlike(rawQ)}%`;
   const results: QuickFindResult[] = [];
+
+  // Resolved ONCE, before the fan-out, and in parallel: each is a grant lookup
+  // plus (when granted) the actor's teacher/mentor id round-trip, and QuickFind
+  // calls this endpoint on every debounced keystroke (180ms) over Ladakhi
+  // bandwidth.
+  const [observation, mentorship] = await Promise.all([
+    observationAccess(db, actor),
+    mentorshipAccess(db, actor),
+  ]);
 
   // 1) Teachers — full_name ILIKE. School code joined for the sublabel.
   const teacherRows = await db
@@ -205,18 +290,8 @@ export async function GET(req: Request) {
   }
 
   // 5) Observation cycles — `code` ILIKE (e.g. "OBS-2026-001"). Cycles are a
-  //    high-traffic deep link from the dashboard.
-  const cycleRows = await db
-    .select({
-      id: observationCycles.id,
-      code: observationCycles.code,
-      kind: observationCycles.kind,
-      topic: observationCycles.topic,
-    })
-    .from(observationCycles)
-    .where(ilike(observationCycles.code, pattern))
-    .orderBy(asc(observationCycles.code))
-    .limit(MAX_PER_KIND);
+  //    high-traffic deep link from the dashboard. Gated and scoped (header).
+  const cycleRows = await searchCycles(db, observation, pattern, MAX_PER_KIND);
   for (const r of cycleRows) {
     results.push({
       kind: "observation_cycle",
@@ -228,18 +303,9 @@ export async function GET(req: Request) {
   }
 
   // 6) Mentor pairings — via mentor name OR teacher name. The pairing has no
-  //    free-text label of its own so we hydrate both sides for the search.
-  const pairingRows = await db
-    .select({
-      id: mentorPairings.id,
-      mentorName: mentors.name,
-      teacherName: teachers.fullName,
-    })
-    .from(mentorPairings)
-    .leftJoin(mentors, eq(mentorPairings.mentorId, mentors.id))
-    .leftJoin(teachers, eq(mentorPairings.teacherId, teachers.id))
-    .where(or(ilike(mentors.name, pattern), ilike(teachers.fullName, pattern)))
-    .limit(MAX_PER_KIND);
+  //    free-text label of its own so both sides are hydrated for the search.
+  //    Gated and scoped (header).
+  const pairingRows = await searchPairings(db, mentorship, pattern, MAX_PER_KIND);
   for (const r of pairingRows) {
     const label = `${r.mentorName ?? "?"} → ${r.teacherName ?? "?"}`;
     results.push({

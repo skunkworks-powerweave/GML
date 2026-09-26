@@ -21,10 +21,17 @@ revives it. Spec 121 is the closure entry.
    results as a flat array of `{ kind, id, label, sublabel, href }`
    rows. Auth-gated. Below `MIN_QUERY=2` chars the endpoint short-
    circuits to `[]` (still 200) so the client can poll while the user
-   types without 400-spam. Every call writes a single audit row
-   `quickfind.query` with `metadata { q, resultCount }` — the audit is
-   intentionally noisy (one per keystroke debounce) so SM-8's retention
-   sweep is the right place to age it out.
+   types without 400-spam. Every answered call writes a single audit row
+   `quickfind.query` with `metadata { q, resultCount }`. That row is
+   permanent (audit_log is append-only and nothing prunes it; SM-8's
+   retention sweep covers notifications only), so the route bounds what
+   it writes (F97, W3-26):
+   - `q` longer than 240 characters (the widest column searched) →
+     `400 { error: "query_too_long" }`, no search, no row;
+   - more than 120 searches per user per minute → `429 { error:
+     "rate_limited", retryAfterMs }` with `Retry-After`, no row;
+   - the limiter unavailable → `503 { error: "rate_limit_unavailable" }`
+     (fail closed), no row.
 
 2. **Client overlay** — `apps/web/src/components/quickfind/QuickFind.tsx`,
    a `"use client"` component mounted globally in the authenticated
@@ -36,6 +43,11 @@ revives it. Spec 121 is the closure entry.
    - closes on `Esc`, on background click, and on result selection
    - shows the top 5 recently-viewed entities (localStorage, keyed by
      user id) when the search input is empty
+   - says "No results" only for a search that was answered with none. A
+     refused search says what happened instead: "Too many searches" with
+     the seconds from `Retry-After` (429), "Signed out" (401), "Search too
+     long" (400), "Search unavailable" (5xx, or a request that never
+     reached the route)
    - renders nothing on the SSR pass (no portal target on the server)
      so it adds zero markup to first paint
 

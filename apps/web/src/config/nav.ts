@@ -9,6 +9,12 @@ import type { RoleName } from "@gml/shared/auth/roles";
 export type NavItem = {
   id: string;
   label: string;
+  /**
+   * The nav.* translation key for `label`, where the id alone cannot say it:
+   * observation, mentorship, rtt and videos carry different labels for
+   * different roles, so Sidebar's id-keyed ITEM_KEY cannot hold them.
+   */
+  labelKey?: string;
   icon: string;
   href: string;
   /** Section-gate slug. Visiting this route prompts for the gate password if not unlocked. */
@@ -31,10 +37,10 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "Programme",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Classroom Observation", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "mentorship", label: "Mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "rtt", label: "RTT Phases", icon: "mountain", href: "/rtt" },
-        { id: "videos", label: "Video library", icon: "video", href: "/videos" },
+        { id: "observation", label: "Classroom Observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -56,6 +62,11 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "tbl-mentors", label: "Mentors", icon: "users", href: "/admin/data/mentors" },
         { id: "tbl-pairings", label: "Pairings", icon: "users", href: "/admin/data/mentor-pairings" },
         { id: "tbl-attendance", label: "Attendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        // The index of ALL 20 tables. Without it the desktop sidebar reached 5
+        // of them, and classes, learners, sessions, resources, RTT content and
+        // observation cycles -- the tables a fresh deployment is empty in --
+        // could only be found by typing /admin. README-deploy.md section 3.2.
+        { id: "tbl-all", label: "All tables", icon: "table", href: "/admin" },
       ],
     },
     {
@@ -75,10 +86,10 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "Programme",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Classroom Observation", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "mentorship", label: "Mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "rtt", label: "RTT Phases", icon: "mountain", href: "/rtt" },
-        { id: "videos", label: "Video library", icon: "video", href: "/videos" },
+        { id: "observation", label: "Classroom Observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -98,6 +109,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "tbl-teachers", label: "Teachers", icon: "users", href: "/admin/data/teachers" },
         { id: "tbl-schools", label: "Schools", icon: "school", href: "/admin/data/schools" },
         { id: "tbl-pairings", label: "Pairings", icon: "users", href: "/admin/data/mentor-pairings" },
+        // See the super_admin Data section: the index of every table.
+        { id: "tbl-all", label: "All tables", icon: "table", href: "/admin" },
       ],
     },
     {
@@ -115,15 +128,18 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My work",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "mentorship", label: "My mentees", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "videos", label: "Pending review", icon: "video", href: "/videos" },
+        { id: "mentorship", label: "My mentees", labelKey: "myMentees", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        // The teach-back review queue. This item linked to /videos, which has
+        // no review control, so the badge pointed at nothing a mentor could do.
+        { id: "teach-back", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
       section: "Programme",
       items: [
-        { id: "rtt", label: "RTT Phases", icon: "mountain", href: "/rtt" },
+        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
         { id: "forms", label: "Forms & quizzes", icon: "file", href: "/forms" },
       ],
     },
@@ -145,8 +161,11 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My work",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Observation cycles", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "videos", label: "Video library", icon: "video", href: "/videos" },
+        { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        // Observers may review teach-backs (rtt/teach-back READ_ROLES) and had
+        // no way to reach the queue.
+        { id: "teach-back", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -167,8 +186,11 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       section: "My learning",
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "rtt", label: "My phase", icon: "mountain", href: "/rtt" },
-        { id: "observation", label: "My observations", icon: "eye", href: "/observation" },
+        { id: "rtt", label: "My phase", labelKey: "myPhase", icon: "mountain", href: "/rtt" },
+        { id: "observation", label: "My observations", labelKey: "myObservations", icon: "eye", href: "/observation" },
+        // Her pairing: its meetings, her Q1/Q4 videos and her reflections. A
+        // teacher could reach it only from an inbox notification.
+        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
         { id: "uploads", label: "My uploads", icon: "upload", href: "/uploads" },
       ],
     },
@@ -192,10 +214,6 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
   ],
 };
 
-/**
- * Mobile bottom tabs. Match `mobile-shell.jsx::TABS_BY_ROLE`.
- * Max 5 tabs per role. `inbox` becomes `audit` for super_admin.
- */
 /**
  * Give every role a link to its own settings page.
  *
@@ -227,13 +245,34 @@ export type MobileTab = {
   gate?: NavItem["gate"];
 };
 
+/**
+ * The role's whole navigation on a phone (/menu). The tab bar holds five or
+ * six destinations and a phone has no sidebar, so everything else -- a
+ * mentee's pairing and forms, the review queue, Forms & quizzes, the
+ * repository pages -- had no mobile route at all.
+ */
+const MENU_TAB: MobileTab = { id: "menu", label: "Menu", icon: "menu", href: "/menu" };
+
+/**
+ * Mobile bottom tabs, after `mobile-shell.jsx::TABS_BY_ROLE`, each ending in
+ * Menu. `inbox` becomes `audit` for super_admin; the teacher's Repo tab gave
+ * way to Uploads and lives in Menu.
+ */
 export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
   teacher: [
     { id: "home", label: "Home", icon: "home", href: "/dashboard" },
     { id: "learn", label: "Learn", icon: "book", href: "/rtt" },
     { id: "observe", label: "Observe", icon: "eye", href: "/observation" },
-    { id: "repo", label: "Repo", icon: "table", href: "/repo" },
     { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    // /uploads was in the DESKTOP sidebar only. A phone has no sidebar, so a
+    // teacher could reach her uploads page -- the only mount of the mobile
+    // camera/resumable-upload runner -- solely through a dashboard to-do row
+    // that appears while a cycle is awaiting a video. Teachers are the most
+    // phone-heavy group in the programme. The grid in BottomTabs sizes itself
+    // from tabs.length; the label renders via nav.uploads (TAB_KEY), this
+    // literal is only the fallback.
+    { id: "uploads", label: "Uploads", icon: "upload", href: "/uploads" },
+    MENU_TAB,
   ],
   mentor: [
     { id: "home", label: "Today", icon: "home", href: "/dashboard" },
@@ -241,12 +280,14 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
     { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
     { id: "repo", label: "Repo", icon: "table", href: "/repo" },
     { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    MENU_TAB,
   ],
   observer: [
     { id: "home", label: "Today", icon: "home", href: "/dashboard" },
     { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
     { id: "repo", label: "Repo", icon: "table", href: "/repo" },
     { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    MENU_TAB,
   ],
   programme_admin: [
     { id: "home", label: "Home", icon: "home", href: "/dashboard" },
@@ -254,6 +295,7 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
     { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
     { id: "repo", label: "Repo", icon: "book", href: "/repo" },
     { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    MENU_TAB,
   ],
   super_admin: [
     { id: "home", label: "Home", icon: "home", href: "/dashboard" },
@@ -261,6 +303,7 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
     { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
     { id: "repo", label: "Repo", icon: "book", href: "/repo" },
     { id: "audit", label: "Audit", icon: "shield", href: "/admin/audit", gate: "admin" },
+    MENU_TAB,
   ],
 };
 
@@ -288,7 +331,7 @@ export function activeNavIdFor(
   let best: { id: string; len: number } | undefined;
   for (const section of NAV_BY_ROLE[role] ?? []) {
     for (const item of section.items) {
-      const href = item.href;
+      const href = item.href.split("?")[0] ?? item.href; // "/rtt/teach-back?status=..." is /rtt/teach-back
       const matches =
         href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
       if (matches && (!best || href.length > best.len)) best = { id: item.id, len: href.length };

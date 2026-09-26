@@ -47,8 +47,9 @@ name: gml-lms
 # EC2 box that is a slow disk-fill: the worker logs an ffmpeg line per job and
 # Caddy an access line per request, forever, until / is full -- at which point
 # Postgres connections, the next backup and the next deploy all fail at once,
-# for a reason that looks nothing like "log files". 3x10MB per service is 120MB
-# worst case across the stack.
+# for a reason that looks nothing like "log files". 3x10MB per service, and
+# 5x20MB for caddy, whose access log is the only per-request record (see the
+# caddy service): 190MB worst case across the stack.
 x-logging: &default-logging
   driver: json-file
   options:
@@ -63,9 +64,13 @@ services:
     # used to happen (health reported 0-of-22 migrations applied and every
     # authenticated page threw). See docs/verification.md (B13).
     #
-    # Safe on every `up`: both ledgers make it a no-op once current. If it exits
-    # non-zero, `app` never starts and the PREVIOUS container keeps serving.
-    # That is the rollback posture, and it is deliberate.
+    # Safe on every `up`: both ledgers make it a no-op once current. But the
+    # depends_on below does NOT keep an old app serving through a failed
+    # migration: `up` recreates app and worker in its create phase and waits
+    # for migrate only in its start phase. So scripts/deploy.sh runs this
+    # service on its own first (`docker compose run --rm --no-deps migrate`)
+    # and calls `up` only once it has exited 0 -- that is what leaves the
+    # previous containers serving when a migration fails.
     # EXPLICIT IMAGE NAME, so the deploy/rollback tags mean something.
     #
     # Without an `image:` key Compose derives one from the project name --
@@ -111,6 +116,13 @@ services:
       GATE_PASSWORD_MENTORSHIP: ${GATE_PASSWORD_MENTORSHIP:-}
       GATE_PASSWORD_ADMIN: ${GATE_PASSWORD_ADMIN:-}
       SEED_DRY_RUN: ${SEED_DRY_RUN:-}
+      # Postgres connections (see DB_POOL_MAX on app). The one-offs run here --
+      # migrate, the seeds, verify-auth -- query one statement at a time.
+      DB_POOL_MAX: "2"
+      # The Supabase pooler CA -- see the note on the app service.
+      SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
+    volumes:
+      - ./docker/supabase-ca.crt:/etc/gml/supabase-ca.crt:ro
     networks:
       - lms_net
 
@@ -134,6 +146,15 @@ services:
       context: .
       dockerfile: docker/app.Dockerfile
     restart: unless-stopped
+    # CPU PRIORITY FOR THE WEB TIER. One ffmpeg at -preset veryfast saturates
+    # both vCPUs (see WORKER_CONCURRENCY on the worker), and every service ran
+    # at Docker's default weight of 1024, so for the length of each transcode
+    # ffmpeg took an equal share with Next.js and page and API latency rose for
+    # everyone. A weight only matters under contention: ffmpeg still has the
+    # whole box when nobody is browsing, and while someone is, app and caddy win
+    # 4:1. Not a `cpus:` cap on the worker, which would slow every transcode,
+    # even at night.
+    cpu_shares: 4096
     logging: *default-logging
     environment:
       NODE_ENV: production
@@ -146,12 +167,16 @@ services:
       # this to `true` only after an SMTP provider is attached there; until then
       # the UI says plainly that password resets go through an administrator.
       AUTH_EMAIL_ENABLED: ${AUTH_EMAIL_ENABLED:-false}
-      # Refused rather than defaulted: an unset app secret used to make the
-      # WhatsApp webhook accept unsigned POSTs from anyone on the internet.
-      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?WHATSAPP_APP_SECRET must be set — the webhook refuses all traffic without it}
+      # Optional. An unset app secret USED to make the webhook accept unsigned
+      # POSTs from anyone; the route now fails closed instead (every request is
+      # refused -- see verifySignature in app/api/webhooks/whatsapp/route.ts),
+      # so requiring it here only stopped the LMS from starting before WhatsApp
+      # was set up. deploy.sh and preflight.sh report it as OFF.
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_GRAPH_API_VERSION: ${WHATSAPP_GRAPH_API_VERSION:-}
       GML_WHATSAPP_NUMBER: ${GML_WHATSAPP_NUMBER:-}
       GML_HELPDESK_PHONE: ${GML_HELPDESK_PHONE:-}
       GML_HELPDESK_EMAIL: ${GML_HELPDESK_EMAIL:-}
@@ -161,6 +186,25 @@ services:
       # turned on during an incident without editing this file.
       HEALTH_DEBUG: ${HEALTH_DEBUG:-}
       TZ: ${TZ:-Asia/Kolkata}
+      # POSTGRES CONNECTIONS, BUDGETED. The session pooler admits as many
+      # clients as its pool size -- 15 by default -- and every open connection
+      # holds one. app 8 + worker 4 + the migrate one-offs 2 + the worker
+      # healthcheck 1 = 15. Raise the pool size in the Supabase dashboard before
+      # raising these (README-deploy.md 2.1).
+      DB_POOL_MAX: ${APP_DB_POOL_MAX:-8}
+      # THE SUPABASE POOLER CA. packages/db/src/client.ts verifies the pooler
+      # only when SUPABASE_CA_CERT is set IN THE CONTAINER, and this file used to
+      # forward it to no service -- so every container ran encrypted but
+      # unauthenticated while preflight.sh reported the certificate "will be
+      # verified" from a .env value nothing read. One fixed file now: replace
+      # the empty docker/supabase-ca.crt with the PEM from Project Settings ->
+      # Database -> SSL Configuration and redeploy. Left empty it reads as ""
+      # and client.ts keeps today's warn-and-continue. A fixed path, not
+      # `${SUPABASE_CA_CERT}:...`, because that expands to `::ro` when unset and
+      # breaks `docker compose config` for everyone who has not opted in.
+      SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
+    volumes:
+      - ./docker/supabase-ca.crt:/etc/gml/supabase-ca.crt:ro
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -200,6 +244,12 @@ services:
       context: .
       dockerfile: docker/worker.Dockerfile
     restart: unless-stopped
+    # Time between SIGTERM and SIGKILL on `up -d`, `stop` and rollbacks. With
+    # none set, Docker's 10 s applied while the worker's drain waited 30 s, so
+    # every deploy during a transcode was a SIGKILL. The worker now interrupts
+    # and hands its job back in seconds, and gives up by itself at 20 s
+    # (DRAIN_DEADLINE_MS in apps/worker/src/index.ts); this must stay above it.
+    stop_grace_period: 30s
     logging: *default-logging
     environment:
       NODE_ENV: production
@@ -210,7 +260,20 @@ services:
       # of the target instance; a second starves the web tier it shares the box
       # with. Queue depth absorbs bursts -- that is what a queue is for.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      # The worker fetches WhatsApp media from the Graph API (whatsapp-fetch.ts)
+      # and replies to the sender; the webhook only records the message and
+      # queues the work. Soft defaults, like the app's: WhatsApp is switched on
+      # after go-live, a fetch without a token fails by name, is retried, and is
+      # visible on /admin/whatsapp-log, and replies without the phone number id
+      # are a logged no-op -- none of it stops the stack from starting.
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_GRAPH_API_VERSION: ${WHATSAPP_GRAPH_API_VERSION:-}
+      # Its share of the pooler budget -- see DB_POOL_MAX on app.
+      DB_POOL_MAX: ${WORKER_DB_POOL_MAX:-4}
       TZ: ${TZ:-Asia/Kolkata}
+      # The Supabase pooler CA -- see the note on the app service.
+      SUPABASE_CA_CERT: /etc/gml/supabase-ca.crt
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -221,11 +284,19 @@ services:
       # matters: can it still reach the queue? A worker that is running but
       # cannot claim looks identical to an idle one, and previously the
       # container had no healthcheck at all -- a crash-loop was invisible.
+      #
+      # Through @gml/db's own pool, so it probes the connection the worker
+      # actually uses, TLS and CA included. It was a bare
+      # `new Client({connectionString})`, which negotiated no TLS: plaintext to
+      # the pooler every 60 s, and permanently unhealthy once Supabase enforces
+      # SSL. tsx because client.ts is TypeScript; the image runs on it anyway.
       test:
         - CMD
         - node
+        - --import
+        - tsx
         - -e
-        - "const{Client}=require('pg');const c=new Client({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:4000});c.connect().then(()=>c.query('select 1 from jobs limit 1')).then(()=>c.end()).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+        - "import('@gml/db/client').then(({getPool})=>getPool().query('select 1 from jobs limit 1')).then(()=>process.exit(0),()=>process.exit(1))"
       interval: 60s
       timeout: 10s
       retries: 3
@@ -235,11 +306,20 @@ services:
       # both failed on a source larger than ~1 GB (which has to coexist with its
       # own HLS output) and spent 2 GiB of RAM on a box with 8.
       - worker_scratch:/tmp
+      - ./docker/supabase-ca.crt:/etc/gml/supabase-ca.crt:ro
 
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
-    logging: *default-logging
+    # Same weight as app, for the same reason: every request is TLS here first.
+    cpu_shares: 4096
+    # More than the default: this is where the Caddyfile's access log goes, one
+    # JSON line (about 1 KB) per request, and it is the only record of them.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     ports:
       - "80:80"
       - "443:443"
@@ -247,11 +327,10 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL must be set for Let's Encrypt}
-      # The CSP has to name the exact Supabase project origin: the browser
-      # uploads to Storage and fetches HLS segments from it directly. Falls back
-      # to a wildcard over supabase.co, which works but is looser than it needs
-      # to be -- set this to your project origin in .env.
-      SUPABASE_ORIGIN: ${NEXT_PUBLIC_SUPABASE_URL:-https://*.supabase.co}
+      # No SUPABASE_ORIGIN here any more. It was passed "because the CSP has to
+      # name the exact Supabase project origin", but docker/Caddyfile never read
+      # it: the CSP is issued per request by apps/web/src/proxy.ts, from
+      # NEXT_PUBLIC_SUPABASE_URL in the app container.
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

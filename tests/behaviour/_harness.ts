@@ -62,6 +62,26 @@ export async function withClient<T>(body: (c: Client) => Promise<T>): Promise<T>
   }
 }
 
+/**
+ * Serialise the tests that briefly put a public table WITHOUT row-level
+ * security in place (rls-every-deploy.test.ts, and seed-bootstrap.test.ts's
+ * verify-auth check) against each other and against the invariant that no
+ * such table exists (invariants.test.ts). Files run in parallel processes, so
+ * without this the invariant could see a probe table, or one test's migrate
+ * could lock down the other's probe before it was looked at. Probes take the
+ * lock exclusively; the invariant takes it shared.
+ */
+export async function withRlsProbeLock<T>(mode: "exclusive" | "shared", body: () => Promise<T>): Promise<T> {
+  const c = await connect();
+  const fn = mode === "exclusive" ? "pg_advisory_lock" : "pg_advisory_lock_shared";
+  try {
+    await c.query(`SELECT ${fn}(hashtext('tests:public-table-without-rls'))`);
+    return await body();
+  } finally {
+    await c.end().catch(() => undefined); // ending the session releases the lock
+  }
+}
+
 /** A unique tag so concurrent test files cannot collide on shared tables. */
 export function tag(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;

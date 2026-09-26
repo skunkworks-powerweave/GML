@@ -10,6 +10,7 @@ import {
   index,
   integer,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -88,6 +89,11 @@ export const videoSubmissions = pgTable(
     reviewedByUserId: uuid("reviewed_by_user_id").references(() => users.id, { onDelete: "set null" }),
     contextType: varchar("context_type", { length: 32 }).notNull(),
     contextId: uuid("context_id"),
+    // Migration 0042. Which quarter a 'mentee_quarterly' video is for: 1 (the
+    // baseline) or 4 (the endline). NULL for every other context. Chosen when
+    // the upload is reserved, so it is on the row that the completion call and
+    // the reconciler both finish from.
+    contextQuarter: smallint("context_quarter"),
     captionRaw: text("caption_raw"), // raw WhatsApp caption (when source='whatsapp')
     // Spec 144 — Meta's webhook delivers the same wa_message_id 2-3 times during
     // their at-least-once retry policy. We dedupe by storing the wa message_id
@@ -97,6 +103,11 @@ export const videoSubmissions = pgTable(
     // so Meta stops retrying. Nullable: non-whatsapp submissions (tusd upload,
     // external_url) carry NULL and are exempt from the partial unique index.
     whatsappMessageId: text("whatsapp_message_id"),
+    // Migration 0036. The Graph media id, so a failed fetch can be queued again
+    // (Meta keeps the media ~30 days), and the sender's number as Meta sent it,
+    // which the ingest log shows. Both null for non-WhatsApp rows.
+    whatsappMediaId: text("whatsapp_media_id"),
+    whatsappFrom: text("whatsapp_from"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     verifiedAt: timestamp("verified_at", { withTimezone: true, mode: "date" }),
   },
@@ -106,6 +117,11 @@ export const videoSubmissions = pgTable(
     index("video_submissions_file_idx").on(t.fileId),
     index("video_submissions_submitter_idx").on(t.submittedByUserId, t.createdAt),
     index("video_submissions_status_idx").on(t.status, t.createdAt),
+    // The teach-back review queue: only unreviewed rows. Migration 0022;
+    // declared so the snapshot describes the database (F107).
+    index("video_submissions_pending_review_idx")
+      .on(t.contextType, t.createdAt)
+      .where(sql`${t.reviewedAt} IS NULL`),
     // Spec 144 — partial unique index for WhatsApp idempotency. Only enforced
     // when whatsapp_message_id IS NOT NULL so other ingest sources are exempt.
     uniqueIndex("video_submissions_whatsapp_message_id_uq")
@@ -114,6 +130,10 @@ export const videoSubmissions = pgTable(
     check(
       "video_submissions_context_type_check",
       sql`${t.contextType} IN ('observation_cycle','teach_back','mentor_meeting','mentee_quarterly','classroom_session','generic')`,
+    ),
+    check(
+      "video_submissions_context_quarter_check",
+      sql`${t.contextQuarter} IS NULL OR (${t.contextType} = 'mentee_quarterly' AND ${t.contextQuarter} IN (1, 4))`,
     ),
     // SM-3 anchor: status='ready' requires hls_master_key non-null AND verified_at non-null
     check(

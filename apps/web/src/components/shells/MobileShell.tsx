@@ -1,20 +1,26 @@
 // Mobile shell: top app bar + content + bottom tabs. Used for viewport ≤ 768px.
 // Floating ? button + sheet overlay land in spec 032.
 //
-// Spec 125 — the BottomTabs subcomponent has become an async server component
-// (it calls `getTranslations()`). RSC handles awaiting async children at the
-// render boundary; this wrapper stays a plain sync function so the spec 026
-// "export function MobileShell" contract still matches.
+// Spec 125 — the BottomTabs subcomponent is an async server component (it
+// calls `getTranslations()`), and so is this shell now: its own header
+// controls -- "Sign out", the settings link's accessible name, the ? button's
+// -- were English literals in every locale, while the desktop topbar's
+// equivalents were translated. It used to stay sync for spec 026's
+// "export function MobileShell" source pin, which now accepts `async`; RSC
+// awaits async components at the render boundary.
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { signOut } from "@/auth";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { BottomTabs } from "@/components/nav/BottomTabs";
+import { NetworkStatusServer } from "@/components/nav/NetworkStatusServer";
 import { ConfidentialityFooter } from "@/components/ConfidentialityFooter";
 import { MobileHelpFAB } from "@/components/MobileHelpFAB";
 import type { NavCounts } from "@/lib/chrome-counts";
+import { MAIN_CONTENT_ID, SkipLink } from "./SkipLink";
 
 type MobileShellProps = {
   user: { id: string; name?: string | null; email?: string | null; role: RoleName; image?: string | null };
@@ -27,7 +33,7 @@ type MobileShellProps = {
   children: ReactNode;
 };
 
-export function MobileShell({
+export async function MobileShell({
   user,
   title,
   activeTab,
@@ -35,8 +41,13 @@ export function MobileShell({
   unreadCount,
   children,
 }: MobileShellProps) {
+  const tAction = await getTranslations("action");
+  const tNav = await getTranslations("nav");
   return (
     <div style={{ minHeight: "100dvh", background: "var(--paper)", paddingBottom: 80 }}>
+      {/* Skips the header's account controls. A phone with a keyboard or a
+          switch device tabs through them otherwise. */}
+      <SkipLink />
       <header
         style={{
           padding: "14px 16px 10px",
@@ -53,6 +64,11 @@ export function MobileShell({
         <div>
           <div style={{ fontSize: 10, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>GML LMS</div>
           {title ? <h1 style={{ fontFamily: "var(--serif)", fontSize: 18, fontWeight: 600, marginTop: 2 }}>{title}</h1> : null}
+          {/* The connection indicator, in the sticky header so it stays in
+              view. It lived in the desktop sidebar only: on a phone on 2G --
+              the case it exists for -- a teacher learnt the server was
+              unreachable only when a save failed. */}
+          <NetworkStatusServer variant="compact" />
         </div>
         {/* ACCOUNT CONTROLS. These did not exist on mobile at all.
             The avatar was an inert <span> and BottomTabs carries no settings
@@ -70,7 +86,7 @@ export function MobileShell({
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Link
             href="/settings"
-            aria-label="Your settings"
+            aria-label={tNav("settings")}
             data-testid="mobile-settings-link"
             title={user.email ?? ""}
             style={{
@@ -96,7 +112,7 @@ export function MobileShell({
             }}
           >
             <SignOutButton
-              title={`Sign out ${user.email ?? ""}`.trim()}
+              title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
               style={{
                 padding: "5px 10px",
                 border: "1px solid var(--line)",
@@ -106,14 +122,16 @@ export function MobileShell({
                 cursor: "pointer",
               }}
             >
-              Sign out
+              {tAction("signOut")}
             </SignOutButton>
           </form>
         </div>
       </header>
-      <main style={{ padding: "16px" }}>{children}</main>
+      <main id={MAIN_CONTENT_ID} tabIndex={-1} style={{ padding: "16px" }}>
+        {children}
+      </main>
       <ConfidentialityFooter user={{ name: user.name, email: user.email }} compact />
-      <MobileHelpFAB />
+      <MobileHelpFAB label={tAction("help")} />
       <BottomTabs
         role={user.role}
         activeTab={activeTab}

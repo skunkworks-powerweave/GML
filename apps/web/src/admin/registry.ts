@@ -17,6 +17,10 @@ import { mentorPairingsEntity } from "./entities/mentor-pairings";
 import { rttAttendanceEntity } from "./entities/rtt-attendance";
 import { rttSessionsEntity } from "./entities/rtt-sessions";
 import { rttSubjectsEntity } from "./entities/rtt-subjects";
+import { rttModulesEntity } from "./entities/rtt-modules";
+import { rttLessonsEntity } from "./entities/rtt-lessons";
+import { rttReadingsEntity } from "./entities/rtt-readings";
+import { observationCyclesEntity } from "./entities/observation-cycles";
 import { subjectsEntity } from "./entities/subjects";
 import { classesEntity } from "./entities/classes";
 import { courseOutlinesEntity } from "./entities/course-outlines";
@@ -25,8 +29,17 @@ import { sessionsEntity } from "./entities/sessions";
 import { resourcesEntity } from "./entities/resources";
 import { resourceSubjectsEntity } from "./entities/resource-subjects";
 import { learnersEntity } from "./entities/learners";
+import { districtsEntity } from "./entities/districts";
+import { phasesEntity } from "./entities/phases";
+import { termsEntity } from "./entities/terms";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
+  // The tops of both hierarchies. Only the seed ever wrote them, so the
+  // programme could not outlive the seed's Phase 3 (ends 2026-09-30); see
+  // entities/phases.ts. Test: tests/behaviour/admin-rtt-structure.test.ts.
+  districts: districtsEntity,
+  phases: phasesEntity,
+  terms: termsEntity,
   schools: schoolsEntity,
   zones: zonesEntity,
   teachers: teachersEntity,
@@ -35,6 +48,15 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   "rtt-attendance": rttAttendanceEntity,
   "rtt-sessions": rttSessionsEntity,
   "rtt-subjects": rttSubjectsEntity,
+  // The four below are registered because nothing else in the product writes
+  // their tables: /rtt/subject/[id] reads modules, lessons and readings, and
+  // /observation is fed entirely by observation_cycles, which only the demo
+  // seed ever inserted. Each entity file carries the full note; the proof is
+  // tests/behaviour/admin-entities.test.ts.
+  "rtt-modules": rttModulesEntity,
+  "rtt-lessons": rttLessonsEntity,
+  "rtt-readings": rttReadingsEntity,
+  "observation-cycles": observationCyclesEntity,
   subjects: subjectsEntity,
   classes: classesEntity,
   "course-outlines": courseOutlinesEntity,

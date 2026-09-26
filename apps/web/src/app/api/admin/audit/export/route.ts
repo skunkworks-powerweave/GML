@@ -10,6 +10,8 @@
 //   GET                            → 200 text/csv   success
 //   GET (no session)               → 401 unauthenticated
 //   GET (role not in allow-list)   → 403 forbidden
+//   GET (no admin section grant)   → 403 gate_required  (and an audit row)
+//   GET (bad ?userId / ?from / ?to)→ 400 invalid_user_id / invalid_from / invalid_to
 //   GET (>10k rows match)          → 413 too_many_rows  (with narrowing hint)
 //   POST                           → 405 method_not_allowed
 //
@@ -21,6 +23,9 @@
 //   ?entityType   exact-match on audit_log.entity_type
 //   ?from         ISO timestamp; audit_log.created_at >= from
 //   ?to           ISO timestamp; audit_log.created_at <  to
+//                 Read strictly, as the admin grid reads dates
+//                 (admin/dates.ts parseAdminDate): an instant with its zone,
+//                 or a date / date-time without one, meant in IST.
 //
 // CSV columns: timestamp, action, actor_user_id, entity_type, entity_id, ip,
 // user_agent, metadata (metadata is JSON-stringified).
@@ -29,6 +34,10 @@
 //   action="audit.bulk_export", entityType="audit_log",
 //   metadata={ rowCount, filters: { action, userId, entityType, from, to } }
 // so a downstream reviewer can see who exfiltrated which slice of the log.
+// A request refused by the admin section gate records
+// action="audit.bulk_export.gate_denied" instead -- a distinct action, never
+// the success one, so the append-only log cannot show an export that did not
+// happen.
 //
 // Hard cap: 10000 rows per request. If the selected count would exceed that,
 // we return 413 with a JSON body hinting the caller to narrow by from/to or
@@ -42,11 +51,15 @@
 
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
+import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
+import { AUDIT_EXPORT_ROW_CAP } from "@/admin/audit-export";
+import { parseAdminDate } from "@/admin/dates";
 import { and, desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
+import { getActiveGrant } from "@/lib/gates";
 import { hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
 
 /** Same shape /admin/audit validates against, kept in step deliberately. */
@@ -55,7 +68,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const dynamic = "force-dynamic";
 
 const ALLOWED_ROLES: RoleName[] = ["super_admin", "programme_admin"];
-const ROW_CAP = 10000;
+// 10000, shared with /admin/audit, which warns before offering an export
+// that this route would refuse.
+const ROW_CAP = AUDIT_EXPORT_ROW_CAP;
 
 export async function GET(req: Request) {
   // Auth gate — API route returns JSON 401 rather than redirecting.
@@ -68,6 +83,36 @@ export async function GET(req: Request) {
   // middleware role list. super_admin + programme_admin only.
   if (!hasAnyRole(session.user.role, ALLOWED_ROLES)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
+  // Section gate. The PAGE these rows come from is gated
+  // (admin/audit/layout.tsx, assertSectionGate) because "a role check alone is a
+  // thinner guard than the UI was claiming". This endpoint streams the SAME
+  // rows -- up to 10k, with ip, user agent and full metadata -- and checked the
+  // role only, so an admin session that had never entered the admin section
+  // password (a borrowed laptop in a shared school office is the realistic
+  // case) could pull the whole log, and rotating that password closed nothing.
+  //
+  // getActiveGrant rather than assertSectionGate: the latter redirect()s, which
+  // in a Route Handler is a 307 to an HTML unlock page where the method matrix
+  // above promises JSON status codes. The only legitimate caller is the Export
+  // CSV link on the gated page, whose user already holds a grant.
+  //
+  // BEFORE any row is read and before the audit.bulk_export row below: a denied
+  // request must not record an export that did not happen. It records its own
+  // action instead -- an ungranted admin probing this URL is exactly the signal
+  // the gate exists to surface, and it used to leave no trace at all.
+  const grant = await getActiveGrant(session.user.id, "admin");
+  if (!grant) {
+    const denialAudited = await recordAudit({
+      action: "audit.bulk_export.gate_denied",
+      entityType: "audit_log",
+      metadata: { gateSlug: "admin", reason: "no_active_grant" },
+    });
+    if (!denialAudited) {
+      noteAuditDegraded("/api/admin/audit/export (gate_denied)");
+    }
+    return NextResponse.json({ error: "gate_required" }, { status: 403 });
   }
 
   const url = new URL(req.url);
@@ -95,13 +140,25 @@ export async function GET(req: Request) {
     filters.push(sql`${auditLog.userId} = ${userIdParam}`);
   }
   if (entityTypeParam) filters.push(sql`${auditLog.entityType} = ${entityTypeParam}`);
+  // A bound that is given must be readable. `new Date(param)` with the bound
+  // dropped when it did not parse exported a typo'd window (2026-13-01,
+  // "yesterday") as if unbounded -- extra rows nobody asked for -- while the
+  // audit row below recorded the typo as a filter the query never applied.
+  // And JS Date guessed where it did parse: 01/09/2026 as 9 January, and
+  // 2026-02-30 as 2 March.
   if (fromParam) {
-    const from = new Date(fromParam);
-    if (!Number.isNaN(from.getTime())) filters.push(gte(auditLog.createdAt, from));
+    const from = parseAdminDate(fromParam);
+    if (Number.isNaN(from.getTime())) {
+      return NextResponse.json({ error: "invalid_from" }, { status: 400 });
+    }
+    filters.push(gte(auditLog.createdAt, from));
   }
   if (toParam) {
-    const to = new Date(toParam);
-    if (!Number.isNaN(to.getTime())) filters.push(lt(auditLog.createdAt, to));
+    const to = parseAdminDate(toParam);
+    if (Number.isNaN(to.getTime())) {
+      return NextResponse.json({ error: "invalid_to" }, { status: 400 });
+    }
+    filters.push(lt(auditLog.createdAt, to));
   }
   const whereExpr =
     filters.length === 0 ? sql`true` : and(...filters);
@@ -184,7 +241,11 @@ export async function GET(req: Request) {
     "user_agent",
     "metadata",
   ];
-  const csv = Papa.unparse({ fields, data });
+  // ESCAPED. user_agent is whatever any caller sent -- the unsigned WhatsApp
+  // webhook audits anonymous internet requests -- and entity_id carries
+  // helpdesk topics; a cell starting with = + - @ is evaluated by the
+  // spreadsheet this file is opened in, during an incident (admin/csv-safety.ts).
+  const csv = Papa.unparse({ fields, data }, CSV_EXPORT_OPTIONS);
 
   // YYYYMMDD in UTC — strip dashes from the ISO date prefix.
   const filename = `audit-log-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;

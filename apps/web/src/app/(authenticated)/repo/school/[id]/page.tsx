@@ -2,6 +2,7 @@
 // Port of repository.jsx::RepoSchoolPage (lines 226-314) — 1:1 visual fidelity.
 // Two-column body: left = Classes + Recent sessions, right = Details KV + Teachers list.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, desc, eq } from "drizzle-orm";
@@ -16,10 +17,13 @@ import {
   subjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "School" };
 
 const READ_ROLES = new Set([
   "super_admin",
@@ -79,7 +83,8 @@ export default async function RepoSchoolDetailPage({
     redirect("/forbidden");
   }
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [school] = await db
     .select({
@@ -196,15 +201,10 @@ export default async function RepoSchoolDetailPage({
         </div>
       </div>
 
-      <section
-        className="page-body"
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.6fr 1fr",
-          gap: 18,
-          alignItems: "start",
-        }}
-      >
+      {/* One column below 768 px, 1.6fr 1fr above. This was an inline
+          "1.6fr 1fr", which holds at every width, so on a phone the two
+          columns stayed side by side and the page scrolled sideways. */}
+      <section className="page-body grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         {/* Left column — Classes + Recent sessions */}
         <div style={{ display: "grid", gap: 16 }}>
           <SectionCard
@@ -480,7 +480,9 @@ function SectionCard({
           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>{sub}</div>
         ) : null}
       </header>
-      {children}
+      {/* Scrolls sideways inside the card: a table wider than a phone was
+          otherwise cut off by the card's overflow:hidden. */}
+      <div style={{ overflowX: "auto" }}>{children}</div>
     </div>
   );
 }
@@ -496,7 +498,10 @@ function KVRow({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "120px 1fr",
+        // minmax(0, ...): a bare 1fr is at least as wide as its content, so a
+        // long code or e-mail pushed the value past the card on a phone.
+        gridTemplateColumns: "120px minmax(0, 1fr)",
+        overflowWrap: "anywhere",
         gap: 10,
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

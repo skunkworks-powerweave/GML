@@ -19,6 +19,7 @@
 // surface it to the user — the URL is normally produced by the form's
 // `<input type="date">` which only ever yields valid ISO dates.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, desc, eq, gte, ilike, lte, sql, type SQL } from "drizzle-orm";
@@ -31,6 +32,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Sessions" };
 
 const ALLOWED_ROLES = new Set([
   "super_admin",
@@ -192,7 +195,7 @@ export default async function RepoSessionsIndex({
           className="card card-hi"
           style={{ padding: 10, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}
         >
-          <div style={{ display: "flex", gap: 4 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {filterTabs.map((f) => {
               const active = statusFilter === f.v;
               const qs = new URLSearchParams();
@@ -208,6 +211,7 @@ export default async function RepoSessionsIndex({
                 <Link
                   key={f.v}
                   href={href}
+                  aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
                     background: active ? "var(--ink)" : "transparent",
@@ -243,6 +247,7 @@ export default async function RepoSessionsIndex({
             />
             <select
               name="subject"
+              aria-label="Filter by subject"
               defaultValue={subjectFilter}
               className="text"
               style={{ maxWidth: 200, padding: "5px 10px", fontSize: 12 }}

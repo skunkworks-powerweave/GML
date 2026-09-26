@@ -1,6 +1,10 @@
 // /uploads — teacher's "My uploads" personal landing.
 // 1:1 port of `LMS GML Frontend/forms.jsx::UploadsPage` (lines 342-375).
-// - Three explainer cards (WhatsApp PRIMARY / browser tus / in-app record)
+// - Explainer cards (WhatsApp PRIMARY / browser upload). A third, "Record
+//   in-app", promised "Saves to your phone first; uploads when you have wifi"
+//   and linked to the same file picker: nothing records, saves offline or
+//   waits for wifi on a desktop, so it is gone (F13). Recording is the phone
+//   flow's "Record now".
 // - Inline <UploadProgress /> tray (spec 045) for browser uploads
 // - Table of viewer's own video_submissions (most recent 50), joined with files
 //   for the original filename and with observation_cycles for the linked cycle code.
@@ -8,20 +12,46 @@
 // Spec 135 (Workflow Run 12 final frontend-parity): on mobile we swap the
 // explainer cards + UploadProgress tray for the dedicated MobileUploadRunner
 // flow (full-screen Record / Pick → Preview → Upload progress). Desktop keeps
-// the original three-card layout untouched. The recent-uploads table is
+// its explainer cards and tray. The recent-uploads table is
 // rendered on both shells because viewing past submissions is identical work
 // regardless of device.
+//
+// WHAT THE VIDEO IS FOR. Every upload here used to be 'generic' -- the desktop
+// tray was hard-wired to that context and the phone flow sent the same --
+// although the teacher's dashboard to-do "Upload lesson video for 1 cycle"
+// links here. A generic video is visible to its uploader and administrators
+// only, so her observer and mentor got a 404 and the cycle's Evidence card
+// stayed empty (F18). The page now takes ?context=&contextId= (and &quarter=
+// for a mentee's quarterly video) from the cycle, pairing and RTT subject
+// pages, runs the reservation's own check on it (./context.ts), and says what
+// the upload is for. Without one it asks, offering the user's own open cycles,
+// meetings, quarterly videos and teach-backs -- and "something else",
+// knowingly.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
 import { db } from "@gml/db";
 import { videoSubmissions, files, observationCycles } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
 import { MobileUploadRunner } from "@/components/video/MobileUploadRunner";
 import { getDeviceType } from "@/lib/device";
-import { assertEnv } from "@/lib/env";
+import { whatsappPhoneForUsers } from "@/lib/env";
+import { uploadLimitBytes } from "@/lib/video/upload";
+import { attachUploadAction } from "./actions";
+import {
+  assertContextAllowed,
+  describeUploadTarget,
+  encodeTarget,
+  lockedSection,
+  openUploadContexts,
+  uploadHref,
+  type GatedSection,
+  type TargetDescription,
+  type UploadTarget,
+} from "./context";
 
 export const dynamic = "force-dynamic";
 
@@ -65,11 +95,23 @@ const CONTEXT_LABEL: Record<string, string> = {
   mentor_meeting: "Mentor meeting",
   mentee_quarterly: "Mentee quarterly",
   classroom_session: "Classroom session",
-  generic: "—",
+  // Said plainly: a generic video is the one the observer and mentor cannot see.
+  generic: "Not linked (only you and admins)",
+};
+
+const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation", mentorship: "Mentorship" };
+
+/** What attachUploadAction redirected back with. Unknown codes show nothing. */
+const ATTACH_NOTICE: Record<string, { text: string; ok: boolean }> = {
+  done: { text: "Attached. The video now shows where you chose.", ok: true },
+  invalid: { text: "Choose what to attach the video to.", ok: false },
+  refused: { text: "The video could not be attached there. Choose another place.", ok: false },
+  not_attachable: { text: "Only your own videos that are not linked yet, and have not failed, can be attached.", ok: false },
+  locked: { text: "Unlock that section first, then attach the video.", ok: false },
 };
 
 /**
- * Built per request, because two of these cards were lying about the product.
+ * Built per request, because these cards were lying about the product.
  *
  *   WhatsApp   The number and the wa.me link were HARDCODED to
  *              +91 90600 22013, three lines above the same file's own
@@ -85,40 +127,46 @@ const CONTEXT_LABEL: Record<string, string> = {
  *              navigate away from the page and open the file instead, losing
  *              whatever was in progress. The copy now describes the button
  *              that is actually there.
+ *
+ *   Size       "Max file 500 MB" was a literal, while the cap beginUpload
+ *              enforces is the programme setting (10 to 2000 MB). It is now
+ *              the same number (uploadLimitBytes).
+ *
+ * `whatsappText` is the caption that sends a video to the same place as this
+ * page's upload: the chosen cycle's code or meeting's MM- code, "OBS-" for the
+ * teacher to finish when nothing is chosen, and null when WhatsApp cannot reach
+ * the target at all -- then the card is dropped, because the video would
+ * arrive linked to nothing.
  */
-function explainerCards(whatsappPhone: string | null) {
+function explainerCards(whatsappPhone: string | null, whatsappText: string | null, chosen: boolean, maxMb: number) {
   const dialable = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : null;
+  const exact = whatsappText !== null && whatsappText !== "OBS-";
   return [
-    ...(whatsappPhone && dialable
+    ...(whatsappPhone && dialable && whatsappText !== null
       ? [
           {
             icon: "wa",
             title: "Forward via WhatsApp",
-            desc: `Send your video to ${whatsappPhone} with the caption for your active cycle ID. Fastest on 2G/3G.`,
+            desc: exact
+              ? `Send your video to ${whatsappPhone} with the caption ${whatsappText}. Fastest on 2G/3G.`
+              : `Send your video to ${whatsappPhone} with your cycle code as the caption, e.g. OBS-2026-009. Fastest on 2G/3G.`,
             accent: "var(--lichen)",
             primary: true,
             cta: "Open WhatsApp",
-            href: `https://wa.me/${dialable}?text=${encodeURIComponent("#cycle- ")}`,
+            href: `https://wa.me/${dialable}?text=${encodeURIComponent(whatsappText)}`,
           },
         ]
       : []),
     {
       icon: "up",
       title: "Upload here",
-      desc: "Choose a file below. Resumes on disconnect. Max file 500 MB. We'll transcode to HLS automatically.",
+      // The limit beginUpload enforces (uploadLimitBytes), not a literal.
+      desc: `Choose a file below. Resumes on disconnect. Max file ${maxMb} MB. We'll transcode to HLS automatically.`,
       accent: "var(--indigo)",
       primary: false,
       cta: "Start",
-      href: "#upload-tray",
-    },
-    {
-      icon: "rec",
-      title: "Record in-app",
-      desc: "Open camera here in the app. Saves to your phone first; uploads when you have wifi.",
-      accent: "var(--saffron)",
-      primary: false,
-      cta: "Start",
-      href: "#upload-tray",
+      // Until the page knows what the video is for, there is no tray to go to.
+      href: chosen ? "#upload-tray" : "#upload-target",
     },
   ];
 }
@@ -148,25 +196,65 @@ function formatIST(d: Date | null): string {
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
 }
 
-export default async function UploadsPage() {
+export default async function UploadsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ context?: string; contextId?: string; quarter?: string; attach?: string }>;
+} = {}) {
   const session = await auth();
   if (!session?.user?.id) {
     redirect("/forbidden");
   }
+  const actor = actorFrom(session);
+  if (!actor) redirect("/forbidden");
   const viewerId = session.user.id;
-  // Spec 135 — device-aware shell. The same env-var contract as
-  // /videos UploadModal (spec 132) is reused for the WhatsApp fallback.
-  // Spec 169 — `process.env.GML_WHATSAPP_NUMBER` is now read THROUGH
-  // assertEnv() so a typo'd value (missing `+`, stray whitespace) falls
-  // through to `WHATSAPP_PHONE_NUMBER_ID` / null and the downstream
-  // UploadModal / MobileUploadRunner hide the WhatsApp path entirely
-  // rather than rendering a broken wa.me link. The legacy env name is
-  // preserved for backwards compatibility with deployments that pre-date
-  // the GML_* override.
+  const sp = (await searchParams) ?? {};
+
+  // WHAT THIS UPLOAD IS FOR, from the link that brought the user here. First
+  // its section's gate, since everything said about the target -- its name, a
+  // refusal such as "This cycle has been signed off", even a 404 rather than an
+  // "unlock" -- is that section's data. Then the same check the reservation
+  // runs (a target this user may not see is a 404, like the cycle or pairing
+  // page itself).
+  let target: (UploadTarget & { description: TargetDescription }) | null = null;
+  let refusal: string | null = null;
+  let locked: { section: GatedSection; back: string } | null = null;
+  if (sp.context) {
+    const asked = { contextType: sp.context, contextId: sp.contextId ?? null, quarter: sp.quarter ? Number(sp.quarter) : null };
+    const gate = await lockedSection(actor, asked.contextType);
+    if (gate) {
+      locked = { section: gate, back: uploadHref(asked) };
+    } else {
+      const check = await assertContextAllowed(actor, asked);
+      if (!check.ok) {
+        refusal = check.error;
+      } else {
+        const d = await describeUploadTarget(actor, check.target);
+        if (d.locked) locked = { section: d.locked, back: uploadHref(check.target) };
+        else target = { ...check.target, description: d.description };
+      }
+    }
+  }
+  // Without a target: the user's own open cycles, meetings and quarterly
+  // videos to choose from. With none, and nothing locked, there is nothing to
+  // choose -- the upload is simply not linked to anything, and says so.
+  const choices = target ? null : await openUploadContexts(actor);
+  if (!target && !refusal && !locked && choices && choices.options.length === 0 && choices.locked.length === 0) {
+    const generic: UploadTarget = { contextType: "generic", contextId: null, quarter: null };
+    const d = await describeUploadTarget(actor, generic);
+    if (!d.locked) target = { ...generic, description: d.description };
+  }
+  const whatsappText = target ? target.description.whatsappText : "OBS-";
+  // Spec 135 — device-aware shell. The WhatsApp number is null while
+  // WhatsApp ingest is off or GML_WHATSAPP_NUMBER is invalid (lib/env.ts
+  // whatsappPhoneForUsers), and the cards and MobileUploadRunner then offer
+  // no WhatsApp path at all rather than a link to a channel that drops the
+  // video. WHATSAPP_PHONE_NUMBER_ID is Meta's opaque account id, not a
+  // dialable number, and is never a fallback (see videos/page.tsx).
   const device = await getDeviceType();
-  // See videos/page.tsx: WHATSAPP_PHONE_NUMBER_ID is Meta's opaque account id,
-  // not a dialable number, and must never be used as a fallback here.
-  const whatsappPhone = assertEnv().whatsappNumber.value ?? null;
+  const whatsappPhone = whatsappPhoneForUsers();
+  const maxMb = Math.floor((await uploadLimitBytes()) / (1024 * 1024));
+  const cards = explainerCards(whatsappPhone, whatsappText, target !== null, maxMb);
 
   const rows = await db
     .select({
@@ -180,6 +268,7 @@ export default async function UploadsPage() {
       filename: files.originalFilename,
       sizeBytes: files.sizeBytes,
       mimeType: files.mimeType,
+      contextQuarter: videoSubmissions.contextQuarter,
       cycleCode: observationCycles.code,
     })
     .from(videoSubmissions)
@@ -195,6 +284,17 @@ export default async function UploadsPage() {
     .orderBy(desc(videoSubmissions.createdAt))
     .limit(50);
 
+  // What an unlinked video of hers can still be attached to: the same open
+  // cycles, meetings, quarterly slots and teach-backs the chooser offers. Not
+  // a failed one (attachSubmissionToContext refuses it): its bytes never came,
+  // or it will not play. One still uploading can be: its completion links the
+  // row's context as it is then.
+  const attachable = (r: { contextType: string; status: string }) => r.contextType === "generic" && r.status !== "failed";
+  const attachOptions = rows.some(attachable)
+    ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: `${o.title} · ${o.detail}` }))
+    : [];
+  const attachNotice = sp.attach ? (ATTACH_NOTICE[sp.attach] ?? null) : null;
+
   return (
     <div>
       <div className="page-header">
@@ -208,14 +308,140 @@ export default async function UploadsPage() {
           Submit a lesson video
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          Three ways to submit. Pick whatever works on your network today.
+          Send it over WhatsApp or upload it here — whichever works on your network today.
         </p>
       </div>
 
       <div className="page-body">
-        {device === "mobile" ? (
+        {attachNotice ? (
+          <p
+            role={attachNotice.ok ? "status" : "alert"}
+            style={{ fontSize: 13, margin: "0 0 12px", color: attachNotice.ok ? "var(--ink-2)" : "var(--rust)" }}
+          >
+            {attachNotice.text}
+          </p>
+        ) : null}
+        <section
+          id="upload-target"
+          data-testid="upload-target"
+          className="card"
+          style={{ padding: 18, marginBottom: 18 }}
+        >
+          {target ? (
+            <>
+              <div className="label">This video is for</div>
+              <div style={{ fontFamily: "var(--serif)", fontSize: 18, marginTop: 4 }}>
+                {target.description.title}
+              </div>
+              <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 4 }}>
+                {target.description.audience}
+              </p>
+              {sp.context ? (
+                <Link href="/uploads" style={{ fontSize: 12, color: "var(--indigo)" }}>
+                  Choose something else
+                </Link>
+              ) : null}
+            </>
+          ) : (
+            <>
+              {refusal ? (
+                <p role="alert" style={{ color: "var(--rust)", fontSize: 13, margin: "0 0 10px" }}>
+                  {refusal}
+                </p>
+              ) : null}
+              {locked ? (
+                <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+                  That link is for the {SECTION_NAME[locked.section]} section.{" "}
+                  <a href={`/gate/${locked.section}?next=${encodeURIComponent(locked.back)}`}>
+                    Unlock {SECTION_NAME[locked.section]}
+                  </a>{" "}
+                  to upload to it.
+                </p>
+              ) : null}
+              <div className="label">What is this video for?</div>
+              <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0", display: "grid", gap: 8 }}>
+                {(choices?.options ?? []).map((o) => (
+                  <li key={o.href}>
+                    <Link href={o.href} className="btn" style={{ textDecoration: "none", minHeight: 44 }}>
+                      {o.title}
+                    </Link>
+                    <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>{o.detail}</span>
+                  </li>
+                ))}
+                {(choices?.locked ?? []).map((s) => (
+                  <li key={s}>
+                    <a
+                      href={`/gate/${s}?next=${encodeURIComponent("/uploads")}`}
+                      className="btn btn-ghost"
+                      style={{ textDecoration: "none" }}
+                    >
+                      Unlock {SECTION_NAME[s]} to choose {s === "observation" ? "a cycle" : "a meeting or a quarterly video"}
+                    </a>
+                  </li>
+                ))}
+                <li>
+                  <Link href="/uploads?context=generic" className="btn btn-ghost" style={{ textDecoration: "none" }}>
+                    Something else
+                  </Link>
+                  <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>
+                    Linked to nothing: only you and programme administrators will see it.
+                  </span>
+                </li>
+              </ul>
+            </>
+          )}
+        </section>
+
+        {/* On a phone the WhatsApp route lives inside the upload flow, which
+            is shown once the page knows what the video is for. Until then it
+            is offered here, as the desktop card offers it. */}
+        {device === "mobile" && !target && whatsappPhone && whatsappText !== null ? (
+          <section
+            style={{
+              marginBottom: 18,
+              padding: 14,
+              borderRadius: 12,
+              background: "var(--lichen-soft)",
+              border: "1px solid oklch(0.82 0.06 145)",
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: 14 }}>On a slow 2G/3G link?</div>
+            <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
+              Send the video to {whatsappPhone} on WhatsApp with your cycle code as the caption, e.g. OBS-2026-009.
+            </p>
+            <a
+              href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(whatsappText)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-block",
+                marginTop: 10,
+                minHeight: 44,
+                padding: "10px 16px",
+                borderRadius: 10,
+                background: "var(--lichen)",
+                color: "white",
+                fontWeight: 500,
+                fontSize: 14,
+                textDecoration: "none",
+              }}
+            >
+              Open WhatsApp
+            </a>
+          </section>
+        ) : null}
+
+        {device === "mobile" && target ? (
           <section style={{ marginBottom: 22 }}>
-            <MobileUploadRunner whatsappPhone={whatsappPhone} />
+            <MobileUploadRunner
+              whatsappPhone={whatsappPhone}
+              target={{
+                contextType: target.contextType,
+                contextId: target.contextId,
+                quarter: target.quarter,
+                whatsappText: target.description.whatsappText,
+              }}
+            />
           </section>
         ) : null}
 
@@ -224,12 +450,12 @@ export default async function UploadsPage() {
             <section
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
+                gridTemplateColumns: `repeat(${cards.length}, 1fr)`,
                 gap: 14,
                 marginBottom: 18,
               }}
             >
-              {explainerCards(whatsappPhone).map((c) => (
+              {cards.map((c) => (
                 <article
                   key={c.title}
                   className={`card${c.primary ? " card-hi" : ""}`}
@@ -296,9 +522,15 @@ export default async function UploadsPage() {
               ))}
             </section>
 
-            <section id="upload-tray" style={{ marginBottom: 22 }}>
-              <UploadProgress contextType="generic" />
-            </section>
+            {target ? (
+              <section id="upload-tray" style={{ marginBottom: 22 }}>
+                <UploadProgress
+                  contextType={target.contextType}
+                  contextId={target.contextId ?? undefined}
+                  quarter={target.quarter}
+                />
+              </section>
+            ) : null}
           </>
         ) : null}
 
@@ -340,7 +572,7 @@ export default async function UploadsPage() {
                 You haven&apos;t uploaded anything yet.
               </div>
               <div style={{ fontSize: 12 }}>
-                Use one of the three options above — WhatsApp is the fastest on
+                Use one of the options above — WhatsApp is the fastest on
                 a flaky connection.
               </div>
             </div>
@@ -369,7 +601,9 @@ export default async function UploadsPage() {
                     const linkedTo =
                       r.contextType === "observation_cycle"
                         ? (r.cycleCode ?? "—")
-                        : (CONTEXT_LABEL[r.contextType] ?? "—");
+                        : r.contextType === "mentee_quarterly" && r.contextQuarter
+                          ? `${CONTEXT_LABEL.mentee_quarterly} · Q${r.contextQuarter}`
+                          : (CONTEXT_LABEL[r.contextType] ?? "—");
                     const sourceChipCls = SOURCE_CHIP[r.source] ?? "";
                     const stateChipCls = STATE_CHIP[r.status] ?? "";
                     return (
@@ -419,6 +653,32 @@ export default async function UploadsPage() {
                           style={{ color: "var(--ink-2)" }}
                         >
                           {linkedTo}
+                          {/* An unlinked video can still be put where it
+                              belongs, instead of sent again (attachUploadAction). */}
+                          {attachable(r) && attachOptions.length > 0 ? (
+                            <form action={attachUploadAction} style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                              <input type="hidden" name="submissionId" value={r.id} />
+                              <select
+                                name="target"
+                                defaultValue=""
+                                required
+                                aria-label={`Attach ${filename} to`}
+                                style={{ fontSize: 11, maxWidth: 220 }}
+                              >
+                                <option value="" disabled>
+                                  Attach to…
+                                </option>
+                                {attachOptions.map((o) => (
+                                  <option key={o.value} value={o.value}>
+                                    {o.title}
+                                  </option>
+                                ))}
+                              </select>
+                              <button type="submit" className="btn btn-sm" style={{ fontSize: 11 }}>
+                                Attach
+                              </button>
+                            </form>
+                          ) : null}
                         </td>
                         <td
                           className="mono"

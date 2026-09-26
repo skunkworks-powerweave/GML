@@ -38,14 +38,23 @@ function main() {
   const ranAt = new Date(parsed.ranAt ?? 0);
   if (isNaN(ranAt.getTime())) fail(`last_restore_drill.json has invalid ranAt: ${parsed.ranAt}`);
 
+  // The result first, and with its reason. scripts/restore.sh stamps a FAILED
+  // drill as {"result":"failed","error":"..."}; before it did, a broken drill
+  // left no file at all and this gate could only say "missing", which reads
+  // like "nobody ran it" rather than "it ran and could not restore".
+  if (parsed.result !== "ok") {
+    const why = typeof parsed.error === "string" && parsed.error ? `: ${parsed.error}` : "";
+    fail(
+      `last restore drill (${parsed.ranAt}) result: ${parsed.result}${why}. ` +
+        `Fix the cause and re-run scripts/restore.sh before deploying (README-deploy.md section 7).`,
+    );
+  }
+
   const ageDays = (Date.now() - ranAt.getTime()) / (24 * 60 * 60 * 1000);
   if (ageDays > MAX_AGE_DAYS) {
     fail(
       `restore drill is ${Math.round(ageDays)} days old (> ${MAX_AGE_DAYS}). Run a restore drill before deploying.`,
     );
-  }
-  if (parsed.result !== "ok") {
-    fail(`last restore drill result: ${parsed.result}. Resolve before deploying.`);
   }
   console.log(`[SM-5] last restore drill ok, ${Math.round(ageDays)} days ago.`);
   process.exit(0);

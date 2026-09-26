@@ -13,8 +13,9 @@
 //
 //   2. apps/web/src/app/api/form-drafts/[id]/route.ts (EDITED)
 //      — the PUT handler's silent `req.json().catch(() => ({}))`
-//        is replaced with an explicit try/catch that returns 400
-//        `{ error: "invalid_json", message: String(err) }`.
+//        is replaced with an explicit 400 `{ error: "invalid_json" }`
+//        (since W3-29 through lib/api-json's readJsonBody, which does
+//        not echo the parser's message).
 //
 //   3. apps/web/src/app/api/helpdesk/tickets/route.ts (EDITED)
 //      — imports `rateLimit` from `@/lib/rate-limit`;
@@ -39,6 +40,11 @@ const TUS_PATH = "apps/web/src/app/api/uploads/tus/route.ts";
 // actions that bracket a direct browser -> Storage transfer.
 const UPLOAD_ACTIONS_PATH = "apps/web/src/app/(authenticated)/uploads/actions.ts";
 const UPLOAD_LIB_PATH = "apps/web/src/lib/video/upload.ts";
+// The context check itself (assertContextAllowed). It lives outside actions.ts
+// so the /uploads page can run the same check before naming the cycle, meeting
+// or pairing a link points at: every export of a "use server" module is a
+// server action the browser can call, and the check is not one.
+const UPLOAD_CONTEXT_PATH = "apps/web/src/app/(authenticated)/uploads/context.ts";
 const FORM_DRAFT_PATH = "apps/web/src/app/api/form-drafts/[id]/route.ts";
 const HELPDESK_PATH = "apps/web/src/app/api/helpdesk/tickets/route.ts";
 const SPEC_DIR = "specs/154-api-hardening";
@@ -170,10 +176,19 @@ test("spec 154 — the upload entry point that replaced it authenticates AND aut
   // finished, having uploaded nothing, would otherwise push an empty object
   // into the pipeline where it fails in the worker and reads as a transcoding
   // bug rather than an upload that never happened.
+  //
+  // The comparison moved into isCompleteSize (packages/db/src/uploads.ts) when
+  // the browser's completion and the reconciler were made to share one
+  // finalizer; tests/behaviour/upload-lifecycle.test.ts executes it.
   assert.match(
     read(UPLOAD_LIB_PATH),
-    /stat\.size\s*<\s*Math\.floor\(row\.expectedBytes\s*\*\s*0\.99\)/,
-    "completeUpload must compare the stored object against the reserved size",
+    /if\s*\(!isCompleteSize\(stat\.size,\s*row\.expectedBytes\)\)\s*\{\s*return\s*\{\s*ok:\s*false/,
+    "completeUpload must refuse a stored object smaller than the reserved size",
+  );
+  assert.match(
+    read("packages/db/src/uploads.ts"),
+    /storedBytes\s*>=\s*Math\.floor\(expectedBytes\s*\*\s*0\.99\)/,
+    "the size check must compare what Storage holds against what was reserved",
   );
 });
 
@@ -235,25 +250,23 @@ test("spec 154 — form-drafts PUT handler no longer silently swallows malformed
     undefined,
     `form-drafts route must not contain \`req.json().catch(() => ({}))\` as live code — spec 154 replaced the silent swallow with an explicit try/catch (offending line: ${offending ?? "<none>"})`,
   );
-  // The explicit try/catch must exist — we pin the catch body's response
-  // shape (`invalid_json` + `message`) so a refactor can't quietly drop
-  // the diagnostic.
+  // W3-29 changed what this pins. It used to require the route's own
+  // try/catch answering `{ error: "invalid_json", message: String(err) }`:
+  // the parser's SyntaxError text, echoed to the caller, which no other /api
+  // route does. The body is now read through lib/api-json's readJsonBody --
+  // the helper the hardened routes share, which answers 400
+  // {"error":"invalid_json"} and nothing more (executed by
+  // tests/behaviour/mentorship-forms-uuid.test.ts). What stays pinned is
+  // that the route uses it, and never forwards an error's text.
   assert.match(
     src,
-    /catch\s*\([^)]*\)\s*\{[\s\S]{0,400}error:\s*"invalid_json"/,
-    "form-drafts route PUT handler must have a catch branch that returns error: \"invalid_json\"",
+    /await\s+readJsonBody\(\s*req\s*\)/,
+    "form-drafts route PUT handler must read its body through readJsonBody (lib/api-json)",
   );
-  assert.match(
+  assert.doesNotMatch(
     src,
-    /error:\s*"invalid_json"[\s\S]{0,200}message:\s*String\(\s*err\s*\)/,
-    "form-drafts route PUT handler must forward the parser error via String(err) for client-side diagnostics",
-  );
-  // The status code is 400 — preserving the existing contract so no
-  // client breakage.
-  assert.match(
-    src,
-    /error:\s*"invalid_json"[\s\S]{0,400}status:\s*400/,
-    "form-drafts route PUT handler must return status 400 on JSON parse failure",
+    /String\(\s*err\s*\)/,
+    "form-drafts route must not echo an error's text to the caller",
   );
 });
 
@@ -424,9 +437,9 @@ test("spec 154 — the fix is documented inline so future contributors don't qui
       "the two hand-maintained copies it replaced were both set to an invalid 5 MB",
   );
   assert.match(
-    read(UPLOAD_ACTIONS_PATH),
+    read(UPLOAD_CONTEXT_PATH),
     /contextId arrives from the browser and is attacker-chosen/,
-    "uploads/actions.ts must state why context authorisation exists -- an authentication " +
+    "uploads/context.ts must state why context authorisation exists -- an authentication " +
       "check alone would let a teacher write into another teacher's evidence",
   );
 });

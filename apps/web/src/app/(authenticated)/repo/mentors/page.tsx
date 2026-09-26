@@ -7,6 +7,7 @@
 // hits /api/admin/data/mentors/export. Schools, teachers, and learners all
 // had a CSV download link already; this closes the parity gap.
 
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, eq, ilike, inArray, sql } from "drizzle-orm";
@@ -19,6 +20,8 @@ import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Mentors" };
 
 // Base-location chip palette. Leh maps to indigo-soft, Kargil maps to saffron-soft.
 // Renders as `.chip .chip-indigo` / `.chip .chip-saffron` via globals.css utilities.

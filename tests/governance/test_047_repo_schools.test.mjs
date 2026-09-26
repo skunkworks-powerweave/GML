@@ -47,10 +47,18 @@ test("schools index queries schools + zones + districts and aggregates counts", 
   for (const tbl of ["schools", "zones", "districts", "teachers", "classes", "sessions"]) {
     assert.match(src, new RegExp(`\\b${tbl}\\b`), `index must reference ${tbl}`);
   }
-  // Aggregates must be correlated subqueries.
-  assert.match(src, /teacher_counts/);
-  assert.match(src, /class_counts/);
-  assert.match(src, /session_counts/);
+  // Aggregates must be correlated subqueries. This pinned the names of three
+  // derived tables (teacher_counts, class_counts, session_counts), which were
+  // not correlated: each GROUPed its whole table on every load (W3-15). What
+  // is pinned now is the correlation to the listed school;
+  // tests/behaviour/repo-index-counts.test.ts checks the plan.
+  for (const tbl of ["teachers", "classes", "classroomSessions"]) {
+    assert.match(
+      src,
+      new RegExp(`\\(select count\\(\\*\\)::int from \\$\\{${tbl}\\} where \\$\\{${tbl}\\.schoolId\\} = \\$\\{schools\\.id\\}`),
+      `the ${tbl} count must be correlated to the listed school`,
+    );
+  }
   // District filter must come from searchParams.
   assert.match(src, /searchParams/);
   assert.match(src, /district/);
@@ -90,7 +98,11 @@ test("school detail queries the per-school joins (school, classes, teachers, ses
 
 test("school detail uses 1.6fr / 1fr two-column body grid (matches JSX prototype)", () => {
   const src = read(DETAIL_PATH);
-  assert.match(src, /gridTemplateColumns:\s*["']1\.6fr 1fr["']/);
+  // From 768 px only (F11). This pinned the inline `gridTemplateColumns:
+  // "1.6fr 1fr"`, which also held on a phone, where the page scrolled
+  // sideways; the columns now collapse to one below the md breakpoint.
+  // tests/behaviour/ui-phone-layout.test.ts renders the page at both widths.
+  assert.match(src, /grid-cols-1\b[^"]*md:grid-cols-\[minmax\(0,1\.6fr\)_minmax\(0,1fr\)\]/);
 });
 
 test("school detail renders Classes table with Grade/Stage/Students/Sections/Class teacher", () => {

@@ -13,6 +13,9 @@
 //   - Background click and result selection both close.
 //   - Result list supports Arrow-Up / Arrow-Down / Enter for keyboard nav.
 //   - Debounced fetch (~180ms) to GET /api/quickfind?q=…; min 2 chars.
+//   - A search the route refuses (429, 401, 5xx) or that cannot reach it
+//     says so -- never "No results", which would say the record does not
+//     exist (see refusalFor).
 //   - Recently-viewed: top 5 most recent selections persisted to
 //     localStorage keyed by the current user id ("gml.quickfind.recent.<uid>").
 //     Rendered when the search box is empty.
@@ -65,6 +68,41 @@ const KIND_LABEL: Record<QuickFindResult["kind"], string> = {
   outline: "Outline",
   session: "Session",
 };
+
+/** What the palette shows in place of results for a search that was not answered. */
+export type SearchRefusal = { primary: string; secondary: string };
+
+const SEARCH_UNAVAILABLE: SearchRefusal = {
+  primary: "Search unavailable",
+  secondary: "Search is not working right now. Try again in a moment.",
+};
+
+/**
+ * The message for a refused search, from its status and Retry-After header.
+ *
+ * The palette used to read only `res.ok` and turn every refusal into an empty
+ * list, rendered as `No results for "<q>"`: a 429, an ended session, a limiter
+ * or database outage all told the person that the teacher or school they were
+ * looking up does not exist, and an admin checking a list could then create a
+ * duplicate. It also meant the route's throttle had to sit above anything a
+ * palette could send, rather than where the audit log wants it.
+ */
+export function refusalFor(status: number, retryAfter: string | null): SearchRefusal {
+  if (status === 429) {
+    const seconds = Math.ceil(Number(retryAfter));
+    return {
+      primary: "Too many searches",
+      secondary:
+        Number.isFinite(seconds) && seconds > 0
+          ? `Searching is paused for your account. Try again in ${seconds} s.`
+          : "Searching is paused for your account. Try again in a minute.",
+    };
+  }
+  if (status === 401) return { primary: "Signed out", secondary: "Your session has ended. Sign in again to search." };
+  // The route's only 400 is query_too_long: longer than any value it searches.
+  if (status === 400) return { primary: "Search too long", secondary: "Shorten the search and try again." };
+  return SEARCH_UNAVAILABLE;
+}
 
 function recentsKey(userId: string): string {
   return `gml.quickfind.recent.${userId}`;
@@ -143,6 +181,8 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QuickFindResult[]>([]);
+  // Set when the last search was not answered; shown instead of "No results".
+  const [refusal, setRefusal] = useState<SearchRefusal | null>(null);
   // Lazy initialiser rather than a mount effect. Reading localStorage here is
   // safe because this component renders nothing until `open`, so the server and
   // first client render agree (both null) and there is no hydration mismatch.
@@ -176,6 +216,7 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
     setOpen(false);
     setQuery("");
     setResults([]);
+    setRefusal(null);
     setActiveIdx(0);
   }, []);
 
@@ -251,14 +292,21 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
         );
         if (!res.ok) {
           setResults([]);
+          setRefusal(refusalFor(res.status, res.headers.get("Retry-After")));
         } else {
           const data = (await res.json()) as {
             results?: QuickFindResult[];
           };
           setResults(Array.isArray(data.results) ? data.results : []);
+          setRefusal(null);
         }
       } catch {
-        // AbortError or network blip → leave the last results in place.
+        // Aborted because the query changed: the next search answers it.
+        // Anything else never reached the route, which is not "no results".
+        if (!ctrl.signal.aborted) {
+          setResults([]);
+          setRefusal(SEARCH_UNAVAILABLE);
+        }
       } finally {
         setLoading(false);
       }
@@ -406,6 +454,8 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
             )
           ) : loading && !showRecents && results.length === 0 ? (
             <EmptyHint primary="Searching…" secondary={`Query: "${query.trim()}"`} />
+          ) : refusal ? (
+            <EmptyHint primary={refusal.primary} secondary={refusal.secondary} />
           ) : results.length === 0 ? (
             <EmptyHint
               primary="No matches"

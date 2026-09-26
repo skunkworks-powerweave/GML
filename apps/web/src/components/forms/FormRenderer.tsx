@@ -13,7 +13,13 @@
 // --serif/--deva). No Tailwind classes; tokens-only.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { clearDraft, saveDraft, type DraftKey } from "@/lib/form-draft";
+import { clearDraft, type DraftKey } from "@/lib/form-draft";
+import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
+import {
+  MAX_TEXT_LENGTH,
+  validateResponses,
+  type FormField as ServerFormField,
+} from "@/lib/forms/validate";
 
 /**
  * A scale answer as a number, or null when genuinely unanswered.
@@ -46,7 +52,9 @@ export type FieldKind =
   | "likert"
   | "rating";
 
-export type FieldOption = { value: string; label: string };
+// hindiLabel on an option is seeded (seed_forms_mentee.ts: "हाँ" / "नहीं") and
+// was rendered by neither runner until the 2026-09 freeze.
+export type FieldOption = { value: string; label: string; hindiLabel?: string };
 
 export type FormField = {
   name: string;
@@ -57,6 +65,8 @@ export type FormField = {
   // Renderer canonical: {value,label}[]. Seeds also write string[].
   options?: FieldOption[] | string[];
   helpText?: string;
+  /** Hindi companion to helpText. Seeded, and referenced nowhere until 2026-09. */
+  helpHindi?: string;
   placeholder?: string;
   min?: number;
   max?: number;
@@ -88,6 +98,17 @@ type FormRendererProps = {
   onSubmit?: (responses: Record<string, unknown>) => Promise<void>;
   action?: (formData: FormData) => Promise<void> | void;
   draftKey?: DraftKey;
+  /**
+   * The signed-in user. The copy of unsaved answers kept on this device is
+   * theirs alone (draft-resilience.ts); with no user, none is kept.
+   */
+  userId?: string;
+  /**
+   * When the server last wrote what `initialResponses` hold (ms since the
+   * epoch): the draft's updatedAt, or the prior answer's submittedAt; null
+   * when it holds neither. A device copy is restored only if it is newer.
+   */
+  serverSavedAt?: number | null;
   submitLabel?: string;
   formId?: string;
   slug?: string;
@@ -112,6 +133,34 @@ const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 // ---------- Helpers ----------
 
+const NO_INITIAL_RESPONSES: Record<string, unknown> = {};
+
+/**
+ * `submitting`, ended by the server's answer.
+ *
+ * A server-action submission ends one of two ways: success redirects to
+ * /forms/[slug]/thanks and this component unmounts; a rejection
+ * (?error=invalid, missing_pairing, wrong_audience) redirects back to the SAME
+ * route. The code used to assume that second case remounted the form too. It
+ * does not: Next 16's layout router keys the page segment without its search
+ * params, so the runner stays mounted with its `submitting` still true -- a
+ * red banner above a disabled "Submitting…" button that only a reload cleared.
+ *
+ * What the rejection does bring is a fresh server render, and with it a NEW
+ * `initialResponses` object. So "submitting" is recorded against the props
+ * the submission was made from, and stops being true the moment different
+ * ones arrive. Derived during render rather than reset in an effect, so there
+ * is no frame in which a stale busy state shows.
+ */
+export function useSubmittingUntilServerAnswers(
+  initialResponses: Record<string, unknown> | undefined,
+): [boolean, (on: boolean) => void] {
+  const current = initialResponses ?? NO_INITIAL_RESPONSES;
+  const [submittedFrom, setSubmittedFrom] = useState<Record<string, unknown> | null>(null);
+  const setSubmitting = useCallback((on: boolean) => setSubmittedFrom(on ? current : null), [current]);
+  return [submittedFrom !== null && submittedFrom === current, setSubmitting];
+}
+
 // Spec 133 — MobileFormRunner reuses these helpers verbatim. They're exported
 // so the mobile renderer doesn't duplicate the validation contract (a drift
 // between the two would make a draft saved on mobile fail on desktop submit).
@@ -126,21 +175,61 @@ export function isHindiNameField(name: string): boolean {
   return /_(hi|hindi)$/i.test(name);
 }
 
+/**
+ * THE SERVER'S RULES, run in the browser. This checked only `required` and a
+ * number's min/max, while submitFormAction also refuses text over 5000
+ * characters, choices that are not options, too many selections and scale
+ * answers off the scale -- so an answer could pass here, travel over a slow
+ * link, and come back refused. lib/forms/validate.ts is dependency-free, so
+ * both sides now run the one validator.
+ */
 export function validateField(field: FormField, raw: unknown): string | null {
-  const empty =
-    raw === undefined ||
-    raw === null ||
-    (typeof raw === "string" && raw.trim() === "") ||
-    (Array.isArray(raw) && raw.length === 0);
-  if (field.required && empty) return "This field is required.";
-  if (empty) return null;
-  if (field.kind === "number") {
-    const n = typeof raw === "number" ? raw : Number(raw);
-    if (Number.isNaN(n)) return "Must be a number.";
-    if (typeof field.min === "number" && n < field.min) return `Must be ≥ ${field.min}.`;
-    if (typeof field.max === "number" && n > field.max) return `Must be ≤ ${field.max}.`;
-  }
-  return null;
+  const [first] = validateResponses([field as ServerFormField], { [field.name]: raw });
+  return first?.message ?? null;
+}
+
+/**
+ * Field kinds whose control is a GROUP (several buttons / inputs), not one
+ * element with id={field.name}. A `<label htmlFor={field.name}>` over one of
+ * these points at nothing, so the wrapper renders as a plain block instead and
+ * the group names itself with role + aria-label. Shared with MobileFormRunner.
+ */
+export function isGroupKind(kind: FormField["kind"]): boolean {
+  return kind === "radio" || kind === "checkbox" || kind === "likert" || kind === "rating";
+}
+
+/**
+ * Style reset for Hindi text that sits inside a Latin-styled container.
+ *
+ * The desktop label style is 11px uppercase JetBrains Mono with 0.06em
+ * letter-spacing, and a child span inherits all of it: letter-spacing pulls
+ * Devanagari matras and conjuncts apart from their base glyphs, and 11px
+ * mono-metric Devanagari is unreadable. So every Hindi run resets them.
+ */
+const HINDI_RESET: React.CSSProperties = {
+  fontFamily: "var(--deva)",
+  letterSpacing: "normal",
+  textTransform: "none",
+  fontWeight: 400,
+};
+
+/**
+ * One run of Hindi text, declared lang="hi" so assistive tech voices it with
+ * a Hindi engine even when the page is English. Renders nothing when absent.
+ * Shared with MobileFormRunner so both runners show the same seeded Hindi.
+ */
+export function HindiText({ text, style }: { text?: string; style?: React.CSSProperties }) {
+  if (!text) return null;
+  return (
+    <span lang="hi" style={{ ...HINDI_RESET, ...style }}>
+      {text}
+    </span>
+  );
+}
+
+/** A <select> option cannot contain markup, so its Hindi label joins the text. */
+export function optionText(o: FieldOption): string {
+  return o.hindiLabel ? `${o.label} / ${o.hindiLabel}` : o.label;
 }
 
 export function validateAll(
@@ -212,6 +301,7 @@ function TextLike({
       placeholder={field.placeholder}
       min={field.min}
       max={field.max}
+      maxLength={type === "text" ? MAX_TEXT_LENGTH : undefined}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
       onChange={(e) => onChange(e.target.value)}
@@ -237,6 +327,7 @@ function TextArea({
       id={field.name}
       name={field.name}
       rows={field.rows ?? 4}
+      maxLength={MAX_TEXT_LENGTH}
       placeholder={field.placeholder}
       aria-required={field.required ? "true" : undefined}
       value={value === undefined || value === null ? "" : String(value)}
@@ -271,7 +362,7 @@ function Select({
       <option value="">Choose…</option>
       {normalizeOptions(field.options).map((o) =>(
         <option key={o.value} value={o.value}>
-          {o.label}
+          {optionText(o)}
         </option>
       ))}
     </select>
@@ -322,7 +413,10 @@ function Radio({
               checked={checked}
               onChange={() => onChange(o.value)}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.8 }} />
+            </span>
           </label>
         );
       })}
@@ -358,7 +452,9 @@ function CheckboxGroup({
     onChange(next);
   };
   return (
-    <div style={{ display: "grid", gap: 6 }}>
+    // A named group, like Radio's radiogroup: the field label above it is not
+    // a <label for> (there is no single control for it to point at).
+    <div role="group" aria-label={field.label} style={{ display: "grid", gap: 6 }}>
       {normalizeOptions(field.options).map((o) =>{
         const checked = selected.includes(o.value);
         return (
@@ -383,7 +479,10 @@ function CheckboxGroup({
               checked={checked}
               onChange={() => toggle(o.value)}
             />
-            <span>{o.label}</span>
+            <span>
+              {o.label}
+              <HindiText text={o.hindiLabel} style={{ marginLeft: 6, opacity: 0.8 }} />
+            </span>
           </label>
         );
       })}
@@ -418,7 +517,11 @@ function Likert({
   // path.
   const current = coerceScaleValue(value);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
+    <div
+      role="group"
+      aria-label={field.label}
+      style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}
+    >
       {/* THE VALUE HAS TO LEAVE THE PAGE.
           These controls are <button type="button"> only -- they carry no name
           and contribute nothing to FormData. This form submits natively via
@@ -436,6 +539,9 @@ function Likert({
             key={n}
             type="button"
             onClick={() => onChange(n)}
+            // Selection was colour-only; a screen-reader user filling a
+            // mentor feedback form heard every point identically.
+            aria-pressed={selected}
             style={{
               padding: "10px 8px",
               border: "1px solid " + (selected ? "var(--ink)" : "var(--line)"),
@@ -478,7 +584,7 @@ function Rating({
     "Exemplary",
   ];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+    <div role="group" aria-label={field.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
       {/* THE VALUE HAS TO LEAVE THE PAGE.
           These controls are <button type="button"> only -- they carry no name
           and contribute nothing to FormData. This form submits natively via
@@ -495,7 +601,10 @@ function Rating({
             key={n}
             type="button"
             onClick={() => onChange(n)}
-            aria-label={`Rate ${n} of ${max}`}
+            // The state lives in the NAME, once. `on` is cumulative (stars
+            // 1..current all fill), so aria-pressed={on} would announce three
+            // pressed buttons for a rating of 3.
+            aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
             style={{
               width: 38,
               height: 38,
@@ -528,6 +637,8 @@ export function FormRenderer({
   onSubmit,
   draftKey,
   submitLabel,
+  userId,
+  serverSavedAt,
   action,
   formId,
   slug,
@@ -560,12 +671,12 @@ export function FormRenderer({
 
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Autosave bookkeeping
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "pending" | "saved" | "error">("idle");
+  // Autosave bookkeeping (saveState / lastSavedAt / flushSave come from
+  // useDraftAutosave below, shared with MobileFormRunner).
+  //
   // A live clock for the "Saved Ns ago" label. This used to be a discarded
   // tick counter (`const [, forceTick] = useState(0)`), which re-rendered this
   // 802-line form once a second while the label it existed to update never
@@ -573,6 +684,11 @@ export function FormRenderer({
   // timestamp in state fixes the label AND keeps Date.now() out of render.
   const [nowMs, setNowMs] = useState<number | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Server-action submit is two passes through onFormSubmit (see there):
+  // formRef lets the first pass re-submit the form once the final draft PUT
+  // has landed; flushedRef marks the second pass so it is let through.
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const flushedRef = useRef(false);
   const valuesRef = useRef(values);
   // Assigned in an effect, never in the render body. Writing to a ref during
   // render is a render-phase side effect (react-hooks/refs) and is unsafe
@@ -588,17 +704,14 @@ export function FormRenderer({
     [draftKey],
   );
 
-  const flushSave = useCallback(async () => {
-    if (!autosaveEnabled || !draftKey) return;
-    setSaveState("pending");
-    try {
-      await saveDraft({ ...draftKey, responses: valuesRef.current });
-      setLastSavedAt(Date.now());
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-    }
-  }, [autosaveEnabled, draftKey]);
+  // A failed save is kept on the device and, when trying again can help,
+  // tried again -- it used to say "retrying" and do nothing (draft-resilience.ts).
+  const { saveState, failure: saveFailure, lastSavedAt, flushSave, cancelRetry } = useDraftAutosave(
+    draftKey,
+    autosaveEnabled,
+    valuesRef,
+    userId,
+  );
 
   const scheduleSave = useCallback(() => {
     if (!autosaveEnabled) return;
@@ -622,12 +735,37 @@ export function FormRenderer({
     };
   }, []);
 
+  // Answers this device kept because the server never got them (the tab was
+  // closed offline, the session expired) come back on the next visit -- if
+  // they are newer than what the server handed the page -- and go to the
+  // server at once. An older copy is dropped (takeNewerLocalCopy).
+  useEffect(() => {
+    if (!autosaveEnabled || !draftKey) return;
+    const kept = takeNewerLocalCopy(userId, draftKey, serverSavedAt ?? null);
+    if (!kept) return;
+    // From a timer, once hydration has painted the server's copy.
+    const t = setTimeout(async () => {
+      valuesRef.current = { ...valuesRef.current, ...kept };
+      setValues((prev) => ({ ...prev, ...kept }));
+      await flushSave();
+    }, 0);
+    return () => clearTimeout(t);
+    // Once, on mount: later changes are this component's own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setField = useCallback(
     (name: string, raw: unknown) => {
       setValues((prev) => {
         const next = { ...prev, [name]: raw };
         return next;
       });
+      // Onto the device AT ONCE, before the debounced PUT: this copy is what
+      // survives a closed tab on a dead link. The ref is written here too (not
+      // only after commit) so the copy and the next save are never a keystroke
+      // behind.
+      valuesRef.current = { ...valuesRef.current, [name]: raw };
+      if (autosaveEnabled && draftKey) keepLocalCopy(userId, draftKey, valuesRef.current);
       // Clear any prior error on this field optimistically; full validation re-runs on submit.
       setErrors((prev) => {
         if (!prev[name]) return prev;
@@ -636,7 +774,7 @@ export function FormRenderer({
       });
       scheduleSave();
     },
-    [scheduleSave],
+    [autosaveEnabled, draftKey, scheduleSave, userId],
   );
 
   // Spec 142 — client-callback submit path (`onSubmit`).
@@ -658,6 +796,14 @@ export function FormRenderer({
       // the action re-validates on the server. If client validation fails we
       // preventDefault to keep the user on the page with the error showing.
       const isServerAction = Boolean(action);
+      if (isServerAction && flushedRef.current) {
+        // SECOND PASS: the requestSubmit() below, re-entering this handler
+        // after the final draft PUT has landed. Validation already passed on
+        // the first pass and the values have not changed since. Do NOT
+        // preventDefault -- that is what lets React dispatch the action.
+        flushedRef.current = false;
+        return;
+      }
       const errs = validateAll(schema.fields ?? [], values);
       // Set state for rendering; do NOT use it for the gate below.
       setErrors(errs);
@@ -667,14 +813,35 @@ export function FormRenderer({
         return;
       }
       if (isServerAction) {
-        // Flush any pending autosave synchronously-ish so the draft on disk
-        // matches what the server is about to persist. We can't await here
-        // without preventDefault'ing, so we fire-and-forget; the browser will
-        // submit the form on the next tick. Mark submitting so the button
-        // disables and a second click does nothing.
+        // FIRST PASS: hold the submit until the last autosave has landed.
+        //
+        // This used to be `void flushSave()` and let the POST go at once --
+        // the shape MobileFormRunner's spec-149 comment describes as the bug.
+        // The submit transaction deletes the draft row; a PUT that landed
+        // after it committed re-created the row, and the next visit painted
+        // "Draft loaded" over a form that had in fact been submitted.
+        //
+        // The flush is kept, not dropped: on a server-side validation
+        // redirect the page re-renders from the draft, so the last keystrokes
+        // must be on disk. requestSubmit() re-dispatches submit through THIS
+        // handler (the form is visible and has onSubmit, unlike mobile's
+        // hidden one), so flushedRef marks the second pass or it would loop.
+        e.preventDefault();
         if (debounceRef.current) clearTimeout(debounceRef.current);
-        if (autosaveEnabled) void flushSave();
         setSubmitting(true);
+        // flushSave never rejects: it records a failure in saveState, and the
+        // answers travel in the POST either way.
+        if (autosaveEnabled) await flushSave();
+        // The POST carries the answers; a retried PUT after it would re-create
+        // the draft the submit deletes.
+        cancelRetry();
+        const form = formRef.current;
+        if (!form) {
+          setSubmitting(false);
+          return;
+        }
+        flushedRef.current = true;
+        form.requestSubmit();
         return;
       }
       // Client-callback mode (preview surfaces). preventDefault, then run
@@ -686,6 +853,7 @@ export function FormRenderer({
         if (debounceRef.current) clearTimeout(debounceRef.current);
         if (autosaveEnabled) await flushSave();
         await onSubmit(values);
+        cancelRetry();
         if (autosaveEnabled && draftKey) {
           // Best-effort cleanup of the draft row. Failure is non-fatal — the
           // user's submission has already gone through.
@@ -701,7 +869,7 @@ export function FormRenderer({
         setSubmitting(false);
       }
     },
-    [action, autosaveEnabled, draftKey, flushSave, onSubmit, schema.fields, values],
+    [action, autosaveEnabled, cancelRetry, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, values],
   );
 
   // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
@@ -710,13 +878,13 @@ export function FormRenderer({
   // a 1 s ticker for free — no extra timer needed here.
   const savedIndicator = useMemo(() => {
     if (!autosaveEnabled) return null;
-    if (saveState === "error") return "Save failed — retrying…";
+    if (saveState === "error") return failureMessage(saveFailure ?? "error");
     if (saveState === "pending") return "Saving…";
     if (lastSavedAt === null) return "Not saved yet";
     const seconds = Math.max(0, Math.floor(((nowMs ?? lastSavedAt) - lastSavedAt) / 1000));
     if (seconds < 1) return "Saved just now";
     return `Saved ${seconds}s ago`;
-  }, [autosaveEnabled, lastSavedAt, saveState, nowMs]);
+  }, [autosaveEnabled, lastSavedAt, saveFailure, saveState, nowMs]);
 
   return (
     <form
@@ -727,6 +895,7 @@ export function FormRenderer({
       // callback. The dev-mode assertion above catches the both-set mistake.
       action={action}
       onSubmit={onFormSubmit}
+      ref={formRef}
       style={{
         background: "var(--card)",
         border: "1px solid var(--line)",
@@ -801,16 +970,36 @@ export function FormRenderer({
       {(schema.fields ?? []).map((field) => {
         const value = values[field.name];
         const error = errors[field.name];
+        const heading = (
+          <>
+            <span>{field.label}</span>
+            {field.required ? (
+              <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
+                *
+              </span>
+            ) : null}
+            {/* The seeded Hindi prompt. It rendered on the phone runner only,
+                so the same form was Hindi on a phone and English-only on a
+                classroom laptop. Resets the label's mono/uppercase/tracking
+                (see HINDI_RESET). */}
+            <HindiText
+              text={field.hindiLabel}
+              style={{ display: "block", fontSize: 14, color: "var(--ink-3)", marginTop: 2 }}
+            />
+          </>
+        );
         return (
           <div key={field.name} style={{ display: "block" }}>
-            <label htmlFor={field.name} style={labelStyle}>
-              <span>{field.label}</span>
-              {field.required ? (
-                <span style={{ color: "var(--rust)", marginLeft: 4 }} aria-hidden="true">
-                  *
-                </span>
-              ) : null}
-            </label>
+            {/* Group kinds have no element with id={field.name}, so a <label
+                for> over them named nothing. They name themselves (role +
+                aria-label) and the heading is a plain block. */}
+            {isGroupKind(field.kind) ? (
+              <div style={labelStyle}>{heading}</div>
+            ) : (
+              <label htmlFor={field.name} style={labelStyle}>
+                {heading}
+              </label>
+            )}
             {field.kind === "textarea" ? (
               <TextArea field={field} value={value} onChange={(v) => setField(field.name, v)} />
             ) : field.kind === "select" ? (
@@ -837,6 +1026,7 @@ export function FormRenderer({
               <TextLike field={field} value={value} onChange={(v) => setField(field.name, v)} />
             )}
             {field.helpText ? <div style={helpStyle}>{field.helpText}</div> : null}
+            <HindiText text={field.helpHindi} style={{ ...helpStyle, display: "block" }} />
             {error ? (
               <div role="alert" style={errorStyle}>
                 {error}

@@ -36,13 +36,55 @@ DB_DIR="${BACKUP_ROOT}/db"
 KEEP_DAILY="${KEEP_DAILY:-14}"   # mirrors /admin/system-settings -> Backup retention
 
 log() { echo "[backup] $(date -Iseconds) — $*"; }
-fail() { echo "[backup] ERROR: $*" >&2; exit 1; }
+BACKUP_ERROR=""
+fail() { BACKUP_ERROR="$*"; echo "[backup] ERROR: $*" >&2; exit 1; }
 
 # An ERR trap so a failure is loud in cron mail rather than a silent non-zero.
-trap 'echo "[backup] FAILED at line ${LINENO}" >&2' ERR
+trap '[ -n "${BACKUP_ERROR}" ] || BACKUP_ERROR="line ${LINENO}: ${BASH_COMMAND}"; echo "[backup] FAILED at line ${LINENO}" >&2' ERR
+
+# One audit row per run: backup.complete at the end, backup.failed from here
+# on any other exit -- the ERR trap does not fire for fail(), so it is caught
+# on EXIT. /admin/system-settings reads backup.complete (scripts/lib/
+# audit-host-job.sh says why, and why a failed write never fails the backup).
+# shellcheck source=lib/audit-host-job.sh
+. scripts/lib/audit-host-job.sh
+BACKUP_RECORDED=""
+on_exit() {
+  local rc=$?
+  if [ "${rc}" -ne 0 ] && [ -z "${BACKUP_RECORDED}" ]; then
+    [ -n "${BACKUP_ERROR}" ] || BACKUP_ERROR="exited ${rc}"
+    audit_host_job backup.failed "{\"error\":\"$(audit_json_text "${BACKUP_ERROR}")\"}"
+  fi
+}
+trap on_exit EXIT
 
 [ -n "${DATABASE_URL:-}" ] || fail "DATABASE_URL not set"
-command -v pg_dump >/dev/null || fail "pg_dump not installed (apt-get install postgresql-client-16)"
+
+# IS pg_dump NEW ENOUGH FOR THIS SERVER — not merely "is it on PATH".
+#
+# pg_dump aborts against a server whose major is newer than its own, and this
+# check used to be `command -v pg_dump` alone, with a hint naming
+# postgresql-client-16. A client-16 box against a Supabase project on 17 passed
+# it and then wrote no dump, every night, with only a bare pg_dump error in
+# /var/lib/gml/backup.log to show for it.
+#
+# The server's major is ASKED, not assumed (scripts/lib/pg-major.sh), so the
+# failure below names both majors and the package that fixes it.
+# shellcheck source=lib/pg-major.sh
+. scripts/lib/pg-major.sh
+pg_rc=0
+pg_check_dump_client "${DATABASE_URL}" || pg_rc=$?
+case "${pg_rc}" in
+  0) log "pg_dump ${PG_CLIENT_MAJOR} can dump this PostgreSQL ${PG_SERVER_MAJOR} server" ;;
+  2)
+    case "${PG_CHECK_ERROR}" in
+      "pg_dump is not installed"*|"psql is not installed"*)
+        fail "${PG_CHECK_ERROR}. Install the PostgreSQL client from the PGDG repository (postgresql-client-<server major>) -- see README-deploy.md section 7" ;;
+      *) fail "${PG_CHECK_ERROR}. Refusing to attempt a dump whose client/server compatibility is unknown." ;;
+    esac
+    ;;
+  *) fail "${PG_CHECK_ERROR}" ;;
+esac
 
 mkdir -p "${DB_DIR}"
 
@@ -89,16 +131,34 @@ S3_SECRET_KEY="${SUPABASE_S3_SECRET_ACCESS_KEY:-${SUPABASE_S3_SECRET_KEY:-}}"
 # far more prominently than an endpoint, and the endpoint is a fixed function
 # of the project URL:
 #     https://<ref>.supabase.co  ->  https://<ref>.storage.supabase.co/storage/v1/s3
+#
+# THE DERIVATION NEVER WORKED. The sed replacement below had been written
+# through a heredoc that turned its backreference into a literal 0x01 control
+# byte, so `ref` was always that one byte and the "derived" endpoint was
+# https://<0x01>.storage.supabase.co/... -- rclone then failed on the first
+# bucket, and `set -e` ended the run after the dump but before it was shipped
+# off the box. With the backreference emitted, a URL that does not match
+# passes through unchanged, which is exactly what the `!=` comparison rejects.
+# tests/scripts/backup-sh.test.mjs executes this and checks the endpoint that
+# rclone is actually handed; tests/scripts/scripts-hygiene.test.mjs rejects a
+# control byte in any shell script.
 S3_ENDPOINT="${SUPABASE_S3_ENDPOINT:-}"
+STORAGE_MIRRORED=false
+SHIPPED_OFFSITE=false
 if [ -z "${S3_ENDPOINT}" ] && [ -n "${NEXT_PUBLIC_SUPABASE_URL:-}" ]; then
-  ref="$(printf '%s' "${NEXT_PUBLIC_SUPABASE_URL}" | sed -E 's#^https?://([^.]+)\..*##')"
+  ref="$(printf '%s' "${NEXT_PUBLIC_SUPABASE_URL}" | sed -E 's#^https?://([^.]+)\..*#\1#')"
   if [ -n "${ref}" ] && [ "${ref}" != "${NEXT_PUBLIC_SUPABASE_URL}" ]; then
     S3_ENDPOINT="https://${ref}.storage.supabase.co/storage/v1/s3"
     log "derived Storage S3 endpoint for project ${ref}"
   fi
 fi
 
-if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+# The SECRET is part of the condition. Without it the script entered this
+# branch with a key and no secret, rclone failed on the first bucket, and
+# `set -e` ended the run before step 3 shipped the dump off the box -- so a
+# missing secret cost the off-site dump as well as the mirror.
+if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY}" ] \
+   && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   command -v rclone >/dev/null || fail "rclone not installed but SUPABASE_S3_* is configured"
 
   # `copy`, NOT `sync`.
@@ -129,19 +189,30 @@ if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${BACKUP_S3_BUC
   export RCLONE_CONFIG_DRDEST_TYPE=s3
   export RCLONE_CONFIG_DRDEST_PROVIDER=AWS
   export RCLONE_CONFIG_DRDEST_REGION="${AWS_REGION:-${SUPABASE_S3_REGION:-ap-south-1}}"
+  # The DESTINATION's credentials. With no keys, rclone's s3 backend is
+  # ANONYMOUS unless env_auth is on -- and this remote set neither, so every
+  # write into our private DR bucket was refused and `set -e` ended the run
+  # before the dump was shipped. env_auth takes the same chain the aws CLI in
+  # step 3 uses: AWS_* environment variables, else the EC2 instance role
+  # (README-deploy.md section 7).
+  export RCLONE_CONFIG_DRDEST_ENV_AUTH=true
 
-  for bucket in videos-original videos-hls posters pdfs; do
+  # Every bucket in packages/shared/src/storage/buckets.ts BUCKETS
+  # (tests/scripts/backup-sh.test.mjs holds the two lists equal).
+  for bucket in videos-original videos-hls posters pdfs scorm-packages; do
     log "mirroring ${bucket}"
     rclone copy \
       "SUPASRC:${bucket}" \
       "DRDEST:${BACKUP_S3_BUCKET#s3://}/storage/${bucket}" \
       --transfers 4 --checkers 8 --stats-one-line
   done
+  STORAGE_MIRRORED=true
 else
   echo "[backup] WARNING: Storage mirror SKIPPED. Needs an access key" >&2
   echo "[backup]          (SUPABASE_S3_ACCESS_KEY_ID), a secret" >&2
   echo "[backup]          (SUPABASE_S3_SECRET_ACCESS_KEY) and BACKUP_S3_BUCKET." >&2
-  echo "[backup]          The endpoint is derived from NEXT_PUBLIC_SUPABASE_URL." >&2
+  echo "[backup]          The endpoint is derived from NEXT_PUBLIC_SUPABASE_URL;" >&2
+  echo "[backup]          set SUPABASE_S3_ENDPOINT to override it (e.g. a custom domain)." >&2
   echo "[backup] WARNING: The videos are NOT being backed up. Supabase has no backup product for Storage." >&2
 fi
 
@@ -149,6 +220,7 @@ fi
 if [ -n "${BACKUP_S3_BUCKET:-}" ] && command -v aws >/dev/null; then
   log "uploading dump to ${BACKUP_S3_BUCKET}"
   aws s3 cp "${DUMP}" "${BACKUP_S3_BUCKET}/db/$(basename "${DUMP}")"
+  SHIPPED_OFFSITE=true
 else
   echo "[backup] WARNING: dump kept only on this host — a host failure loses it too." >&2
 fi
@@ -160,4 +232,7 @@ log "pruning local dumps older than ${KEEP_DAILY} days"
 find "${DB_DIR}" -name 'gml-*.dump.gz' -mtime "+${KEEP_DAILY}" -delete
 
 date -u +%Y-%m-%dT%H:%M:%SZ > "${BACKUP_ROOT}/last-backup.txt"
+BACKUP_RECORDED=1
+audit_host_job backup.complete \
+  "{\"dump\":\"$(basename "${DUMP}")\",\"bytes\":${size},\"storage_mirrored\":${STORAGE_MIRRORED},\"shipped_offsite\":${SHIPPED_OFFSITE}}"
 log "complete"

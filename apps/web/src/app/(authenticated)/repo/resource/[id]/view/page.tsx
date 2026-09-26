@@ -15,16 +15,20 @@
 //
 // Anti-download is a deterrent, not DRM — we say so out loud in the footer.
 
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { uuidOrNotFound } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
 import { PdfViewer } from "@/components/pdf/PdfViewer";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = { title: "Reading viewer" };
 
 export default async function RepoResourceViewPage({
   params,
@@ -34,7 +38,8 @@ export default async function RepoResourceViewPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const { id } = await params;
+  // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
+  const id = uuidOrNotFound((await params).id);
 
   const [res] = await db
     .select()

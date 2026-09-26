@@ -26,7 +26,11 @@ test("spec 114: all five spec-kit files are present", () => {
 test("spec 114: updateRowAction is exported from actions.ts and uses db.update + eq + zod", () => {
   const src = read(ACTIONS);
   assert.match(src, /export async function updateRowAction/, "updateRowAction must be exported");
-  assert.match(src, /db\s*\n?\s*\.update\(/, "updateRowAction must call db.update(...)");
+  // `tx.update` as well as `db.update`: the update now reads and locks the row
+  // inside a transaction first (a state guard and an audit before-image need
+  // the current row; tests/behaviour/admin-cycle-lock.test.ts), so the write
+  // goes through the transaction handle.
+  assert.match(src, /(?:db|tx)\s*\n?\s*\.update\(/, "updateRowAction must call db.update(...) / tx.update(...)");
   assert.match(src, /\.where\(eq\(/, "updateRowAction must use eq(...) to scope the update by id");
   assert.match(src, /entity\.formSchema\.safeParse/, "updateRowAction must validate via the entity's Zod formSchema");
 });

@@ -116,7 +116,7 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   cycle: {
     title: "Observation cycle",
     short: "One round of pre-form → lesson → post-form → sign-off, run between a teacher and a mentor.",
-    long: "A cycle is one complete round of observation. It has a unique ID (like c2026-001), a date, a topic, a kind (baseline, developmental or evaluative), and moves through five stages. A teacher can have several cycles in a year.",
+    long: "A cycle is one complete round of observation. It has a unique code (like OBS-2026-001), a date, a topic, a kind (baseline, developmental or evaluative), and moves through five stages. A teacher can have several cycles in a year.",
     related: ["pre_form", "post_form", "sign_off", "kind", "status"],
   },
   pre_form: {
@@ -164,9 +164,11 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
 
   // ── RTT structure ──────────────────────────────────────────────────────────
   rtt: {
-    title: "RTT — Recruit, Train, Transform",
-    short: "Our three-phase programme to grow a teacher from new recruit to confident classroom leader.",
-    long: "RTT stands for Recruit, Train, Transform. It is the three-phase journey every teacher goes through over two years: Phase 1 (Foundational), Phase 2 (Application), Phase 3 (Mastery & Certification).",
+    // Refresher Teacher Training, as the page metadata and teach-back say; this
+    // entry and the sign-in page expanded it as "Recruit, Train, Transform".
+    title: "RTT — Refresher Teacher Training",
+    short: "Our three-phase programme that takes a teacher from refresher training to confident classroom leader.",
+    long: "RTT stands for Refresher Teacher Training. It is the three-phase journey every teacher goes through over two years: Phase 1 (Foundational), Phase 2 (Application), Phase 3 (Mastery & Certification).",
     related: ["phase", "phase_1", "phase_2", "phase_3"],
     seeAlso: ["/rtt"],
   },
@@ -278,28 +280,51 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
   // ── Video pipeline ─────────────────────────────────────────────────────────
   watermark: {
     title: "Watermark",
-    short: "Faint text across the video showing who is watching. Stops videos being shared outside.",
-    long: "Every classroom video has a watermark — your username and the current date — drawn faintly across every frame. This is so videos can't be copied and shared. If a video ever leaks, the watermark shows whose account it came from.",
+    short: "Your name and the time, shown over the player while you watch. A reminder that classroom videos stay inside the programme.",
+    long: "While you watch a classroom video, your name and the current date and time are shown over the player, and every view is logged. The watermark is on the player, not in the video file itself, so it is a reminder rather than a lock: please do not share, download or re-record classroom videos.",
     related: ["confidentiality", "audit"],
   },
   hls: {
     title: "HLS streaming",
-    short: "Smart streaming that adjusts video quality to your network — works even on 2G.",
-    long: "HLS is the technology that lets the video player automatically drop to 240p when your network is weak and bump back to 720p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
+    short: "Streaming in short pieces that adjusts quality to your connection, so a video starts quickly and keeps playing on a weak signal.",
+    long: "HLS sends a video in short pieces rather than as one large file, so playback starts before the whole video has arrived and a dropped connection only costs the piece in flight. Each video is streamed in up to three versions, 240p, 360p and 480p, and the player drops to 240p (about 250 kbps) when your network is weak and comes back up to 480p when it's strong. This is why videos play even in remote Ladakh schools on patchy 3G.",
     related: ["video", "upload"],
   },
   transcoding: {
     title: "Transcoding",
-    short: "What happens to a video after upload — we re-make it in several sizes so it plays everywhere.",
-    long: "When a teacher uploads a video, our server processes it into four versions: 240p (low-band), 480p (default), 720p (sharp), and audio-only. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
+    short: "What happens to a video after upload — we re-make it as a 240p, 360p and 480p stream that plays in the browser.",
+    long: "When a teacher uploads a video, our server converts it into three versions for streaming: 240p for a weak signal, 360p, and 480p, the sharpest (a video recorded smaller than that is never enlarged, so it gets only the versions that fit), plus a still frame for the video library. The player moves between them by itself as your signal changes. This takes a few minutes. While the system is transcoding, you'll see a 'Transcoding…' badge.",
     related: ["video", "upload", "hls"],
   },
   whatsapp_ingest: {
     title: "WhatsApp upload",
     short: "Forward your lesson video to our WhatsApp number — it comes straight into the system.",
-    long: "Many of our teachers find it easier to send videos via WhatsApp than upload through the app. Forward your video to the programme WhatsApp number with the caption #c2026-XXX (your cycle ID) and it will land in the right place automatically.",
+    long: "Many of our teachers find it easier to send videos via WhatsApp than upload through the app. Send your video to the programme WhatsApp number with your cycle code as the caption, for example OBS-2026-009 (the code is shown on your cycle's page), and it will land on that cycle automatically. A long lesson can be attached as a document instead.",
     related: ["upload", "video", "cycle"],
     seeAlso: ["/uploads"],
+  },
+  // The next three entries (and the "start" group below) carry what the mobile
+  // help sheet used to say in five hardcoded bullets, before its ? button was
+  // pointed at this panel. "password" in particular was the only in-app
+  // instruction a locked-out teacher had, and existed nowhere else.
+  upload: {
+    title: "Uploading from the browser",
+    short: "You can also upload a lesson video straight from this app — best on stable wifi.",
+    long: "Direct browser upload works on a phone or a computer. It resumes if your connection drops, but a large video needs a steady link, so use stable wifi where you can. On a slow or patchy network, sending the video by WhatsApp is easier. Either way, your videos appear on your Uploads page within a few minutes.",
+    related: ["whatsapp_ingest", "transcoding", "video"],
+    seeAlso: ["/uploads"],
+  },
+  navigation: {
+    title: "Finding your way around",
+    short: "On a phone, use the bottom tabs to switch between sections. On a computer, use the sidebar.",
+    long: "Every section you can use is one tap away: the bottom tabs on a phone, the sidebar on the left on a computer. Your settings, including the interface language, are under Settings in the sidebar on a computer, and behind your initial at the top of the screen on a phone. The ? button opens this help from anywhere.",
+    related: ["password", "confidentiality"],
+  },
+  password: {
+    title: "Forgot your password?",
+    short: "Ask your programme admin to send you a sign-in link — it lets you in without the password.",
+    long: "If you cannot sign in, ask your programme admin to send a sign-in link to your email address. Open the link on the device you want to use, then set a new password from Settings. The section gate password (for Observation, Mentorship and Admin) is different: your programme admin shares that one separately.",
+    related: ["section_gate", "navigation"],
   },
 
   // ── Auth / security ────────────────────────────────────────────────────────
@@ -362,6 +387,14 @@ export const HELP: Readonly<Record<string, HelpEntry>> = Object.freeze({
 
 /** Topic groups used in HelpPanel's "Browse all" view. */
 export const HELP_GROUPS: ReadonlyArray<{ id: string; title: string; keys: readonly string[] }> = Object.freeze([
+  // First, because it is what a new or stuck user needs; it is also where the
+  // mobile help sheet's bullets went (see the upload / navigation / password
+  // entries above).
+  {
+    id: "start",
+    title: "Getting started",
+    keys: ["navigation", "whatsapp_ingest", "upload", "confidentiality", "password"],
+  },
   { id: "core", title: "Core ideas", keys: ["rtt", "phase", "observation", "cycle", "pairing", "quarter"] },
   {
     id: "people",

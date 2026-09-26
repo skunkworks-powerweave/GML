@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { rttSessions } from "@gml/db/schema";
+// Relative, not @/: the registry is imported by tests with no path alias.
+import { webLink } from "../../lib/rtt/links";
 import type { AdminEntity } from "../types";
 
 // RTT sessions — the webinars, live quizzes and asynchronous units that make up
@@ -37,7 +39,22 @@ export const rttSessionsEntity: AdminEntity = {
     scheduledAt: z.coerce.date().optional().nullable(),
     durationMin: z.coerce.number().int().min(1).max(600).optional().nullable(),
     platform: z.string().max(80).optional().nullable(),
-    linkOrRecording: z.string().max(2000).optional().nullable(),
+    // http(s) only, as rtt-readings: it becomes the Join/Watch href on every
+    // teacher's subject page and calendar. It was any string, so a Meet link
+    // pasted as Meet displays it ("meet.google.com/...", no scheme) became a
+    // relative link that 404'd inside the app at session time. A bare host is
+    // stored with https:// (lib/rtt/links.ts); anything else is refused.
+    linkOrRecording: z
+      .preprocess(
+        (v) => (typeof v === "string" && v.trim() !== "" ? (webLink(v) ?? v) : v),
+        z
+          .string()
+          .max(2000)
+          .regex(/^https?:\/\//i, "Must be a web link, e.g. https://meet.google.com/abc-defg-hij")
+          .url(),
+      )
+      .optional()
+      .nullable(),
     notes: z.string().max(5000).optional().nullable(),
   }),
   formFields: [

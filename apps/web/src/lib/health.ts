@@ -1,6 +1,9 @@
 // Sub-system health pings used by /api/health.
-// Dynamic imports so this module doesn't crash if @gml/db / the queue client / etc. aren't
-// installed yet (specs 004+ land them).
+
+// Data only: importing it opens nothing (the pool is imported lazily below).
+import migrationsJournal from "@gml/db/migrations/journal";
+import { BUCKETS } from "@gml/shared/storage/buckets";
+import { UNRESOLVED_DEAD_SQL } from "@gml/db/queue";
 
 export type PingResult = {
   ok: boolean;
@@ -15,8 +18,18 @@ export type MigrationsResult = {
 };
 
 /**
- * Both database probes below connect with DATABASE_URL — the SAME string the
- * application itself uses.
+ * Both database probes below go through the APPLICATION'S OWN POOL
+ * (packages/db/src/client.ts), so they fail exactly when the app's queries do.
+ *
+ * They used to build a private pg.Pool from DATABASE_URL. The app's pool does
+ * not use the URL alone: with no `sslmode` in it, it forces TLS for the
+ * Supabase pooler. The probes' pools did not, so against a Postgres without TLS
+ * every page returned 500 ("The server does not support SSL connections")
+ * while /api/health reported `db: true`. A new pool per probe also opened and
+ * tore down a connection every 30 seconds for nothing.
+ *
+ * Earlier still, they connected with POSTGRES_* variables rather than
+ * DATABASE_URL:
  *
  * They used to assemble a connection from POSTGRES_HOST / POSTGRES_PORT /
  * POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD, which is a different
@@ -34,29 +47,14 @@ export type MigrationsResult = {
  * real dependency is down, and red when it is fine.
  */
 export async function pingDb(): Promise<PingResult> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) return { ok: false, detail: "DATABASE_URL not set" };
-  const { Pool } = await import("pg");
-  const pool = new Pool({
-    connectionString,
-    // 5s, not 2s. The database is in another region now; a 2-second budget
-    // turns ordinary latency into a reported outage.
-    connectionTimeoutMillis: 5000,
-    max: 1,
-  });
+  if (!process.env.DATABASE_URL) return { ok: false, detail: "DATABASE_URL not set" };
   try {
-    await pool.query("SELECT 1");
+    // The pool's own connectionTimeoutMillis (5s) bounds a hung connect.
+    const { getPool } = await import("@gml/db");
+    await getPool().query("SELECT 1");
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
-  } finally {
-    // `finally`, not the happy path only. Previously pool.end() ran solely after
-    // a successful query, so every FAILED probe leaked a pg.Pool and its
-    // reconnect timers. With a 30s healthcheck interval against a flapping
-    // database that accumulates sockets until the process dies -- i.e. the
-    // health check itself became the outage. pingMigrations() already had this
-    // right; pingDb did not.
-    await pool.end().catch(() => undefined);
   }
 }
 
@@ -90,15 +88,86 @@ export async function pingStorage(): Promise<PingResult> {
     if (!res.ok) return { ok: false, detail: `status ${res.status}` };
     const buckets = (await res.json()) as { name: string }[];
     const names = new Set(buckets.map((b) => b.name));
-    const missing = ["videos-original", "videos-hls", "posters", "pdfs"].filter(
-      (b) => !names.has(b),
-    );
+    // Every bucket the app writes: a hand-written list left out
+    // scorm-packages, so a deployment without it reported healthy while
+    // every SCORM upload and launch failed.
+    const missing = Object.values(BUCKETS).filter((b) => !names.has(b));
     return missing.length === 0
       ? { ok: true }
       : { ok: false, detail: `missing buckets: ${missing.join(", ")}` };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * WhatsApp ingest: how it is configured, and whether it is working.
+ *
+ * ── WHY ──────────────────────────────────────────────────────────────────────
+ *
+ * Nothing reported this. With WHATSAPP_APP_SECRET set and WHATSAPP_ACCESS_TOKEN
+ * empty -- the state docker-compose accepts -- the webhook accepted every video
+ * and none could be fetched, while /api/health said ok. The secret switches the
+ * webhook ON; the verify token is what Meta's handshake checks; the access
+ * token is what fetches media and sends replies; the phone number id is what
+ * replies are sent from. Each one missing breaks something different, so each
+ * is named.
+ *
+ * NOT part of readiness. WhatsApp is switched on after go-live, so "off" is a
+ * legitimate state for a healthy LMS, and a Meta problem must not restart the
+ * web container. This is reported beside the probes, never ANDed into `ok`.
+ *
+ * Names only, never values.
+ */
+export type WhatsAppHealth = {
+  state: "off" | "partial" | "on";
+  /** The WHATSAPP_* variables that are unset, when the secret is set. */
+  missing: string[];
+  /** Media fetches waiting for (or being retried by) the worker. */
+  pendingFetches: number | null;
+  /** Fetches that gave up in the last 24 hours. */
+  deadFetches24h: number | null;
+  /** The last time a WhatsApp video was fetched into Storage. */
+  lastFetchedAt: string | null;
+};
+
+const WHATSAPP_REQUIRED = [
+  "WHATSAPP_VERIFY_TOKEN",
+  "WHATSAPP_ACCESS_TOKEN",
+  "WHATSAPP_PHONE_NUMBER_ID",
+] as const;
+
+/** Configuration only: cheap, no database. */
+export function whatsappConfig(env: Record<string, string | undefined> = process.env): Pick<WhatsAppHealth, "state" | "missing"> {
+  if (!env.WHATSAPP_APP_SECRET?.trim()) return { state: "off", missing: [] };
+  const missing = WHATSAPP_REQUIRED.filter((k) => !env[k]?.trim());
+  return { state: missing.length === 0 ? "on" : "partial", missing };
+}
+
+export async function whatsappHealth(): Promise<WhatsAppHealth> {
+  const config = whatsappConfig();
+  const out: WhatsAppHealth = { ...config, pendingFetches: null, deadFetches24h: null, lastFetchedAt: null };
+  if (!process.env.DATABASE_URL) return out;
+  try {
+    const { getPool } = await import("@gml/db");
+    const q = await getPool().query<{ pending: string; dead: string; last: Date | null }>(`
+      SELECT
+        (SELECT count(*) FROM jobs WHERE queue = 'whatsapp' AND name = 'whatsapp_fetch'
+            AND status IN ('queued', 'running'))::text AS pending,
+        -- updated_at for a job the lease reaper dead-lettered before it set
+        -- completed_at (packages/db/src/queue.ts, reapExpiredLeases).
+        (SELECT count(*) FROM jobs WHERE queue = 'whatsapp' AND name = 'whatsapp_fetch'
+            AND ${UNRESOLVED_DEAD_SQL} AND coalesce(completed_at, updated_at) > now() - interval '24 hours')::text AS dead,
+        (SELECT max(created_at) FROM audit_log WHERE action = 'whatsapp.media.fetched') AS last
+    `);
+    const row = q.rows[0];
+    out.pendingFetches = Number(row?.pending ?? 0);
+    out.deadFetches24h = Number(row?.dead ?? 0);
+    out.lastFetchedAt = row?.last ? new Date(row.last).toISOString() : null;
+  } catch {
+    // The database probe reports the database; this stays configuration-only.
+  }
+  return out;
 }
 
 /**
@@ -113,61 +182,23 @@ export async function pingStorage(): Promise<PingResult> {
  * diagnose without needing shell access to the DB.
  */
 export async function pingMigrations(): Promise<MigrationsResult> {
-  // Expected: count entries in the journal shipped with the build.
-  let expected = 0;
-  try {
-    const { readFileSync } = await import("node:fs");
-    const { resolve } = await import("node:path");
-    // process.cwd() during `next start` / `next dev` is the repo root in
-    // dev and the apps/web folder in standalone builds. Try both.
-    const candidates = [
-      resolve(process.cwd(), "packages/db/src/migrations/meta/_journal.json"),
-      resolve(process.cwd(), "../../packages/db/src/migrations/meta/_journal.json"),
-    ];
-    let journalRaw: string | null = null;
-    for (const p of candidates) {
-      try {
-        journalRaw = readFileSync(p, "utf8");
-        break;
-      } catch {
-        // try next candidate
-      }
-    }
-    if (journalRaw === null) {
-      return {
-        ok: false,
-        applied: 0,
-        expected: 0,
-        error: "_journal.json not found",
-      };
-    }
-    const journal = JSON.parse(journalRaw) as { entries?: unknown[] };
-    expected = Array.isArray(journal.entries) ? journal.entries.length : 0;
-  } catch (err) {
-    return {
-      ok: false,
-      applied: 0,
-      expected: 0,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
+  // Expected: the entries of the journal this build was made from, imported
+  // statically so it is part of the build. It was read at request time from
+  // paths built on process.cwd(), which Next's file tracer cannot resolve to
+  // one file: it counted all of apps/web as reachable from /api/health and
+  // copied it -- src, READMEs, tsconfig.tsbuildinfo -- into .next/standalone,
+  // and the answer depended on where the process was started.
+  const entries = (migrationsJournal as { entries?: unknown[] }).entries;
+  const expected = Array.isArray(entries) ? entries.length : 0;
 
-  // Applied: query the drizzle.__drizzle_migrations table.
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
+  // Applied: query the drizzle.__drizzle_migrations table, through the app's pool.
+  if (!process.env.DATABASE_URL) {
     return { ok: false, applied: 0, expected, error: "DATABASE_URL not set" };
   }
-  let pool: import("pg").Pool | null = null;
   try {
-    const { Pool } = await import("pg");
-    pool = new Pool({
-      connectionString,
-      // 5s, matching pingDb: the database is in another region.
-      connectionTimeoutMillis: 5000,
-      max: 1,
-    });
+    const { getPool } = await import("@gml/db");
     try {
-      const res = await pool.query<{ count: string }>(
+      const res = await getPool().query<{ count: string }>(
         "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations",
       );
       const applied = Number(res.rows[0]?.count ?? 0);
@@ -186,8 +217,6 @@ export async function pingMigrations(): Promise<MigrationsResult> {
         };
       }
       return { ok: false, applied: 0, expected, error: msg };
-    } finally {
-      await pool.end();
     }
   } catch (err) {
     return {

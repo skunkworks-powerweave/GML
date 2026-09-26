@@ -21,9 +21,13 @@
 .github
 .claude
 
-# Secrets. Never in an image layer.
-.env
-.env.*
+# Secrets. Never in an image layer -- AT ANY DEPTH. Docker matches these
+# against paths from the context root, so the old `.env` / `.env.*` excluded
+# only the root's own: an apps/web/.env or .env.production on the build machine
+# entered the context, `next build` loaded it (inlining any NEXT_PUBLIC_*
+# value), and Next's standalone writer copied it into the runtime image.
+**/.env
+**/.env.*
 !.env.example
 
 # Local/runtime state and docs that no build step reads.

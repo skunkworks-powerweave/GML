@@ -19,15 +19,75 @@
 // keystrokes in devtools and absent entirely from a direct POST to the server
 // action — which is a URL, not a private channel.
 
+/**
+ * An option as stored in feedback_forms.schema. Most seeds write plain strings;
+ * seed_forms_mentee.ts writes `{ value, label, hindiLabel }` objects. Both
+ * renderers normalise the two (FormRenderer.tsx::normalizeOptions) and SUBMIT
+ * THE VALUE, so the validator has to compare against values too.
+ */
+export type FormFieldOption = string | { value: string; label?: string; hindiLabel?: string };
+
 export type FormField = {
   name: string;
   kind: string;
   label?: string;
   required?: boolean;
-  options?: string[];
+  options?: FormFieldOption[];
   min?: number;
   max?: number;
+  /** A likert's point labels; the renderers draw one point per label (5 by default). */
+  likertLabels?: readonly string[];
+  /** A rating's star count (5 by default), as the renderers draw it. */
+  starsMax?: number;
 };
+
+/**
+ * The range a numeric field's answer must fall in, when the schema declares
+ * none of its own.
+ *
+ * Only the school-visit hygiene rating declared min/max; every other seeded
+ * likert, rating and number field declared neither, and the server accepted
+ * any finite number -- a crafted POST stored 9 on a 1-5 confidence scale and
+ * -3 years of teaching. A likert or rating answer is what its renderer can
+ * produce: a WHOLE point from 1 to the number of points it draws. A number
+ * with no declared minimum is a count or a duration here (years, meetings,
+ * sessions), so it cannot be negative. A declared min/max always wins.
+ */
+function numericBounds(field: FormField): { min?: number; max?: number; integer: boolean } {
+  if (field.kind === "likert") {
+    const points = Array.isArray(field.likertLabels) && field.likertLabels.length > 0 ? field.likertLabels.length : 5;
+    return { min: field.min ?? 1, max: field.max ?? points, integer: true };
+  }
+  if (field.kind === "rating") {
+    const stars = typeof field.starsMax === "number" && field.starsMax > 0 ? field.starsMax : 5;
+    return { min: field.min ?? 1, max: field.max ?? stars, integer: true };
+  }
+  if (field.kind === "number") return { min: field.min ?? 0, max: field.max, integer: false };
+  return { min: field.min, max: field.max, integer: false };
+}
+
+/**
+ * The submit-able values of a field's options.
+ *
+ * `new Set(field.options)` over object options was a Set of object references,
+ * which never contains the string a renderer submits -- so the mentee final
+ * form's required `would_recommend` radio rejected both "yes" and "no" and the
+ * form could not be submitted by anyone. A malformed entry (null, or an object
+ * with no string value) contributes nothing rather than throwing inside a
+ * server action or becoming the literal string "undefined".
+ *
+ * Deliberately NOT imported from FormRenderer: that module is "use client".
+ */
+export function optionValues(options: readonly unknown[]): Set<string> {
+  const out = new Set<string>();
+  for (const o of options) {
+    if (typeof o === "string") out.add(o);
+    else if (o && typeof o === "object" && typeof (o as { value?: unknown }).value === "string") {
+      out.add((o as { value: string }).value);
+    }
+  }
+  return out;
+}
 
 export type ValidationError = { field: string; message: string };
 
@@ -37,8 +97,26 @@ export type ValidationError = { field: string; message: string };
  * Not a style preference: these land in a jsonb column that administrators
  * read, and without a bound one submission can push an arbitrary payload into
  * a surface someone will later open.
+ *
+ * Exported so an input can carry the same cap as maxLength (the observation
+ * stage forms do): refused on the server, it is a redirect, and the user finds
+ * out only after typing past it.
  */
-const MAX_TEXT_LENGTH = 5000;
+export const MAX_TEXT_LENGTH = 5000;
+
+/**
+ * A text answer with its line breaks as the browser counted them: LF, one
+ * character each.
+ *
+ * A textarea's maxlength counts a line break as one character, but a form
+ * posts every line break as CRLF, and the server's decoders keep the CR. So an
+ * answer the browser allowed at exactly MAX_TEXT_LENGTH arrived one character
+ * longer per line break and was refused as too long. Lengths are measured on
+ * this, and the observation stage forms store it.
+ */
+export function normaliseLineBreaks(s: string): string {
+  return s.replace(/\r\n?/g, "\n");
+}
 
 /**
  * Kinds whose stored answer is a number, not one of `options`.
@@ -87,7 +165,7 @@ export function validateResponses(
     }
 
     for (const raw of values) {
-      if (raw.length > MAX_TEXT_LENGTH) {
+      if (normaliseLineBreaks(raw).length > MAX_TEXT_LENGTH) {
         errors.push({
           field: field.name,
           message: `${label} is too long (max ${MAX_TEXT_LENGTH} characters).`,
@@ -110,7 +188,8 @@ export function validateResponses(
     // constraint for these kinds, and it is stricter: it enforces min/max
     // rather than mere membership.
     if (field.options && field.options.length > 0 && !NUMERIC_KINDS.has(field.kind)) {
-      const allowed = new Set(field.options);
+      // Values, not the raw entries: see optionValues().
+      const allowed = optionValues(field.options);
       for (const v of values) {
         if (!allowed.has(v)) {
           errors.push({
@@ -122,29 +201,37 @@ export function validateResponses(
       }
     }
 
-    // NUMBERS.
+    // NUMBERS, within the field's declared range or its implicit one
+    // (numericBounds above).
     if (NUMERIC_KINDS.has(field.kind)) {
+      const { min, max, integer } = numericBounds(field);
       for (const v of values) {
         const n = Number(v);
         if (!Number.isFinite(n)) {
           errors.push({ field: field.name, message: `${label} must be a number.` });
           break;
         }
-        if (field.min !== undefined && n < field.min) {
-          errors.push({ field: field.name, message: `${label} must be at least ${field.min}.` });
+        if (integer && !Number.isInteger(n)) {
+          errors.push({ field: field.name, message: `${label} must be a whole number.` });
           break;
         }
-        if (field.max !== undefined && n > field.max) {
-          errors.push({ field: field.name, message: `${label} must be at most ${field.max}.` });
+        if (min !== undefined && n < min) {
+          errors.push({ field: field.name, message: `${label} must be at least ${min}.` });
+          break;
+        }
+        if (max !== undefined && n > max) {
+          errors.push({ field: field.name, message: `${label} must be at most ${max}.` });
           break;
         }
       }
       continue;
     }
 
-    // Non-numeric fields can still carry min/max as a length bound.
+    // Non-numeric fields can still carry min/max as a length bound, counted
+    // as the browser counts it (normaliseLineBreaks).
     if (field.min !== undefined || field.max !== undefined) {
-      for (const v of values) {
+      for (const raw of values) {
+        const v = normaliseLineBreaks(raw);
         if (field.min !== undefined && v.length < field.min) {
           errors.push({
             field: field.name,

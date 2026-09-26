@@ -51,6 +51,21 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL=postgres://build:build@127.0.0.1:5432/build
 RUN pnpm exec next build
 
+# Ship the compiled server, not the source. pingMigrations() (src/lib/health.ts)
+# used to read a path built from process.cwd(), which the file tracer cannot
+# resolve, so it traced the whole apps/web directory into .next/standalone:
+# all of src/, tsconfig.tsbuildinfo, the READMEs. It now imports the migration
+# journal statically, which removes that cause. This stays as the guard for
+# the next one: a single dynamic read anywhere puts the source back into the
+# standalone tree, and nothing else would notice. None of it runs -- the
+# server is .next/server. Removed HERE, before the runner copies the
+# directory, so no layer of the published image holds any of it; likewise
+# any .env file Next copied in (.dockerignore already keeps them out of the
+# build context).
+RUN cd .next/standalone/apps/web \
+ && rm -rf src tsconfig.tsbuildinfo README.md AGENTS.md CLAUDE.md \
+ && rm -f .env .env.*
+
 # ── runner ─────────────────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION} AS runner
 WORKDIR /app

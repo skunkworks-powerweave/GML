@@ -29,10 +29,12 @@ export const DEFAULT_LOCALE: Locale = "en";
 /**
  * Name of the cookie carrying the UI locale.
  *
- * `user_prefs.uiLanguage` remains the source of truth; this cookie is the
- * read path for code that cannot hit the database -- notably the next-intl
- * request config, which runs on every server render. It was previously a bare
- * "gml-locale" string literal repeated across four files.
+ * `user_prefs.uiLanguage` is the source of truth for a signed-in user; this
+ * cookie is the pre-auth picker's choice, and what ./resolve.ts falls back to
+ * when nobody is signed in or nothing has been saved yet. It is NOT a mirror
+ * the server can rely on: nothing writes it at sign-in, which is why reading
+ * it alone rendered the chrome in a different language from the layouts. It
+ * was previously a bare "gml-locale" string literal repeated across four files.
  */
 export const LOCALE_COOKIE = "gml-locale";
 
@@ -47,11 +49,12 @@ export const LOCALE_LABELS: Record<Locale, { label: string; native: string; scri
  * Source of truth for the messages bundles. Order matters: `en` is the
  * fallback locale.
  *
- * Spec 169 — values may now be either a flat `string` (the original
- * shape, kept for back-compat with most chrome namespaces) OR a nested
- * object of strings (used by the new `login.forgot.*` / `login.reset.*`
- * branches so the keys read naturally as `t("forgot.title")` etc.).
- * `loadMessages` walks both shapes per-key.
+ * Spec 169 — values may be either a flat `string` OR a nested object of
+ * strings; `loadMessages` walks both shapes per-key. (The nested
+ * `login.forgot.*` / `login.reset.*` / `forbidden.*` branches that
+ * introduced this were deleted in the 2026-09 freeze: no page ever read them,
+ * and their copy described a lockout and an SMTP flag that no longer exist.
+ * The nested shape is still supported for whoever needs it next.)
  */
 type MessageValue = string | { [key: string]: MessageValue };
 type MessageNamespace = Record<string, MessageValue>;
@@ -86,11 +89,10 @@ export function normalizeLocale(value: string | null | undefined): Locale {
  * In development a `console.warn` is emitted per missing key so the gap is
  * visible during translation work.
  *
- * Spec 169 — the bo (Bhoti / Ladakhi) bundle currently ships with EMPTY-
- * STRING placeholders for the new `login.forgot.*` / `login.reset.*` /
- * `forbidden.*` keys (the strings are awaiting a Ladakhi translator). An
- * empty string here counts as MISSING so the English fallback wins and
- * the chrome remains readable. A `console.warn` is emitted for any empty
+ * An empty string counts as MISSING, so a placeholder a translator has not
+ * filled yet falls back to English and the chrome remains readable. (bo.json
+ * no longer ships any: tests/behaviour/ui-i18n.test.ts requires every en key
+ * to be present and non-empty in hi and bo.) A `console.warn` is emitted for any empty
  * bo key when NODE_ENV !== 'production' so the gap is loud during
  * translation work. Production stays silent to keep the log channel
  * unspammed.
@@ -156,15 +158,21 @@ export function loadMessages(locale: Locale): MessageBundle {
 }
 
 /**
- * Map of locale → CSS font-family override. Hindi gets the Devanagari font
- * stack (`--deva`); English and Tibetan stay on the default sans / Tibetan
- * system fonts. Applied as an inline style on the `<html>` element by the
- * authenticated layout so the rule wins over per-component overrides.
+ * Map of locale → CSS font-family override. Hindi gets the Devanagari stack
+ * (`--deva`), Bhoti the Tibetan stack (`--tib`), both backed by the faces
+ * app/layout.tsx self-hosts; English keeps the default sans.
+ *
+ * Applied as an inline style on the locale WRAPPER <div> in
+ * (authenticated)/layout.tsx and login/layout.tsx -- not on <html>, as this
+ * comment used to claim. It is only inherited, so a component that sets its
+ * own font-family (the mono labels, the serif headings) overrides it, and
+ * script glyphs inside it fall back to whatever the system has. Put the
+ * .deva / .tib class on script text that sits inside such a component.
  */
 export const LOCALE_FONT_FAMILY: Record<Locale, string | undefined> = {
   en: undefined,
   hi: "var(--deva)",
-  bo: undefined,
+  bo: "var(--tib)",
 };
 
 /** ISO language code used for the `<html lang>` attribute. */

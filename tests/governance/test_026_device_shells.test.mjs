@@ -35,7 +35,10 @@ test("NAV_BY_ROLE has all 5 roles with role-aware sections", () => {
   assert.match(src, /gate:\s*"admin"/);
 });
 
-test("TABS_BY_ROLE has all 5 roles with ≤5 tabs each", () => {
+// Title corrected: it said "≤5 tabs each" but only ever asserted the export,
+// and the teacher bar now has six (uploads). The tab contents are executed in
+// tests/behaviour/ui-navigation.test.ts.
+test("TABS_BY_ROLE is exported for the mobile tab bar", () => {
   const src = read("apps/web/src/config/nav.ts");
   assert.match(src, /export const TABS_BY_ROLE/);
 });
@@ -49,7 +52,11 @@ test("Sidebar + BottomTabs + Topbar exist", () => {
 test("DesktopShell + MobileShell exist and accept children", () => {
   for (const shell of ["DesktopShell", "MobileShell"]) {
     const src = read(`apps/web/src/components/shells/${shell}.tsx`);
-    assert.match(src, new RegExp(`export function ${shell}`));
+    // `(async )?`: MobileShell became an async server component (F134) so its
+    // own header controls can be translated with getTranslations(), as
+    // BottomTabs, Sidebar and Topbar already are. The invariant is that the
+    // shell is an exported component taking children, not that it is sync.
+    assert.match(src, new RegExp(`export (async )?function ${shell}`));
     assert.match(src, /children/);
   }
 });

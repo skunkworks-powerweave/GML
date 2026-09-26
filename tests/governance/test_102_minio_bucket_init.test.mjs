@@ -25,7 +25,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,6 +34,23 @@ const read = (rel) => readFileSync(resolve(root, rel), "utf8");
 
 const MIGRATION = "packages/db/src/migrations/_post/005_storage_buckets_and_policies.sql";
 const BUCKETS_MODULE = "packages/shared/src/storage/buckets.ts";
+const POST_DIR = "packages/db/src/migrations/_post";
+
+/**
+ * Every ledgered _post file that creates buckets, concatenated. 005 created
+ * the first four; a later feature adds its own bucket in its own file (009,
+ * SCORM) rather than editing a ledgered migration that has already run --
+ * migrate.ts would never re-apply an edit. The invariant is unchanged: the
+ * buckets the migrations create are exactly the ones @gml/shared names.
+ */
+function bucketSql() {
+  return readdirSync(resolve(root, POST_DIR))
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => read(`${POST_DIR}/${f}`))
+    .filter((sql) => /INSERT INTO storage\.buckets/.test(sql))
+    .join("\n");
+}
 
 /** The bucket ids the migration inserts. */
 function migrationBuckets(sql) {
@@ -62,7 +79,7 @@ test("spec 102: buckets are created by a migration, not by a container", () => {
 });
 
 test("spec 102: there is exactly one list of bucket names, and it matches", () => {
-  const fromSql = migrationBuckets(read(MIGRATION)).sort();
+  const fromSql = migrationBuckets(bucketSql()).sort();
   const fromTs = declaredBuckets(read(BUCKETS_MODULE)).sort();
   assert.ok(fromSql.length >= 4, `migration must declare the buckets, found: ${fromSql.join(", ")}`);
   assert.deepEqual(
@@ -75,7 +92,7 @@ test("spec 102: there is exactly one list of bucket names, and it matches", () =
 });
 
 test("spec 102: every bucket is PRIVATE", () => {
-  const sql = read(MIGRATION);
+  const sql = bucketSql();
   const publicRows = [...sql.matchAll(/\(\s*'[a-z-]+',\s*'[a-z-]+',\s*(true|false),/g)]
     .map((m) => m[1])
     .filter((v) => v === "true");
@@ -89,7 +106,7 @@ test("spec 102: every bucket is PRIVATE", () => {
 });
 
 test("spec 102: every bucket has a server-side size cap", () => {
-  const rows = [...read(MIGRATION).matchAll(/\(\s*'([a-z-]+)',\s*'\1',\s*false,\s*(\d+)/g)];
+  const rows = [...bucketSql().matchAll(/\(\s*'([a-z-]+)',\s*'\1',\s*false,\s*(\d+)/g)];
   assert.ok(rows.length >= 4, "expected a size limit on each bucket");
   for (const [, name, limit] of rows) {
     assert.ok(
