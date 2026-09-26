@@ -79,11 +79,12 @@ test("F126: every sidebar item and heading, for every role, renders its own labe
   assert.deepEqual([...wrong], [], "sidebar labels that are English, missing or the wrong role's wording");
 });
 
-test("F126: in English the role-specific wording survives (a mentor's videos item is 'Pending review')", async () => {
+test("F126: in English the role-specific wording survives (a mentor's teach-back item is 'Pending review')", async () => {
   // The regression the ITEM_KEY exclusion was guarding against.
   const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
   const mentor = sidebarLabels(await render(h(Sidebar, { role: "mentor" })));
-  assert.equal(mentor.get("videos"), "Pending review");
+  assert.equal(mentor.get("teach-back"), "Pending review");
+  assert.equal(mentor.get("videos"), "Video library");
   assert.equal(mentor.get("mentorship"), "My mentees");
   assert.equal(mentor.get("observation"), "Observation cycles");
   const admin = sidebarLabels(await render(h(Sidebar, { role: "super_admin" })));

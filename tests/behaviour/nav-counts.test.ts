@@ -82,3 +82,43 @@ test("the mentor's mentees badge is withheld until the mentorship section is unl
     await w.cleanup();
   }
 });
+
+test("FR-10: mentors and observers reach the teach-back queue, and its badge keeps an overdue clip", { skip }, async () => {
+  // The mentor's "Pending review" item linked to /videos, which has no review
+  // control, and observers (who may review) had no link at all.
+  const { NAV_BY_ROLE, activeNavIdFor } = await import("../../apps/web/src/config/nav.ts");
+  for (const role of ["mentor", "observer"] as const) {
+    const item = NAV_BY_ROLE[role].flatMap((s) => s.items).find((i) => i.href.startsWith("/rtt/teach-back"));
+    assert.ok(item, `the ${role} nav links to the teach-back queue`);
+    assert.equal(activeNavIdFor(role, "/rtt/teach-back"), item.id, `${role}: the item is highlighted on the queue`);
+  }
+
+  // The badge ANDed a 30-day window onto the shared predicate, so the clip
+  // that had waited longest dropped out of it while /rtt/teach-back kept it.
+  const w = await observationWorld("navteach");
+  const db = drizzle(w.c) as unknown as Db;
+  let fileId: string | undefined;
+  try {
+    const before = (await navCounts(db, w.mentor.id, "mentor")).pendingReview ?? 0;
+    fileId = (
+      await w.c.query(
+        `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos', $1, 'video/mp4', 'video_original', 'stored') RETURNING id`,
+        [`test/${w.T}/teach-back`],
+      )
+    ).rows[0].id as string;
+    await w.c.query(
+      `INSERT INTO video_submissions (file_id, source, status, context_type, hls_master_key, verified_at, created_at)
+       VALUES ($1, 'direct', 'ready', 'teach_back', 'hls/test/master.m3u8', now(), now() - interval '40 days')`,
+      [fileId],
+    );
+    const mentor = (await navCounts(db, w.mentor.id, "mentor")).pendingReview ?? 0;
+    assert.ok(mentor >= before + 1, `a 40-day-old unreviewed teach-back is counted (${before} -> ${mentor})`);
+    assert.ok(((await navCounts(db, w.observer.id, "observer")).pendingReview ?? 0) >= 1, "the observer's badge counts it too");
+  } finally {
+    if (fileId) {
+      await w.c.query(`DELETE FROM video_submissions WHERE file_id = $1`, [fileId]);
+      await w.c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+    }
+    await w.cleanup();
+  }
+});

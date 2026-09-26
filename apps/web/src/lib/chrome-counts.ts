@@ -195,7 +195,7 @@ export function applyNavCounts<TSection extends { section: string; items: readon
 const NAV_BADGE_MAP: Record<string, (c: NavCounts) => number | undefined> = {
   mentorship: (c) => c.mentees,
   observation: (c) => c.cycles,
-  videos: (c) => c.pendingReview,
+  "teach-back": (c) => c.pendingReview,
   uploads: (c) => c.myUploads,
   forms: (c) => c.pendingForms,
 };

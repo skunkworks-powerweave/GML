@@ -29,7 +29,7 @@ export type NavCounts = {
    * no badge -- while the observation section is locked for them.
    */
   cycles?: number;
-  /** mentor: video_submissions awaiting mentor review */
+  /** mentor + observer: teach-backs owed a review (the /rtt/teach-back queue) */
   pendingReview?: number;
   /** teacher: video_submissions submitted by this user in the last 30d */
   myUploads?: number;
@@ -79,6 +79,20 @@ async function menteeCount(db: Db, userId: string, mentorId: string | null): Pro
   return row?.c ?? 0;
 }
 
+/**
+ * Teach-backs owed a review, programme-wide: the one definition shared with
+ * the dashboard card and /rtt/teach-back (lib/video/pending-review.ts), with
+ * no time window. A 30-day window here dropped the clip that had waited
+ * longest from the badge while the queue still listed it.
+ */
+async function pendingTeachBackCount(db: Db): Promise<number> {
+  const [row] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(videoSubmissions)
+    .where(pendingTeachBackReviewWhere());
+  return row?.c ?? 0;
+}
+
 async function draftCount(db: Db, userId: string): Promise<number> {
   const [row] = await db
     .select({ c: sql<number>`count(*)::int` })
@@ -98,34 +112,27 @@ export async function navCounts(db: Db, userId: string, role: RoleName): Promise
       .limit(1);
     const mentorId = mentorRow?.id ?? null;
 
-    const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const [mentees, cycles, pendingReview, pendingForms] = await Promise.all([
       menteeCount(db, userId, mentorId),
       openCycles(db, userId, role),
-      db
-        .select({ c: sql<number>`count(*)::int` })
-        .from(videoSubmissions)
-        .where(
-          and(
-            // The one definition of "owed a review", shared with the
-            // dashboard card and /rtt/teach-back (lib/video/pending-review.ts).
-            pendingTeachBackReviewWhere(),
-            gte(videoSubmissions.createdAt, cutoff30d),
-          ),
-        ),
+      pendingTeachBackCount(db),
       draftCount(db, userId),
     ]);
     return {
       mentees,
       cycles,
-      pendingReview: pendingReview[0]?.c ?? 0,
+      pendingReview,
       pendingForms,
     };
   }
 
   if (role === "observer") {
-    const [cycles, pendingForms] = await Promise.all([openCycles(db, userId, role), draftCount(db, userId)]);
-    return { cycles, pendingForms };
+    const [cycles, pendingReview, pendingForms] = await Promise.all([
+      openCycles(db, userId, role),
+      pendingTeachBackCount(db),
+      draftCount(db, userId),
+    ]);
+    return { cycles, pendingReview, pendingForms };
   }
 
   if (role === "teacher") {

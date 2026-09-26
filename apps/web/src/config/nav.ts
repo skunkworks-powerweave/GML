@@ -130,7 +130,10 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
         { id: "mentorship", label: "My mentees", labelKey: "myMentees", icon: "users", href: "/mentorship", gate: "mentorship" },
         { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "videos", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/videos" },
+        // The teach-back review queue. This item linked to /videos, which has
+        // no review control, so the badge pointed at nothing a mentor could do.
+        { id: "teach-back", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
@@ -159,6 +162,9 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       items: [
         { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
         { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        // Observers may review teach-backs (rtt/teach-back READ_ROLES) and had
+        // no way to reach the queue.
+        { id: "teach-back", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
         { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
@@ -311,7 +317,7 @@ export function activeNavIdFor(
   let best: { id: string; len: number } | undefined;
   for (const section of NAV_BY_ROLE[role] ?? []) {
     for (const item of section.items) {
-      const href = item.href;
+      const href = item.href.split("?")[0] ?? item.href; // "/rtt/teach-back?status=..." is /rtt/teach-back
       const matches =
         href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
       if (matches && (!best || href.length > best.len)) best = { id: item.id, len: href.length };
