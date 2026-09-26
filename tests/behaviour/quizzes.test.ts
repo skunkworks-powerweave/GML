@@ -1349,6 +1349,11 @@ test("F48: every quiz audit row the code writes is documented with its real meta
       if (rows.length < 4) await new Promise((r) => setTimeout(r, 50));
     }
     assert.deepEqual(rows.map((r) => r.action).sort(), ["quiz.attempt.expired", "quiz.created", "quiz.schema.update", "quiz.submit"]);
+    // W3-23: the rows about a quiz name it the same way, so an export filtered
+    // by entity_type finds them all. The expiry row said 'quiz', the admin
+    // rows 'quizzes' (the table's name).
+    const aboutTheQuiz = rows.filter((r) => r.action !== "quiz.submit").map((r) => `${r.action}: ${r.entity_type}`).sort();
+    assert.deepEqual(aboutTheQuiz, ["quiz.attempt.expired: quizzes", "quiz.created: quizzes", "quiz.schema.update: quizzes"]);
 
     const { readFileSync } = await import("node:fs");
     const doc = readFileSync(new URL("../../docs/audit-actions.md", import.meta.url), "utf8");

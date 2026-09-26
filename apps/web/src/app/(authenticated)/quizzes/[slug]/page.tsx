@@ -46,11 +46,16 @@ export const metadata: Metadata = { title: "Quiz" };
 // wrong clock; then the load is paid from here, as before.
 const SUBMIT_GRACE_SECONDS = 30;
 
-/** The audit row for an attempt closed because its time ran out, by either path. */
+/**
+ * The audit row for an attempt closed because its time ran out, by either
+ * path. entity_type is the table's name, as quiz.created and
+ * quiz.schema.update write it; this row said 'quiz', so an export filtered
+ * by entity type found one set or the other, never both (W3-23).
+ */
 function auditExpired(quiz: { id: string; timeLimitSeconds: number | null }, slug: string): void {
   void recordAudit({
     action: "quiz.attempt.expired",
-    entityType: "quiz",
+    entityType: "quizzes",
     entityId: quiz.id,
     metadata: { quizSlug: slug, limitSeconds: quiz.timeLimitSeconds },
   });
