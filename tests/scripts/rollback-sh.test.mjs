@@ -23,6 +23,8 @@ case "$*" in
   "image inspect --format {{.Id}} "*)
     ref="$5"
     [ -n "\${FAKE_SAME_IMAGE:-}" ] && ref="\${ref%:*}"
+    # FAKE_UNCHANGED=worker: that service's :previous is its :current.
+    [ -n "\${FAKE_UNCHANGED:-}" ] && [ "\${ref%:*}" = "gml-lms-\${FAKE_UNCHANGED}" ] && ref="\${ref%:*}"
     echo "sha256:$(printf %s "$ref" | tr ':' '-')" ;;
 esac
 exit 0
@@ -78,6 +80,21 @@ test("rollback.sh asks before doing anything, and aborts without the word", () =
       !sb.invocations().some((l) => /^docker (tag|compose up)/.test(l)),
       "nothing may be retagged or restarted without confirmation",
     );
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("FR-20: a service the last release did not change is left running, and the rest roll back", () => {
+  const sb = rollbackSandbox();
+  try {
+    const r = sb.run("scripts/rollback.sh", { env: { ...FAST, FAKE_UNCHANGED: "worker" }, input: "rollback\n", timeout: 200_000 });
+    assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+    const calls = sb.invocations();
+    const shown = calls.join("\n");
+    assert.ok(calls.includes("docker tag gml-lms-app:previous gml-lms-app:current"), shown);
+    assert.ok(!calls.some((l) => /^docker tag gml-lms-worker/.test(l)), `the worker must not be retagged:\n${shown}`);
+    assert.ok(calls.some((l) => /^docker compose up -d --no-deps app$/.test(l)), `only the app restarts:\n${shown}`);
   } finally {
     sb.cleanup();
   }

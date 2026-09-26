@@ -363,15 +363,27 @@ log "migrations applied"
 
 # Only now, with the new release about to replace the serving one, does the
 # serving one become :previous (see step 1).
+#
+# A release is a unit. When any image changed, EVERY service's :previous
+# becomes what it was serving, including one whose build is unchanged: an
+# app-only release used to leave the worker's :previous on the release before,
+# so rollback.sh took the app back one release and the worker back two. When
+# nothing changed (a re-run of the same code), :previous stays where it was.
+release_changed=false
 for svc in app worker; do
   built="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
+  if [ -n "${was_current[${svc}]}" ] && [ "${was_current[${svc}]}" != "${built}" ]; then
+    release_changed=true
+  fi
+done
+for svc in app worker; do
   if [ -z "${was_current[${svc}]}" ]; then
     log "gml-lms-${svc}: first build on this host -- no :previous to keep yet"
-  elif [ "${was_current[${svc}]}" != "${built}" ]; then
+  elif [ "${release_changed}" = true ]; then
     docker tag "${was_current[${svc}]}" "gml-lms-${svc}:previous"
     log "tagged the release that was serving as gml-lms-${svc}:previous"
   else
-    log "gml-lms-${svc}: the build is unchanged -- :previous left where it was"
+    log "gml-lms-${svc}: the release is unchanged -- :previous left where it was"
   fi
 done
 

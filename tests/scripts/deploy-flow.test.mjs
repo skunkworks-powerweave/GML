@@ -314,7 +314,11 @@ case "$*" in
       echo "target worker: failed to solve: process did not complete successfully: exit code: 100" >&2
       exit 1
     fi
-    for s in app worker migrate; do printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"; done
+    # FAKE_BUILD_ONLY=app: a release that changed only that image.
+    for s in app worker migrate; do
+      [ -z "\${FAKE_BUILD_ONLY:-}" ] || [ "$s" = "\${FAKE_BUILD_ONLY}" ] || continue
+      printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"
+    done
     exit 0 ;;
   "compose run --rm --no-deps migrate") exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
   "compose up"*) [ "\${FAKE_MIGRATE_EXIT:-0}" = 0 ] || exit 1; exit "\${FAKE_UP_EXIT:-0}" ;;
@@ -380,6 +384,24 @@ test("a build that changed the image moves :previous to what was serving", () =>
     for (const svc of ["app", "worker"]) {
       assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`);
       assert.equal(imageId(sb, `gml-lms-${svc}:current`), `sha256:v2-${svc}`);
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("FR-20: an app-only release makes the worker's :previous what it was serving too", () => {
+  // The worker's image did not change, so :previous was "left where it was":
+  // on v0, the release BEFORE the one serving. rollback.sh then took the app
+  // back to v1 and the worker to v0, against v1's schema.
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2", FAKE_BUILD_ONLY: "app" }, timeout: SLOW });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(imageId(sb, "gml-lms-app:current"), "sha256:v2-app");
+    assert.equal(imageId(sb, "gml-lms-worker:current"), "sha256:v1-worker", "the worker build was unchanged");
+    for (const svc of ["app", "worker"]) {
+      assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`, `${svc}: :previous is the release that was serving`);
     }
   } finally {
     sb.cleanup();

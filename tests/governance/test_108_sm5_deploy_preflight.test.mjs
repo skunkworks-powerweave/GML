@@ -269,10 +269,18 @@ test("spec 108: deploy.sh leaves a rollback target behind, and rollback.sh exist
     recorded >= 0 && recorded < src.indexOf("docker compose build"),
     "deploy.sh must record the serving image IDs BEFORE the build overwrites :current",
   );
+  // FR-20: a release is a unit -- when any image changed, every service's
+  // :previous moves to what it was serving, so an app-only release does not
+  // leave the worker's rollback target two releases back.
   assert.match(
     src,
-    /elif \[ "\$\{was_current\[\$\{svc\}\]\}" != "\$\{built\}" \]; then\s+docker tag "\$\{was_current\[\$\{svc\}\]\}" "gml-lms-\$\{svc\}:previous"/,
-    "deploy.sh must move :previous to the serving image only when the build changed it",
+    /\[ "\$\{was_current\[\$\{svc\}\]\}" != "\$\{built\}" \]; then\s+release_changed=true/,
+    "deploy.sh must notice whether the build changed any image",
+  );
+  assert.match(
+    src,
+    /elif \[ "\$\{release_changed\}" = true \]; then\s+docker tag "\$\{was_current\[\$\{svc\}\]\}" "gml-lms-\$\{svc\}:previous"/,
+    "deploy.sh must move every :previous to the serving image only when the release changed",
   );
   assert.ok(existsSync(resolve(root, "scripts/rollback.sh")), "scripts/rollback.sh must exist");
   assert.match(

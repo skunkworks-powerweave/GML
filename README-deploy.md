@@ -368,8 +368,9 @@ that ports 80 and 443 are free. `deploy.sh` does **not** run it: it fails when
 `deploy.sh` runs: host-toolchain and `.env` checks → the SM-5 restore-drill
 gate (§7; skipped, loudly, on a host's first deploy) → build → migrations, on
 their own (nothing serving is touched unless they succeed) → tag the images
-that were serving as `:previous` (only those the build changed, so a re-run of
-the same code keeps the rollback target) → `up` → wait for health through
+that were serving as `:previous` (all of them when the build changed any, so a
+release rolls back as a unit; none when it changed nothing, so a re-run of the
+same code keeps the rollback target) → `up` → wait for health through
 Caddy → seed → verify auth → post-deploy smoke.
 
 It is idempotent. Re-running it is the normal upgrade path.
@@ -569,9 +570,9 @@ re-running `docker compose run --rm --no-deps migrate` will not repeat them
 ./scripts/rollback.sh
 ```
 
-Restarts `app` and `worker` from the `:previous` image. It asks for
-confirmation, and refuses when `:previous` is the image already running --
-nothing would change.
+Restarts `app` and `worker` from the `:previous` image, leaving running any
+service the last release did not change. It asks for confirmation, and refuses
+when every `:previous` is the image already running -- nothing would change.
 
 **It does not touch the database.** Migrations are forward-only and there are no
 down-sections. If a *migration* is the problem, you need §7's restore procedure,

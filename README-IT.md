@@ -65,8 +65,8 @@ curl -s https://$DOMAIN/api/health | jq
 
 Step 4 runs: the host-toolchain and `.env` checks, the SM-5 restore-drill gate
 (skipped, loudly, on a host's first deploy; see Backups below), build, run the
-migrations on their own, tag the images that were serving `:previous` (only
-those the build changed), `docker compose up -d`, wait for health through
+migrations on their own, tag the images that were serving `:previous` (all of
+them when the build changed any; none on a re-run of the same code), `docker compose up -d`, wait for health through
 Caddy, seed, verify auth, post-deploy smoke. It does **not** run
 `preflight.sh`; that is step 3.5, by hand. Preflight fails when ports 80 and 443
 are in use, which is true of every later deploy.

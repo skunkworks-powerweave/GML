@@ -51,40 +51,47 @@ docker images --format '{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}' \
 # roll back TO, and saying so is better than starting containers from whatever
 # `latest` happens to point at.
 #
-# And it must be a DIFFERENT image from the one running. deploy.sh used to
-# overwrite :previous with :current on every run, so after a re-run of the same
-# code the two named one image, and this script retagged it onto itself,
-# restarted the release it was meant to leave and reported a rollback.
-# deploy.sh no longer does that; this refuses the state anyway rather than
-# performing a rollback that changes nothing.
+# And :previous must be a DIFFERENT image from the one running, for at least
+# one service. deploy.sh used to overwrite :previous with :current on every
+# run, so after a re-run of the same code the two named one image, and this
+# script retagged it onto itself and reported a rollback; that state is still
+# refused. A service whose :previous IS its :current was not changed by the
+# last release (deploy.sh moves every :previous together, so this is its
+# image in the release being rolled back to) and is left running.
+ROLL=""
 for svc in ${SERVICES}; do
   prev_id="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:previous" 2>/dev/null || true)"
   [ -n "${prev_id}" ] \
     || fail "gml-lms-${svc}:previous does not exist. Nothing to roll back to — this deploy was the first, or the previous image has been pruned."
   cur_id="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
-  [ "${prev_id}" != "${cur_id}" ] \
-    || fail "gml-lms-${svc}:previous is the image already running (:current is the same ${prev_id}). A rollback would restart the same release. Check out the release you want and run ./scripts/deploy.sh instead."
+  if [ "${prev_id}" = "${cur_id}" ]; then
+    log "gml-lms-${svc}: unchanged by the last release -- left running"
+  else
+    ROLL="${ROLL:+${ROLL} }${svc}"
+  fi
 done
+[ -n "${ROLL}" ] \
+  || fail "every :previous is the image already running (${SERVICES}). A rollback would restart the same release. Check out the release you want and run ./scripts/deploy.sh instead."
 
 log "confirming"
 echo
-echo "  This will stop ${SERVICES} and restart them from the ':previous' image."
+echo "  This will stop ${ROLL} and restart it from the ':previous' image."
 echo "  The DATABASE IS NOT TOUCHED. If a migration is the problem, this will"
 echo "  not help — see README-deploy.md, 'Restoring from backup'."
 echo
 read -r -p "  Type 'rollback' to continue: " confirm
 [ "${confirm}" = "rollback" ] || fail "aborted"
 
-for svc in ${SERVICES}; do
+for svc in ${ROLL}; do
   log "retagging gml-lms-${svc}:previous -> current"
   docker tag "gml-lms-${svc}:previous" "gml-lms-${svc}:current"
 done
 
-log "restarting ${SERVICES}"
+log "restarting ${ROLL}"
 # --no-deps so this does not re-run `migrate`: the schema is already where it
 # is, and re-running it on a rollback is at best a no-op and at worst confusing.
 # shellcheck disable=SC2086
-docker compose up -d --no-deps ${SERVICES}
+docker compose up -d --no-deps ${ROLL}
 
 # The SAME defects deploy.sh had, twice over. First the probe exited 0 on
 # whatever the proxy answered, never reaching the app. Then it was made strict
