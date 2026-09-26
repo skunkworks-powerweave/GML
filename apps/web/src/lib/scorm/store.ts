@@ -209,7 +209,25 @@ const rankOf = (status: SQL | AnyColumn) => sql`(CASE ${status}::text ${WHEN_RAN
  *   the rest Location, suspend data and exit are always the newest commit's
  *            -- that is what resuming needs.
  */
-export async function commitAttempt(db: Db, userId: string, packageId: string, p: CommitPayload): Promise<void> {
+/**
+ * Record a commit. Resolves true when it was newer than what the record held
+ * (a new session, or a later seq in this one), false for a stale or repeated
+ * commit, which changes nothing: a player re-sending an LMSFinish whose
+ * response was lost must not be audited as a second finish.
+ */
+export async function commitAttempt(db: Db, userId: string, packageId: string, p: CommitPayload): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [prev] = await tx
+      .select({ sessionId: scormAttempts.sessionId, sessionSeq: scormAttempts.sessionSeq })
+      .from(scormAttempts)
+      .where(and(eq(scormAttempts.packageId, packageId), eq(scormAttempts.userId, userId)))
+      .for("update");
+    await upsertCommit(tx, userId, packageId, p);
+    return !prev || prev.sessionId !== p.sessionId || p.seq > (prev.sessionSeq ?? -1);
+  });
+}
+
+async function upsertCommit(db: Pick<Db, "insert">, userId: string, packageId: string, p: CommitPayload): Promise<void> {
   const newSession = sql`${scormAttempts.sessionId} IS DISTINCT FROM ${excluded("session_id")}`;
   const newer = sql`(${newSession} OR ${excluded("session_seq")} > ${scormAttempts.sessionSeq})`;
   const better = sql`${newer} AND ${rankOf(excluded("lesson_status"))} >= ${rankOf(scormAttempts.lessonStatus)}`;

@@ -144,6 +144,21 @@ test("LMSFinish is audited with what the SCO reported, LMSCommit is not, and the
   });
 });
 
+test("FR-19: an LMSFinish re-sent after its response was lost is audited once", { skip }, async () => {
+  await withPackage(async ({ w, pkgId }) => {
+    signIn(w.teacher);
+    const finish = commitBody({ seq: 2, lessonStatus: "passed", scoreRaw: 90, exit: "", final: true });
+    await post(pkgId, commitBody());
+    await post(pkgId, finish);
+    await post(pkgId, finish); // the same commit again: the first had landed
+    const { rows } = await w.c.query(
+      `SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1 AND action = 'scorm.attempt.finish'`,
+      [pkgId],
+    );
+    assert.equal(rows[0].n, 1, "one session, one finish row");
+  });
+});
+
 test("end to end: a SCO driving the real runtime through this route is resumed on relaunch", { skip }, async () => {
   await withPackage(async ({ w, pkgId }) => {
     const { Scorm12Runtime } = await import("../../apps/web/src/lib/scorm/runtime.ts");

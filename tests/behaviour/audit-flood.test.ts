@@ -348,3 +348,70 @@ test("W3-06 helpdesk: a caller over the ticket limit is refused every time and a
     }
   });
 });
+
+// ── FR-19: the other client-triggered writers ───────────────────────────────
+
+test("FR-19 video events: play/pause/ended is throttled per user, and every event served is audited", { skip, timeout: 120_000 }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("vev-flood"));
+    try {
+      const me = await teacher(f);
+      const fileId = (
+        await c.query(
+          `INSERT INTO files (bucket, object_key, mime_type, kind, status, owner_user_id) VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored', $2) RETURNING id`,
+          [`test/${randomUUID()}.mp4`, me],
+        )
+      ).rows[0].id as string;
+      const videoId = (
+        await c.query(
+          `INSERT INTO video_submissions (file_id, source, status, context_type, submitted_by_user_id) VALUES ($1, 'direct', 'queued', 'generic', $2) RETURNING id`,
+          [fileId, me],
+        )
+      ).rows[0].id as string;
+      f.defer(`DELETE FROM files WHERE id = $1`, [fileId]);
+      f.defer(`DELETE FROM video_submissions WHERE id = $1`, [videoId]);
+      const { POST } = await import("../../apps/web/src/app/api/videos/[id]/event/route.ts");
+      const statuses: number[] = [];
+      for (let i = 0; i < 80; i++) {
+        const res = await POST(
+          new Request(`http://x/api/videos/${videoId}/event`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: i % 2 ? "pause" : "play", t: i }) }),
+          { params: Promise.resolve({ id: videoId }) },
+        );
+        statuses.push(res.status);
+      }
+      const served = statuses.filter((s) => s === 204).length;
+      assert.ok(statuses.includes(429), `80 events in a row were all recorded: ${statuses.join(",")}`);
+      assert.equal(statuses.indexOf(429), served, "an event was recorded after the throttle engaged");
+      assert.ok(served >= 30, `only ${served} events were recorded before the throttle`);
+      const rows = [...(await auditRows(c, me, "video.play", 1)), ...(await auditRows(c, me, "video.pause", 1))];
+      assert.equal(rows.length, served);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("FR-19 user-prefs: saves are throttled per user, and every save served is audited", { skip, timeout: 120_000 }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prefs-flood"));
+    try {
+      const me = await teacher(f);
+      f.defer(`DELETE FROM user_prefs WHERE user_id = $1`, [me]);
+      const { PUT } = await import("../../apps/web/src/app/api/user-prefs/route.ts");
+      const statuses: number[] = [];
+      for (let i = 0; i < 50; i++) {
+        const res = await PUT(
+          new Request("http://x/api/user-prefs", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ highContrast: i % 2 === 0 }) }),
+        );
+        statuses.push(res.status);
+      }
+      const served = statuses.filter((s) => s === 200).length;
+      assert.ok(statuses.includes(429), `50 saves in a row were all recorded: ${statuses.join(",")}`);
+      assert.equal(statuses.indexOf(429), served, "a save was recorded after the throttle engaged");
+      assert.ok(served >= 10, `only ${served} saves were served before the throttle`);
+      assert.equal((await auditRows(c, me, "user_prefs.update", served)).length, served);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});

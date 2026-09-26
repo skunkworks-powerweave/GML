@@ -26,6 +26,13 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
+import { apiRateLimit } from "@/lib/api-guards";
+
+// Every event is a permanent audit_log row, so a script looping play/pause on
+// any video it can see could write them without end (FR-19). A viewer seeking
+// through a lesson sends a handful a minute.
+const EVENT_LIMIT = 60;
+const EVENT_WINDOW_MS = 60_000;
 
 const BodySchema = z.object({
   kind: z.enum(["play", "pause", "ended"]),
@@ -42,6 +49,8 @@ export async function POST(
   const session = await auth();
   const actor = actorFrom(session);
   if (!actor) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  const limited = await apiRateLimit("video-event", actor.id, EVENT_LIMIT, EVENT_WINDOW_MS);
+  if (limited) return limited;
 
   const { id } = await params;
 

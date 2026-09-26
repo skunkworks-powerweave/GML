@@ -13,6 +13,7 @@ import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
+import { apiRateLimit } from "@/lib/api-guards";
 import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { LOCALE_COOKIE } from "@/i18n/config";
 import { cookieLocale } from "@/i18n/resolve";
@@ -55,6 +56,10 @@ export async function PUT(req: Request) {
   if (!session?.user?.id) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
+  // Each save is a permanent user_prefs.update audit row (FR-19). A person
+  // flipping settings saves a few times a minute; a loop is refused.
+  const limited = await apiRateLimit("user-prefs", session.user.id, 30, 60_000);
+  if (limited) return limited;
   // Not `.catch(() => ({}))`: that read a body that was not JSON as an empty
   // patch, upserted the defaults, audited an update and answered 200 ok.
   const read = await readJsonBody(req);

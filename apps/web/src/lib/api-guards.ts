@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { hasAnyRole, type RoleName } from "@gml/shared/auth/roles";
+import { rateLimit } from "@/lib/rate-limit";
 import type { Session } from "@/auth";
 
 /**
@@ -45,4 +46,22 @@ export async function requireApiSession(): Promise<
     };
   }
   return { session };
+}
+
+/**
+ * A per-user throttle for an endpoint that writes to the append-only audit
+ * log on every call: the 429 (or, when the limiter cannot count, a 503 --
+ * fail closed, as lib/rate-limit.ts does) to return, or null to go on.
+ */
+export async function apiRateLimit(bucket: string, userId: string, limit: number, windowMs: number): Promise<NextResponse | null> {
+  try {
+    const rl = await rateLimit({ bucket, id: userId, limit, windowMs });
+    if (rl.ok) return null;
+    return NextResponse.json(
+      { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
+      { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil(rl.retryAfterMs / 1000))) } },
+    );
+  } catch {
+    return NextResponse.json({ error: "rate_limit_unavailable" }, { status: 503 });
+  }
 }
