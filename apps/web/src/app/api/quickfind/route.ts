@@ -15,6 +15,7 @@
 //   GET ?q=<<2 chars>          → 200 { ok:true, q, results: [] } (no-op, but still 200)
 //   GET ?q=<over 240 chars>    → 400 { error: "query_too_long" }
 //   GET (over the throttle)    → 429 { error: "rate_limited", retryAfterMs } + Retry-After
+//   GET (limiter unavailable)  → 503 { error: "rate_limit_unavailable" } (fail closed)
 //   GET (no session)           → 401 { error: "unauthenticated" }
 //   POST / PUT / DELETE        → 405 { error: "method_not_allowed" }
 //
@@ -71,21 +72,25 @@ import { escapeIlike } from "@gml/shared/sql/ilike";
 export const dynamic = "force-dynamic";
 
 const MIN_QUERY = 2;
-// Neither bound may be reachable by a person using the palette: QuickFind
-// renders every non-200 as "No results for <q>", so a refusal there tells them
-// a teacher or school does not exist.
-//
 // In characters, as Postgres counts varchar. The widest column searched below
 // is sessions.topic, varchar(240) (outline names 200, person and school names
 // 160, codes shorter), and `%q%` cannot match a value shorter than q -- so a
-// longer q would find nothing, and is refused rather than stored whole.
+// longer q would find nothing, and is refused rather than stored whole. A
+// person's real search never reaches it.
 const MAX_QUERY = 240;
-// Per user, and above what one palette can send. QuickFind fetches whenever
-// typing pauses for its DEBOUNCE_MS (180 ms), and at phone typing speed (300-500
-// ms a character) that is after every character: up to ceil(60_000 / 180) = 334
-// searches a minute from one person. 400 clears that and still stops a loop.
-// audit-flood.test.ts reads the client's debounce and fails if it outruns this.
-const QUICKFIND_LIMIT = 400;
+// Per user, and sized for the log: every answered search is a permanent
+// quickfind.query row. A person looking names up sends about one search per
+// character -- QuickFind fetches whenever typing pauses for 180 ms, and phone
+// typing runs at 300-500 ms a character -- so eight 15-character names in a
+// minute is 120. A loop meets it at once.
+//
+// It was 400, above the 334 a minute one palette can send at most, because
+// QuickFind showed every refusal as "No results for <q>": reaching the limit
+// told a person that the teacher or school they wanted did not exist. That
+// let one account add 576,000 rows a day. The palette now says "Too many
+// searches -- try again in N s" (refusalFor), so the limit no longer has to be
+// out of a person's reach. audit-flood.test.ts bounds it from both sides.
+const QUICKFIND_LIMIT = 120;
 const QUICKFIND_WINDOW_MS = 60_000;
 const MAX_PER_KIND = 4; // 8 kinds × 4 ≈ 20-row cap after the flat merge.
 const HARD_CAP = 20;

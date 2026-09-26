@@ -245,14 +245,17 @@ export async function withIntl(child: unknown, locale: RequestState["locale"]): 
 // them (`{ effects: true }`): then useEffect/useLayoutEffect bodies run after
 // each render whose deps changed, as React's commit would, and unmount() runs
 // their cleanups -- which a test using them must call, or a timer an effect
-// started keeps the process alive. It reaches into React's
+// started keeps the process alive. useSyncExternalStore reads the server
+// snapshot, as a first (hydrating) render does, unless the test asks for the
+// browser's (`{ client: true }`): a component that renders nothing until it
+// is mounted in a browser (QuickFind) shows nothing otherwise. It reaches into React's
 // documented-as-internal dispatcher slot, so a React major upgrade will break
 // it LOUDLY -- `mount` throws if the slot is missing rather than silently
 // rendering nothing.
 
 type AnyElement = { type: unknown; props: Record<string, unknown> };
 
-export function mount<P>(component: (props: P) => unknown, props: P, opts: { effects?: boolean } = {}) {
+export function mount<P>(component: (props: P) => unknown, props: P, opts: { effects?: boolean; client?: boolean } = {}) {
   const internals = (React as unknown as Record<string, { H: unknown } | undefined>)
     .__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
   if (!internals || !("H" in internals)) {
@@ -308,7 +311,7 @@ export function mount<P>(component: (props: P) => unknown, props: P, opts: { eff
     useContext(ctx: { _currentValue: unknown }) { return ctx._currentValue; },
     useSyncExternalStore<T>(_s: unknown, get: () => T, getServer?: () => T) {
       cursor++;
-      return (getServer ?? get)();
+      return (opts.client ? get : (getServer ?? get))();
     },
     useActionState<S>(_a: unknown, initial: S) { cursor++; return [initial, () => undefined, false]; },
     useOptimistic<S>(v: S) { cursor++; return [v, () => undefined]; },

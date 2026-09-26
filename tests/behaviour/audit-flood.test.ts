@@ -32,6 +32,7 @@ import "./_ui.js";
 import { needsDatabase, withClient, tag } from "./_harness.js";
 import { actAs, fixture, type Fixture } from "./_admin-fixture.js";
 import { closeAppPool } from "./_mentorship.js";
+import { withRowFault } from "./_fake_gotrue.js";
 
 const skip = needsDatabase();
 after(closeAppPool);
@@ -84,28 +85,17 @@ async function teacher(f: Fixture): Promise<string> {
 
 // ── /api/quickfind ───────────────────────────────────────────────────────────
 //
-// Both bounds are sized to the palette, because QuickFind (components/
-// quickfind/QuickFind.tsx) renders ANY non-200 as "No results for <q>". A
-// bound an honest user can reach tells them a teacher or school does not
-// exist -- and an admin checking a list may then create a duplicate. So:
+// The length cap sits at the longest value the route searches, so a query it
+// refuses is one that could not have matched anything.
 //
-//   - the length cap sits at the longest value the route searches, so a query
-//     it refuses is one that could not have matched anything;
-//   - the throttle sits above the most searches one palette can send in a
-//     window, so only something other than a person typing reaches it.
-
-/**
- * QuickFind's debounce, read from the component. The palette is a separate
- * program, and the fastest it can call this route is what sizes the limit;
- * reading it here means shortening it cannot silently cross the throttle.
- */
-async function clientDebounceMs(): Promise<number> {
-  const { readFileSync } = await import("node:fs");
-  const src = readFileSync(new URL("../../apps/web/src/components/quickfind/QuickFind.tsx", import.meta.url), "utf8");
-  const m = /\bconst DEBOUNCE_MS = (\d+);/.exec(src);
-  assert.ok(m, "QuickFind.tsx no longer declares `const DEBOUNCE_MS = <n>;` -- update clientDebounceMs()");
-  return Number(m[1]);
-}
+// The throttle is sized for the log. It used to have to sit above the most
+// searches one palette can send (ceil(60 s / 180 ms debounce) = 334 a minute,
+// so 400), because QuickFind rendered ANY non-200 as "No results for <q>": a
+// bound an honest user could reach told them a teacher or school did not
+// exist. That let one account write 576,000 permanent rows a day. The palette
+// now says "Too many searches -- try again in N s" instead
+// (quickfind-refusals.test.ts), so the limit can be one a person looking
+// names up does not meet and a loop meets at once.
 
 test("F97 quickfind: an over-long query is refused, and neither searched nor stored", { skip }, async () => {
   await withClient(async (c) => {
@@ -179,49 +169,52 @@ test("F97 quickfind: the longest value it searches, pasted whole, is found; one 
   });
 });
 
-test("F97 quickfind: a person typing is never throttled, a loop is, and every search served is audited", { skip, timeout: 120_000 }, async () => {
-  const debounceMs = await clientDebounceMs();
+/**
+ * A person looking names up: eight 15-character names in a minute at one
+ * search per character, which is what the palette sends at phone typing speed
+ * (300-500 ms a character, slower than its 180 ms debounce). Twice the four
+ * lookups that filled the original limit of 60.
+ */
+const PERSON_PER_MINUTE = 8 * 15;
+/** The most quickfind.query rows one account may add in a minute: 216,000 a day at most. */
+const LOG_CEILING_PER_MINUTE = 150;
+
+test("F97/W3-26 quickfind: a person looking names up is not throttled, a loop is, well under the old 400 a minute, and every search served is audited", { skip, timeout: 120_000 }, async () => {
   await withClient(async (c) => {
     const t = tag("qf-flood");
     const f = fixture(c, t);
     try {
       const me = await teacher(f);
-      // QuickFind searches whenever typing pauses for debounceMs, and at phone
-      // typing speed (300-500 ms a character) that is after every character:
-      // one palette can send a search every debounceMs for a whole window.
-      // Open this user's window as if they had done exactly that up to their
-      // last search, rather than make several hundred real calls. (The counter
-      // is keyed `<bucket>:<user id>` by lib/rate-limit.)
-      const human = Math.ceil(60_000 / debounceMs);
+      // Open this user's window as if they had already sent all but the last
+      // of a person's searches for the minute, rather than make that many real
+      // calls. (The counter is keyed `<bucket>:<user id>` by lib/rate-limit.)
       const seededAt = Date.now();
       await c.query(`INSERT INTO rate_limits (key, window_start, count) VALUES ($1, now(), $2)`, [
         `quickfind:${me}`,
-        human - 1,
+        PERSON_PER_MINUTE - 1,
       ]);
 
       const served: number[] = [];
       let limited: Response | null = null;
-      for (let i = 0; i < 300 && !limited; i++) {
+      for (let i = 0; i < 400 && !limited; i++) {
         const res = await quickfind(`${t}-${i}`);
         if (res.status === 429) limited = res;
         else served.push(res.status);
       }
-      assert.ok(
-        served.length > 0,
-        `search ${human} of one window was throttled, and QuickFind (debounce ${debounceMs} ms) sends that many ` +
-          `while a person types -- the palette shows the 429 as "No results"`,
-      );
-      assert.ok(limited, `${human - 1 + served.length} searches in one window were all served`);
+      assert.ok(served.length > 0, `search ${PERSON_PER_MINUTE} of a minute was throttled: a person looking up eight names meets the limit`);
+      assert.ok(limited, `${PERSON_PER_MINUTE - 1 + served.length} searches in one window were all served`);
       assert.deepEqual(new Set(served), new Set([200]), `unexpected statuses: ${served.join(",")}`);
 
       // The window, measured: time since it opened plus what the 429 says is
-      // left of it. One palette's worst case over that window fits the limit.
-      const { retryAfterMs } = (await limited.json()) as { retryAfterMs: number };
-      const windowMs = Date.now() - seededAt + retryAfterMs;
-      const limit = human - 1 + served.length;
+      // left of it. What that lets one account write, per minute, is bounded.
+      const body = (await limited.json()) as { error: string; retryAfterMs: number };
+      assert.equal(body.error, "rate_limited");
+      const windowMs = Date.now() - seededAt + body.retryAfterMs;
+      const limit = PERSON_PER_MINUTE - 1 + served.length;
+      const perMinute = Math.round((limit * 60_000) / windowMs);
       assert.ok(
-        limit >= Math.ceil(windowMs / debounceMs),
-        `the limit (${limit} per ${windowMs} ms) is below what one QuickFind palette sends in that time`,
+        perMinute <= LOG_CEILING_PER_MINUTE,
+        `the limit (${limit} per ${windowMs} ms) lets one account add ${perMinute} permanent audit rows a minute`,
       );
 
       // Every search that was answered is in the log; none that was refused is.
@@ -252,6 +245,53 @@ test("F97 resource-view: the beacon is throttled per user", { skip, timeout: 120
       assert.equal(statuses.indexOf(429), served, "a beacon was recorded after the throttle engaged");
       assert.ok(served >= 10, `only ${served} beacons were recorded before the throttle`);
       assert.equal((await auditRows(c, me, "resource.view.client_ping", served)).length, served);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("F97 resource-view: the viewer recorded is the session's, never a client-supplied viewerId", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("rv-viewer"));
+    try {
+      const me = await teacher(f);
+      const resourceId = randomUUID();
+      const res = await ping({ id: resourceId, viewerId: "someone-else@example.test" });
+      assert.equal(res.status, 204, "a client that still sends viewerId is not refused");
+
+      const rows = await auditRows(c, me, "resource.view.client_ping", 1);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]!.entity_id, resourceId);
+      assert.ok(
+        !JSON.stringify(rows[0]!.metadata).includes("someone-else"),
+        `the client's claimed viewer was written into the forensic log: ${JSON.stringify(rows[0]!.metadata)}`,
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── fail closed ──────────────────────────────────────────────────────────────
+
+test("W3-26 quickfind and resource-view: when the limiter cannot count, they refuse with 503 and write nothing", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("rl-down"));
+    try {
+      const me = await teacher(f);
+      // The counter's write fails for this user's keys only, so files running
+      // alongside against the same database are unaffected.
+      await withRowFault(c, "rate_limits", "INSERT", `NEW.key LIKE '%:${me}'`, async () => {
+        const qf = await quickfind("Tsering");
+        assert.equal(qf.status, 503, "quickfind searched with its throttle down");
+        assert.deepEqual(await qf.json(), { error: "rate_limit_unavailable" });
+        const rv = await ping({ resourceId: randomUUID() });
+        assert.equal(rv.status, 503, "the beacon was recorded with its throttle down");
+        assert.deepEqual(await rv.json(), { error: "rate_limit_unavailable" });
+      });
+      assert.equal((await auditRows(c, me, "quickfind.query")).length, 0, "an unthrottled search was audited");
+      assert.equal((await auditRows(c, me, "resource.view.client_ping")).length, 0, "an unthrottled beacon was audited");
     } finally {
       await f.cleanup();
     }
@@ -303,28 +343,6 @@ test("W3-06 helpdesk: a caller over the ticket limit is refused every time and a
       assert.equal(rows.length, 1, `50 refused POSTs wrote ${rows.length} permanent audit rows`);
       assert.equal(rows[0]!.entity_id, me);
       assert.equal(typeof rows[0]!.metadata.retryAfterMs, "number");
-    } finally {
-      await f.cleanup();
-    }
-  });
-});
-
-test("F97 resource-view: the viewer recorded is the session's, never a client-supplied viewerId", { skip }, async () => {
-  await withClient(async (c) => {
-    const f = fixture(c, tag("rv-viewer"));
-    try {
-      const me = await teacher(f);
-      const resourceId = randomUUID();
-      const res = await ping({ id: resourceId, viewerId: "someone-else@example.test" });
-      assert.equal(res.status, 204, "a client that still sends viewerId is not refused");
-
-      const rows = await auditRows(c, me, "resource.view.client_ping", 1);
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0]!.entity_id, resourceId);
-      assert.ok(
-        !JSON.stringify(rows[0]!.metadata).includes("someone-else"),
-        `the client's claimed viewer was written into the forensic log: ${JSON.stringify(rows[0]!.metadata)}`,
-      );
     } finally {
       await f.cleanup();
     }
