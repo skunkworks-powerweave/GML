@@ -224,11 +224,12 @@ export function MobileUploadRunner({
     setProgress(0);
     setErrorMsg(null);
 
+    // Reserve first. The server authorizes the context and issues an object
+    // key prefixed with this user's uuid; the bytes then go straight to
+    // Supabase Storage without passing through the application.
+    let reservation: Awaited<ReturnType<typeof beginUploadAction>>;
     try {
-      // Reserve first. The server authorizes the context and issues an object
-      // key prefixed with this user's uuid; the bytes then go straight to
-      // Supabase Storage without passing through the application.
-      const reservation = await beginUploadAction({
+      reservation = await beginUploadAction({
         filename: file.name,
         sizeBytes: file.size,
         contentType: file.type || "video/mp4",
@@ -236,13 +237,25 @@ export function MobileUploadRunner({
         contextId: target?.contextId ?? null,
         quarter: target?.quarter ?? null,
       });
-      if (!reservation.ok) {
-        if (!mountedRef.current) return;
-        setErrorMsg(reservation.error);
-        setStep("failed");
-        return;
-      }
+    } catch {
+      // The request itself failed: offline, a dropped connection, or an answer
+      // that was not the action's (a proxy's error page during a deploy).
+      // This showed the rejection's own text -- "Failed to fetch", "Load
+      // failed" -- which tells a teacher nothing. Nothing was uploaded, and
+      // Retry starts again with the same file.
+      if (!mountedRef.current) return;
+      setErrorMsg("Could not reach the server. Check your connection and tap Retry.");
+      setStep("failed");
+      return;
+    }
+    if (!reservation.ok) {
+      if (!mountedRef.current) return;
+      setErrorMsg(reservation.error);
+      setStep("failed");
+      return;
+    }
 
+    try {
       const handle = await startResumableUpload({
         file,
         bucket: reservation.bucket,
@@ -270,9 +283,12 @@ export function MobileUploadRunner({
         },
       });
       uploadRef.current = handle;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Upload failed";
-      setErrorMsg(msg);
+    } catch {
+      // startResumableUpload reports its own failures, in words, through
+      // onError; a throw here is one it did not expect, and its text is not
+      // for a teacher either.
+      if (!mountedRef.current) return;
+      setErrorMsg("Upload failed. Try again, or send the video over WhatsApp.");
       setStep("failed");
     }
   }

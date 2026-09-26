@@ -238,6 +238,29 @@ test("mobile: a completion call that fails leaves the progress screen, and Retry
   });
 });
 
+// W3-76. The runner showed the rejection's own text: when the reservation
+// request dropped, a teacher on a phone read "Failed to fetch" (Chromium),
+// "Load failed" (iOS Safari), or Next's "An unexpected response was received
+// from the server." -- where the desktop tray says what happened and what to
+// do.
+test("mobile: a reservation call that fails says the server could not be reached, not the browser's error", async () => {
+  for (const failure of [
+    () => Promise.reject(new TypeError("Failed to fetch")),
+    () => Promise.reject(new TypeError("Load failed")),
+    () => Promise.reject(new Error("An unexpected response was received from the server.")),
+  ]) {
+    await withMobileRunner(async ({ pick, press, screen }, _routerCalls, unhandled) => {
+      script({ begin: failure });
+      await pick(FILE);
+      await press("Start upload");
+      assert.deepEqual(unhandled, []);
+      assert.match(screen(), /Upload failed/);
+      assert.match(screen(), /could not reach the server/i, screen());
+      assert.doesNotMatch(screen(), /Failed to fetch|Load failed|unexpected response/, screen());
+    });
+  }
+});
+
 // The unconfirmed submission belongs to ONE upload. Once the teacher has gone
 // back and started another file, a Retry of that other file's failure must
 // upload it -- confirming the earlier submission instead would report
