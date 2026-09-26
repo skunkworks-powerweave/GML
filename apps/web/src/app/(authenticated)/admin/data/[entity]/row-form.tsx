@@ -106,12 +106,14 @@ export function RowForm({
       {entity.formFields.map((field) => {
         const kind = fieldKind(shape[field]);
         const dateInput = dateInputType(entity, field);
-        // Priority: prior failed-submit echo → initial row value → "".
+        // Priority: prior failed-submit echo → initial row value → "". The
+        // echo is the string this field posted (actions.ts submittedFields),
+        // "" included: an emptied box stays empty after a refusal elsewhere,
+        // instead of the stored value coming back and the corrected save
+        // quietly undoing the clearing.
         const echo = state?.fields?.[field];
         const initial =
-          echo !== undefined && echo !== ""
-            ? echo
-            : toInputValue(kind, initialValues?.[field], dateInput);
+          echo !== undefined ? echo : toInputValue(kind, initialValues?.[field], dateInput);
         const fieldError = state?.fieldErrors?.[field];
         const optional = isOptionalField(shape[field]);
         const refs = options[field];

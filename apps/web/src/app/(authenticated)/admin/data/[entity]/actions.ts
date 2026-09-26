@@ -69,7 +69,7 @@ async function requireEntityGate(entity: ReturnType<typeof getEntityOrThrow>, us
  */
 function writeErrorState(
   entity: ReturnType<typeof getEntityOrThrow>,
-  raw: Record<string, unknown>,
+  fields: Record<string, string>,
   err: unknown,
 ): AdminActionState {
   const message = describeWriteError(entity, err);
@@ -77,18 +77,18 @@ function writeErrorState(
   return {
     ok: false,
     error: message,
-    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    fields,
     ...(entity.formFields.includes(field) ? { fieldErrors: { [field]: message.slice(field.length + 2) } } : {}),
   };
 }
 
 /** Field errors from the entity's database-backed rules, as an action state. */
-function problemsState(raw: Record<string, unknown>, problems: Record<string, string>): AdminActionState {
+function problemsState(fields: Record<string, string>, problems: Record<string, string>): AdminActionState {
   const [field, message] = Object.entries(problems)[0]!;
   return {
     ok: false,
     error: `${field}: ${message}`,
-    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    fields,
     fieldErrors: problems,
   };
 }
@@ -140,11 +140,33 @@ function coerceFormData(
 }
 
 /**
+ * What the operator submitted, as the strings the form posted: the `fields`
+ * a refused create or update hands back for RowForm to show again.
+ *
+ * NOT the coerced values. The echo used to be String() of those, so a date
+ * came back as "Thu Oct 01 2026 05:30:00 GMT+0530 (India Standard Time)",
+ * which a date or datetime-local input rejects: the box came back empty, and
+ * the corrected save sent the emptied optional dates as NULL ("Row updated.")
+ * or failed a required one with "Invalid date". An emptied field also came
+ * back as "", which the form reads as "show the stored value", so a field the
+ * operator had cleared was quietly refilled. The posted strings are exactly
+ * what the inputs accept, "" included.
+ */
+function submittedFields(formData: FormData, fields: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const field of fields) {
+    const value = formData.get(field);
+    if (typeof value === "string") out[field] = value;
+  }
+  return out;
+}
+
+/**
  * Build `fieldErrors` + summary `error` from a Zod safeParse failure.
  * Spec 114: surfaces per-field error messages for inline form display.
  */
 function shapeZodError(
-  raw: Record<string, unknown>,
+  fields: Record<string, string>,
   issues: { path: (string | number)[]; message: string }[],
 ): AdminActionState {
   const fieldErrors: Record<string, string> = {};
@@ -156,7 +178,7 @@ function shapeZodError(
   return {
     ok: false,
     error: first ? `${first.path.join(".")}: ${first.message}` : "Validation failed",
-    fields: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, String(v ?? "")])),
+    fields,
     fieldErrors,
   };
 }
@@ -178,12 +200,13 @@ export async function createRowAction(
   await requireEntityGate(entity, session.user.id);
 
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema));
+  const echo = submittedFields(formData, entity.formFields);
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
-    return shapeZodError(raw, parse.error.issues);
+    return shapeZodError(echo, parse.error.issues);
   }
   const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
-  if (problems) return problemsState(raw, problems);
+  if (problems) return problemsState(echo, problems);
 
   const audited = withAudit(
     async () => {
@@ -206,7 +229,7 @@ export async function createRowAction(
     await audited();
   } catch (err) {
     console.error("[admin.row.create] failed", err);
-    return writeErrorState(entity, raw, err);
+    return writeErrorState(entity, echo, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
@@ -237,9 +260,10 @@ export async function updateRowAction(
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema), {
     emptyMeansNull: true,
   });
+  const echo = submittedFields(formData, entity.formFields);
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
-    return shapeZodError(raw, parse.error.issues);
+    return shapeZodError(echo, parse.error.issues);
   }
   // READ, GUARD, WRITE, in one transaction. This used to be a blind UPDATE by
   // id: it could not enforce a rule that depends on the row's current state
@@ -291,9 +315,9 @@ export async function updateRowAction(
     await audited();
   } catch (err) {
     if (err instanceof MutationRefused) return { ok: false, error: err.message };
-    if (err instanceof RowProblems) return problemsState(raw, err.problems);
+    if (err instanceof RowProblems) return problemsState(echo, err.problems);
     console.error("[admin.row.update] failed", err);
-    return writeErrorState(entity, raw, err);
+    return writeErrorState(entity, echo, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
