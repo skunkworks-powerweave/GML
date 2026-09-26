@@ -146,11 +146,27 @@ test("the WhatsApp webhook refuses an unsigned POST", async () => {
   // This is the primary, internet-facing ingest path. It used to accept
   // unsigned POSTs from anyone when WHATSAPP_APP_SECRET was unset — and the
   // variable was absent from .env.example, so that was the default everywhere.
+  //
+  // Refused has two correct shapes. A configured webhook answers 401 (the
+  // signature failed). A deployment that has not switched WhatsApp on yet --
+  // it is optional, and deploy.sh says "WhatsApp ingest is OFF" -- answers 503
+  // whatsapp_not_configured for every request. Pinning 401 alone made every
+  // deploy without WhatsApp end in "post-deploy smoke FAILED". Anything else,
+  // including a 200, still fails here.
   const res = await get("/api/webhooks/whatsapp", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ entry: [] }),
   });
+  if (res.status === 503) {
+    const body = await res.json().catch(() => null);
+    assert.deepEqual(
+      body,
+      { error: "whatsapp_not_configured" },
+      "a 503 is only acceptable as the explicit not-configured refusal",
+    );
+    return;
+  }
   assert.equal(
     res.status,
     401,
