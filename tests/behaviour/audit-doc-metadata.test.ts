@@ -17,6 +17,8 @@
 //                                client pings (writes kind, fileKey, piiAudited)
 //   quiz.schema.update           "a setting's key is present only when that save changed it" (the
 //                                editor pre-fills every setting, so every save writes them all)
+//   quickfind.query              `userId`, `query` "(length only, NOT raw text — privacy)" (writes
+//                                q, the search as typed, and resultCount -- as spec 121 says)
 //
 // Executed: the real handlers, as a signed-in user, against Postgres; each
 // row they write is compared with its documented row, both ways.
@@ -91,9 +93,32 @@ function assertDocumented(row: Row, optional: string[] = []): void {
 async function signedIn(f: Fixture, role: string): Promise<string> {
   const id = await f.user(role, role);
   f.defer(`DELETE FROM rate_limits WHERE key LIKE $1`, [`%:${id}`]);
-  f.defer(`DELETE FROM notifications WHERE entity_type = 'helpdesk' AND body LIKE $1`, [`%${id}%`]);
   actAs(id, role);
   return id;
+}
+
+/**
+ * Run `body` with the helpdesk notifications whose text carries `marker`
+ * silently skipped. A ticket notifies every active administrator in the
+ * database, and a shared test database holds other files' administrators:
+ * their inbox assertions would see this ticket, and one deleted between the
+ * route's SELECT and INSERT failed it on the foreign key. A BEFORE trigger
+ * that returns NULL drops the row without an error, so the route still runs
+ * through to its audit write. `marker` must be a test-generated value.
+ */
+async function withoutTicketNotifications<T>(c: Client, marker: string, body: () => Promise<T>): Promise<T> {
+  const name = `test_skip_${marker.replace(/-/g, "")}`;
+  await c.query(
+    `CREATE FUNCTION public.${name}() RETURNS trigger LANGUAGE plpgsql AS $f$
+     BEGIN IF NEW.kind = 'helpdesk.ticket' AND NEW.body LIKE '%${marker}%' THEN RETURN NULL; END IF; RETURN NEW; END $f$`,
+  );
+  await c.query(`CREATE TRIGGER ${name} BEFORE INSERT ON notifications FOR EACH ROW EXECUTE FUNCTION public.${name}()`);
+  try {
+    return await body();
+  } finally {
+    await c.query(`DROP TRIGGER IF EXISTS ${name} ON notifications`);
+    await c.query(`DROP FUNCTION IF EXISTS public.${name}()`);
+  }
 }
 
 // ── helpdesk.* ───────────────────────────────────────────────────────────────
@@ -112,7 +137,9 @@ test("W3-06/W3-24 helpdesk.*: the ticket and the throttle rows hold what the tax
             body: JSON.stringify({ topic: "login", pageSlug: "/dashboard", message: `help ${me}` }),
           }),
         );
-      assert.equal((await post()).status, 200);
+      await withoutTicketNotifications(c, me, async () => assert.equal((await post()).status, 200));
+      const leaked = await c.query(`SELECT 1 FROM notifications WHERE body LIKE $1`, [`%${me}%`]);
+      assert.equal(leaked.rows.length, 0, "this test's ticket reached another file's administrators");
       const [opened] = await rowsOf(c, me, "helpdesk.ticket_opened");
       assertDocumented(opened!);
 
@@ -227,6 +254,28 @@ test("W3-24 quiz.schema.update: a setting's key says the save carried it, not th
         "the taxonomy says a key means the setting changed; this save changed nothing and wrote every key",
       );
       assertDocumented(row!, ["rttSubjectId"]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── quickfind.query ──────────────────────────────────────────────────────────
+
+test("W3-25 quickfind.query: the row holds the search as typed and its result count, as the taxonomy says", { skip }, async () => {
+  await withClient(async (c) => {
+    const t = tag("doc-qf");
+    const f = fixture(c, t);
+    try {
+      const me = await signedIn(f, "teacher");
+      const { GET } = await import("../../apps/web/src/app/api/quickfind/route.ts");
+      const res = await GET(new Request(`http://x/api/quickfind?q=${encodeURIComponent(`  ${t} nobody  `)}`));
+      assert.equal(res.status, 200);
+      const [row] = await rowsOf(c, me, "quickfind.query");
+      assertDocumented(row!);
+      // The decided shape (spec 121, and learners.search beside it): the
+      // trimmed text, so an administrator can see what was looked up.
+      assert.deepEqual(row!.metadata, { q: `${t} nobody`, resultCount: 0 });
     } finally {
       await f.cleanup();
     }

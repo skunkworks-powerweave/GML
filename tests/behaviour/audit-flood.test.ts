@@ -56,16 +56,19 @@ type Row = { metadata: Record<string, unknown>; entity_id: string | null };
 
 /**
  * This user's rows for `action`, once the voided recordAudit() inserts the
- * routes fire have landed: read until two reads 150 ms apart agree.
+ * routes fire have landed: read until two reads 150 ms apart agree, and --
+ * when the test knows rows are coming -- until at least `expect` are there.
+ * Two agreeing reads alone could both come before a slow insert under a
+ * loaded suite, and a count of 0 then failed a test whose route was right.
  */
-async function auditRows(c: Client, userId: string, action: string): Promise<Row[]> {
+async function auditRows(c: Client, userId: string, action: string, expect = 0): Promise<Row[]> {
   const read = async () =>
     (await c.query<Row>(`SELECT metadata, entity_id FROM audit_log WHERE user_id = $1 AND action = $2`, [userId, action])).rows;
   let prev = await read();
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 150));
     const next = await read();
-    if (next.length === prev.length) return next;
+    if (next.length === prev.length && next.length >= expect) return next;
     prev = next;
   }
   return prev;
@@ -164,16 +167,12 @@ test("F97 quickfind: the longest value it searches, pasted whole, is found; one 
       const over = await quickfind(`${topic}x`);
       assert.equal(over.status, 400, "a query longer than any searchable value was searched");
 
-      // PROVISIONAL: the row stores the raw q as typed. docs/audit-actions.md
-      // documents quickfind.query as length only, NOT raw text (privacy), and
-      // product has not yet decided which is right. This pin records current
-      // behaviour; change it with that decision, not around it.
-      const rows = await auditRows(c, me, "quickfind.query");
-      assert.deepEqual(
-        rows.map((r) => r.metadata.q),
-        [topic],
-        "the served search is audited once, the refused one not at all",
-      );
+      // What F97 needs: the served search is one row, the refused one none.
+      // What the row holds is the taxonomy's contract, pinned against
+      // docs/audit-actions.md in audit-doc-metadata.test.ts (W3-25).
+      const rows = await auditRows(c, me, "quickfind.query", 1);
+      assert.equal(rows.length, 1, "the served search is audited once, the refused one not at all");
+      assert.equal(rows[0]!.metadata.resultCount, 1);
     } finally {
       await f.cleanup();
     }
@@ -226,7 +225,7 @@ test("F97 quickfind: a person typing is never throttled, a loop is, and every se
       );
 
       // Every search that was answered is in the log; none that was refused is.
-      assert.equal((await auditRows(c, me, "quickfind.query")).length, served.length);
+      assert.equal((await auditRows(c, me, "quickfind.query", served.length)).length, served.length);
       const again = await quickfind(`${t}-after`);
       assert.equal(again.status, 429, "a search was served after the throttle engaged");
       assert.ok(Number(again.headers.get("retry-after")) > 0, "a 429 says when to retry");
@@ -252,7 +251,7 @@ test("F97 resource-view: the beacon is throttled per user", { skip, timeout: 120
       assert.ok(statuses.includes(429), `50 beacons in a row were all recorded: ${statuses.join(",")}`);
       assert.equal(statuses.indexOf(429), served, "a beacon was recorded after the throttle engaged");
       assert.ok(served >= 10, `only ${served} beacons were recorded before the throttle`);
-      assert.equal((await auditRows(c, me, "resource.view.client_ping")).length, served);
+      assert.equal((await auditRows(c, me, "resource.view.client_ping", served)).length, served);
     } finally {
       await f.cleanup();
     }
@@ -300,7 +299,7 @@ test("W3-06 helpdesk: a caller over the ticket limit is refused every time and a
         0,
         "a refused POST opened a ticket",
       );
-      const rows = await auditRows(c, me, "helpdesk.ticket_rate_limited");
+      const rows = await auditRows(c, me, "helpdesk.ticket_rate_limited", 1);
       assert.equal(rows.length, 1, `50 refused POSTs wrote ${rows.length} permanent audit rows`);
       assert.equal(rows[0]!.entity_id, me);
       assert.equal(typeof rows[0]!.metadata.retryAfterMs, "number");
@@ -319,7 +318,7 @@ test("F97 resource-view: the viewer recorded is the session's, never a client-su
       const res = await ping({ id: resourceId, viewerId: "someone-else@example.test" });
       assert.equal(res.status, 204, "a client that still sends viewerId is not refused");
 
-      const rows = await auditRows(c, me, "resource.view.client_ping");
+      const rows = await auditRows(c, me, "resource.view.client_ping", 1);
       assert.equal(rows.length, 1);
       assert.equal(rows[0]!.entity_id, resourceId);
       assert.ok(

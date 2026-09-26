@@ -216,7 +216,7 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | `notifications.mark_read` | A user marked one or more notifications read via `/api/notifications/mark-read` | `userId`, `notificationIds`, `count` |
 | `user_prefs.update` | A user changed their UI preferences (language, theme, mobile-density) | `userId`, `changedKeys` |
 | `dashboard.viewed` | A user rendered `/dashboard` (loose "did the user come back?" signal) | `userId`, `role` |
-| `quickfind.query` | The CMD-K quick-find palette executed a search (spec 121) | `userId`, `query` (length only, NOT raw text — privacy), `resultCount` |
+| `quickfind.query` | The Cmd+K quick-find palette's search was answered (spec 121): `GET /api/quickfind` with 2 or more characters. `entity_type` `quickfind`, `user_id` the searcher. A refused search (too long, throttled, limiter unavailable) writes nothing. The text is kept as typed, as the learner search on `/repo/students` keeps its own: the row is the record of who looked up which teacher, school or session, and only a `programme_admin` or `super_admin` can read it (`/admin/audit`) | `q` (the trimmed search text, at most 240 characters), `resultCount` (rows shown, at most 20) |
 
 ## audit.* — meta-audit (read-on-write only)
 
