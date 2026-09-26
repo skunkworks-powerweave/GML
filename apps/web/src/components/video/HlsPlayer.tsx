@@ -1,9 +1,18 @@
 "use client";
 
 // HLS video player with watermark overlay (SM-4 deterrence) and signed-URL refresh.
-// Uses hls.js for browsers without native HLS support (Firefox, most Androids).
-// Safari, iOS and current desktop Chrome (canPlayType answers "maybe") use
-// native HLS via the <video> src attribute.
+//
+// WHICH ENGINE PLAYS (see playbackPath). hls.js, wherever it can run -- every
+// browser with Media Source Extensions, iOS 17.1+ included -- and the
+// browser's native HLS only where it cannot (iOS before 17.1). The player used
+// to go native whenever canPlayType("application/vnd.apple.mpegurl") was
+// non-empty, and current desktop and Android Chrome answer "maybe". The
+// playlist is same-origin (/api/media/playlist/<id>), every segment line in it
+// a signed Storage URL on another origin, and Chrome's native player failed
+// the stream with MEDIA_ERR_SRC_NOT_SUPPORTED: no transcoded video played in
+// Chrome, and the message that followed blamed the connection. hls.js fetches
+// segments with CORS, which Storage answers (Access-Control-Allow-Origin: *);
+// tests/behaviour/hls-source-selection.test.ts runs this choice.
 //
 // Spec 132 (Workflow Run 11 frontend-parity) — adds the speed + quality
 // control row that the JSX prototype (LMS GML Frontend/videos.jsx lines
@@ -62,6 +71,34 @@ export function levelIndexFor(levels: Level[], choice: string): number {
   if (choice === "auto") return -1;
   return levels.findIndex((l) => label(l) === choice);
 }
+
+export type PlaybackPath = "hls.js" | "native" | "unsupported";
+
+/**
+ * The engine for this browser: hls.js whenever Hls.isSupported(), else native
+ * HLS when the element claims it (canPlayType's answer, "" for no), else none.
+ * A native "maybe" never outranks hls.js -- Chrome says "maybe" and then
+ * cannot play the stream.
+ */
+export function playbackPath(hlsSupported: boolean, nativeHls: string): PlaybackPath {
+  if (hlsSupported) return "hls.js";
+  return nativeHls !== "" ? "native" : "unsupported";
+}
+
+/**
+ * Whether this browser has a MediaSource of any kind -- hls.js's own first
+ * test (ManagedMediaSource is iOS 17.1+'s). Without one hls.js cannot run, so
+ * its bundle is not fetched: an older iPhone on a 2G link starts its native
+ * player at once instead of first downloading a library it cannot use.
+ */
+function hasMediaSource(): boolean {
+  const g = globalThis as Record<string, unknown>;
+  return Boolean(g.ManagedMediaSource || g.MediaSource || g.WebKitMediaSource);
+}
+
+/** Shown when neither engine can play here. It is the browser, not the connection. */
+export const UNSUPPORTED_BROWSER_MESSAGE =
+  "This browser cannot play these videos. Open this page in an up-to-date Chrome, Firefox or Safari.";
 
 type HlsPlayerProps = {
   /** Pre-signed master playlist URL — /api/media/<token>. Refresh from server before expiry. */
@@ -154,12 +191,16 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
       policy: recoveryRef.current,
     };
 
-    const isNative = video.canPlayType("application/vnd.apple.mpegurl") !== "";
-    if (isNative) {
-      // SAFARI, iOS -- and desktop Chrome, which answers "maybe" here. This
-      // branch once had no error handling at all; iOS is a primary target
-      // (field mentors watch on phones).
-      detach = attachNative(video, hooks);
+    const nativeHls = video.canPlayType("application/vnd.apple.mpegurl");
+    // Where hls.js cannot run the choice is made now, without its bundle.
+    // Native is iOS before 17.1 here; this branch once had no error handling
+    // at all, and iOS is a primary target (field mentors watch on phones).
+    const withoutHlsJs = (path: PlaybackPath) => {
+      if (path === "native") detach = attachNative(video, hooks);
+      else setError(UNSUPPORTED_BROWSER_MESSAGE);
+    };
+    if (!hasMediaSource()) {
+      withoutHlsJs(playbackPath(false, nativeHls));
     } else {
       // Lazy-load hls.js so it doesn't bloat first paint.
       // Spec 156 (Run 14 audit-closure MEDIUM): chain a .catch so a
@@ -168,8 +209,10 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
       // nothing renders, and the user has no idea why the player is dead.
       import("hls.js")
         .then(({ default: Hls }) => {
-          if (cancelled || !Hls.isSupported()) {
-            if (!cancelled) setError("HLS playback not supported in this browser.");
+          if (cancelled) return;
+          const path = playbackPath(Hls.isSupported(), nativeHls);
+          if (path !== "hls.js") {
+            withoutHlsJs(path);
             return;
           }
           const hls = new Hls({
@@ -207,8 +250,8 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
   }
 
   // Apply quality change. -1 = auto (ABR), otherwise the chosen rendition. On
-  // Safari native HLS hlsRef is null and the menu offers only Auto: Safari
-  // switches renditions by itself and exposes no way to pin one.
+  // native HLS (iOS before 17.1) hlsRef is null and the menu offers only Auto:
+  // Safari switches renditions by itself and exposes no way to pin one.
   function applyQuality(next: string) {
     setQuality(next);
     const hls = hlsRef.current;
@@ -239,8 +282,13 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           overflow: "hidden",
         }}
       >
+        {/* crossOrigin: a native player fetches media itself, and the segments
+            are on Storage's origin, which answers CORS. The same-origin
+            playlist route still gets its cookies ("anonymous" withholds them
+            only cross-origin). hls.js plays from a blob: URL, unaffected. */}
         <video
           ref={videoRef}
+          crossOrigin="anonymous"
           controls
           playsInline
           poster={poster}
@@ -279,8 +327,11 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           {watermark}
         </div>
 
+        {/* role="alert": the message replaces the picture, so a screen reader
+            must hear it; it is rendered once, when playback has given up. */}
         {error ? (
           <div
+            role="alert"
             style={{
               position: "absolute",
               inset: 0,

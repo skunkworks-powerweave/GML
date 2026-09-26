@@ -19,7 +19,7 @@ const src = stripComments(readFileSync(resolve(root, "apps/web/src/components/vi
 
 test("F08 — both player branches hand the element to the recovery module", () => {
   assert.match(src, /from\s+"@\/lib\/video\/playback-recovery"/);
-  assert.match(src, /attachNative\(\s*video\s*,\s*hooks\s*\)/, "the native branch (Safari, iOS, desktop Chrome)");
+  assert.match(src, /attachNative\(\s*video\s*,\s*hooks\s*\)/, "the native branch (iOS before 17.1, where hls.js cannot run)");
   assert.match(src, /attachHls\(\s*video\s*,/, "the hls.js branch");
 });
 
