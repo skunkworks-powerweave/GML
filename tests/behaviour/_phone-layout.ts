@@ -53,10 +53,10 @@ const GLOBALS_CSS = fileURLToPath(new URL("src/app/globals.css", WEB_URL));
 /** The narrowest phone the programme's teachers carry. */
 export const PHONE_WIDTH = 360;
 /**
- * The content box on that phone: MobileShell's <main> pads 16px each side and
- * .page-body / .page-header another 32px, so 360 - 2 * 48.
+ * The content box on that phone: MobileShell's <main> pads 16px each side,
+ * and below 768px that is the only side gutter (globals.css), so 360 - 2 * 16.
  */
-export const PHONE_CONTENT = 264;
+export const PHONE_CONTENT = 328;
 /** A label column beside a value, e.g. "Uploaded | 3 Sep 2026". */
 const MAX_LABEL_TRACK = 140;
 
@@ -170,15 +170,22 @@ function mediaMatches(prelude: string, width: number): boolean {
 
 type SimpleRule = { cls: string; tag: string | null; decls: Decl };
 
-/** globals.css's top-level `.x` / `tag.x` rules, in source order. */
-async function globalsRules(): Promise<SimpleRule[]> {
+/**
+ * globals.css's `.x` / `tag.x` rules that hold at `width`, in source order:
+ * the top-level ones and those inside an @media query that matches.
+ */
+async function globalsRules(width: number): Promise<SimpleRule[]> {
   const out: SimpleRule[] = [];
-  for (const b of parseBlocks(await readFile(GLOBALS_CSS, "utf8"))) {
-    if (b.prelude.startsWith("@")) continue; // @theme, @media print, @keyframes
+  const add = (b: Block) => {
     for (const sel of b.prelude.split(",").map((s) => s.trim())) {
       const m = sel.match(/^([a-z]+)?\.([\w-]+)$/);
       if (m) out.push({ tag: m[1] ?? null, cls: m[2]!, decls: b.decls });
     }
+  };
+  for (const b of parseBlocks(await readFile(GLOBALS_CSS, "utf8"))) {
+    if (b.prelude.startsWith("@media")) {
+      if (mediaMatches(b.prelude, width)) b.children.forEach(add);
+    } else if (!b.prelude.startsWith("@")) add(b); // @theme, @keyframes
   }
   return out;
 }
@@ -248,7 +255,7 @@ export async function resolverFor(root: El, width: number): Promise<Resolver> {
   const classes = new Set<string>();
   for (const el of walk(root)) for (const c of classesOf(el)) classes.add(c);
   const tw = tailwindAt(await tailwindCss([...classes]), width);
-  const globals = await globalsRules();
+  const globals = await globalsRules(width);
   return (el, prop) => {
     const inline = inlineStyle(el)[prop];
     if (inline !== undefined) return inline;

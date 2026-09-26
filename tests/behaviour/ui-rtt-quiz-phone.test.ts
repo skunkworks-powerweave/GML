@@ -89,10 +89,10 @@ function columns(template: string): number {
   return n;
 }
 
-// The smallest phones still sold are 320 px wide, a column of 320 - 96 =
-// 224 px inside MobileShell and the page padding. _phone-layout.ts holds an
-// auto-fit grid to the 360 px phone's 264 px column; a 260 px minimum passes
-// that and still overflows here.
+// The smallest phones still sold are 320 px wide, a column of 320 - 32 =
+// 288 px inside MobileShell's padding. _phone-layout.ts holds an auto-fit
+// grid to the 360 px phone's 328 px column; a 300 px minimum passes that and
+// still overflows here.
 const SMALLEST_PHONE = 320;
 const SMALLEST_CONTENT = SMALLEST_PHONE - (PHONE_WIDTH - PHONE_CONTENT);
 

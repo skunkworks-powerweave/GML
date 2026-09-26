@@ -85,7 +85,9 @@ export default async function SettingsPage() {
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            // Two cards a row where they fit, one on a phone: a fixed
+            // "1fr 1fr" left each card ~130px there and clipped its buttons.
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))",
             gap: 18,
             marginBottom: 24,
           }}

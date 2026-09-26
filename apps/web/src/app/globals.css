@@ -240,6 +240,13 @@ input.text:focus, textarea.text:focus, select.text:focus {
 /* Page shell helpers */
 .page-header { padding: 24px 32px 12px; border-bottom: 1px solid var(--line); }
 .page-body { padding: 20px 32px 80px; }
+/* Below tablet width the shell's own <main> padding is the side gutter
+   (MobileShell 16px, DesktopShell 28px); 32px more on top left a 360px phone
+   a 264px column on every page. */
+@media (max-width: 768px) {
+  .page-header { padding: 24px 0 12px; }
+  .page-body { padding: 20px 0 80px; }
+}
 
 /* Watermark — used by HlsPlayer + PdfViewer */
 .wm-overlay {

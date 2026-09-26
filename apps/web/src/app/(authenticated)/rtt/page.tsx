@@ -146,8 +146,8 @@ export default async function RttIndexPage({
         ) : (
           <>
             {/* Phase strip. The card minimum is min(100%, 260px), as on the
-                self-paced units: a bare 260 px fits a 360 px phone's 264 px
-                column and overflows a 320 px phone's 224 px one (F11). */}
+                self-paced units, so a card never overflows a narrow phone's
+                column (F11). */}
             <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))", gap: 14 }}>
               {phaseRows.map((p) => {
                 const phaseTerms = termRows.filter((t) => t.phaseId === p.id).sort((a, b) => a.sequence - b.sequence);

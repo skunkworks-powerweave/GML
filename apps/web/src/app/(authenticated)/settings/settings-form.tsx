@@ -478,6 +478,7 @@ function KvRow({ label, children }: { label: string; children: React.ReactNode }
     <div
       style={{
         display: "flex",
+        flexWrap: "wrap",
         alignItems: "center",
         padding: "8px 0",
         borderTop: "1px solid var(--line)",

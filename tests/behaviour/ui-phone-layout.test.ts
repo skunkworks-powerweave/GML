@@ -29,7 +29,7 @@ import { render, withAppRouter, request } from "./_ui.js";
 import { Client } from "pg";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 import { observationWorld } from "./_observation-world.js";
-import { phoneLayoutIssues, templateAt, PHONE_WIDTH } from "./_phone-layout.js";
+import { phoneLayoutIssues, templateAt, parseMarkup, walk, resolverFor, PHONE_WIDTH } from "./_phone-layout.js";
 
 const skip = needsDatabase();
 after(async () => {
@@ -61,7 +61,7 @@ test("the resolver flags the shapes that overflowed, and passes their phone-safe
     // The value column's minimum is its content: a 36-character video id.
     labelValueThatCannotShrink: `<div style="display:grid;grid-template-columns:100px 1fr"><span>Video ID</span><div>uuid</div></div>`,
     evenSplitThatCannotShrink: `<div style="display:grid;grid-template-columns:1fr 1fr"><div></div><div></div></div>`,
-    wideAutoFill: `<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr))"></div>`,
+    wideAutoFill: `<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(340px, 1fr))"></div>`,
     tailwindWithoutBreakpoint: `<div class="grid grid-cols-3"></div>`,
     bareTable: `<div class="card"><table class="t"></table></div>`,
     scrolledTableInAutoTrack: `<div style="display:grid;gap:16px"><div class="card"><div style="overflow-x:auto"><table></table></div></div></div>`,
@@ -200,6 +200,33 @@ test("the dashboard fits a phone for a teacher and for an administrator (with th
       const html = await asPhone(user, () => DashboardPage());
       noIssues(await phoneLayoutIssues(html), `/dashboard as ${user.role}`);
     }
+  } finally {
+    await w.cleanup();
+  }
+});
+
+// ── page gutters and /settings (FR-30) ───────────────────────────────────────
+
+test("on a phone the shell's 16px is the only side gutter; the desktop keeps the page's 32px", async () => {
+  // .page-header/.page-body padded 32px on top of MobileShell's 16px, so a
+  // 360px phone had a 264px column on every page.
+  for (const cls of ["page-body", "page-header"]) {
+    const root = parseMarkup(`<div class="${cls}"></div>`);
+    const el = [...walk(root)].find((e) => e.attrs.class === cls)!;
+    const phone = (await resolverFor(root, PHONE_WIDTH))(el, "padding") ?? "";
+    const desktop = (await resolverFor(root, 1280))(el, "padding") ?? "";
+    assert.equal(phone.split(/\s+/)[1], "0", `.${cls} side padding on a phone: ${phone}`);
+    assert.equal(desktop.split(/\s+/)[1], "32px", `.${cls} side padding on a desktop: ${desktop}`);
+  }
+});
+
+test("/settings fits a phone: its cards stack instead of clipping Change password", { skip }, async () => {
+  const w = await observationWorld("phoneset");
+  try {
+    const { default: SettingsPage } = await import(`${APP}/settings/page.tsx`);
+    const html = await asPhone(w.teacher, () => SettingsPage());
+    assert.match(html, /Account/, "the Account card is on the page");
+    noIssues(await phoneLayoutIssues(html), "/settings");
   } finally {
     await w.cleanup();
   }
