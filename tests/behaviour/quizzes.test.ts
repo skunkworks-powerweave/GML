@@ -860,6 +860,64 @@ test("W3-17: a runner that opens with no time left does not auto-submit blank an
   }
 });
 
+// ── W3-18: the countdown ends when the attempt does, however slow the load ───
+
+/** Mount `Runner` with a limit and a server clock, and report the second of the fake clock at which it auto-submits. */
+async function autoSubmitSecond(Runner: unknown, timeLimitSeconds: number, serverOffsetMs: number | null): Promise<number | null> {
+  const clock = fakeClock();
+  try {
+    let at: number | null = null;
+    const mountedAt = Date.now();
+    const live = mountLive(Runner as never, {
+      slug: "s",
+      title: "T",
+      questions: RUNNER_QUESTIONS,
+      timeLimitSeconds,
+      serverNowMs: serverOffsetMs === null ? null : mountedAt + serverOffsetMs,
+      submitAction: async () => {
+        at ??= Math.round((Date.now() - mountedAt) / 1000);
+      },
+    } as never);
+    for (let s = 0; s < timeLimitSeconds + 2 && at === null; s++) {
+      clock.tick(1000);
+      await flush();
+      live.rerender();
+    }
+    live.unmount();
+    return at;
+  } finally {
+    clock.restore();
+  }
+}
+
+test("W3-18: a page that took 40 s to arrive leaves 20 s of a 60 s countdown, not 60", async () => {
+  for (const [name, Runner] of await runners()) {
+    // The server rendered 40 s before the runner mounted.
+    assert.equal(await autoSubmitSecond(Runner, 60, -40_000), 20, `${name} counted the load time as time to answer`);
+  }
+});
+
+test("W3-18: a server clock that cannot be load time is ignored, so a wrong phone clock takes nothing off", async () => {
+  for (const [name, Runner] of await runners()) {
+    assert.equal(await autoSubmitSecond(Runner, 60, null), 60, `${name} with no server clock`);
+    // The phone's clock is behind the server's: the gap is negative.
+    assert.equal(await autoSubmitSecond(Runner, 60, 5_000), 60, `${name} with a phone clock behind`);
+    // Ten minutes is not a page load; it is a phone clock ten minutes fast.
+    assert.equal(await autoSubmitSecond(Runner, 60, -600_000), 60, `${name} with a phone clock far ahead`);
+  }
+});
+
+test("W3-18: the page hands the runner the database's clock as it rendered", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    const serverNowMs = (runner as { serverNowMs?: unknown } | undefined)?.serverNowMs;
+    assert.equal(typeof serverNowMs, "number", `serverNowMs=${JSON.stringify(serverNowMs)}`);
+    // The local Postgres and this process share a machine, so the two clocks agree.
+    assert.ok(Math.abs(Date.now() - (serverNowMs as number)) < 5_000, `server clock ${serverNowMs} vs ${Date.now()}`);
+  });
+});
+
 // ── W3-20: the answers survive a reload ──────────────────────────────────────
 //
 // The runners kept the selections in React state only, so a reload or a stray

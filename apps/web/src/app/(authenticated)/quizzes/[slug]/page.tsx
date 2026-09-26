@@ -30,11 +30,19 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Quiz" };
 
 // Seconds past the time limit a submission is still scored. It exists for the
-// time the learner did NOT see: the countdown starts only once the page has
-// arrived and hydrated, and the auto-submit at 00:00 still has to travel back.
-// On a Ladakh 2G link that is seconds, and penalising it would be penalising
-// someone's bandwidth. It is applied HERE ONLY -- the countdown shows the real
-// limit -- because a grace that is also on the clock is no grace at all.
+// time the learner did NOT see: the auto-submit at 00:00 still has to travel
+// back, and the interval that fires it can be a second late. On a Ladakh 2G
+// link that is seconds, and penalising it would be penalising someone's
+// bandwidth. It is applied HERE ONLY -- the countdown shows the real limit --
+// because a grace that is also on the clock is no grace at all.
+//
+// It no longer has to cover the page's own load. The countdown used to start
+// when the runner mounted, so delivery and hydration came out of this grace
+// -- seconds on a warm cache, but a cold first load on 2G can take longer
+// than 30 s, and then every answer was refused. The runner now takes that
+// time off the countdown (components/quiz/deadline.ts, W3-18), except when
+// the phone's clock is too far from the database's to tell latency from a
+// wrong clock; then the load is paid from here, as before.
 const SUBMIT_GRACE_SECONDS = 30;
 
 /** The audit row for an attempt closed because its time ran out, by either path. */
@@ -393,6 +401,9 @@ export default async function QuizRunnerPage({
     .select({
       id: quizAttempts.id,
       elapsedSeconds: sql<number>`EXTRACT(EPOCH FROM (now() - ${quizAttempts.startedAt}))::int`,
+      // The same clock at the same moment, for the runner to measure how long
+      // this page took to reach it (components/quiz/deadline.ts).
+      serverNowMs: sql<number>`(EXTRACT(EPOCH FROM now()) * 1000)::float8`,
     })
     .from(quizAttempts)
     .where(
@@ -493,6 +504,7 @@ export default async function QuizRunnerPage({
           timeLimitSeconds={timeLimitSeconds}
           attemptId={attemptId}
           userId={session.user.id}
+          serverNowMs={attempt?.serverNowMs ?? null}
           submitAction={submitQuizAttempt}
         />
       </main>
@@ -518,6 +530,7 @@ export default async function QuizRunnerPage({
         timeLimitSeconds={timeLimitSeconds}
         attemptId={attemptId}
         userId={session.user.id}
+        serverNowMs={attempt?.serverNowMs ?? null}
         submitAction={submitQuizAttempt}
       />
     </main>

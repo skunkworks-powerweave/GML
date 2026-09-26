@@ -41,6 +41,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
 import { PickedMark } from "./PickedMark";
 import { useQuizAnswers } from "./answer-drafts";
+import { loadLatencyMs } from "./deadline";
 import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type MobileQuizRunnerQuestion = {
@@ -62,6 +63,9 @@ export type MobileQuizRunnerProps = {
   // Whose attempt it is: with the attempt id, the key the answers are kept
   // under in this tab so a reload does not lose them (answer-drafts.ts).
   userId?: string | null;
+  // The database's clock (epoch ms) as the page rendered: what the page took
+  // to arrive comes off the countdown (deadline.ts, W3-18).
+  serverNowMs?: number | null;
   // Server action — receives slug + attempt id + answers; redirects to
   // /quizzes/[slug]/result/[id]. Drop-in same shape as QuizRunner.
   // Spec 146: client sends ALL questions; skipped answers carry
@@ -94,6 +98,7 @@ export function MobileQuizRunner({
   timeLimitSeconds,
   attemptId,
   userId,
+  serverNowMs,
   submitAction,
 }: MobileQuizRunnerProps) {
   const [idx, setIdx] = useState(0);
@@ -144,7 +149,7 @@ export function MobileQuizRunner({
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
     const mountedAt = Date.now();
-    const deadline = mountedAt + timeLimitSeconds * 1000;
+    const deadline = mountedAt + timeLimitSeconds * 1000 - loadLatencyMs(serverNowMs, mountedAt);
     const hadTime = deadline > mountedAt;
     const autoSubmit = () => {
       if (submittedRef.current) return;

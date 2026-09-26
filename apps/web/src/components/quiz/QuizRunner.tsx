@@ -24,6 +24,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { PickedMark } from "./PickedMark";
 import { useQuizAnswers } from "./answer-drafts";
+import { loadLatencyMs } from "./deadline";
 import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type QuizRunnerQuestion = {
@@ -45,6 +46,9 @@ export type QuizRunnerProps = {
   // Whose attempt it is: with the attempt id, the key the answers are kept
   // under in this tab so a reload does not lose them (answer-drafts.ts).
   userId?: string | null;
+  // The database's clock (epoch ms) as the page rendered: what the page took
+  // to arrive comes off the countdown (deadline.ts, W3-18).
+  serverNowMs?: number | null;
   // Server action — receives slug + attempt id + answers; redirects to /quizzes/[slug]/result/[id].
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
@@ -77,6 +81,7 @@ export function QuizRunner({
   timeLimitSeconds,
   attemptId,
   userId,
+  serverNowMs,
   submitAction,
 }: QuizRunnerProps) {
   const [idx, setIdx] = useState(0);
@@ -142,10 +147,16 @@ export function QuizRunner({
   // by the first tick still goes, as at any other 00:00. (The page mounts no
   // runner for an attempt with no time left; this covers a load that took
   // longer than the time there was.)
+  //
+  // FROM WHEN THE PAGE RENDERED, NOT WHEN IT ARRIVED (W3-18). The seconds
+  // left were measured as the page rendered; counting them from mount added
+  // the page's delivery and hydration time to the countdown, and that time
+  // was paid out of the server's submit grace. It is taken off here
+  // (deadline.ts).
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
     const mountedAt = Date.now();
-    const deadline = mountedAt + timeLimitSeconds * 1000;
+    const deadline = mountedAt + timeLimitSeconds * 1000 - loadLatencyMs(serverNowMs, mountedAt);
     const hadTime = deadline > mountedAt;
     // Auto-submit closure — reads from refs so it always sees the latest
     // selection map and the latest question list, even though the effect
