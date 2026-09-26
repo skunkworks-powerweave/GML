@@ -104,3 +104,38 @@ test("FR-12: the completed pairing's page offers no meeting log, no new commitme
     assert.match(html, /<button[^>]*aria-label="Mark commitment: read daily"[^>]*disabled=""/, "the tick box is still live");
   });
 });
+
+test("FR-09: a pairing's meetings page past the newest 20, and the chip counts them all", { skip }, async () => {
+  // The query ended in .limit(20) with no pager, so every meeting past the
+  // 20th dropped off the page with its recording controls.
+  const w = await buildWorld("pairmeet");
+  try {
+    for (const p of [w.mentor]) await w.grant(p.id);
+    await w.q(
+      `INSERT INTO mentor_meetings (pairing_id, scheduled_at, notes)
+       SELECT $1, now() - make_interval(days => g), 'meeting ' || g FROM generate_series(1, 23) g`,
+      [w.pairingA],
+    );
+    const { render, decodeEntities } = await import("./_ui.js");
+    const { default: PairingDetailPage } = await import("../../apps/web/src/app/(authenticated)/mentorship/[pairingId]/page.tsx");
+    const html = async (sp: Record<string, string>) => {
+      signIn(w.mentor);
+      const r = await outcome(() => PairingDetailPage({ params: Promise.resolve({ pairingId: w.pairingA }), searchParams: Promise.resolve(sp) }));
+      assert.equal(r.kind, "value", describe(r));
+      return decodeEntities(await render((r as { value: unknown }).value));
+    };
+    const shown = (h: string) => [...h.matchAll(/meeting (\d+)</g)].map((m) => Number(m[1]));
+
+    const first = await html({});
+    assert.deepEqual(shown(first), Array.from({ length: 20 }, (_, i) => i + 1), "the newest 20, newest first");
+    assert.match(first, /<span class="chip">23<\/span>/, "the chip counts every meeting");
+    assert.ok(first.includes(`href="/mentorship/${w.pairingA}?meetings=2">Older`), "an Older link to page 2");
+
+    const older = await html({ meetings: "2" });
+    assert.deepEqual(shown(older), [21, 22, 23]);
+  } finally {
+    signIn(null);
+    await w.q(`DELETE FROM mentor_meetings WHERE pairing_id = $1`, [w.pairingA]);
+    await w.cleanup();
+  }
+});

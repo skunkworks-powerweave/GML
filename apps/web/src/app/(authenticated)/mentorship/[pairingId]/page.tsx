@@ -38,6 +38,7 @@ import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { getDeviceType } from "@/lib/device";
 import { lookupOwn } from "@/lib/lookup";
+import { parsePage } from "@/lib/observation/list";
 import { QUARTER_TO_KIND, quarterlyVersionByKind } from "@/lib/forms/quarterly";
 import { loadEnabledNotificationKinds } from "@/lib/notification-kinds";
 import { MobileDetailFrame } from "@/components/shells";
@@ -87,12 +88,15 @@ function isUpcoming(scheduledAt: Date): boolean {
 // A lookup also means the next version bump does not silently break this page
 // again, which a corrected constant would not have prevented.
 
+/** Meetings a page on the pairing record, newest first. */
+const MEETINGS_PAGE_SIZE = 20;
+
 export default async function PairingDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ pairingId: string }>;
-  searchParams?: Promise<{ logMeeting?: string; error?: string; confirmCancel?: string }>;
+  searchParams?: Promise<{ logMeeting?: string; error?: string; confirmCancel?: string; meetings?: string }>;
 }) {
   const { pairingId } = await params;
   const sp = (await searchParams) ?? {};
@@ -203,12 +207,23 @@ export default async function PairingDetailPage({
     ? await loadEnabledNotificationKinds().then((kinds) => kinds === null || kinds.includes("meeting.cancelled"))
     : true;
 
+  // PAGED (?meetings=<page>), newest first. This was the newest 20 and no
+  // more: with weekly contact every meeting past the 20th dropped off the page
+  // with its recording controls, and the chip counted only the 20.
+  const [{ n: meetingTotal }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(mentorMeetings)
+    .where(eq(mentorMeetings.pairingId, pairingId));
+  const meetingPages = Math.max(1, Math.ceil(meetingTotal / MEETINGS_PAGE_SIZE));
+  const meetingPage = Math.min(parsePage(sp.meetings), meetingPages);
   const meetings = await db
     .select()
     .from(mentorMeetings)
     .where(eq(mentorMeetings.pairingId, pairingId))
-    .orderBy(desc(mentorMeetings.scheduledAt))
-    .limit(20);
+    .orderBy(desc(mentorMeetings.scheduledAt), desc(mentorMeetings.id))
+    .limit(MEETINGS_PAGE_SIZE)
+    .offset((meetingPage - 1) * MEETINGS_PAGE_SIZE);
+  const meetingsHref = (page: number) => `/mentorship/${pairingId}${page > 1 ? `?meetings=${page}` : ""}`;
 
   // EVERY RECORDING OF EACH MEETING, not only recording_video_id. A meeting
   // can have several: a long one sent over WhatsApp arrives in parts (a video
@@ -633,7 +648,7 @@ export default async function PairingDetailPage({
                   Mentor logs every contact — phone, video, in-person, WhatsApp
                 </div>
               </div>
-              <span className="chip">{meetings.length}</span>
+              <span className="chip">{meetingTotal}</span>
             </div>
             {meetings.length === 0 ? (
               <p style={{ padding: 16, fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
@@ -780,6 +795,23 @@ export default async function PairingDetailPage({
                 })}
               </div>
             )}
+            {meetingPages > 1 ? (
+              <nav
+                aria-label="Meeting pages"
+                style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--line)" }}
+              >
+                {meetingPage > 1 ? (
+                  <Link href={meetingsHref(meetingPage - 1)} className="btn btn-sm">
+                    ← Newer
+                  </Link>
+                ) : null}
+                {meetingPage < meetingPages ? (
+                  <Link href={meetingsHref(meetingPage + 1)} className="btn btn-sm">
+                    Older →
+                  </Link>
+                ) : null}
+              </nav>
+            ) : null}
           </div>
         </div>
 

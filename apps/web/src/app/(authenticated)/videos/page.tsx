@@ -33,6 +33,7 @@ import { UploadModal } from "@/components/video/UploadModal";
 import { whatsappPhoneForUsers } from "@/lib/env";
 import { getSystemSettings } from "@/lib/system-settings";
 import { signPosterUrls } from "@/lib/video/storage";
+import { parsePage } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,9 @@ const STATE_CHIP: Record<string, string> = {
   review_pending: "chip-saffron",
   reviewed: "chip-indigo",
 };
+
+/** Cards a page: a phone on 2G pays for each (about 2.7 KB of HTML plus its poster). */
+const LIBRARY_PAGE_SIZE = 30;
 
 const STATUS_VALUES = new Set([
   "received",
@@ -86,7 +90,7 @@ type VideoSource = "direct" | "whatsapp" | "external_link" | "google_drive";
 export default async function VideoLibraryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; source?: string }>;
+  searchParams: Promise<{ status?: string; source?: string; page?: string }>;
 }) {
   const sp = await searchParams;
   const whatsappPhone = whatsappPhoneForUsers();
@@ -150,34 +154,6 @@ export default async function VideoLibraryPage({
   conds.push(...scopeConds);
   if (filter) conds.push(eq(videoSubmissions.status, filter as VideoStatus));
 
-  const rows = await db
-    .select({
-      id: videoSubmissions.id,
-      source: videoSubmissions.source,
-      status: videoSubmissions.status,
-      durationSec: videoSubmissions.durationSec,
-      createdAt: videoSubmissions.createdAt,
-      contextType: videoSubmissions.contextType,
-      contextId: videoSubmissions.contextId,
-      hlsKey: videoSubmissions.hlsMasterKey,
-      posterKey: videoSubmissions.posterKey,
-    })
-    .from(videoSubmissions)
-    .where(conds.length === 0 ? undefined : and(...conds))
-    .orderBy(desc(videoSubmissions.createdAt))
-    .limit(100);
-
-  // The poster frame the worker made for each video, signed in one batch --
-  // only for rows the scope above already allowed. Empty on a Storage error:
-  // the cards then show their placeholder, as they always did.
-  const posterUrls = await signPosterUrls(rows.map((r) => r.posterKey));
-
-  // Per-status counts as a single GROUP BY, over the SAME visibility scope as
-  // the rows above. Without `scopeConds` here this aggregate ran unfiltered, so
-  // the chips reported totals for the whole programme -- including mentorship
-  // recordings and mentee quarterly videos -- to a teacher who could open none
-  // of them. A count is not a lesser disclosure than a row: "47 mentor
-  // meetings" is exactly the fact the visibility scope exists to withhold.
   const statusCountRows = await db
     .select({
       status: videoSubmissions.status,
@@ -196,6 +172,52 @@ export default async function VideoLibraryPage({
     queued: countByStatus("queued"),
   };
 
+  // PAGES, not the newest 100. The chips counted the whole set ("All 125")
+  // while only 100 cards rendered and nothing reached the rest. A stale page
+  // past the end is the last page.
+  const matching = filter ? countByStatus(filter) : totalVideos;
+  const lastPage = Math.max(1, Math.ceil(matching / LIBRARY_PAGE_SIZE));
+  const page = Math.min(parsePage(sp.page), lastPage);
+
+  const rows = await db
+    .select({
+      id: videoSubmissions.id,
+      source: videoSubmissions.source,
+      status: videoSubmissions.status,
+      durationSec: videoSubmissions.durationSec,
+      createdAt: videoSubmissions.createdAt,
+      contextType: videoSubmissions.contextType,
+      contextId: videoSubmissions.contextId,
+      hlsKey: videoSubmissions.hlsMasterKey,
+      posterKey: videoSubmissions.posterKey,
+    })
+    .from(videoSubmissions)
+    .where(conds.length === 0 ? undefined : and(...conds))
+    // id breaks ties, so the order is total and pages cannot overlap.
+    .orderBy(desc(videoSubmissions.createdAt), desc(videoSubmissions.id))
+    .limit(LIBRARY_PAGE_SIZE)
+    .offset((page - 1) * LIBRARY_PAGE_SIZE);
+
+  // The poster frame the worker made for each video, signed in one batch --
+  // only for rows the scope above already allowed. Empty on a Storage error:
+  // the cards then show their placeholder, as they always did.
+  const posterUrls = await signPosterUrls(rows.map((r) => r.posterKey));
+  const from = rows.length === 0 ? 0 : (page - 1) * LIBRARY_PAGE_SIZE + 1;
+  const to = (page - 1) * LIBRARY_PAGE_SIZE + rows.length;
+  const pageHref = (n: number) => {
+    const qs = new URLSearchParams();
+    if (filter) qs.set("status", filter);
+    if (sourceFilter) qs.set("source", sourceFilter);
+    qs.set("page", String(n));
+    return `/videos?${qs.toString()}`;
+  };
+
+  // Per-status counts as a single GROUP BY, over the SAME visibility scope as
+  // the rows above. Without `scopeConds` here this aggregate ran unfiltered, so
+  // the chips reported totals for the whole programme -- including mentorship
+  // recordings and mentee quarterly videos -- to a teacher who could open none
+  // of them. A count is not a lesser disclosure than a row: "47 mentor
+  // meetings" is exactly the fact the visibility scope exists to withhold.
   return (
     <div>
       <div className="page-header">
@@ -293,7 +315,7 @@ export default async function VideoLibraryPage({
             </button>
           </form>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{rows.length} shown</span>
+            <span className="chip">{`Showing ${from}–${to} of ${matching}`}</span>
           </div>
         </div>
 
@@ -396,6 +418,20 @@ export default async function VideoLibraryPage({
             ))}
           </div>
         )}
+        {lastPage > 1 ? (
+          <nav aria-label="Pages" style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            {page > 1 ? (
+              <Link href={pageHref(page - 1)} className="btn btn-sm">
+                ← Previous
+              </Link>
+            ) : null}
+            {page < lastPage ? (
+              <Link href={pageHref(page + 1)} className="btn btn-sm">
+                Next →
+              </Link>
+            ) : null}
+          </nav>
+        ) : null}
       </div>
     </div>
   );
