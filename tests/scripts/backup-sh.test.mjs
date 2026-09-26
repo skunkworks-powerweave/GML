@@ -27,6 +27,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { makeSandbox, posixish, root } from "./_sandbox.mjs";
+import { BUCKETS } from "../../packages/shared/src/storage/buckets.ts";
 
 const LIB = "scripts/lib/pg-major.sh";
 const AUDIT_LIB = "scripts/lib/audit-host-job.sh";
@@ -78,6 +79,7 @@ esac
  */
 const RCLONE = `
 printf 'rclone-endpoint=%s\\n' "\${RCLONE_CONFIG_SUPASRC_ENDPOINT}" >> "$SANDBOX_LOG"
+printf 'rclone-source=%s\\n' "$2" >> "$SANDBOX_LOG"
 if [ -z "\${RCLONE_CONFIG_SUPASRC_SECRET_ACCESS_KEY}" ]; then
   echo "rclone: SignatureDoesNotMatch" >&2
   exit 1
@@ -222,6 +224,13 @@ test("backup.sh DERIVES the Storage S3 endpoint from the project URL and mirrors
     for (const e of endpoints) {
       assert.equal(e, "rclone-endpoint=https://abcdefgh.storage.supabase.co/storage/v1/s3");
     }
+    // Every bucket the app writes, SCORM packages included: the list was
+    // hard-coded to the first four, so scorm-packages was never copied (FR-22).
+    const mirrored = sb
+      .invocations()
+      .filter((l) => l.startsWith("rclone-source=SUPASRC:"))
+      .map((l) => l.slice("rclone-source=SUPASRC:".length));
+    assert.deepEqual(mirrored.sort(), Object.values(BUCKETS).sort(), "the mirrored buckets are BUCKETS");
   } finally {
     sb.cleanup();
   }

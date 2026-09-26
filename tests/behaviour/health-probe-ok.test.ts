@@ -47,3 +47,30 @@ test("the migrations probe knows the build's migrations whatever the working dir
     rmSync(elsewhere, { recursive: true, force: true });
   }
 });
+
+test("FR-22: /api/health's Storage check requires every bucket the app writes, SCORM packages included", async () => {
+  const { createServer } = await import("node:http");
+  const { BUCKETS } = await import("../../packages/shared/src/storage/buckets.ts");
+  let names: string[] = [];
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(names.map((name) => ({ name }))));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const saved = { url: process.env.NEXT_PUBLIC_SUPABASE_URL, key: process.env.SUPABASE_SECRET_KEY };
+  process.env.NEXT_PUBLIC_SUPABASE_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  process.env.SUPABASE_SECRET_KEY = "test-secret";
+  try {
+    const { pingStorage } = await import("../../apps/web/src/lib/health.ts");
+    names = ["videos-original", "videos-hls", "posters", "pdfs"];
+    assert.deepEqual(await pingStorage(), { ok: false, detail: "missing buckets: scorm-packages" });
+    names = Object.values(BUCKETS);
+    assert.deepEqual(await pingStorage(), { ok: true });
+  } finally {
+    for (const [k, v] of [["NEXT_PUBLIC_SUPABASE_URL", saved.url], ["SUPABASE_SECRET_KEY", saved.key]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await new Promise((r) => server.close(r));
+  }
+});

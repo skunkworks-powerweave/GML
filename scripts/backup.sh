@@ -197,7 +197,9 @@ if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY
   # (README-deploy.md section 7).
   export RCLONE_CONFIG_DRDEST_ENV_AUTH=true
 
-  for bucket in videos-original videos-hls posters pdfs; do
+  # Every bucket in packages/shared/src/storage/buckets.ts BUCKETS
+  # (tests/scripts/backup-sh.test.mjs holds the two lists equal).
+  for bucket in videos-original videos-hls posters pdfs scorm-packages; do
     log "mirroring ${bucket}"
     rclone copy \
       "SUPASRC:${bucket}" \

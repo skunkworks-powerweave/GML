@@ -2,6 +2,7 @@
 
 // Data only: importing it opens nothing (the pool is imported lazily below).
 import migrationsJournal from "@gml/db/migrations/journal";
+import { BUCKETS } from "@gml/shared/storage/buckets";
 
 export type PingResult = {
   ok: boolean;
@@ -86,9 +87,10 @@ export async function pingStorage(): Promise<PingResult> {
     if (!res.ok) return { ok: false, detail: `status ${res.status}` };
     const buckets = (await res.json()) as { name: string }[];
     const names = new Set(buckets.map((b) => b.name));
-    const missing = ["videos-original", "videos-hls", "posters", "pdfs"].filter(
-      (b) => !names.has(b),
-    );
+    // Every bucket the app writes: a hand-written list left out
+    // scorm-packages, so a deployment without it reported healthy while
+    // every SCORM upload and launch failed.
+    const missing = Object.values(BUCKETS).filter((b) => !names.has(b));
     return missing.length === 0
       ? { ok: true }
       : { ok: false, detail: `missing buckets: ${missing.join(", ")}` };
