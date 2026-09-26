@@ -174,7 +174,7 @@ export default async function AdminIndexPage() {
             >
               <div className="text-sm font-medium">Transcode jobs</div>
               <div className="text-xs text-neutral-500">
-                Inspect the dead-letter queue · retry or drop failed transcodes (spec 162)
+                Inspect the dead-letter queue · retry or drop failed transcodes
               </div>
             </Link>
           </li>

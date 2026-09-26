@@ -232,7 +232,7 @@ export default async function InboxPage({
           </h2>
           <p style={{ color: "var(--ink-3)", fontSize: 13, maxWidth: 420, margin: "0 auto" }}>
             Operational events — assigned cycles, transcoded videos, scheduled meetings, due quizzes — will show up
-            here. Notifications are kept for 90 days (SM-8).{" "}
+            here. Notifications are kept for 90 days.{" "}
             <Link href="/dashboard" style={{ color: "var(--indigo)" }}>
               Back to dashboard →
             </Link>

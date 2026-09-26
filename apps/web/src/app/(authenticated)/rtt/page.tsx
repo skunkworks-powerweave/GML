@@ -140,7 +140,7 @@ export default async function RttIndexPage({
         ) : null}
 
         {phaseRows.length === 0 ? (
-          <p style={{ color: "var(--ink-3)" }}>No phases seeded yet. Run the spec 086 seed script.</p>
+          <p style={{ color: "var(--ink-3)" }}>No phases have been set up yet.</p>
         ) : (
           <>
             {/* Phase strip. The card minimum is min(100%, 260px), as on the
