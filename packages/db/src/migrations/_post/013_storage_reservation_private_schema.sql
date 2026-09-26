@@ -35,7 +35,7 @@ BEGIN
   IF to_regclass('storage.objects') IS NULL
      OR to_regprocedure('auth.uid()') IS NULL
      OR (SELECT count(*) FROM pg_roles WHERE rolname IN ('anon', 'authenticated')) < 2 THEN
-    RAISE NOTICE '[_post/011] storage/auth schema or API roles absent (not a Supabase database) -- skipping';
+    RAISE NOTICE '[_post/013] storage/auth schema or API roles absent (not a Supabase database) -- skipping';
     RETURN;
   END IF;
 
