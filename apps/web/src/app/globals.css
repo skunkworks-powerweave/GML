@@ -237,6 +237,10 @@ input.text:focus, textarea.text:focus, select.text:focus {
 
 .divider { height: 1px; background: var(--line); }
 
+/* The bar over the current bottom tab (BottomTabs, ActiveNavLink). */
+.m-tab-indicator { background: transparent; }
+[aria-current="page"] > .m-tab-indicator { background: var(--ink); }
+
 /* Page shell helpers */
 .page-header { padding: 24px 32px 12px; border-bottom: 1px solid var(--line); }
 .page-body { padding: 20px 32px 80px; }

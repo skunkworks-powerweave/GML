@@ -15,12 +15,12 @@
 // none). When counts is missing the static prototype numbers still render —
 // chrome stays readable in degraded mode.
 
-import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { NetworkStatusServer } from "./NetworkStatusServer";
+import { ActiveNavLink } from "./ActiveNavLink";
 import { Icon } from "./Icon";
 
 type SidebarProps = {
@@ -151,30 +151,33 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
               super_admin heard four identical "navigation" landmarks. */}
           <nav aria-label={sectionLabel} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
             {section.items.map((item) => {
-              const isActive = activeId === item.id;
               const itemKey = item.labelKey ?? ITEM_KEY[item.id];
               const itemLabel = itemKey ? tNav(itemKey) : item.label;
               return (
-                <Link
+                <ActiveNavLink
                   key={item.id}
+                  role={role}
+                  id={item.id}
+                  kind="sidebar"
+                  serverActive={activeId === item.id}
                   href={item.href}
                   data-help-anchor={`nav-${item.id}`}
-                  // The current page, stated -- not only drawn with a
-                  // background and a border.
-                  aria-current={isActive ? "page" : undefined}
+                  // The current page is stated (aria-current), not only drawn
+                  // with a background and a border.
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 9,
                     padding: "6px 8px",
                     borderRadius: "var(--r-2)",
-                    color: isActive ? "var(--ink)" : "var(--ink-2)",
-                    background: isActive ? "var(--card-hi)" : "transparent",
+                    color: "var(--ink-2)",
+                    background: "transparent",
                     fontSize: 13,
-                    fontWeight: isActive ? 500 : 400,
+                    fontWeight: 400,
                     textDecoration: "none",
-                    border: isActive ? "1px solid var(--line)" : "1px solid transparent",
+                    border: "1px solid transparent",
                   }}
+                  activeStyle={{ color: "var(--ink)", background: "var(--card-hi)", fontWeight: 500, border: "1px solid var(--line)" }}
                 >
                   <Icon name={item.icon} size={14} />
                   <span style={{ flex: 1 }}>{itemLabel}</span>
@@ -219,7 +222,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                       {item.count}
                     </span>
                   ) : null}
-                </Link>
+                </ActiveNavLink>
               );
             })}
           </nav>

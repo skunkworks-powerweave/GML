@@ -8,11 +8,11 @@
 // chip when cycles are in flight. We render a single small badge per tab
 // (mobile real-estate is tight) and tolerate `counts` being absent.
 
-import Link from "next/link";
 import { getLocale, getTranslations } from "next-intl/server";
 import { TABS_BY_ROLE } from "@/config/nav";
 import type { NavCounts } from "@/lib/chrome-counts";
 import type { RoleName } from "@gml/shared/auth/roles";
+import { ActiveNavLink } from "./ActiveNavLink";
 import { Icon } from "./Icon";
 
 type BottomTabsProps = {
@@ -96,7 +96,6 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
       }}
     >
       {tabs.map((tab) => {
-        const isActive = activeTab === tab.id;
         const badgeFn = TAB_BADGE[tab.id];
         const badgeVal = badgeFn ? badgeFn(counts ?? {}, unreadCount) : undefined;
         const badgeLabel =
@@ -106,12 +105,16 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
               : String(badgeVal)
             : null;
         return (
-          <Link
+          <ActiveNavLink
             key={tab.id}
+            role={role}
+            id={tab.id}
+            kind="tab"
+            serverActive={activeTab === tab.id}
             href={tab.href}
             data-help-anchor={TAB_HELP_ANCHOR[tab.id] ? `nav-${TAB_HELP_ANCHOR[tab.id]}` : undefined}
-            // The 3px bar and the weight change are visual only.
-            aria-current={isActive ? "page" : undefined}
+            // The 3px bar and the weight change are visual only; the current
+            // tab is stated by aria-current (ActiveNavLink).
             style={{
               display: "flex",
               flexDirection: "column",
@@ -119,21 +122,24 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
               justifyContent: "center",
               gap: 3,
               padding: "8px 0 10px",
-              color: isActive ? "var(--ink)" : "var(--ink-3)",
+              color: "var(--ink-3)",
               ...label,
-              fontWeight: isActive ? 500 : 400,
+              fontWeight: 400,
               textDecoration: "none",
               position: "relative",
             }}
+            activeStyle={{ color: "var(--ink)", fontWeight: 500 }}
           >
+            {/* The bar over the current tab: globals.css draws it from the
+                link's aria-current, which follows client navigation. */}
             <span
+              className="m-tab-indicator"
               style={{
                 position: "absolute",
                 top: 0,
                 width: 32,
                 height: 3,
                 borderRadius: "0 0 3px 3px",
-                background: isActive ? "var(--ink)" : "transparent",
               }}
             />
             <span style={{ position: "relative", display: "inline-flex" }}>
@@ -165,7 +171,7 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
               ) : null}
             </span>
             <span>{TAB_KEY[tab.id] ? tNav(TAB_KEY[tab.id]) : tab.label}</span>
-          </Link>
+          </ActiveNavLink>
         );
       })}
     </nav>

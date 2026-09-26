@@ -142,3 +142,27 @@ test("F137: your name in the topbar links to your settings; signing out is its o
     assert.ok(pill.text.includes(USER.name), `${locale}: and it is the one that shows the name`);
   }
 });
+
+// ── FR-29: the highlight follows client navigation ───────────────────────────
+
+test("FR-29: the sidebar and the tab bar mark the page the browser is on, not the one first loaded", async () => {
+  // The layout computed the active item once, from the hard-loaded URL, and a
+  // layout does not re-render on client navigation: after one click the
+  // highlight and aria-current named the previous page. The links read the
+  // live pathname now; the layout's answer ("dashboard", "home") is stale here.
+  const { createRequire } = await import("node:module");
+  const { PathnameContext } = createRequire(new URL("../../apps/web/package.json", import.meta.url))(
+    "next/dist/shared/lib/hooks-client-context.shared-runtime",
+  ) as { PathnameContext: import("react").Context<string | null> };
+  const at = (pathname: string, child: unknown) => h(PathnameContext.Provider, { value: pathname }, child as never);
+  const current = (html: string) =>
+    openingTags(html, "a").filter((t) => attr(t, "aria-current") === "page").map((t) => attr(t, "href"));
+
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const side = await render(at("/admin/users/abc", await Sidebar({ role: "super_admin", activeId: "dashboard" })));
+  assert.deepEqual(current(side), ["/admin/users"]);
+
+  const { BottomTabs } = await import("../../apps/web/src/components/nav/BottomTabs.tsx");
+  const tabs = await render(at("/observation/abc", await BottomTabs({ role: "teacher", activeTab: "home" })));
+  assert.deepEqual(current(tabs), ["/observation"]);
+});
