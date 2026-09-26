@@ -249,7 +249,7 @@ test("spec 169 — authenticated layout calls assertEnv()", () => {
   const src = read(AUTH_LAYOUT);
   assert.match(
     src,
-    /import\s*\{\s*assertEnv\s*\}\s*from\s*["']@\/lib\/env["']/,
+    /import\s*\{[^}]*\bassertEnv\b[^}]*\}\s*from\s*["']@\/lib\/env["']/,
     "(authenticated)/layout.tsx must `import { assertEnv } from \"@/lib/env\"` so the validation runs once per render",
   );
   assert.match(

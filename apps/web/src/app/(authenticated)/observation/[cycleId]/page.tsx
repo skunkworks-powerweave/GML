@@ -26,6 +26,7 @@ import { DraftTextarea } from "./DraftTextarea";
 import { draftScope } from "@/lib/observation/drafts";
 import { MAX_TEXT_LENGTH } from "@/lib/forms/validate";
 import { getDeviceType } from "@/lib/device";
+import { whatsappPhoneForUsers } from "@/lib/env";
 import { lookupOwn } from "@/lib/lookup";
 import { MobileDetailFrame } from "@/components/shells";
 import {
@@ -186,6 +187,7 @@ export default async function CycleDetailPage({
   // the server as well. The upload path's own refusal (beginUploadAction and
   // finalizeUpload) belongs to the upload plumbing, not to this page.
   const locked = cycle.status === "complete";
+  const whatsappPhone = whatsappPhoneForUsers();
   // addNoteAction: observer, mentor, programme_admin, super_admin.
   const canAddNote =
     !locked && hasAnyRole(viewerRole, ["observer", "mentor", "programme_admin", "super_admin"]);
@@ -350,8 +352,16 @@ export default async function CycleDetailPage({
           <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Lesson video</h2>
           {evidence.length === 0 ? (
             <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
-              No video evidence linked yet. Teacher uploads via WhatsApp with caption{" "}
-              <span className="kbd">OBS-{cycle.code.replace(/^OBS-/, "")}</span>.
+              {locked ? (
+                "No video evidence was linked to this cycle."
+              ) : whatsappPhone ? (
+                <>
+                  No video evidence linked yet. The teacher uploads it below, or sends it by WhatsApp with the caption{" "}
+                  <span className="kbd">OBS-{cycle.code.replace(/^OBS-/, "")}</span>.
+                </>
+              ) : (
+                "No video evidence linked yet. The teacher uploads it below."
+              )}
             </p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -391,7 +401,7 @@ export default async function CycleDetailPage({
                   href={uploadHref({ contextType: "observation_cycle", contextId: cycleId })}
                   style={{ display: "inline-block", marginTop: 8, fontSize: 12, color: "var(--indigo)" }}
                 >
-                  Record on a phone, or send by WhatsApp →
+                  {whatsappPhone ? "Record on a phone, or send by WhatsApp →" : "Record on a phone →"}
                 </Link>
               </>
             )}

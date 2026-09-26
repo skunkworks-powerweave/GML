@@ -38,7 +38,7 @@ import { videoSubmissions, files, observationCycles } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
 import { MobileUploadRunner } from "@/components/video/MobileUploadRunner";
 import { getDeviceType } from "@/lib/device";
-import { assertEnv } from "@/lib/env";
+import { whatsappPhoneForUsers } from "@/lib/env";
 import { uploadLimitBytes } from "@/lib/video/upload";
 import { attachUploadAction } from "./actions";
 import {
@@ -245,19 +245,14 @@ export default async function UploadsPage({
     if (!d.locked) target = { ...generic, description: d.description };
   }
   const whatsappText = target ? target.description.whatsappText : "OBS-";
-  // Spec 135 — device-aware shell. The same env-var contract as
-  // /videos UploadModal (spec 132) is reused for the WhatsApp fallback.
-  // Spec 169 — `process.env.GML_WHATSAPP_NUMBER` is now read THROUGH
-  // assertEnv() so a typo'd value (missing `+`, stray whitespace) falls
-  // through to `WHATSAPP_PHONE_NUMBER_ID` / null and the downstream
-  // UploadModal / MobileUploadRunner hide the WhatsApp path entirely
-  // rather than rendering a broken wa.me link. The legacy env name is
-  // preserved for backwards compatibility with deployments that pre-date
-  // the GML_* override.
+  // Spec 135 — device-aware shell. The WhatsApp number is null while
+  // WhatsApp ingest is off or GML_WHATSAPP_NUMBER is invalid (lib/env.ts
+  // whatsappPhoneForUsers), and the cards and MobileUploadRunner then offer
+  // no WhatsApp path at all rather than a link to a channel that drops the
+  // video. WHATSAPP_PHONE_NUMBER_ID is Meta's opaque account id, not a
+  // dialable number, and is never a fallback (see videos/page.tsx).
   const device = await getDeviceType();
-  // See videos/page.tsx: WHATSAPP_PHONE_NUMBER_ID is Meta's opaque account id,
-  // not a dialable number, and must never be used as a fallback here.
-  const whatsappPhone = assertEnv().whatsappNumber.value ?? null;
+  const whatsappPhone = whatsappPhoneForUsers();
   const maxMb = Math.floor((await uploadLimitBytes()) / (1024 * 1024));
   const cards = explainerCards(whatsappPhone, whatsappText, target !== null, maxMb);
 

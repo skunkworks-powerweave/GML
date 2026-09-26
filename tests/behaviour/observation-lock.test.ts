@@ -276,3 +276,34 @@ test("a note over the length cap is refused and the remark is unchanged; one at 
     await w.cleanup();
   }
 });
+
+test("FR-33: the cycle page offers WhatsApp only where WhatsApp can take the video", { skip }, async () => {
+  const w = await observationWorld("lockwa");
+  const saved = { secret: process.env.WHATSAPP_APP_SECRET, number: process.env.GML_WHATSAPP_NUMBER };
+  try {
+    const open = await w.cycle({ status: "pre_submitted" });
+    const closed = await w.cycle({ status: "complete" });
+    await w.grant(w.teacher.id);
+    process.env.GML_WHATSAPP_NUMBER = "+919876543210";
+
+    // Ingest off (the default until the Meta keys are set): the webhook
+    // refuses every message, so the page must not send a teacher there.
+    delete process.env.WHATSAPP_APP_SECRET;
+    const off = await renderCycle(w.teacher, open.id);
+    assert.doesNotMatch(off, /WhatsApp/, "no WhatsApp instruction while ingest is off");
+    assert.match(off, /The teacher uploads it below/);
+
+    process.env.WHATSAPP_APP_SECRET = "test-app-secret";
+    assert.match(await renderCycle(w.teacher, open.id), /sends it by WhatsApp with the caption/);
+    // A signed-off cycle accepts no evidence: no upload instruction at all.
+    const signedOff = await renderCycle(w.teacher, closed.id);
+    assert.doesNotMatch(signedOff, /WhatsApp|uploads it below/);
+    assert.match(signedOff, /No video evidence was linked to this cycle/);
+  } finally {
+    for (const [k, v] of [["WHATSAPP_APP_SECRET", saved.secret], ["GML_WHATSAPP_NUMBER", saved.number]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await w.cleanup();
+  }
+});

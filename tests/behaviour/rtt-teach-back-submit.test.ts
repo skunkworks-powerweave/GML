@@ -39,8 +39,10 @@ after(async () => {
 // Supabase values; any value will do, nothing here reaches Storage.
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://storage.test";
 process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??= "publishable-test-key";
-// A programme number, so /uploads offers the WhatsApp route and its caption.
+// A programme number with ingest switched on, so /uploads offers the
+// WhatsApp route and its caption (lib/env.ts whatsappPhoneForUsers).
 process.env.GML_WHATSAPP_NUMBER = "+919999999999";
+process.env.WHATSAPP_APP_SECRET ??= "test-app-secret";
 
 type World = RttWorld & {
   /** A generic video of `by`'s own, stored, as /uploads lists it. */

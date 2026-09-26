@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import { NextIntlClientProvider } from "next-intl";
 import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
-import { assertEnv } from "@/lib/env";
+import { assertEnv, whatsappPhoneForUsers } from "@/lib/env";
 import { DesktopShell, MobileShell } from "@/components/shells";
 import { DeviceSync } from "@/components/DeviceSync";
 import AntiDownloadGuard from "@/components/AntiDownloadGuard";
@@ -165,7 +165,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
           styles and cannot respond. Renders nothing. */}
       <DeviceSync initial={device} />
       <AntiDownloadGuard />
-      {prefsFailed ? null : <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />}
+      {prefsFailed ? null : <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} whatsapp={whatsappPhoneForUsers() !== null} />}
       <QuickFind userId={user.id} />
       {/* THE LANGUAGE IS DECLARED, NOT JUST RECORDED. This was
           data-html-lang={htmlLang}: a data attribute, invisible to the browser

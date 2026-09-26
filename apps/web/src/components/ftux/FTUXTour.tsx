@@ -39,6 +39,8 @@ type Step = {
   target: string;
   title: string;
   body: string;
+  /** The body where WhatsApp cannot take a video, when `body` mentions it. */
+  bodyWithoutWhatsApp?: string;
 };
 
 // FTUX_TOURS map — verbatim from help.jsx::FTUX_TOURS. Five steps per persona
@@ -100,6 +102,7 @@ export const FTUX_TOURS: Record<Role, Step[]> = {
       title: "Send a lesson video",
       body:
         "Forward it via WhatsApp (easiest on slow networks) or upload here. Resumes if your connection drops.",
+      bodyWithoutWhatsApp: "Upload it here, from a phone or a computer. Resumes if your connection drops.",
     },
     {
       target: "[data-help-anchor='topbar-help']",
@@ -148,6 +151,8 @@ type FTUXTourProps = {
   /** ISO timestamp string when the user finished or skipped the tour. Null
    * means the FTUX has never been seen and the overlay should mount. */
   ftuxSeenAt: string | null;
+  /** Whether WhatsApp can take a video on this deployment (lib/env.ts whatsappPhoneForUsers). */
+  whatsapp: boolean;
 };
 
 type Rect = { left: number; top: number; width: number; height: number };
@@ -195,11 +200,14 @@ export function captionPosition(
   return sheet();
 }
 
-export function FTUXTour({ role, ftuxSeenAt }: FTUXTourProps) {
+export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
   // Memoised on `role`. The `?? []` fallback allocated a fresh array on every
   // render, so the effect below saw a new dependency each time and re-ran
   // continuously for any role without a configured tour.
-  const steps = useMemo(() => FTUX_TOURS[role] ?? [], [role]);
+  const steps = useMemo(
+    () => (FTUX_TOURS[role] ?? []).map((s) => (!whatsapp && s.bodyWithoutWhatsApp ? { ...s, body: s.bodyWithoutWhatsApp } : s)),
+    [role, whatsapp],
+  );
   const [dismissed, setDismissed] = useState<boolean>(Boolean(ftuxSeenAt));
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);

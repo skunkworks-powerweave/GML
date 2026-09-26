@@ -289,7 +289,7 @@ export function MobileUploadRunner({
       // onError; a throw here is one it did not expect, and its text is not
       // for a teacher either.
       if (!mountedRef.current) return;
-      setErrorMsg("Upload failed. Try again, or send the video over WhatsApp.");
+      setErrorMsg(whatsappPhone ? "Upload failed. Try again, or send the video over WhatsApp." : "Upload failed. Please try again.");
       setStep("failed");
     }
   }
@@ -502,24 +502,26 @@ export function MobileUploadRunner({
           </div>
 
           {/* WhatsApp PRIMARY-path reminder card. Lichen-soft to read as
-              "this is the recommended path on a slow link". */}
-          <div
-            style={{
-              marginTop: 20,
-              padding: 14,
-              borderRadius: 12,
-              background: "var(--lichen-soft)",
-              border: "1px solid oklch(0.82 0.06 145)",
-            }}
-          >
-            <div style={{ fontWeight: 600, fontSize: 14 }}>
-              On a slow 2G/3G link?
-            </div>
-            <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
-              WhatsApp is faster than direct upload on weak signals — your phone
-              keeps retrying in the background.
-            </p>
-            {waHref ? (
+              "this is the recommended path on a slow link". Only where
+              WhatsApp can take this video (waHref): otherwise it recommended
+              a path that did not exist. */}
+          {waHref ? (
+            <div
+              style={{
+                marginTop: 20,
+                padding: 14,
+                borderRadius: 12,
+                background: "var(--lichen-soft)",
+                border: "1px solid oklch(0.82 0.06 145)",
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: 14 }}>
+                On a slow 2G/3G link?
+              </div>
+              <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
+                WhatsApp is faster than direct upload on weak signals — your phone
+                keeps retrying in the background.
+              </p>
               <a
                 href={waHref}
                 target="_blank"
@@ -540,8 +542,8 @@ export function MobileUploadRunner({
               >
                 Open WhatsApp
               </a>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -841,7 +843,7 @@ export function MobileUploadRunner({
               Upload failed
             </h1>
             <p style={{ color: "var(--rust)", fontSize: 13, marginTop: 6 }}>
-              {errorMsg ?? "Something went wrong. Try again or use WhatsApp."}
+              {errorMsg ?? (whatsappPhone ? "Something went wrong. Try again or use WhatsApp." : "Something went wrong. Please try again.")}
             </p>
           </div>
           <div style={{ display: "flex", gap: 10 }}>

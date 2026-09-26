@@ -342,12 +342,12 @@ test("spec 135 — uploads/page.tsx still imports + renders UploadProgress for d
 test("spec 135 — uploads/page.tsx wires whatsappPhone from the spec 132 env chain", () => {
   const src = read(PAGE_PATH);
   // Same env contract as UploadModal (spec 132) — no new env vars.
-  // GML_WHATSAPP_NUMBER is read THROUGH assertEnv(), which validates it, so the
-  // literal now lives in lib/env.ts rather than in this page.
+  // GML_WHATSAPP_NUMBER is read THROUGH whatsappPhoneForUsers(), which
+  // validates it (assertEnv) and returns null while ingest is off (FR-33).
   assert.match(
     src,
-    /assertEnv\(\)\.whatsappNumber\.value/,
-    "uploads page must read the validated GML_WHATSAPP_NUMBER via assertEnv()",
+    /const whatsappPhone = whatsappPhoneForUsers\(\)/,
+    "uploads page must read the WhatsApp number via whatsappPhoneForUsers()",
   );
   // THE WHATSAPP_PHONE_NUMBER_ID FALLBACK IS GONE, AND MUST STAY GONE.
   //

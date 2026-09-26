@@ -160,8 +160,8 @@ test("spec 123 — (authenticated)/layout.tsx selects ftuxSeenAt and mounts <FTU
   // The component must be mounted with the right props.
   assert.match(
     src,
-    /<FTUXTour\s+role=\{user\.role\}\s+ftuxSeenAt=\{ftuxSeenAt\}\s*\/>/,
-    "layout must mount <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} />",
+    /<FTUXTour\s+role=\{user\.role\}\s+ftuxSeenAt=\{ftuxSeenAt\}\s+whatsapp=\{whatsappPhoneForUsers\(\) !== null\}\s*\/>/,
+    "layout must mount <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} whatsapp={...} /> (FR-33)",
   );
   // Imports
   assert.match(

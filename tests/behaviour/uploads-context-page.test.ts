@@ -35,7 +35,10 @@ after(async () => {
   if (!skip) await closeAppDb();
 });
 
+// A programme number with ingest switched on, so /uploads offers the
+// WhatsApp route (lib/env.ts whatsappPhoneForUsers).
 process.env.GML_WHATSAPP_NUMBER = "+919999999999";
+process.env.WHATSAPP_APP_SECRET ??= "test-app-secret";
 
 const PHONE_UA = "Mozilla/5.0 (Linux; Android 13; SM-A135F) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36";
 const asUser = (u: WorldUser): TestUser => ({ id: u.id, role: u.role, name: u.name, email: u.email });

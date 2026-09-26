@@ -338,8 +338,8 @@ test("spec 132 — videos/page.tsx imports UploadModal and renders it in the hea
   // a wrong one.
   assert.match(
     src,
-    /whatsappPhone=\{assertEnv\(\)\.whatsappNumber\.value \?\? null\}/,
-    "whatsappPhone must come from the validated env value, or be null",
+    /const whatsappPhone = whatsappPhoneForUsers\(\);[\s\S]*whatsappPhone=\{whatsappPhone\}/,
+    "whatsappPhone must come from whatsappPhoneForUsers() (the validated number, or null while ingest is off; FR-33)",
   );
   assert.ok(
     !/process\.env\.WHATSAPP_PHONE_NUMBER_ID/.test(src),

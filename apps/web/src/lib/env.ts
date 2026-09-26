@@ -63,6 +63,18 @@ export type EnvSummary = {
   helpdeskEmail: EnvCheck;
 };
 
+/**
+ * The programme WhatsApp number to offer a user, or null when WhatsApp cannot
+ * take a video: no valid GML_WHATSAPP_NUMBER, or ingest switched off (no
+ * WHATSAPP_APP_SECRET, so the webhook refuses every message with 503
+ * whatsapp_not_configured). Every "send it by WhatsApp" affordance keys on
+ * this, so a deployment without WhatsApp does not steer teachers to it.
+ */
+export function whatsappPhoneForUsers(): string | null {
+  if (!process.env.WHATSAPP_APP_SECRET?.trim()) return null;
+  return assertEnv().whatsappNumber.value ?? null;
+}
+
 function checkPhone(raw: string | undefined, varName: string): EnvCheck {
   if (!raw) {
     return { present: false, value: null, reason: "" };

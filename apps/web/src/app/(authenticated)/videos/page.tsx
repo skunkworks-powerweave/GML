@@ -30,7 +30,7 @@ import { auth } from "@/auth";
 import { actorFrom, lockedVideoScope, videoVisibilityFilter } from "@/lib/authz";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { UploadModal } from "@/components/video/UploadModal";
-import { assertEnv } from "@/lib/env";
+import { whatsappPhoneForUsers } from "@/lib/env";
 import { getSystemSettings } from "@/lib/system-settings";
 import { signPosterUrls } from "@/lib/video/storage";
 
@@ -89,6 +89,7 @@ export default async function VideoLibraryPage({
   searchParams: Promise<{ status?: string; source?: string }>;
 }) {
   const sp = await searchParams;
+  const whatsappPhone = whatsappPhoneForUsers();
   const filter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : undefined;
   const sourceFilter = SOURCE_VALUES.has(sp.source ?? "") ? sp.source! : undefined;
 
@@ -203,8 +204,10 @@ export default async function VideoLibraryPage({
             <div className="label">Video library</div>
             <h1 className="serif" style={{ fontSize: 28, marginTop: 4 }}>Submissions &amp; lesson recordings</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 6, maxWidth: 540 }}>
-              Videos are watermarked per viewer and streamed in the browser, and every view is logged. WhatsApp
-              uploads land here automatically once a teacher sends a video with the right caption code.
+              Videos are watermarked per viewer and streamed in the browser, and every view is logged.
+              {whatsappPhone
+                ? " WhatsApp uploads land here automatically once a teacher sends a video with the right caption code."
+                : null}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -223,7 +226,7 @@ export default async function VideoLibraryPage({
               entirely when the number is null. No link beats a wrong one.
             */}
             <UploadModal
-              whatsappPhone={assertEnv().whatsappNumber.value ?? null}
+              whatsappPhone={whatsappPhone}
               videoDefaultQuality={sysSettings?.videoDefaultQuality ?? "480p"}
             />
             {canSeeWhatsappLog && (
