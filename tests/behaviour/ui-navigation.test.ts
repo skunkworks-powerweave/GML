@@ -166,3 +166,36 @@ test("FR-29: the sidebar and the tab bar mark the page the browser is on, not th
   const tabs = await render(at("/observation/abc", await BottomTabs({ role: "teacher", activeTab: "home" })));
   assert.deepEqual(current(tabs), ["/observation"]);
 });
+
+// ── FR-28: every destination is reachable on a phone ─────────────────────────
+
+test("FR-28: every role's tab bar ends in Menu, and Menu lists the role's whole navigation", async () => {
+  // A phone has no sidebar: a mentee could not reach her pairing or her forms,
+  // a mentor the review queue, anyone Forms & quizzes -- except by URL.
+  const { TABS_BY_ROLE, NAV_BY_ROLE } = await import("../../apps/web/src/config/nav.ts");
+  for (const [role, tabs] of Object.entries(TABS_BY_ROLE)) {
+    assert.equal(tabs.at(-1)?.href, "/menu", `${role}: the last tab is Menu`);
+    assert.ok(tabs.length <= 6, `${role}: ${tabs.length} tabs do not fit a 360px phone`);
+  }
+  const teacherHrefs = NAV_BY_ROLE.teacher.flatMap((s) => s.items.map((i) => i.href));
+  for (const href of ["/mentorship", "/forms", "/repo"]) assert.ok(teacherHrefs.includes(href), `teacher nav lacks ${href}`);
+
+  (globalThis as Record<string, unknown>).__gmlTestSession = {
+    user: { id: "00000000-0000-4000-8000-000000000001", email: "t@example.test", name: "Teacher", image: null, role: "teacher" },
+  };
+  try {
+    const { default: MenuPage } = await import("../../apps/web/src/app/(authenticated)/menu/page.tsx");
+    for (const locale of ["en", "hi"] as const) {
+      resetRequest();
+      request.locale = locale;
+      const html = await render(await MenuPage());
+      const hrefs = openingTags(html, "a").map((t) => attr(t, "href"));
+      assert.deepEqual(hrefs, teacherHrefs, `${locale}: /menu lists exactly the teacher's navigation`);
+      const nav = loadMessages(locale).nav as Record<string, string>;
+      const text = html.replace(/&amp;/g, "&");
+      assert.ok(text.includes(nav.mentorship) && text.includes(nav.forms), `${locale}: labels in the reader's language`);
+    }
+  } finally {
+    delete (globalThis as Record<string, unknown>).__gmlTestSession;
+  }
+});

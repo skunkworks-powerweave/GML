@@ -33,7 +33,7 @@ type SidebarProps = {
 };
 
 /** Section heading literal → `navSection.*` key. */
-const SECTION_KEY: Record<string, string> = {
+export const SECTION_KEY: Record<string, string> = {
   "Programme": "programme",
   "My work": "myWork",
   "My learning": "myLearning",
@@ -59,7 +59,7 @@ const SECTION_KEY: Record<string, string> = {
  * sidebar stayed English although nav.myPhase, nav.pendingReview and the rest
  * were translated all along.
  */
-const ITEM_KEY: Record<string, string> = {
+export const ITEM_KEY: Record<string, string> = {
   "dashboard": "dashboard",
   "repo": "repoHome",
   "repo-schools": "schools",

@@ -36,7 +36,8 @@
     "data": "डेटा",
     "allTables": "सभी तालिकाएँ",
     "users": "उपयोगकर्ता",
-    "primary": "मुख्य नेविगेशन"
+    "primary": "मुख्य नेविगेशन",
+    "menu": "मेनू"
   },
   "navSection": {
     "programme": "कार्यक्रम",
@@ -50,6 +51,7 @@
   },
   "crumb": {
     "dashboard": "डैशबोर्ड",
+    "menu": "मेनू",
     "observation": "कक्षा अवलोकन",
     "mentorship": "मेंटरशिप",
     "rtt": "RTT चरण",

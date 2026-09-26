@@ -36,7 +36,8 @@
     "data": "Data",
     "allTables": "All tables",
     "users": "Users",
-    "primary": "Main navigation"
+    "primary": "Main navigation",
+    "menu": "Menu"
   },
   "navSection": {
     "programme": "Programme",
@@ -50,6 +51,7 @@
   },
   "crumb": {
     "dashboard": "Dashboard",
+    "menu": "Menu",
     "observation": "Classroom Observation",
     "mentorship": "Mentorship",
     "rtt": "RTT Phases",

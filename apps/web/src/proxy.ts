@@ -84,6 +84,7 @@ const POLICIES: PolicyRule[] = [
   { prefix: "/settings", loggedIn: true },
   { prefix: "/uploads", loggedIn: true },
   { prefix: "/inbox", loggedIn: true },
+  { prefix: "/menu", loggedIn: true },
 ];
 
 function matchPolicy(pathname: string): PolicyRule | undefined {

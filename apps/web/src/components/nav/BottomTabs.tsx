@@ -37,6 +37,7 @@ const TAB_KEY: Record<string, string> = {
   // Without this entry the teacher's uploads tab fell through to its English
   // literal while the rest of the bar rendered in hi / bo.
   "uploads": "uploads",
+  "menu": "menu",
 };
 
 /**
