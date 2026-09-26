@@ -6,6 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { hasRole, hasAnyRole, isRoleName, ROLES } from "@gml/shared/auth/roles";
 import {
   extractSegments,
@@ -79,6 +80,45 @@ test("SM-1: the audit log cannot be emptied with TRUNCATE, even by the app's own
       );
     } finally {
       await c.query("ROLLBACK");
+    }
+  });
+});
+
+test("SM-1: docs/substrate-moats.md names every trigger that defends audit_log, and what the owner can still do", { skip }, async () => {
+  // The moat doc is the inventory a reviewer reads for SM-1's controls. When
+  // _post/007 added the TRUNCATE trigger it was updated nowhere but README-IT,
+  // so the doc still listed only the UPDATE and DELETE row triggers, implied
+  // the owner's TRUNCATE was covered by the REVOKEs (it never was), and said
+  // nothing of the owner's DISABLE TRIGGER (W3-80). Read from the catalogue,
+  // so a trigger added later has to be written down too.
+  await withClient(async (c) => {
+    const { rows } = await c.query(`
+      SELECT t.tgname,
+             array_remove(ARRAY[
+               CASE WHEN t.tgtype & 4  > 0 THEN 'INSERT' END,
+               CASE WHEN t.tgtype & 8  > 0 THEN 'DELETE' END,
+               CASE WHEN t.tgtype & 16 > 0 THEN 'UPDATE' END,
+               CASE WHEN t.tgtype & 32 > 0 THEN 'TRUNCATE' END], NULL) AS events,
+             pg_get_userbyid(k.relowner) = current_user AS owner
+        FROM pg_trigger t JOIN pg_class k ON k.oid = t.tgrelid
+       WHERE t.tgrelid = 'audit_log'::regclass AND NOT t.tgisinternal
+       ORDER BY t.tgname`);
+    assert.ok(rows.length >= 3, "precondition: audit_log carries its append-only triggers");
+    const doc = readFileSync(new URL("../../docs/substrate-moats.md", import.meta.url), "utf8");
+    const start = doc.indexOf("## SM-1");
+    assert.ok(start >= 0, "docs/substrate-moats.md has an SM-1 section");
+    const sm1 = doc.slice(start, doc.indexOf("\n## ", start + 1));
+    for (const r of rows as Array<{ tgname: string; events: string[] }>) {
+      assert.ok(sm1.includes(r.tgname), `SM-1 in docs/substrate-moats.md does not name the trigger ${r.tgname}`);
+      for (const e of r.events) {
+        assert.match(sm1, new RegExp(`BEFORE ${e}\\b`), `SM-1 does not say ${r.tgname} refuses ${e}`);
+      }
+    }
+    // The app connects as the owner here as in production, and an owner can
+    // switch the triggers off. Until it runs as a role that does not own the
+    // table, the doc must not present the triggers as the last word.
+    if (rows[0].owner) {
+      assert.match(sm1, /DISABLE TRIGGER/, "SM-1 must say the table owner, which the app connects as, can still DISABLE TRIGGER");
     }
   });
 });
