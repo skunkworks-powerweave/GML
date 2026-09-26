@@ -132,6 +132,30 @@ async function canUpload(
   }
 }
 
+/**
+ * Inside the caller's open transaction: the storage and auth stand-ins where
+ * the real ones are missing, then every storage _post file, as migrate.ts
+ * would apply them.
+ */
+async function applyStoragePolicies(c: Client): Promise<void> {
+  const real = (await c.query(`SELECT to_regclass('storage.objects') IS NOT NULL AS real`)).rows[0].real;
+  if (!real) {
+    for (const sql of STAND_IN_SCHEMAS) {
+      await c.query("SAVEPOINT schema");
+      try {
+        await c.query(sql);
+        await c.query("RELEASE SAVEPOINT schema");
+      } catch (err) {
+        // Another suite created it between the check and the insert.
+        await c.query("ROLLBACK TO SAVEPOINT schema");
+        if (!["23505", "42P06"].includes(String((err as { code?: unknown }).code))) throw err;
+      }
+    }
+    await c.query(STAND_IN);
+  }
+  for (const sql of storagePolicySql()) await c.query(sql);
+}
+
 test(
   "Storage admits an upload only to a key its uploader reserved, at no more than the reserved size",
   { skip: needsDatabase() },
@@ -139,22 +163,7 @@ test(
     await withClient(async (c) => {
       await c.query("BEGIN");
       try {
-        const real = (await c.query(`SELECT to_regclass('storage.objects') IS NOT NULL AS real`)).rows[0].real;
-        if (!real) {
-          for (const sql of STAND_IN_SCHEMAS) {
-            await c.query("SAVEPOINT schema");
-            try {
-              await c.query(sql);
-              await c.query("RELEASE SAVEPOINT schema");
-            } catch (err) {
-              // Another suite created it between the check and the insert.
-              await c.query("ROLLBACK TO SAVEPOINT schema");
-              if (!["23505", "42P06"].includes(String((err as { code?: unknown }).code))) throw err;
-            }
-          }
-          await c.query(STAND_IN);
-        }
-        for (const sql of storagePolicySql()) await c.query(sql);
+        await applyStoragePolicies(c);
 
         const teacher = randomUUID();
         const other = randomUUID();
@@ -220,6 +229,78 @@ test(
           await canUpload(c, teacher, othersReservation, meta(300 * MB)),
           "refused",
           "another user's reservation is not the caller's to fill",
+        );
+      } finally {
+        await c.query("ROLLBACK");
+      }
+    });
+  },
+);
+
+// ── Where the reservation check lives (W3-79) ────────────────────────────────
+//
+// _post/008 put the check in `public` as a SECURITY DEFINER function that
+// `authenticated` may EXECUTE -- the one owner-privileged function in the
+// schema PostgREST serves by default, so re-exposing `public` would publish it
+// as /rest/v1/rpc/storage_upload_is_reserved. And its cast of contentLength
+// raised on a non-number, although its comment said it could only fail.
+
+test(
+  "the upload check is no Data API function: nothing owner-privileged in public is callable by anon or authenticated",
+  { skip: needsDatabase() },
+  async () => {
+    await withClient(async (c) => {
+      await c.query("BEGIN");
+      try {
+        await applyStoragePolicies(c);
+
+        const exposed = await c.query(`
+          SELECT p.oid::regprocedure::text AS fn FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'public' AND p.prosecdef
+             AND (has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                  OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+           ORDER BY 1`);
+        assert.deepEqual(
+          exposed.rows.map((r) => r.fn),
+          [],
+          "a SECURITY DEFINER function in public that an API role can execute is callable over /rest/v1/rpc " +
+            "as soon as public is exposed again; it belongs in a schema the Data API never serves",
+        );
+
+        // Moved, not dropped: the policy still calls it, and only
+        // `authenticated` -- the role storage-api evaluates the policy as --
+        // can resolve the schema it now lives in.
+        const where = await c.query(`
+          SELECT n.nspname, has_schema_privilege('anon', n.oid, 'USAGE') AS anon_usage,
+                 has_schema_privilege('authenticated', n.oid, 'USAGE') AS authenticated_usage
+            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE p.proname = 'storage_upload_is_reserved'`);
+        assert.equal(where.rowCount, 1, "exactly one reservation check exists");
+        assert.notEqual(where.rows[0].nspname, "public");
+        assert.equal(where.rows[0].anon_usage, false, "anon cannot even resolve names in the check's schema");
+        assert.equal(where.rows[0].authenticated_usage, true, "storage-api evaluates the policy as authenticated");
+
+        const teacher = randomUUID();
+        await c.query(`INSERT INTO users (id, email, name, role) VALUES ($1, $2, 'W3-79 teacher', 'teacher')`, [
+          teacher,
+          `w379.${teacher}@example.test`,
+        ]);
+        const key = `${teacher}/${randomUUID()}.mp4`;
+        await c.query(
+          `INSERT INTO files (bucket, object_key, mime_type, kind, status, size_bytes, owner_user_id)
+           VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'uploading', $2, $3)`,
+          [key, 300 * MB, teacher],
+        );
+        assert.equal(
+          await canUpload(c, teacher, key, { mimetype: "video/mp4", contentLength: 300 * MB }),
+          "admitted",
+          "the reserved upload must still be admitted through the moved check",
+        );
+        assert.equal(
+          await canUpload(c, teacher, key, { mimetype: "video/mp4", contentLength: "abc" }),
+          "refused",
+          "a size that is not a number must fail the check, not raise invalid input syntax for type numeric",
         );
       } finally {
         await c.query("ROLLBACK");
