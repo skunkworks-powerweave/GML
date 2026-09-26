@@ -268,3 +268,16 @@ test("--ink-4 text meets WCAG AA (4.5:1) on every surface it is used on", async 
     assert.ok(ratio >= 4.5, `--ink-4 ${ink4} on --${surface} ${bg} is ${ratio.toFixed(2)}:1`);
   }
 });
+
+test("FR-31: a tap gets an immediate, announced loading state in the reader's language", async () => {
+  // Without app/(authenticated)/loading.tsx a dynamic page showed nothing
+  // until the whole of it had arrived, which on 2G looked like a dead tap.
+  const { withIntl, h } = await import("./_ui.js");
+  const { default: Loading } = await import("../../apps/web/src/app/(authenticated)/loading.tsx");
+  for (const [locale, text] of [["en", "Loading…"], ["hi", "लोड हो रहा है…"]] as const) {
+    const html = await render(await withIntl(h(Loading, {}), locale));
+    assert.match(html, /role="status"/);
+    assert.match(html, /aria-busy="true"/);
+    assert.ok(html.includes(text), `${locale}: ${html}`);
+  }
+});
