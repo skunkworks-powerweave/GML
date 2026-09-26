@@ -11,9 +11,11 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { Client } from "pg";
 import { needsDatabase, DATABASE_URL } from "./_harness.js";
 import { render } from "./_ui.js";
-import { envelope, route, SECRET, signed, videoMessage, withEnv, withWorld } from "./_whatsapp.js";
+import { withRowFault } from "./_fake_gotrue.js";
+import { envelope, route, SECRET, signed, videoMessage, withEnv, withWorld, type World } from "./_whatsapp.js";
 
 const skip = needsDatabase();
 
@@ -213,6 +215,186 @@ test("F93: a refused Retry fetch or Resend is explained on the page it lands on"
         const text = await alertOf(code);
         assert.ok(text && text !== generic && !text.includes(code), `?error=${code} is not explained: ${text}`);
       }
+    }),
+  );
+});
+
+// ── Check, then write: the actions against a row that is changing ────────────
+//
+// Both actions judge a row from a plain read and then write it. What runs in
+// between is real: the worker committing the stored bytes, a transcode
+// finishing, a pooler reset during the enqueue.
+
+/** A WhatsApp video in `status`, with every column the two actions read. */
+async function seedFetched(w: World, status: string, extra: { fileStatus?: string } = {}) {
+  const id = w.wamid();
+  const q = async (sql: string, p: unknown[]) => (await w.c.query(sql, p)).rows[0]?.id as string;
+  const fileId = await q(
+    `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos-original', $1, 'video/mp4', 'video_original', $2) RETURNING id`,
+    [`whatsapp/${id}.mp4`, extra.fileStatus ?? "stored"],
+  );
+  const ready = status === "ready" || status === "reviewed" || status === "review_pending";
+  const subId = await q(
+    `INSERT INTO video_submissions (file_id, source, status, context_type, caption_raw, whatsapp_message_id, whatsapp_media_id, whatsapp_from,
+                                    hls_master_key, verified_at)
+     VALUES ($1, 'whatsapp', $2, 'generic', 'lesson', $3, $4, $5, $6, $7) RETURNING id`,
+    [fileId, status, id, `MEDIA-${id}`, w.teacher.phone, ready ? `hls/${id}/master.m3u8` : null, ready ? new Date() : null],
+  );
+  return { id, subId, fileId };
+}
+
+const rowOf = async (w: World, subId: string) =>
+  (
+    await w.c.query(
+      `SELECT v.status, f.status AS file_status FROM video_submissions v JOIN files f ON f.id = v.file_id WHERE v.id = $1`,
+      [subId],
+    )
+  ).rows[0] as { status: string; file_status: string };
+
+const jobsFor = async (w: World, subId: string, msgId: string) =>
+  (
+    await w.c.query(`SELECT name, status FROM jobs WHERE dedupe_key IN ($1, $2) ORDER BY created_at`, [
+      `submission:${subId}`,
+      `wa:${msgId}`,
+    ])
+  ).rows as Array<{ name: string; status: string }>;
+
+/**
+ * Run `action` while another transaction holds `write` uncommitted, and commit
+ * it only once the action is waiting on that transaction's row lock: exactly a
+ * worker (or a finishing transcode) committing between the action's read and
+ * its write. Deterministic: the commit waits for the lock wait, not a sleep.
+ */
+async function committedDuring<T>(w: World, write: (c: Client) => Promise<void>, action: () => Promise<T>): Promise<T> {
+  const side = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5000 });
+  await side.connect();
+  try {
+    await side.query("BEGIN");
+    await write(side);
+    const pid = (await side.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+    let settled = false;
+    const running = action().finally(() => (settled = true));
+    running.catch(() => undefined);
+    const deadline = Date.now() + 10_000;
+    while (!settled && Date.now() < deadline) {
+      const n = (await w.c.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, [pid]))
+        .rows[0].n as number;
+      if (n > 0) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await side.query("COMMIT");
+    return await running;
+  } finally {
+    await side.end().catch(() => undefined);
+  }
+}
+
+// W3-61. Resend wrote 'queued' and then enqueued, as two statements. An
+// enqueue that failed (a pooler reset, a connection blip) left the video
+// 'queued' with no job behind it -- "in progress" on the teacher's page for
+// good, since nothing repaired a 'queued' video.
+test("W3-61: a Resend whose enqueue fails leaves the video as it was, not 'queued' with no job", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { id, subId } = await seedFetched(w, "failed");
+      signIn("programme_admin");
+      const { resendTranscodeAction } = await actions();
+      const thrown = await withRowFault(w.c, "public.jobs", "INSERT", `NEW.dedupe_key = 'submission:${subId}'`, () =>
+        outcome(() => resendTranscodeAction(form(subId))).then(
+          () => null,
+          (e: unknown) => e,
+        ),
+      );
+      assert.ok(thrown instanceof Error, "the operator is shown that the Resend did not happen");
+      assert.equal((await rowOf(w, subId)).status, "failed", "the video must not say 'queued' with nothing queued");
+      assert.deepEqual(await jobsFor(w, subId, id), []);
+    }),
+  );
+});
+
+// The status write was keyed on the id alone, so a status that moved on after
+// the action's read was overwritten: a transcode finishing in that window left
+// a playable video 'queued' and transcoded it again.
+test("W3-61: a Resend does not un-ready a video whose transcode finished after the row was read", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { id, subId } = await seedFetched(w, "transcoding");
+      signIn("programme_admin");
+      const { resendTranscodeAction } = await actions();
+      const r = await committedDuring(
+        w,
+        async (c) => {
+          await c.query(`UPDATE video_submissions SET status = 'ready', hls_master_key = $2, verified_at = now() WHERE id = $1`, [
+            subId,
+            `hls/${subId}/master.m3u8`,
+          ]);
+        },
+        () => outcome(() => resendTranscodeAction(form(subId))),
+      );
+      assert.equal((await rowOf(w, subId)).status, "ready", "a finished video stays finished");
+      assert.deepEqual(await jobsFor(w, subId, id), [], "and is not transcoded again");
+      assert.equal(r.redirect, "/admin/whatsapp-log?error=cannot_resend_finalised");
+    }),
+  );
+});
+
+// W3-62. The page offers Retry fetch on every row still awaiting media,
+// including one whose fetch is running. When the worker stored the bytes after
+// the action's read, the action's writes -- keyed on the id alone -- put the
+// submission back to 'received' and the file to 'uploading' over them. The
+// row then said "awaiting media" beside a queued transcode, Resend refused it
+// (media_not_fetched), and the transcode finished with the file still
+// 'uploading', so the Retry fetch button stayed on a ready video.
+test("W3-62: a Retry fetch does not undo a fetch the worker committed after the row was read", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { POST } = await route();
+      const id = w.wamid();
+      assert.equal((await POST(signed(envelope([videoMessage({ id, from: w.teacher.phone, caption: w.cycleCode })])))).status, 200);
+      const sub = await w.submission(id);
+      const subId = String(sub!.id);
+      signIn("programme_admin");
+      const { retryWhatsAppFetchAction } = await actions();
+
+      // The worker's success transaction (whatsapp-fetch.ts), held open.
+      const r = await committedDuring(
+        w,
+        async (c) => {
+          await c.query(`UPDATE video_submissions SET status = 'queued' WHERE id = $1 AND status = 'received'`, [subId]);
+          await c.query(`UPDATE files SET status = 'stored' WHERE id = $1`, [sub!.file_id]);
+          await c.query(
+            `INSERT INTO jobs (queue, name, payload, dedupe_key) VALUES ('transcode', 'transcode', '{}', $1)`,
+            [`submission:${subId}`],
+          );
+        },
+        () => outcome(() => retryWhatsAppFetchAction(form(subId))),
+      );
+
+      assert.deepEqual(await rowOf(w, subId), { status: "queued", file_status: "stored" }, "the worker's stored bytes stand");
+      assert.equal(r.redirect, "/admin/whatsapp-log?error=already_fetched");
+    }),
+  );
+});
+
+// What that race left behind, and why it mattered: Retry fetch on a video that
+// is ready (or reviewed) sent it back through the fetch and a transcode.
+test("W3-62: Retry fetch is neither offered nor done on a video past fetching", { skip }, async () => {
+  await withEnv(CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { id, subId } = await seedFetched(w, "ready", { fileStatus: "uploading" });
+      signIn("programme_admin");
+      const { default: Page } = await page();
+      const html = await render(await Page({ searchParams: Promise.resolve({}) }));
+      const at = html.indexOf(subId.slice(0, 10));
+      assert.ok(at > 0, "the submission is listed");
+      const row = html.slice(html.lastIndexOf("<tr", at), html.indexOf("</tr>", at));
+      assert.doesNotMatch(row, /Retry fetch/, "a ready video is not fetched again");
+
+      const { retryWhatsAppFetchAction } = await actions();
+      const r = await outcome(() => retryWhatsAppFetchAction(form(subId)));
+      assert.equal(r.redirect, "/admin/whatsapp-log?error=cannot_refetch_status");
+      assert.deepEqual(await rowOf(w, subId), { status: "ready", file_status: "uploading" });
+      assert.deepEqual(await jobsFor(w, subId, id), []);
     }),
   );
 });

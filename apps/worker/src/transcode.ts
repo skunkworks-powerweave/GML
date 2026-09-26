@@ -160,6 +160,15 @@ export async function repairReapedTranscodes(tx: QueueTx, job: ReapedJob): Promi
  * offered neither Retry nor Drop, which both need a latest attempt that failed.
  * A stranded video without such a row gets one, so the DLQ lists it.
  *
+ * A video 'queued' with no live job is stranded the same way. Every producer
+ * writes 'queued' in the transaction that enqueues its job, and the handler
+ * and the reaper write it only while the job is live, so nothing is coming
+ * for one. Two paths left them: a WhatsApp Resend whose enqueue failed after
+ * its status write had committed, and the old worker's Storage-unset throw,
+ * which ran before its ledger row and let the job dead-letter. (A Resend
+ * committing in the same instant can be failed here; its job still runs and
+ * rewrites the status, so that is harmless.)
+ *
  * The same goes for a video already 'failed' by a transcode that died with no
  * failed attempt on record -- the last attempt's row 'cancelled' by a shutdown
  * whose release() never landed (the reaper then dead-lettered the job), or
@@ -190,7 +199,7 @@ export async function repairStrandedTranscodes(): Promise<{ attempts: number; vi
        RETURNING video_submission_id
     ), videos AS (
       UPDATE ${videoSubmissions} SET status = 'failed', processing_log = ${reason}
-       WHERE ${videoSubmissions.status} = 'transcoding' AND ${noLiveJob(videoSubmissions.id)}
+       WHERE ${videoSubmissions.status} IN ('transcoding', 'queued') AND ${noLiveJob(videoSubmissions.id)}
        RETURNING id
     ), recorded AS (
       INSERT INTO ${transcodeJobs} (video_submission_id, profile, status, ended_at, error)

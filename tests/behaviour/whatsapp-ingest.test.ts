@@ -23,6 +23,7 @@ import { needsDatabase } from "./_harness.js";
 import {
   acceptAndClaim,
   bucketAllowlist,
+  claimJob,
   deferred,
   documentMessage,
   envelope,
@@ -65,7 +66,7 @@ test("a signed video is a submission and a queued fetch job before Meta gets its
       assert.equal(jobs[0]!.name, "whatsapp_fetch");
       assert.equal(jobs[0]!.status, "queued");
       assert.equal(jobs[0]!.dedupe_key, `wa:${id}`);
-      assert.ok(Number(jobs[0]!.max_attempts) > 3, "a Graph outage or a token rotation needs more than 15 seconds of retries");
+      assert.ok(Number(jobs[0]!.max_attempts) > 3, "a Graph outage or a token rotation needs more than the queue default's 11 minutes of retries");
 
       assert.equal(deferred.length, 0, "no ingest work may be left to after(), where a failure is final");
     }),
@@ -177,9 +178,9 @@ test("worker: a fetch stores the bytes, marks the file stored and queues the tra
 
 // A document's mime type is whatever the sender's phone declared. The
 // videos-original bucket lists eight types (_post/005), and Supabase refuses
-// any other -- deterministically, so ten retries over 42 minutes all failed the
-// same way, the submission was marked failed, and the teacher was told to send
-// a video again that would fail again. fakeStorage enforces that allowlist.
+// any other -- deterministically, so every retry failed the same way, the
+// submission was marked failed, and the teacher was told to send a video again
+// that would fail again. fakeStorage enforces that allowlist.
 test("worker: a document with a video type the bucket does not list is stored and queued for transcode", { skip }, async () => {
   await withEnv(PARTLY_CONFIGURED, () =>
     withWorld(async (w) => {
@@ -275,6 +276,163 @@ test("worker: an HTML error page is refused, not stored as a video", { skip }, a
       );
       assert.equal(storage.puts.length, 0);
       assert.equal((await w.submission(id))!.file_status, "uploading");
+    }),
+  );
+});
+
+// ── Shutdown, retries and refusals (W3-64, W3-65) ────────────────────────────
+
+const REPLIES_ON = { WHATSAPP_ACCESS_TOKEN: "test-token", WHATSAPP_PHONE_NUMBER_ID: "PNID-TEST" };
+
+/**
+ * Graph as fakeGraph() answers it, except that the media download never
+ * answers: only its request's signal ends it. A 100 MB lesson over a slow path
+ * when a deploy begins.
+ */
+function hangingDownload() {
+  const sent: string[] = [];
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("https://graph.facebook.com/") && url.endsWith("/messages")) {
+      sent.push(String(JSON.parse(String(init?.body)).text?.body));
+      return Response.json({ messaging_product: "whatsapp", messages: [{ id: "wamid.reply" }] });
+    }
+    if (url.startsWith("https://graph.facebook.com/")) return Response.json({ url: "https://lookaside.fbsbx.example/media/abc" });
+    return new Promise<Response>((_, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }) as typeof globalThis.fetch;
+  return { sent, fetch };
+}
+
+// W3-64. The fetch was given no stop signal, only its own timeouts, so a
+// shutdown could not cut a download short: past the 20 s drain deadline the
+// worker exited without handing the job back, and the reaper charged it an
+// attempt fifteen minutes later.
+test("W3-64: a shutdown cuts a fetch's download short, and its last attempt records no outcome", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fetchWhatsAppMedia } = await fetcher();
+      const { id, job } = await acceptAndClaim(w);
+      const graph = hangingDownload();
+      const stop = new AbortController();
+      const run = fetchWhatsAppMedia(
+        job.payload as never,
+        { attempt: job.maxAttempts, maxAttempts: job.maxAttempts, signal: stop.signal } as never,
+        { fetch: graph.fetch, put: fakeStorage().put, env: REPLIES_ON },
+      );
+      setTimeout(() => stop.abort(), 50);
+      const ended = await Promise.race([
+        run.then(
+          () => "resolved",
+          () => "rejected",
+        ),
+        new Promise((r) => setTimeout(() => r("still downloading"), 5_000)),
+      ]);
+      assert.equal(ended, "rejected", "the download must stop when shutdown begins, not wait out its five-minute timeout");
+      // The job is handed back uncounted (runJob, release()), so the re-run is
+      // the real last attempt: this one must leave nothing decided.
+      const sub = await w.submission(id);
+      assert.equal(sub!.status, "received");
+      assert.equal(sub!.file_status, "uploading");
+      assert.deepEqual(graph.sent, [], "the sender is not told to send it again by an attempt that will be re-run");
+      assert.deepEqual(await w.audits("whatsapp.media.fetch_failed", id), []);
+    }),
+  );
+});
+
+// A last attempt that fails for its own reason while the worker is going away
+// is interrupted too, by runJob's rule (a failure during shutdown is released,
+// uncounted). It used to mark the submission failed and send "Please send it
+// again" first; the released job's re-run then found it failed, did nothing,
+// and was recorded 'succeeded' -- gone from the dead-fetch count on the health
+// banner.
+test("W3-64: a last attempt that fails once shutdown has begun leaves the video waiting for the re-run", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fetchWhatsAppMedia } = await fetcher();
+      const { id, job } = await acceptAndClaim(w);
+      const graph = fakeGraph();
+      const stop = new AbortController();
+      stop.abort();
+      await assert.rejects(
+        fetchWhatsAppMedia(
+          job.payload as never,
+          { attempt: job.maxAttempts, maxAttempts: job.maxAttempts, signal: stop.signal } as never,
+          { fetch: graph.fetch, put: async () => { throw new Error("Storage is going away too"); }, env: REPLIES_ON },
+        ),
+      );
+      const sub = await w.submission(id);
+      assert.equal(sub!.status, "received");
+      assert.notEqual(sub!.file_status, "failed");
+      assert.deepEqual(graph.sent, []);
+    }),
+  );
+});
+
+// W3-65. WHATSAPP_FETCH_MAX_ATTEMPTS was chosen against a backoff of 5 s
+// doubling -- "ten attempts keep retrying for about 42 minutes". The queue now
+// backs off 1 min, 10 min, then hourly, so ten attempts ran for about 7.2
+// hours, and a sender whose video could not be fetched was told so hours
+// later. Measured here on the real queue: the job the webhook wrote, failed
+// by the real fail() attempt after attempt, adding up the waits it schedules.
+//
+// It stops at the start of the last attempt -- the one whose failure tells the
+// sender -- rather than failing that one too: a dead fetch, deleted again on
+// cleanup, would move the dead-fetch count other files assert on.
+test("W3-65: a fetch that keeps failing reaches its last attempt, and its sender hears, within about an hour", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fail } = await import("../../packages/db/src/queue.ts");
+      const { db } = await import("../../packages/db/src/index.ts");
+      const { job } = await acceptAndClaim(w);
+      let waited = 0;
+      let attempt = job.attempts;
+      while (attempt < job.maxAttempts) {
+        const { willRetry } = await fail(db as never, job.id, "Graph media lookup failed: HTTP 500", attempt, job.maxAttempts);
+        assert.ok(willRetry, `attempt ${attempt} of ${job.maxAttempts} is retried`);
+        const [r] = (
+          await w.c.query(`SELECT EXTRACT(EPOCH FROM run_at - updated_at)::int AS wait FROM jobs WHERE id = $1`, [job.id])
+        ).rows;
+        waited += Number(r.wait);
+        attempt = (await claimJob(w, job.id)).attempts;
+      }
+      assert.equal(attempt, job.maxAttempts, "every attempt ran");
+      assert.ok(waited >= 30 * 60, `retries span ${waited} s: long enough to ride out a half-hour Graph or Storage outage`);
+      assert.ok(waited <= 75 * 60, `retries span ${Math.round(waited / 60)} min before the last attempt; the sender waits all of it`);
+    }),
+  );
+});
+
+// And a refusal that cannot change between attempts -- media over the size
+// cap -- was retried all the same, so the sender heard only after the whole
+// schedule. It is final at once, like a transcode's PermanentJobError.
+test("W3-65: media over the size cap is refused once, and the sender told at once", { skip }, async () => {
+  await withEnv(PARTLY_CONFIGURED, () =>
+    withWorld(async (w) => {
+      const { fetchWhatsAppMedia, MAX_WHATSAPP_MEDIA_BYTES } = await fetcher();
+      const { id, job } = await acceptAndClaim(w);
+      const graph = fakeGraph({
+        media: new Response(new Uint8Array(8), {
+          headers: { "content-type": "video/mp4", "content-length": String(MAX_WHATSAPP_MEDIA_BYTES + 1) },
+        }),
+      });
+      const storage = fakeStorage();
+      await assert.rejects(
+        fetchWhatsAppMedia(job.payload as never, { attempt: 1, maxAttempts: job.maxAttempts }, {
+          fetch: graph.fetch,
+          put: storage.put,
+          env: REPLIES_ON,
+        }),
+        (err: Error) => err.name === "PermanentJobError" && /cap/.test(err.message),
+        "a refusal every retry would repeat is permanent, so the queue dead-letters it at once",
+      );
+      assert.equal(storage.puts.length, 0);
+      const sub = await w.submission(id);
+      assert.equal(sub!.status, "failed", "decided on the first attempt, not the last");
+      assert.equal(sub!.file_status, "failed");
+      assert.equal(graph.sent.length, 1, "and the sender is told now");
     }),
   );
 });

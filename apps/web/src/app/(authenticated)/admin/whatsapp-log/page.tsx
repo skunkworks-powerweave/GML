@@ -83,7 +83,13 @@ const ACTION_ERRORS: Record<string, string> = {
     "That video arrived before the WhatsApp media id was recorded, so it cannot be fetched again. " +
     "Ask the sender to send it again.",
   already_fetched: "That video's media is already stored. Use Resend transcode instead.",
+  cannot_refetch_status:
+    "That video is already being processed or has been, so its media is not fetched again.",
 };
+
+// A fetch is retried only for a video still waiting for its media or one whose
+// fetch gave up; a ready or reviewed video is never sent back through it.
+const REFETCHABLE_STATUSES = new Set(["received", "failed"]);
 
 function chipForContext(contextType: string): string {
   if (contextType === "generic") return "chip chip-rust";
@@ -345,7 +351,7 @@ export default async function WhatsappIngestLogPage({
                 // read, so the row offers the fetch again instead -- when the
                 // media id was kept (every row since migration 0036).
                 const awaitingMedia = r.fileStatus !== "stored";
-                const canRetryFetch = awaitingMedia && r.mediaId !== null;
+                const canRetryFetch = awaitingMedia && r.mediaId !== null && REFETCHABLE_STATUSES.has(r.status);
                 const canResend = !awaitingMedia && RESENDABLE_STATUSES.has(r.status);
                 const why =
                   r.status === "failed" ? r.processingLog : awaitingMedia ? r.fetchError : null;
