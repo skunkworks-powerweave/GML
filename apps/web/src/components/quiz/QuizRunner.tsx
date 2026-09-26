@@ -23,6 +23,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { PickedMark } from "./PickedMark";
+import { useQuizAnswers } from "./answer-drafts";
 import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type QuizRunnerQuestion = {
@@ -41,6 +42,9 @@ export type QuizRunnerProps = {
   // so a runner left open on an earlier attempt cannot close a newer one
   // (W3-19); "" when there is none, which the action refuses.
   attemptId: string;
+  // Whose attempt it is: with the attempt id, the key the answers are kept
+  // under in this tab so a reload does not lose them (answer-drafts.ts).
+  userId?: string | null;
   // Server action — receives slug + attempt id + answers; redirects to /quizzes/[slug]/result/[id].
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
@@ -72,11 +76,14 @@ export function QuizRunner({
   questions,
   timeLimitSeconds,
   attemptId,
+  userId,
   submitAction,
 }: QuizRunnerProps) {
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
-  const [selected, setSelected] = useState<Record<string, number>>({});
+  // Kept in this tab's sessionStorage as they are picked and restored for
+  // the same attempt, so a reload or a stray tap does not lose them (W3-20).
+  const [selected, pickAnswer] = useQuizAnswers(userId, slug, attemptId, questions);
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
   // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
@@ -195,8 +202,7 @@ export function QuizRunner({
   const selection = selected[q.id];
   const isLast = idx === totalCount - 1;
 
-  const onPick = (i: number) =>
-    setSelected((s) => ({ ...s, [q.id]: i }));
+  const onPick = (i: number) => pickAnswer(q.id, i);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with

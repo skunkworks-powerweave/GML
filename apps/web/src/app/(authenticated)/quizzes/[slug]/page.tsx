@@ -492,6 +492,7 @@ export default async function QuizRunnerPage({
           questions={mappedQuestions}
           timeLimitSeconds={timeLimitSeconds}
           attemptId={attemptId}
+          userId={session.user.id}
           submitAction={submitQuizAttempt}
         />
       </main>
@@ -516,6 +517,7 @@ export default async function QuizRunnerPage({
         questions={mappedQuestions}
         timeLimitSeconds={timeLimitSeconds}
         attemptId={attemptId}
+        userId={session.user.id}
         submitAction={submitQuizAttempt}
       />
     </main>

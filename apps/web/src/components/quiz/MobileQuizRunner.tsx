@@ -40,6 +40,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
 import { PickedMark } from "./PickedMark";
+import { useQuizAnswers } from "./answer-drafts";
 import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type MobileQuizRunnerQuestion = {
@@ -58,6 +59,9 @@ export type MobileQuizRunnerProps = {
   // so a runner left open on an earlier attempt cannot close a newer one
   // (W3-19); "" when there is none, which the action refuses.
   attemptId: string;
+  // Whose attempt it is: with the attempt id, the key the answers are kept
+  // under in this tab so a reload does not lose them (answer-drafts.ts).
+  userId?: string | null;
   // Server action — receives slug + attempt id + answers; redirects to
   // /quizzes/[slug]/result/[id]. Drop-in same shape as QuizRunner.
   // Spec 146: client sends ALL questions; skipped answers carry
@@ -89,11 +93,14 @@ export function MobileQuizRunner({
   questions,
   timeLimitSeconds,
   attemptId,
+  userId,
   submitAction,
 }: MobileQuizRunnerProps) {
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
-  const [selected, setSelected] = useState<Record<string, number>>({});
+  // Kept in this tab's sessionStorage as they are picked and restored for
+  // the same attempt, so a reload or a stray tap does not lose them (W3-20).
+  const [selected, pickAnswer] = useQuizAnswers(userId, slug, attemptId, questions);
   const [isPending, startTransition] = useTransition();
   const [serverErr, setServerErr] = useState<string | null>(null);
   // Spec 159 — countdown state. null = untimed quiz; non-null = seconds
@@ -225,8 +232,7 @@ export function MobileQuizRunner({
   // After the early return above, currentQ is guaranteed non-undefined.
   const q = currentQ as MobileQuizRunnerQuestion;
 
-  const onPick = (i: number) =>
-    setSelected((s) => ({ ...s, [q.id]: i }));
+  const onPick = (i: number) => pickAnswer(q.id, i);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with
@@ -506,7 +512,8 @@ export function MobileQuizRunner({
           exactly where MobileShell draws its position:fixed tab bar, with the
           "?" help button floating over the right end. On a 640px phone the
           centre of "Next →" was the Inbox tab: a tap navigated away and every
-          selected answer, held only in this component's state, was gone. It
+          selected answer, then held only in this component's state, was gone
+          (they are kept in sessionStorage now too, answer-drafts.ts). It
           now sticks above the 80px the shell reserves for the tab bar (plus
           the notch inset the tab bar pads itself with), and its right padding
           keeps the buttons out from under the help button (right 14px,

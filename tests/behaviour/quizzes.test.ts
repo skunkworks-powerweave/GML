@@ -646,6 +646,8 @@ function mountLive<P>(component: (props: P) => unknown, props: P) {
     useTransition() { cursor++; return [false, (fn: () => void) => fn()]; },
     useContext(ctx: { _currentValue: unknown }) { return ctx._currentValue; },
     useId() { return `live-${cursor++}`; },
+    // A mounted client reads the store itself (hydration is over).
+    useSyncExternalStore<T>(_subscribe: unknown, get: () => T) { cursor++; return get(); },
     useDebugValue() {},
   };
   let tree: unknown;
@@ -811,6 +813,166 @@ test("W3-17: a runner that opens with no time left does not auto-submit blank an
       clock.restore();
     }
   }
+});
+
+// ── W3-20: the answers survive a reload ──────────────────────────────────────
+//
+// The runners kept the selections in React state only, so a reload or a stray
+// navigation remounted them with nothing chosen while the attempt carried on.
+
+/** A sessionStorage stand-in, as a browser tab has one. */
+function memoryStorage(): Storage {
+  const m = new Map<string, string>();
+  return {
+    get length() {
+      return m.size;
+    },
+    key: (i: number) => [...m.keys()][i] ?? null,
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    setItem: (k: string, v: string) => void m.set(k, String(v)),
+    removeItem: (k: string) => void m.delete(k),
+    clear: () => m.clear(),
+  } as Storage;
+}
+
+/** Run `body` with a `window` whose sessionStorage is `store`, as in a tab. */
+async function inTab<T>(store: Storage, body: () => Promise<T>): Promise<T> {
+  const g = globalThis as Record<string, unknown>;
+  const had = "window" in g;
+  const previous = g.window;
+  g.window = { sessionStorage: store };
+  try {
+    return await body();
+  } finally {
+    if (had) g.window = previous;
+    else delete g.window;
+  }
+}
+
+const TWO_QUESTIONS = [
+  { id: "q1", prompt: "One?", options: ["a", "b", "c"] },
+  { id: "q2", prompt: "Two?", options: ["a", "b"] },
+];
+
+test("W3-20: a runner remounted for the same attempt shows the answers chosen before the reload", async () => {
+  for (const [name, Runner] of await runners()) {
+    const tab = memoryStorage();
+    await inTab(tab, async () => {
+      const props = {
+        slug: "s",
+        title: "T",
+        questions: TWO_QUESTIONS,
+        userId: "user-1",
+        attemptId: "attempt-1",
+        submitAction: async () => undefined,
+      };
+      const first = mountLive(Runner as never, props as never);
+      (optionButtons(first.tree()).at(2)!.props.onClick as () => void)();
+      first.rerender();
+      first.unmount();
+
+      // The reload: same attempt, fresh component.
+      const again = mountLive(Runner as never, props as never);
+      again.rerender();
+      const pressed = optionButtons(again.tree()).map((b) => b.props["aria-pressed"]);
+      assert.deepEqual(pressed, [false, false, true], `${name} came back with nothing chosen after a reload`);
+      again.unmount();
+
+      // Another attempt, or another learner on the same tab, starts empty.
+      for (const other of [{ attemptId: "attempt-2" }, { userId: "user-2" }]) {
+        const fresh = mountLive(Runner as never, { ...props, ...other } as never);
+        fresh.rerender();
+        assert.deepEqual(
+          optionButtons(fresh.tree()).map((b) => b.props["aria-pressed"]),
+          [false, false, false],
+          `${name}: ${JSON.stringify(other)} was shown answers that are not its own`,
+        );
+        fresh.unmount();
+      }
+    });
+  }
+});
+
+test("W3-20: the timed auto-submit after a reload sends the restored answers", async () => {
+  for (const [name, Runner] of await runners()) {
+    const tab = memoryStorage();
+    const clock = fakeClock();
+    try {
+      await inTab(tab, async () => {
+        const calls: unknown[][] = [];
+        const props = {
+          slug: "s",
+          title: "T",
+          questions: TWO_QUESTIONS,
+          userId: "user-1",
+          attemptId: "attempt-1",
+          timeLimitSeconds: 30,
+          submitAction: async (...args: unknown[]) => void calls.push(args),
+        };
+        const first = mountLive(Runner as never, props as never);
+        (optionButtons(first.tree()).at(1)!.props.onClick as () => void)();
+        first.rerender();
+        first.unmount();
+        // Reloaded with two seconds left; the countdown runs out.
+        const again = mountLive(Runner as never, { ...props, timeLimitSeconds: 2 } as never);
+        again.rerender();
+        for (let i = 0; i < 3; i++) {
+          clock.tick(1000);
+          await flush();
+          again.rerender();
+        }
+        assert.equal(calls.length, 1, `${name} auto-submitted ${calls.length} times`);
+        const answers = calls[0]!.at(-1) as Array<{ questionId: string; selectedIndex: number | null }>;
+        assert.deepEqual(
+          answers,
+          [
+            { questionId: "q1", selectedIndex: 1 },
+            { questionId: "q2", selectedIndex: null },
+          ],
+          `${name} auto-submitted without the answer chosen before the reload`,
+        );
+        again.unmount();
+      });
+    } finally {
+      clock.restore();
+    }
+  }
+});
+
+test("W3-20: saved answers are checked against the quiz, and a save drops only this quiz's other attempts", async () => {
+  const { answersScope, parseAnswers, readAnswers, saveAnswers } = await import(
+    "../../apps/web/src/components/quiz/answer-drafts.ts"
+  );
+  const qs = [
+    { id: "q1", options: ["a", "b"] },
+    { id: "q2", options: ["a", "b", "c"] },
+  ];
+  assert.deepEqual(parseAnswers(JSON.stringify({ q1: 1, q2: 2 }), qs), { q1: 1, q2: 2 });
+  // A question that has gone, an option it no longer has, anything not a whole index.
+  assert.deepEqual(parseAnswers(JSON.stringify({ gone: 0, q1: 2, q2: 1.5 }), qs), {});
+  assert.deepEqual(parseAnswers(JSON.stringify({ q1: "1", q2: -1 }), qs), {});
+  for (const junk of [null, "", "{", "[1,2]", "7", "null"]) assert.deepEqual(parseAnswers(junk, qs), {}, String(junk));
+
+  const store = memoryStorage();
+  const mine = answersScope("u1", "quiz-a");
+  saveAnswers(store, mine, "attempt-1", { q1: 0 });
+  saveAnswers(store, answersScope("u1", "quiz-b"), "attempt-9", { q1: 1 });
+  saveAnswers(store, answersScope("u2", "quiz-a"), "attempt-7", { q1: 1 });
+  saveAnswers(store, mine, "attempt-2", { q1: 1 });
+  assert.equal(readAnswers(store, mine, "attempt-1"), null, "the earlier attempt's entry stays behind");
+  assert.equal(readAnswers(store, mine, "attempt-2"), JSON.stringify({ q1: 1 }));
+  assert.ok(readAnswers(store, answersScope("u1", "quiz-b"), "attempt-9"), "another quiz, possibly still open, lost its answers");
+  assert.ok(readAnswers(store, answersScope("u2", "quiz-a"), "attempt-7"), "another learner's entry was touched");
+});
+
+test("W3-20: the page tells the runner whose attempt it is", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    const [open] = await w.q<{ id: string }>(`SELECT id FROM quiz_attempts WHERE quiz_id = $1 AND closed_at IS NULL`, [w.quizId]);
+    assert.equal((runner as { userId?: string } | undefined)?.userId, w.userId);
+    assert.equal(runner?.attemptId, open!.id);
+  });
 });
 
 // ── F38: the editor and a payload without questions ──────────────────────────
