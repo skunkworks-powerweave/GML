@@ -24,6 +24,7 @@ import { getDeviceType } from "@/lib/device";
 import { isUuid } from "@/lib/ids";
 import { QuizRunner } from "@/components/quiz/QuizRunner";
 import { MobileQuizRunner } from "@/components/quiz/MobileQuizRunner";
+import { quizShownTo } from "./quiz-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -73,13 +74,17 @@ export async function submitQuizAttempt(
   if (!session?.user?.id) redirect("/login");
   const userId = session.user.id;
 
-  // Load the quiz by slug (active only).
+  // Load the quiz by slug (active, and on a subject this learner is shown:
+  // a runner opened before its subject was retired cannot still submit --
+  // quiz-scope.ts, W3-21).
   const [quiz] = await db
     .select()
     .from(quizzes)
     .where(eq(quizzes.slug, slug))
     .limit(1);
-  if (!quiz || !quiz.active) redirect(`/quizzes/${slug}?error=not_found`);
+  if (!quiz || !quiz.active || !(await quizShownTo(db, { id: userId, role: session.user.role }, quiz))) {
+    redirect(`/quizzes/${slug}?error=not_found`);
+  }
 
   // Load questions ordered by sequence.
   const qs = await db
@@ -286,7 +291,15 @@ export default async function QuizRunnerPage({
     .where(eq(quizzes.slug, slug))
     .limit(1);
 
-  if (!quiz || !quiz.active) {
+  // A quiz on an RTT subject this viewer is not shown -- retired, or taught
+  // in another district or zone -- is treated as not there, as /rtt and the
+  // subject page treat it; a direct link used to open it (quiz-scope.ts,
+  // W3-21).
+  if (
+    !quiz ||
+    !quiz.active ||
+    !(await quizShownTo(db, { id: session.user.id, role: session.user.role }, quiz))
+  ) {
     // submitQuizAttempt sends a learner here with ?error=not_found when the
     // quiz was switched off (or removed) while they were answering it. This
     // check used to run first and 404 them, so the message written for

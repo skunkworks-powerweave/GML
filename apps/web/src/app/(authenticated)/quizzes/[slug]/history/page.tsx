@@ -27,6 +27,7 @@ import { db } from "@gml/db";
 import { quizzes, quizSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { lookupOwn } from "@/lib/lookup";
+import { quizShownTo } from "../quiz-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -118,7 +119,12 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
   // abandoned attempt does not consume a try.
   const attemptsLeft =
     quiz.maxAttempts == null ? null : Math.max(0, quiz.maxAttempts - rows.length);
-  const canRetake = attemptsLeft === null || attemptsLeft > 0;
+  // A quiz switched off, or on an RTT subject this learner is not shown (a
+  // retired one, one taught elsewhere: W3-21), cannot be started from here:
+  // the runner answers it with a 404. Her own past results stay readable.
+  const open =
+    quiz.active && (await quizShownTo(db, { id: userId, role: session.user.role }, quiz));
+  const canRetake = open && (attemptsLeft === null || attemptsLeft > 0);
 
   return (
     <main>
@@ -185,7 +191,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
               </Link>
             ) : (
               <p style={{ marginTop: 16, fontSize: 13, color: "var(--ink-3)" }}>
-                You have no attempts left at this quiz.
+                {open ? "You have no attempts left at this quiz." : "This quiz is not open."}
               </p>
             )}
           </div>
@@ -326,7 +332,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             </Link>
           ) : (
             <span className="btn" aria-disabled="true" style={{ opacity: 0.5, cursor: "default" }}>
-              No attempts left
+              {open ? "No attempts left" : "Quiz not open"}
             </span>
           )}
           <Link href="/dashboard" className="btn btn-ghost">
