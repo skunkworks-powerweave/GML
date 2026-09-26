@@ -12,9 +12,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "pnpm run test:governance && pnpm run test:scripts",
+    "test": "node scripts/test-gate.mjs governance scripts hooks",
     "test:governance": "node --test \"tests/governance/**/*.test.mjs\"",
     "test:scripts": "node --test \"tests/scripts/**/*.test.mjs\"",
+    "test:hooks": "node --test \"tests/hooks/**/*.test.mjs\"",
     "test:smoke": "node --test \"tests/integration/**/*.test.mjs\"",
     "dev": "pnpm --filter @gml/web dev",
     "lint": "pnpm -r --if-present lint",

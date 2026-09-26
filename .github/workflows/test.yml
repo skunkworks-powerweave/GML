@@ -16,9 +16,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# None of the three jobs declares a `name:`, deliberately.
+#
+# GitHub shows a job's `name:` when it has one and the job id otherwise, and
+# branch protection matches required status checks against that displayed
+# string LITERALLY. These jobs were named `lint · typecheck · build ·
+# governance`, `behavioural tests (real Postgres)` and `container images`: a
+# U+00B7 and a pair of parentheses that have to be reproduced exactly into the
+# required-checks box. A rule that does not match any check name does not fail
+# — it silently requires nothing, which is the same failure mode as the hooks
+# this branch is replacing. Dropping `name:` makes the check names the job ids
+# (`static`, `behaviour`, `images`): plain, typeable, stable ASCII.
 jobs:
   static:
-    name: lint · typecheck · build · governance
     runs-on: ubuntu-latest
     env:
       # packages/db/src/client.ts builds a pg Pool at import time and now THROWS
@@ -59,11 +69,36 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The executable bit is part of a shell script's contract and is the one
+      # part of it that never shows up in a diff. scripts/*.sh are the deploy,
+      # backup, restore and rollback path: a 100644 there turns
+      # `./scripts/restore.sh` into "Permission denied" on the single day
+      # anyone runs it, and Windows checkouts drop the bit silently.
+      - name: Shell scripts are executable
+        run: |
+          bad=$(git ls-files -s scripts/*.sh | awk '$1!="100755"')
+          if [ -n "$bad" ]; then
+            echo "::error::scripts/*.sh must be committed mode 100755; these are not:"
+            echo "$bad"
+            echo "fix with: git update-index --chmod=+x <path>"
+            exit 1
+          fi
+
+      # Run the enforcement suite on its own, BEFORE `pnpm test`.
+      #
+      # `pnpm test` shells through scripts/test-gate.mjs, which is itself part
+      # of the enforcement layer -- it writes the receipt the commit hook
+      # trusts. If that wrapper breaks, every suite underneath it goes dark and
+      # reports nothing, which is precisely how six dead hooks survived 27
+      # commits. This step verifies the gates by a path that does not depend on
+      # the gates.
+      - name: Hook enforcement tests
+        run: pnpm test:hooks
+
       - name: Governance + script tests
         run: pnpm test
 
   behaviour:
-    name: behavioural tests (real Postgres)
     runs-on: ubuntu-latest
     # A REAL DATABASE. The governance suite reads source files and regex-matches
     # their text; not one of its assertions can observe a runtime behaviour. This
@@ -74,9 +109,48 @@ jobs:
     # `supabase_auth_admin` roles and the `auth` schema unguarded, so the FIRST
     # _post file aborted the run against a plain Postgres and no schema was
     # created at all.
+    #
+    # The image was raised from 16.4 to 17. What that is NOT is "matching
+    # production", which an earlier version of this comment claimed: nothing in
+    # this repository records the major version Supabase runs. docker-compose.yml
+    # declares migrate, app, worker and caddy and no postgres at all -- its own
+    # comment says Supabase IS the database.
+    #
+    # NINE places in this tree record a Postgres version, and not one of them is
+    # a reading of production: this CI service; the
+    # 16.4-alpine probe in docs/verification.md and the same probe cited in
+    # docs/substrate-moats.md; postgresql-client-16 in scripts/backup.sh, in
+    # scripts/preflight.sh (twice) and in README-deploy.md; and 16.4 / 16-alpine
+    # in two specs/*/research.md files.
+    #
+    # The count is of RECORDS, not of grep hits: the command above returns 17
+    # lines across 10 files, the extra eight being this comment's own line, three
+    # in CLAUDE.md and four in tests/hooks/settings-wiring.test.mjs, none of which
+    # records a version of anything. An earlier version of this comment quoted
+    # that command and said it "finds nine places", which is the kind of number
+    # attached to the wrong evidence that this file complains about elsewhere; and
+    # the version before THAT listed three of the nine and said "only", while the
+    # CLAUDE.md passage making the same point was complete.
+    #
+    # The client pin is the sharpest evidence AGAINST 17, not for it: pg_dump 16
+    # refuses to dump a 17 server, so a production already on 17 would mean the
+    # nightly backups have never produced a file. Which major Supabase actually
+    # runs is an open question. Whoever reads it off the Supabase project records
+    # it in docs/verification.md and pins the backup client to match. There is no
+    # numbered remediation item for this: an earlier version of this comment
+    # cited "P4-07 of the remediation plan", and no such item exists in any file
+    # in this repository.
+    #
+    # 17 is chosen here as the newer of the two and the likelier target, and
+    # the honest statement is that CI now exercises 17 while the deployment's
+    # version is unrecorded.
+    #
+    # NOTE: `services:` / `postgres:` / `image:` must stay on three adjacent
+    # lines. tests/governance/test_165 matches them with a single regex, so a
+    # comment inserted between them fails that gate for no real reason.
     services:
       postgres:
-        image: postgres:16.4-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: gml
           POSTGRES_PASSWORD: gml
@@ -128,7 +202,6 @@ jobs:
           GML_REQUIRE_FFMPEG: "1"
 
   images:
-    name: container images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
