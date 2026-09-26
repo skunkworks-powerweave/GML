@@ -15,7 +15,9 @@ export const dynamic = "force-dynamic";
 export default async function AdminQuizzesIndexPage() {
   await requireRole(["programme_admin", "super_admin"]);
 
-  // Question counts per quiz — small grouped query to keep the index honest.
+  // Question counts per quiz. A join, not a correlated subquery: in a
+  // single-table select Drizzle leaves columns unqualified, and inside the
+  // subquery "id" bound to quiz_questions.id, so every count read 0.
   const rows = await db
     .select({
       id: quizzes.id,
@@ -25,11 +27,11 @@ export default async function AdminQuizzesIndexPage() {
       active: quizzes.active,
       subjectId: quizzes.subjectId,
       rttSubjectId: quizzes.rttSubjectId,
-      questionCount: sql<number>`(
-        SELECT COUNT(*)::int FROM ${quizQuestions} WHERE ${quizQuestions.quizId} = ${quizzes.id}
-      )`,
+      questionCount: sql<number>`count(${quizQuestions.id})::int`,
     })
     .from(quizzes)
+    .leftJoin(quizQuestions, eq(quizQuestions.quizId, quizzes.id))
+    .groupBy(quizzes.id)
     .orderBy(asc(quizzes.title));
 
   // The subjects a new quiz can be bound to. Labelled with phase and term

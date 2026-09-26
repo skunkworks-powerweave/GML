@@ -244,6 +244,21 @@ test("F32: with no RTT subjects the create form says what to do instead of faili
   assert.match(html, /RTT subject/);
 });
 
+test("FR-14: the quiz index shows each quiz's real question count", { skip }, async () => {
+  // The count was a correlated subquery in a single-table select, which
+  // Drizzle renders unqualified ("quiz_id" = "id"): inside the subquery "id"
+  // bound to quiz_questions.id, so every quiz read 0 questions.
+  await withQuiz({}, async (w) => {
+    signIn(randomUUID(), "programme_admin");
+    const { default: Index } = await import("../../apps/web/src/app/(authenticated)/admin/quizzes/page.tsx");
+    const html = renderSync(withAppRouter(await Index()));
+    const row = html.split("<tr").find((r) => r.includes(`>${w.slug}<`));
+    assert.ok(row, "the quiz is listed");
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1]);
+    assert.equal(cells[3], String(w.questionIds.length), "the Questions column");
+  });
+});
+
 test("F32: the quiz editor can move a quiz to another RTT subject, and refuses one that does not exist", { skip }, async () => {
   await withQuiz({}, async (w) => {
     signIn(randomUUID(), "programme_admin");
