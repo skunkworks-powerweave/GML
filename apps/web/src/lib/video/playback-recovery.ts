@@ -93,7 +93,7 @@ const probePlaylist = async (url: string): Promise<number> =>
 
 const isOk = (status: number) => status >= 200 && status < 300;
 
-/** Safari, iOS -- and desktop Chrome, which answers canPlayType("...mpegurl") with "maybe". */
+/** Native HLS: only where hls.js cannot run (iOS before 17.1) -- see playbackPath in HlsPlayer.tsx. */
 export function attachNative(video: VideoLike, hooks: PlaybackHooks): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let done = false;
