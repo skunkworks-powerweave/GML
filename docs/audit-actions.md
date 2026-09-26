@@ -214,7 +214,7 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `notifications.mark_read` | A user marked one or more notifications read via `/api/notifications/mark-read` | `userId`, `notificationIds`, `count` |
-| `user_prefs.update` | A user changed their UI preferences (language, theme, mobile-density) | `userId`, `changedKeys` |
+| `user_prefs.update` | A user saved a UI preference through `PUT /api/user-prefs` (Settings, the language picker, the first-run tour and its replay). `entity_type` `user_prefs`, `entity_id` and `user_id` the user. Written for every save that sets at least one preference, even to the value it already had; a PUT that sets none is refused (400 `empty_patch`) and writes nothing | `keys` (the names of the preferences the save set; their values are not recorded) |
 | `dashboard.viewed` | A user rendered `/dashboard` (loose "did the user come back?" signal) | `userId`, `role` |
 | `quickfind.query` | The Cmd+K quick-find palette's search was answered (spec 121): `GET /api/quickfind` with 2 or more characters. `entity_type` `quickfind`, `user_id` the searcher. A refused search (too long, throttled, limiter unavailable) writes nothing. The text is kept as typed, as the learner search on `/repo/students` keeps its own: the row is the record of who looked up which teacher, school or session, and only a `programme_admin` or `super_admin` can read it (`/admin/audit`) | `q` (the trimmed search text, at most 240 characters), `resultCount` (rows shown, at most 20) |
 

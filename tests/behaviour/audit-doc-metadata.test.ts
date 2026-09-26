@@ -3,7 +3,7 @@
 // writes is a filter that silently matches nothing, and a key it omits is data
 // nobody knows is there.
 //
-// ── W3-06 / W3-24 ────────────────────────────────────────────────────────────
+// ── W3-06 / W3-24 / W3-25 / W3-27 ────────────────────────────────────────────
 //
 // Several non-auth rows described metadata the code never wrote:
 //
@@ -19,6 +19,7 @@
 //                                editor pre-fills every setting, so every save writes them all)
 //   quickfind.query              `userId`, `query` "(length only, NOT raw text — privacy)" (writes
 //                                q, the search as typed, and resultCount -- as spec 121 says)
+//   user_prefs.update            `userId`, `changedKeys` (writes keys; the user is the row's)
 //
 // Executed: the real handlers, as a signed-in user, against Postgres; each
 // row they write is compared with its documented row, both ways.
@@ -254,6 +255,31 @@ test("W3-24 quiz.schema.update: a setting's key says the save carried it, not th
         "the taxonomy says a key means the setting changed; this save changed nothing and wrote every key",
       );
       assertDocumented(row!, ["rttSubjectId"]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── user_prefs.update ────────────────────────────────────────────────────────
+
+test("W3-27 user_prefs.update holds what the taxonomy says: the keys the save set", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("doc-prefs"));
+    try {
+      const me = await signedIn(f, "teacher");
+      const { PUT } = await import("../../apps/web/src/app/api/user-prefs/route.ts");
+      const res = await PUT(
+        new Request("http://x/api/user-prefs", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ density: "dense", highContrast: true }),
+        }),
+      );
+      assert.equal(res.status, 200);
+      const [row] = await rowsOf(c, me, "user_prefs.update");
+      assertDocumented(row!);
+      assert.deepEqual(row!.metadata, { keys: ["density", "highContrast"] });
     } finally {
       await f.cleanup();
     }
