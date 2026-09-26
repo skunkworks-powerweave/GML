@@ -41,6 +41,12 @@ export type StartUploadOptions = {
   file: File;
   bucket: string;
   objectKey: string;
+  /**
+   * The reservation's content type (beginUpload): the bucket refuses a type it
+   * does not list, such as the video/x-m4v or video/mp2t a browser reports for
+   * .m4v and .mts, with a 415 that no retry can get past.
+   */
+  contentType: string;
   chunkBytes: number;
   /** Supplied by beginUploadAction — see lib/supabase/browser.ts for why it is
    *  not read from process.env here. */
@@ -141,7 +147,7 @@ export async function startResumableUpload(
     metadata: {
       bucketName: opts.bucket,
       objectName: opts.objectKey,
-      contentType: opts.file.type || "video/mp4",
+      contentType: opts.contentType,
       cacheControl: "3600",
     },
     chunkSize: opts.chunkBytes,

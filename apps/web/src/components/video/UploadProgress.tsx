@@ -140,6 +140,7 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
       file,
       bucket: reservation.bucket,
       objectKey: reservation.objectKey,
+      contentType: reservation.contentType,
       chunkBytes: reservation.chunkBytes,
       // Server-supplied, not read from process.env in the browser -- see
       // lib/supabase/browser.ts.

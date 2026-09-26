@@ -38,6 +38,7 @@ test("importing the upload module does not load the browser Supabase client", as
     file: Object.assign(Buffer.from("x"), { type: "video/mp4" }) as unknown as File,
     bucket: "videos-original",
     objectKey: "k",
+    contentType: "video/mp4",
     chunkBytes: 6 * 1024 * 1024,
     supabase: { url: "", anonKey: "" },
     onProgress: () => undefined,

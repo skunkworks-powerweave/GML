@@ -26,6 +26,8 @@ export type BeginUploadState =
       bucket: string;
       objectKey: string;
       chunkBytes: number;
+      /** The type to upload the bytes as (beginUpload's storable type). */
+      contentType: string;
       /**
        * The browser needs the project URL and the publishable key to talk to
        * Storage directly, and it CANNOT read them from process.env: NEXT_PUBLIC_*

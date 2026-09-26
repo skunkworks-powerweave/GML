@@ -38,7 +38,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { files, videoSubmissions } from "@gml/db/schema";
 import { finalizeUpload, isCompleteSize, isOversize, UPLOAD_ABANDON_AFTER_HOURS } from "@gml/db/uploads";
-import { BUCKETS, uploadKey } from "@gml/shared/storage/buckets";
+import { BUCKETS, storableVideoType, uploadKey } from "@gml/shared/storage/buckets";
 import { storage } from "@/lib/video/storage";
 import { getSystemSettings } from "@/lib/system-settings";
 
@@ -85,17 +85,6 @@ export async function uploadLimitBytes(): Promise<number> {
   return Math.min(configuredBytes, MAX_UPLOAD_BYTES);
 }
 
-const ALLOWED_VIDEO_TYPES = new Set([
-  "video/mp4",
-  "video/quicktime",
-  "video/x-matroska",
-  "video/webm",
-  "video/3gpp",
-  "video/x-msvideo",
-  "video/mpeg",
-  "application/octet-stream",
-]);
-
 function extensionFor(filename: string, contentType: string): string {
   const fromName = filename.includes(".") ? filename.split(".").pop()! : "";
   if (fromName && /^[a-z0-9]{1,8}$/i.test(fromName)) return fromName.toLowerCase();
@@ -109,6 +98,11 @@ export type BeginUploadResult = {
   bucket: string;
   objectKey: string;
   chunkBytes: number;
+  /**
+   * The type the bytes must be uploaded as: the bucket's, which is the
+   * browser's own only when the bucket lists it (storableVideoType).
+   */
+  contentType: string;
   /** True when this is an earlier, unfinished reservation for the same file. */
   resumed: boolean;
 };
@@ -130,9 +124,7 @@ export async function beginUpload(opts: {
   /** 1 or 4 for a 'mentee_quarterly' video; null otherwise (migration 0039). */
   contextQuarter?: number | null;
 }): Promise<BeginUploadResult | { error: string }> {
-  const contentType = ALLOWED_VIDEO_TYPES.has(opts.contentType)
-    ? opts.contentType
-    : "application/octet-stream";
+  const contentType = storableVideoType(opts.contentType);
 
   if (!Number.isFinite(opts.sizeBytes) || opts.sizeBytes <= 0) {
     return { error: "That file looks empty." };
@@ -190,6 +182,7 @@ export async function beginUpload(opts: {
       bucket: BUCKETS.videosOriginal,
       objectKey: unfinished.objectKey,
       chunkBytes: UPLOAD_CHUNK_BYTES,
+      contentType,
       resumed: true,
     };
   }
@@ -237,6 +230,7 @@ export async function beginUpload(opts: {
     bucket: BUCKETS.videosOriginal,
     objectKey,
     chunkBytes: UPLOAD_CHUNK_BYTES,
+    contentType,
     resumed: false,
   };
 }

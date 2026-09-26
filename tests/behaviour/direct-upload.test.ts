@@ -52,12 +52,15 @@ const BYTES = Buffer.from("fake mp4 bytes, ".repeat(64));
 type Reply = { status: number; body: string };
 type Seen = { method: string; url: string; headers: IncomingHttpHeaders; bytes: number };
 
-/** The objectName a tus creation request asked for. */
-function objectNameOf(s: Seen): string | null {
+/** A metadata value a tus creation request carried. */
+function metadataOf(s: Seen, key: string): string | null {
   const meta = String(s.headers["upload-metadata"] ?? "");
-  const pair = meta.split(",").map((p) => p.trim().split(" ")).find(([k]) => k === "objectName");
+  const pair = meta.split(",").map((p) => p.trim().split(" ")).find(([k]) => k === key);
   return pair?.[1] ? Buffer.from(pair[1], "base64").toString() : null;
 }
+
+/** The objectName a tus creation request asked for. */
+const objectNameOf = (s: Seen) => metadataOf(s, "objectName");
 
 /**
  * A stand-in for Storage's resumable endpoint. `refuse` may answer a creation
@@ -167,16 +170,18 @@ function upload(
   storageUrl: string,
   store: unknown = resumeStore([]).store,
   chunkBytes = 6 * 1024 * 1024,
+  types: { file: string; reserved: string } = { file: "video/mp4", reserved: "video/mp4" },
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   tus.defaultOptions.urlStorage = store;
   // tus-js-client's Node build reads a Buffer; `type` is what the File would carry.
-  const file = Object.assign(Buffer.from(BYTES), { type: "video/mp4" });
+  const file = Object.assign(Buffer.from(BYTES), { type: types.file });
   return new Promise((resolve) => {
     void tusUpload().then(({ startResumableUpload }) =>
       startResumableUpload({
         file: file as unknown as File,
         bucket: "videos-original",
         objectKey: KEY,
+        contentType: types.reserved,
         chunkBytes,
         supabase: { url: storageUrl, anonKey: "publishable-key" },
         onProgress: () => undefined,
@@ -207,6 +212,27 @@ test("a teacher's upload creates the object without asking Storage to overwrite"
     assert.equal(create.headers.authorization, `Bearer ${TEST_ACCESS_TOKEN}`, "the user's own token, so RLS applies");
     assert.equal(objectNameOf(create), KEY, "the bytes go to the server-issued key");
     assert.deepEqual(result, { ok: true }, "the whole file went up in the creation request; the upload must succeed");
+  } finally {
+    await storage.close();
+  }
+});
+
+test("FR-24: a video the bucket has no MIME type for goes up as the reservation's type, not the browser's", async () => {
+  // Browsers call .m4v video/x-m4v, .avi video/avi, .mts video/mp2t. The
+  // bucket refuses those with 415 (tus does not retry it), and the teacher was
+  // told to "try again", which could never work. beginUpload stores such a
+  // file as application/octet-stream; the upload must declare the same.
+  const { VIDEOS_ORIGINAL_TYPES: allowed } = await import("../../packages/shared/src/storage/buckets.ts");
+  const storage = await fakeStorage((s) =>
+    s.method === "POST" && !allowed.has(metadataOf(s, "contentType") ?? "")
+      ? { status: 415, body: '{"error":"invalid_mime_type"}' }
+      : null,
+  );
+  try {
+    const result = await upload(storage.url, undefined, undefined, { file: "video/x-m4v", reserved: "application/octet-stream" });
+    const create = storage.seen.find((s) => s.method === "POST");
+    assert.equal(metadataOf(create!, "contentType"), "application/octet-stream");
+    assert.deepEqual(result, { ok: true });
   } finally {
     await storage.close();
   }
