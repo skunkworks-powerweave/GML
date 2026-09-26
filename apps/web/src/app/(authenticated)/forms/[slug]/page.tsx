@@ -39,7 +39,7 @@ import {
 } from "@gml/db/schema";
 
 import { auth } from "@/auth";
-import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
+import { actorFrom, assertCanAccessPairing, pairingClosed } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { assertSectionGate } from "@/lib/gates";
 import {
@@ -271,6 +271,7 @@ export async function submitFormAction(formData: FormData): Promise<void> {
   // and it lives outside /mentorship, so nothing else asked for the password.
   await assertSectionGate(actor.id, "mentorship", formRunnerHref(slug, pairingId));
   const pairing = await assertCanAccessPairing(actor, pairingId);
+  if (pairingClosed(pairing)) redirect(`${formRunnerHref(slug, pairingId)}&error=pairing_closed`);
 
   // Pull the form back so we know which field ids to accept. Drop unknown keys.
   const [form] = await db
@@ -880,6 +881,8 @@ export default async function FormRunnerPage({
                 your account. If you think that is wrong, contact your programme
                 administrator.
               </>
+            ) : error === "pairing_closed" ? (
+              <>This pairing is complete, so its record is closed and no more forms can be filed for it. Nothing was saved.</>
             ) : error === "form_broken" ? (
               <>This form&apos;s definition is broken, so it cannot be submitted. Please tell your programme administrator.</>
             ) : error === "invalid" ? (

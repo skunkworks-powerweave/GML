@@ -13,10 +13,13 @@ import { db } from "@gml/db";
 import { mentorMeetings, mentorPairings, mentors, observationCycles, phases, rttSubjects, teachers, terms } from "@gml/db/schema";
 import { notFound } from "next/navigation";
 import { hasAnyRole } from "@gml/shared/auth/roles";
-import { assertCanAccessCycle, assertCanAccessPairing, isUuid, type Actor } from "@/lib/authz";
+import { assertCanAccessCycle, assertCanAccessPairing, isUuid, pairingClosed, type Actor } from "@/lib/authz";
 import { rttScope } from "@/lib/rtt/scope";
 import { activeGrant, isAdmin, mentorshipAccess, observationAccess } from "@/lib/visibility";
 import type { UploadContextType } from "@/lib/video/upload";
+
+/** assertContextAllowed's refusal for a completed or ended pairing (FR-12). */
+const CLOSED_PAIRING = "This pairing is complete. Its record is closed, so no more videos can be added.";
 
 export const UPLOAD_CONTEXT_TYPES: ReadonlySet<string> = new Set<UploadContextType>([
   "observation_cycle",
@@ -113,7 +116,9 @@ export async function assertContextAllowed(
         .where(eq(mentorMeetings.id, contextId))
         .limit(1);
       if (!meeting) notFound();
-      await assertCanAccessPairing(actor, meeting.pairingId);
+      if (pairingClosed(await assertCanAccessPairing(actor, meeting.pairingId))) {
+        return { ok: false, error: CLOSED_PAIRING };
+      }
       return { ok: true, target: { contextType, contextId, quarter: null } };
     }
 
@@ -123,6 +128,7 @@ export async function assertContextAllowed(
         return { ok: false, error: "Say whether this is the Q1 (baseline) or the Q4 (endline) video." };
       }
       const pairing = await assertCanAccessPairing(actor, contextId);
+      if (pairingClosed(pairing)) return { ok: false, error: CLOSED_PAIRING };
       // The endline video belongs to the pairing's last quarter. Q1 stays open:
       // a baseline sent late is still the baseline.
       const current = pairing.currentQuarter ?? 1;

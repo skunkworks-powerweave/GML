@@ -156,6 +156,16 @@ export async function assertCanAccessPairing(actor: Actor, pairingId: string) {
 }
 
 /**
+ * Whether a pairing's record is closed: completed or ended. Its meetings,
+ * forms, commitments and videos stay readable; nothing is added or changed.
+ * 'complete' used to close nothing, so records kept arriving on a finished
+ * mentorship (FR-12). 'paused' is not closed: it resumes.
+ */
+export function pairingClosed(pairing: { status: string }): boolean {
+  return pairing.status === "complete" || pairing.status === "ended";
+}
+
+/**
  * Authorise access to a video submission.
  *
  * Videos are the most sensitive surface here -- mentorship meeting recordings

@@ -26,14 +26,14 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { notify } from "@gml/db/notify";
 import { mentorPairings, mentorMeetings, mentors, teachers, videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
 import { hasAnyRole } from "@gml/shared/auth/roles";
-import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
+import { actorFrom, assertCanAccessPairing, pairingClosed } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/ids";
@@ -126,6 +126,7 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // of a page and none of the writing does not meet it.
   await assertSectionGate(actor.id, "mentorship", "/mentorship");
   const pairing = await assertCanAccessPairing(actor, pairingId);
+  if (pairingClosed(pairing)) redirect(`/mentorship/${pairingId}?error=pairing_closed`);
 
   let newMeetingId = "";
   await db.transaction(async (tx) => {
@@ -237,6 +238,7 @@ export async function cancelMeetingAction(formData: FormData): Promise<void> {
   // asserts it (see logMeetingAction).
   await assertSectionGate(actor.id, "mentorship", "/mentorship");
   const pairing = await assertCanAccessPairing(actor, pairingId);
+  if (pairingClosed(pairing)) redirect(`/mentorship/${pairingId}?error=pairing_closed`);
 
   // The meeting must be THIS pairing's: a meeting id from another pairing, or
   // a malformed one (never sent to a uuid column), is treated as absent.
@@ -334,15 +336,18 @@ export async function completePairingAction(formData: FormData): Promise<void> {
   await assertSectionGate(completeActor.id, "mentorship", "/mentorship");
   await assertCanAccessPairing(completeActor, pairingId);
 
+  // Only an open pairing completes: a re-post (the button is hidden, the
+  // action is not) overwrote ended_at and wrote a second audit row.
   const endedAt = new Date();
   const updated = await db
     .update(mentorPairings)
     .set({ status: "complete", endedAt })
-    .where(eq(mentorPairings.id, pairingId))
+    .where(and(eq(mentorPairings.id, pairingId), notInArray(mentorPairings.status, ["complete", "ended"])))
     .returning({ id: mentorPairings.id });
 
+  // assertCanAccessPairing found it, so no row updated means it was closed.
   if (updated.length === 0) {
-    redirect(`/mentorship?error=pairing_not_found`);
+    redirect(`/mentorship/${pairingId}?error=pairing_closed`);
   }
 
   void recordAudit({
@@ -390,7 +395,8 @@ export async function toggleCommitmentAction(formData: FormData): Promise<void> 
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
   await assertSectionGate(commitmentActor.id, "mentorship", "/mentorship");
-  await assertCanAccessPairing(commitmentActor, pairingId);
+  const pairing = await assertCanAccessPairing(commitmentActor, pairingId);
+  if (pairingClosed(pairing)) redirect(`/mentorship/${pairingId}?error=pairing_closed`);
 
   // IT NOW PERSISTS. The previous version wrote an audit row and changed
   // nothing: a mentor ticked an item, saw nothing happen, reloaded, and found
@@ -475,7 +481,8 @@ export async function addCommitmentAction(formData: FormData): Promise<void> {
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
   await assertSectionGate(actor.id, "mentorship", "/mentorship");
-  await assertCanAccessPairing(actor, pairingId);
+  const pairing = await assertCanAccessPairing(actor, pairingId);
+  if (pairingClosed(pairing)) redirect(`/mentorship/${pairingId}?error=pairing_closed`);
 
   const entry = {
     id: randomUUID(),

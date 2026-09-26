@@ -18,7 +18,7 @@
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { actorFrom, assertCanAccessPairing } from "@/lib/authz";
+import { actorFrom, assertCanAccessPairing, pairingClosed } from "@/lib/authz";
 import Link from "next/link";
 import { SubmitButton } from "@/components/SubmitButton";
 import { and, asc, eq, desc, inArray, sql } from "drizzle-orm";
@@ -121,6 +121,7 @@ export default async function PairingDetailPage({
     invalid_duration: "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
     meeting_not_found: "That meeting is not on this pairing any more.",
     meeting_has_recording: "That meeting has a recording attached, so it was kept.",
+    pairing_closed: "This pairing is complete, so its record is closed. Nothing was saved.",
   };
   const pairingError = sp.error
     ? (lookupOwn(PAIRING_ERRORS, sp.error) ?? "That action could not be completed. Please try again.")
@@ -186,7 +187,10 @@ export default async function PairingDetailPage({
       : null;
   // The mentee does not log meetings: "Mentor logs every contact", and a
   // mistaken entry by her could not be removed by anyone.
-  const canLogMeeting = !viewerIsMentee;
+  // A completed or ended pairing is a closed record: nothing is logged,
+  // added or ticked on it (the actions refuse too; lib/authz pairingClosed).
+  const closed = pairingClosed(pairing);
+  const canLogMeeting = !viewerIsMentee && !closed;
 
   // WHETHER A CANCELLATION REACHES ANYONE. cancelMeetingAction always writes
   // the meeting.cancelled notice, but /inbox and the bell show only the kinds
@@ -936,7 +940,7 @@ export default async function PairingDetailPage({
             <div style={{ padding: 4 }}>
               {commitments.length === 0 ? (
                 <p style={{ padding: "12px 14px", fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                  Nothing agreed yet. Add the first commitment below.
+                  {closed ? "Nothing was agreed." : "Nothing agreed yet. Add the first commitment below."}
                 </p>
               ) : (
                 commitments.map((c, i) => (
@@ -962,6 +966,7 @@ export default async function PairingDetailPage({
                     <input type="hidden" name="commitmentId" value={c.id} />
                     <SubmitButton
                       pendingLabel=""
+                      disabled={closed}
                       aria-label={`${c.done ? "Unmark" : "Mark"} commitment: ${c.text}`}
                       style={{
                         width: 16,
@@ -1007,83 +1012,85 @@ export default async function PairingDetailPage({
                 One minmax(0, 1fr) column: an implicit one is as wide as the
                 row's content, which counts the due box at its default ~20
                 characters, and that pushed the page 16 px past the edge. */}
-            <form
-              action={addCommitmentAction}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1fr)",
-                gap: 6,
-                padding: "10px 12px",
-                borderTop: "1px solid var(--line)",
-              }}
-            >
-              <input type="hidden" name="pairingId" value={pairingId} />
-              {/* aria-labels: the row has no visible labels, and a placeholder
-                  names a box only until something is typed in it; the who
-                  select had no name at all. */}
-              <input
-                name="text"
-                required
-                maxLength={500}
-                placeholder="Add a commitment…"
-                aria-label="New commitment"
+            {closed ? null : (
+              <form
+                action={addCommitmentAction}
                 style={{
-                  width: "100%",
-                  padding: "6px 8px",
-                  border: "1px solid var(--line-2)",
-                  borderRadius: 6,
-                  fontSize: 12,
-                  background: "var(--card)",
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0, 1fr)",
+                  gap: 6,
+                  padding: "10px 12px",
+                  borderTop: "1px solid var(--line)",
                 }}
-              />
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <select
-                  name="who"
-                  defaultValue="mentee"
-                  aria-label="Whose commitment"
-                  style={{
-                    flex: "0 0 90px",
-                    padding: "6px 4px",
-                    border: "1px solid var(--line-2)",
-                    borderRadius: 6,
-                    fontSize: 11,
-                    background: "var(--card)",
-                  }}
-                >
-                  <option value="mentee">mentee</option>
-                  <option value="mentor">mentor</option>
-                </select>
+              >
+                <input type="hidden" name="pairingId" value={pairingId} />
+                {/* aria-labels: the row has no visible labels, and a placeholder
+                    names a box only until something is typed in it; the who
+                    select had no name at all. */}
                 <input
-                  name="due"
-                  maxLength={40}
-                  placeholder="Wk 8"
-                  aria-label="Due"
+                  name="text"
+                  required
+                  maxLength={500}
+                  placeholder="Add a commitment…"
+                  aria-label="New commitment"
                   style={{
-                    flex: "1 1 0",
-                    minWidth: 0,
-                    padding: "6px 6px",
+                    width: "100%",
+                    padding: "6px 8px",
                     border: "1px solid var(--line-2)",
                     borderRadius: 6,
-                    fontSize: 11,
+                    fontSize: 12,
                     background: "var(--card)",
                   }}
                 />
-                <SubmitButton
-                  style={{
-                    flex: "none",
-                    padding: "6px 12px",
-                    border: "none",
-                    borderRadius: 6,
-                    background: "var(--ink)",
-                    color: "var(--paper)",
-                    fontSize: 12,
-                    cursor: "pointer",
-                  }}
-                >
-                  Add
-                </SubmitButton>
-              </div>
-            </form>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <select
+                    name="who"
+                    defaultValue="mentee"
+                    aria-label="Whose commitment"
+                    style={{
+                      flex: "0 0 90px",
+                      padding: "6px 4px",
+                      border: "1px solid var(--line-2)",
+                      borderRadius: 6,
+                      fontSize: 11,
+                      background: "var(--card)",
+                    }}
+                  >
+                    <option value="mentee">mentee</option>
+                    <option value="mentor">mentor</option>
+                  </select>
+                  <input
+                    name="due"
+                    maxLength={40}
+                    placeholder="Wk 8"
+                    aria-label="Due"
+                    style={{
+                      flex: "1 1 0",
+                      minWidth: 0,
+                      padding: "6px 6px",
+                      border: "1px solid var(--line-2)",
+                      borderRadius: 6,
+                      fontSize: 11,
+                      background: "var(--card)",
+                    }}
+                  />
+                  <SubmitButton
+                    style={{
+                      flex: "none",
+                      padding: "6px 12px",
+                      border: "none",
+                      borderRadius: 6,
+                      background: "var(--ink)",
+                      color: "var(--paper)",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Add
+                  </SubmitButton>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       </div>
