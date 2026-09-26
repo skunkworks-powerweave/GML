@@ -10,7 +10,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { videoSubmissions, teachers, users } from "@gml/db/schema";
+import { rttSubjects, videoSubmissions, teachers, users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { isUuid } from "@/lib/authz";
 import { parsePage } from "@/lib/observation/list";
@@ -85,6 +85,8 @@ type Row = {
   teacherName: string | null;
   teacherHindi: string | null;
   teacherSubject: string | null;
+  /** The RTT subject taught back (the context id, uploads/context.ts); null for a clip from before it was one. */
+  rttSubjectName: string | null;
 };
 
 export default async function TeachBackQueuePage({
@@ -163,10 +165,12 @@ export default async function TeachBackQueuePage({
         teacherName: teachers.fullName,
         teacherHindi: teachers.hindiName,
         teacherSubject: teachers.subjectSpecialism,
+        rttSubjectName: rttSubjects.name,
       })
       .from(videoSubmissions)
       .leftJoin(users, eq(videoSubmissions.submittedByUserId, users.id))
-      .leftJoin(teachers, eq(teachers.userId, users.id));
+      .leftJoin(teachers, eq(teachers.userId, users.id))
+      .leftJoin(rttSubjects, eq(rttSubjects.id, videoSubmissions.contextId));
 
   // Right-pane selection is loaded BY ID, not looked up in the page shown: a
   // deep link (the dashboard to-do, a notification) must open the review pane
@@ -380,6 +384,8 @@ export default async function TeachBackQueuePage({
                             flexWrap: "wrap",
                           }}
                         >
+                          {/* What she taught back, then her own specialism. */}
+                          {r.rttSubjectName ? <span>{r.rttSubjectName} ·</span> : null}
                           <span>{r.teacherSubject || "—"}</span>
                           <span style={{ fontFamily: "var(--mono)" }}>· {fmtDate(r.createdAt)}</span>
                         </div>
@@ -526,6 +532,8 @@ export default async function TeachBackQueuePage({
                 fontSize: 12,
               }}
             >
+              <dt style={dtStyle}>RTT subject</dt>
+              <dd style={ddStyle}>{selected.rttSubjectName ?? "—"}</dd>
               <dt style={dtStyle}>Source</dt>
               <dd style={ddStyle}>
                 <span

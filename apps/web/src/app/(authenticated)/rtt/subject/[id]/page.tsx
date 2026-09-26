@@ -3,7 +3,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { and, eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auth } from "@/auth";
 import {
@@ -16,7 +16,9 @@ import {
   phases,
   districts,
   zones,
+  videoSubmissions,
 } from "@gml/db/schema";
+import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { uuidOrNotFound } from "@/lib/ids";
 import { listSubjectAssessments } from "@/lib/rtt/assessments";
 import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
@@ -47,6 +49,14 @@ const ATTENDANCE_CHIP: Record<string, string> = {
   absent: "chip chip-rust",
   excused: "chip",
 };
+
+/** A teach-back's state for the teacher who sent it: review first, then the pipeline. */
+function teachBackChip(v: { status: string; reviewedAt: Date | null }): { cls: string; label: string } {
+  if (v.reviewedAt) return { cls: "chip chip-lichen", label: "Reviewed" };
+  if (v.status === "ready") return { cls: "chip chip-saffron", label: "Awaiting review" };
+  if (v.status === "failed") return { cls: "chip chip-rust", label: "Failed" };
+  return { cls: "chip", label: v.status.replace(/_/g, " ") };
+}
 
 export const dynamic = "force-dynamic";
 
@@ -168,6 +178,32 @@ export default async function RttSubjectPage({
   ]);
   const presentCount = [...attendance.values()].filter((s) => s === "present").length;
   const passedCount = assessments.filter((q) => q.passed).length;
+
+  // HER TEACH-BACKS OF THIS SUBJECT (FR-02). The review side -- the
+  // /rtt/teach-back queue, the mentor's "Pending video reviews" card and the
+  // badge -- was built, and nothing a teacher could reach sent one: no page
+  // linked a teach-back upload, and its id had no meaning. A teach-back is now
+  // for a subject (uploads/context.ts), offered here to the teacher learning
+  // it. Staff review teach-backs; they are not asked for one.
+  const teachBacks = scope.isStaff
+    ? []
+    : await db
+        .select({
+          id: videoSubmissions.id,
+          status: videoSubmissions.status,
+          createdAt: videoSubmissions.createdAt,
+          reviewedAt: videoSubmissions.reviewedAt,
+        })
+        .from(videoSubmissions)
+        .where(
+          and(
+            eq(videoSubmissions.contextType, "teach_back"),
+            eq(videoSubmissions.contextId, id),
+            eq(videoSubmissions.submittedByUserId, session.user.id),
+          ),
+        )
+        .orderBy(desc(videoSubmissions.createdAt))
+        .limit(10);
 
   // "Resume" (spec 119's in-page anchor) goes to the first module with a
   // lesson she has not done. It always went to module 1, whatever she had
@@ -736,6 +772,58 @@ export default async function RttSubjectPage({
 
           {phone ? null : readingsCard}
           {phone ? null : assessmentCard}
+
+          {/* Last, on a phone and on a desktop: the readings and the quiz's
+              Start button are what a subject is opened for (F11), and a
+              teach-back comes once the subject has been learned. */}
+          {scope.isStaff ? null : (
+            <article id="teach-back" className="card card-hi">
+              <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>Teach-back</div>
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  Record yourself teaching a lesson from this subject. Mentors and observers watch it and mark it
+                  reviewed.
+                </div>
+              </div>
+              {teachBacks.length > 0 ? (
+                <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
+                  {teachBacks.map((v, i) => {
+                    const chip = teachBackChip(v);
+                    return (
+                      <li
+                        key={v.id}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "10px 0",
+                          borderTop: i ? "1px solid var(--line)" : "none",
+                        }}
+                      >
+                        <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                          {`Sent ${new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`}
+                        </Link>
+                        <span className={chip.cls}>{chip.label}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+              {/* The upload page, bound to this subject: the file picker, the
+                  phone flow and -- when the programme has a number -- the
+                  WhatsApp caption TB-<subject> live there. */}
+              <div style={{ padding: "12px 14px" }}>
+                <Link
+                  href={uploadHref({ contextType: "teach_back", contextId: id })}
+                  className="btn btn-sm"
+                  style={{ textDecoration: "none" }}
+                >
+                  {teachBacks.length === 0 ? "Upload a teach-back video →" : "Upload another teach-back →"}
+                </Link>
+              </div>
+            </article>
+          )}
         </div>
       </section>
     </div>

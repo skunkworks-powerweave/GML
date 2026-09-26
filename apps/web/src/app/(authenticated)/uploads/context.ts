@@ -8,12 +8,13 @@ import "server-only";
 // pairing a link points at, so the page and the reservation cannot disagree
 // about who may upload where.
 
-import { and, desc, eq, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, lte, ne } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentorMeetings, mentorPairings, mentors, observationCycles, teachers } from "@gml/db/schema";
+import { mentorMeetings, mentorPairings, mentors, observationCycles, phases, rttSubjects, teachers, terms } from "@gml/db/schema";
 import { notFound } from "next/navigation";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { assertCanAccessCycle, assertCanAccessPairing, isUuid, type Actor } from "@/lib/authz";
+import { rttScope } from "@/lib/rtt/scope";
 import { activeGrant, isAdmin, mentorshipAccess, observationAccess } from "@/lib/visibility";
 import type { UploadContextType } from "@/lib/video/upload";
 
@@ -59,10 +60,15 @@ export type ContextCheck = { ok: true; target: UploadTarget } | { ok: false; err
  *                      recording no reader could resolve -- the mentee got a
  *                      404 for it.
  *   mentee_quarterly   the pairing, with the quarter (1 or 4) it is for
+ *   teach_back         the RTT SUBJECT taught back, one the uploader is shown
+ *                      (lib/rtt/scope.ts). It was any uuid at all -- the
+ *                      "teach_backs" namespace it was left to does not exist
+ *                      -- so no page could offer a teach-back, and a
+ *                      hand-typed one named nothing a reviewer could look up.
  *
- * A cycle, meeting or quarterly upload with no id is refused. It used to pass
- * ("no id, nothing to check") and was stored linked to nothing: visible to its
- * uploader and administrators only, and on no cycle page.
+ * A cycle, meeting, quarterly or teach-back upload with no id is refused. It
+ * used to pass ("no id, nothing to check") and was stored linked to nothing:
+ * visible to its uploader and administrators only, and on no cycle page.
  */
 export async function assertContextAllowed(
   actor: Actor,
@@ -126,12 +132,29 @@ export async function assertContextAllowed(
       return { ok: true, target: { contextType, contextId, quarter } };
     }
 
-    case "teach_back":
+    case "teach_back": {
+      if (!contextId) return { ok: false, error: "Choose which RTT subject this teach-back is for." };
+      if (!isUuid(contextId)) notFound();
+      // The subject page's own predicate: an active subject taught where the
+      // teacher is (staff: the whole programme). A retired subject, another
+      // district's, or an id that is no subject reads as absent, as it does on
+      // /rtt/subject/[id]. A teach-back is still the uploader's own work: no
+      // per-row owner is checked beyond that.
+      const scope = await rttScope(db, actor);
+      const [subject] = await db
+        .select({ id: rttSubjects.id })
+        .from(rttSubjects)
+        .where(and(eq(rttSubjects.id, contextId), scope.subjectWhere))
+        .limit(1);
+      if (!subject) notFound();
+      return { ok: true, target: { contextType, contextId, quarter: null } };
+    }
+
     case "classroom_session":
-      // Not scoped to a per-row owner: a teach-back is the uploader's own work,
-      // and a classroom session is programme-wide reference data. The
-      // submission still records who uploaded it. A malformed id names
-      // nothing; it used to reach the uuid column and fail there (22P02, a 500).
+      // Not scoped to a per-row owner: a classroom session is programme-wide
+      // reference data. The submission still records who uploaded it. A
+      // malformed id names nothing; it used to reach the uuid column and fail
+      // there (22P02, a 500).
       if (contextId && !isUuid(contextId)) notFound();
       return { ok: true, target: { contextType, contextId, quarter: null } };
   }
@@ -248,12 +271,16 @@ export async function describeUploadTarget(
         whatsappText: `Q${target.quarter}-${id}`,
       });
     }
-    case "teach_back":
+    case "teach_back": {
+      const [s] = await db.select({ name: rttSubjects.name }).from(rttSubjects).where(eq(rttSubjects.id, id!)).limit(1);
       return described({
-        title: "Teach-back video",
-        audience: "Mentors and observers review teach-backs.",
-        whatsappText: id ? `TB-${id}` : null,
+        title: `Teach-back video for ${s!.name}`,
+        audience: "It goes to the teach-back queue, where mentors and observers review it.",
+        // TB-<subject> (packages/shared/src/whatsapp/caption.ts); the webhook
+        // holds it to the same subject check as assertContextAllowed.
+        whatsappText: `TB-${id}`,
       });
+    }
     case "classroom_session":
       return described({ title: "Classroom session video", audience: "Only you and programme administrators can see it.", whatsappText: null });
     case "generic":
@@ -295,7 +322,8 @@ export function uploadHref(t: { contextType: string; contextId?: string | null; 
  * The user's own open places a video can go, for the /uploads chooser:
  *
  *   teacher   her cycles not yet signed off; her Q1 video (Q4 in the last
- *             quarter) for each active pairing
+ *             quarter) for each active pairing; a teach-back for each RTT
+ *             subject she is shown
  *   observer  the cycles she observes, not yet signed off
  *   mentor    his mentees' open cycles; his most recent past meetings
  *
@@ -373,6 +401,26 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
           detail: m.teacherName,
         });
       }
+    }
+  }
+
+  // Teach-backs are RTT's, which has no section password. Only a teacher is
+  // offered them: she teaches a subject back, and mentors and observers review
+  // what she sends (the /rtt/teach-back queue). Nothing offered one before, so
+  // the queue, the mentor's card and the badge had nothing to count.
+  if (actor.role === "teacher") {
+    const scope = await rttScope(db, actor);
+    const subjects = await db
+      .select({ id: rttSubjects.id, name: rttSubjects.name, term: terms.name, phase: phases.label })
+      .from(rttSubjects)
+      .innerJoin(terms, eq(terms.id, rttSubjects.termId))
+      .innerJoin(phases, eq(phases.id, terms.phaseId))
+      .where(scope.subjectWhere)
+      .orderBy(asc(phases.sequence), asc(terms.sequence), asc(rttSubjects.name))
+      .limit(20);
+    for (const s of subjects) {
+      const target: UploadTarget = { contextType: "teach_back", contextId: s.id, quarter: null };
+      options.push({ target, href: uploadHref(target), title: `Teach-back for ${s.name}`, detail: `${s.phase} · ${s.term}` });
     }
   }
   return { options, locked };

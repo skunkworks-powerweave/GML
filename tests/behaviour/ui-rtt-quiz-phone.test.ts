@@ -179,8 +179,8 @@ test("an RTT subject page with content fits a phone: modules, then the readings 
       cardOrder(html),
       // The SCORM card (F41) is the subject's other module list; it follows
       // the readings and the Start button rather than parting them from the
-      // modules.
-      ["Modules", "Required readings", "Assessment", "SCORM modules", "Cohort sessions", "Your progress"],
+      // modules. The teacher's teach-back upload (FR-02) comes last.
+      ["Modules", "Required readings", "Assessment", "SCORM modules", "Cohort sessions", "Your progress", "Teach-back"],
       "the cards in a phone's reading order",
     );
     // That arrangement is one column at any width. The device cookie says
@@ -193,7 +193,7 @@ test("an RTT subject page with content fits a phone: modules, then the readings 
     }
 
     // The desktop layout is unchanged: modules and sessions beside progress,
-    // readings and the assessment.
+    // readings and the assessment -- and, last there too, the teach-back.
     const desk = await asDevice("desktop", w.teacher, open);
     assert.deepEqual(cardOrder(desk), [
       "Modules",
@@ -202,6 +202,7 @@ test("an RTT subject page with content fits a phone: modules, then the readings 
       "Your progress",
       "Required readings",
       "Assessment",
+      "Teach-back",
     ]);
     const desktop = await templateAt(desk, 1280, (e) => e.tag === "section" && /md:grid-cols/.test(e.attrs.class ?? ""));
     assert.ok(desktop.some((t) => columns(t) === 2), `two columns on a desktop: ${desktop.join(" | ")}`);
