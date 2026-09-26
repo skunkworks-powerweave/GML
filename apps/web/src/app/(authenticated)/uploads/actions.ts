@@ -64,6 +64,14 @@ export async function beginUploadAction(input: {
 
   // Who may attach to what, and what each context id means: ./context.ts.
   // Throws notFound() for a target this user may not see.
+  // The section gate first, as attachUploadAction does: a server action runs
+  // before any page, and assertContextAllowed's refusals ("signed off", "in
+  // Q2") must not reach a caller the section is locked for. Completing is not
+  // gated again: the reservation passed here, and the reconciler finishes a
+  // stored upload whether or not its tab comes back.
+  if (await lockedSection(actor, input.contextType)) {
+    return { ok: false, error: "Unlock that section first: enter its password, then send the video again." };
+  }
   const allowed = await assertContextAllowed(actor, {
     contextType: input.contextType,
     contextId: input.contextId,

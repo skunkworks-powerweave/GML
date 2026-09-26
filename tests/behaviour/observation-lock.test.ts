@@ -88,6 +88,7 @@ test("the upload path refuses evidence for a signed-off cycle before reserving a
     const { beginUploadAction } = await import("../../apps/web/src/app/(authenticated)/uploads/actions.ts");
     const cyc = await w.cycle({ status: "complete" });
     cycleId = cyc.id;
+    await w.grant(w.teacher.id); // unlocked: the refusal is about the cycle
     signIn(w.teacher);
     const r = await beginUploadAction({
       filename: "lesson.mp4",
@@ -107,6 +108,45 @@ test("the upload path refuses evidence for a signed-off cycle before reserving a
         `WITH v AS (DELETE FROM video_submissions WHERE context_id = $1 RETURNING file_id)
          DELETE FROM files WHERE id IN (SELECT file_id FROM v)`,
         [cycleId],
+      );
+    }
+    await w.cleanup();
+  }
+});
+
+test("FR-11: a locked section refuses a direct upload before saying anything about the cycle", { skip }, async () => {
+  // beginUploadAction checked ownership but not the section gate, so a
+  // teacher whose grant had expired or been revoked by a password rotation
+  // could still reserve (and finish) evidence with a hand-built POST.
+  const w = await observationWorld("lockgate");
+  process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://127.0.0.1:1";
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??= "test-publishable-key";
+  let cycleId: string | null = null;
+  try {
+    const { beginUploadAction } = await import("../../apps/web/src/app/(authenticated)/uploads/actions.ts");
+    for (const status of ["pre_submitted", "complete"]) {
+      const cyc = await w.cycle({ status });
+      cycleId = cyc.id;
+      signIn(w.teacher); // no grant: observation is locked for her
+      const r = await beginUploadAction({
+        filename: "lesson.mp4",
+        sizeBytes: 1024,
+        contentType: "video/mp4",
+        contextType: "observation_cycle",
+        contextId: cyc.id,
+      });
+      assert.equal(r.ok, false, `a ${status} cycle's upload is refused while the section is locked`);
+      assert.match((r as { error: string }).error, /unlock/i);
+      assert.doesNotMatch((r as { error: string }).error, /signed off/i, "a locked caller learns nothing about the cycle");
+      const n = (await w.c.query(`SELECT count(*)::int AS n FROM video_submissions WHERE context_id = $1`, [cyc.id])).rows[0].n;
+      assert.equal(n, 0, "nothing reserved");
+    }
+  } finally {
+    if (cycleId) {
+      await w.c.query(
+        `WITH v AS (DELETE FROM video_submissions WHERE context_id IN (SELECT id FROM observation_cycles WHERE teacher_id = $1) RETURNING file_id)
+         DELETE FROM files WHERE id IN (SELECT file_id FROM v)`,
+        [w.teacherId],
       );
     }
     await w.cleanup();

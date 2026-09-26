@@ -63,6 +63,9 @@ async function withWorld(body: (w: World) => Promise<void>) {
   );
   const otherMentorId = await one(`INSERT INTO mentors (user_id, name) VALUES ($1, $2) RETURNING id`, [otherMentorUser, `Other ${w.T}`]);
   const people = [w.admin, w.teacher, w.mentor, w.observer, w.otherObserver].map((p) => p.id).concat(otherMentorUser);
+  // Both sections unlocked for everyone: these tests are about which target
+  // an upload binds to. The gate itself: observation-lock.test.ts FR-11.
+  for (const id of people) for (const slug of ["observation", "mentorship"] as const) await w.grant(id, slug);
   try {
     await body({ ...w, meetingId, otherMentor: { id: otherMentorUser, role: "mentor", name: `Other Mentor ${w.T}`, email: "" } });
   } finally {
@@ -72,6 +75,7 @@ async function withWorld(body: (w: World) => Promise<void>) {
     await w.c.query(`UPDATE mentor_meetings SET recording_video_id = NULL WHERE id = $1`, [meetingId]);
     await w.c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = ANY($1::uuid[])`, [people]);
     await w.c.query(`DELETE FROM files WHERE owner_user_id = ANY($1::uuid[])`, [people]);
+    await w.c.query(`DELETE FROM section_gate_grants WHERE user_id = $1`, [otherMentorUser]);
     await w.c.query(`DELETE FROM mentors WHERE id = $1`, [otherMentorId]);
     await w.c.query(`DELETE FROM users WHERE id = $1`, [otherMentorUser]);
     await w.cleanup();
