@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { mentorPairings } from "@gml/db/schema";
+import { mentorPairings, pairingStatusEnum } from "@gml/db/schema";
 import type { AdminEntity } from "../types";
 
 export const mentorPairingsEntity: AdminEntity = {
@@ -24,7 +24,13 @@ export const mentorPairingsEntity: AdminEntity = {
     teacherId: z.string().uuid(),
     startedAt: z.coerce.date(),
     endedAt: z.coerce.date().optional().nullable(),
-    status: z.enum(["active", "paused", "ended"]).default("active"),
+    // The database's own list. A hand-written ["active", "paused", "ended"]
+    // left out "review" and "complete" (the seed writes both, the one-click
+    // Complete pairing the second): the edit form showed such a pairing as
+    // "active", so saving a note reopened a finished mentorship, and CSV
+    // import and the Status filter refused both values.
+    // Test: tests/behaviour/admin-grid-enums.test.ts.
+    status: z.enum(pairingStatusEnum.enumValues).default("active"),
     conceptNote: z.string().max(5000).optional().nullable(),
   }),
   formFields: ["mentorId", "teacherId", "startedAt", "endedAt", "status", "conceptNote"],

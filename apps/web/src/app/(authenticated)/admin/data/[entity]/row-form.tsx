@@ -163,6 +163,13 @@ export function RowForm({
                     {c.replace(/_/g, " ")}
                   </option>
                 ))}
+                {/* A stored value the choices lack stays selected, as itself:
+                    with no option for it the select fell back to the first
+                    choice, and an untouched save overwrote it (a complete
+                    pairing became "active"). Saved as is, zod refuses it. */}
+                {initial && !choices.includes(initial) ? (
+                  <option value={initial}>{initial.replace(/_/g, " ")}</option>
+                ) : null}
               </select>
             ) : kind === "boolean" ? (
               <select

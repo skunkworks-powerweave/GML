@@ -57,9 +57,13 @@ test("an enum is a choice and long text is a text area", async () => {
   const html = renderSync(h(RowForm, { entitySlug: "mentor-pairings", mode: "create", options: {} }));
   const status = elements(html, "select").find((s) => attr(s.open, "name") === "status");
   assert.ok(status, "status must offer its values, not a free text box");
+  // Every value pairing_status holds, in the enum's order. This pinned
+  // ["active", "paused", "ended"], the hand-written list that lacked "review"
+  // and "complete", so saving such a pairing wrote "active" (FR-04,
+  // tests/behaviour/admin-grid-enums.test.ts).
   assert.deepEqual(
     [...status.inner.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]),
-    ["active", "paused", "ended"],
+    ["active", "review", "paused", "ended", "complete"],
   );
   assert.ok(
     openingTags(html, "textarea").some((t) => attr(t, "name") === "conceptNote"),
