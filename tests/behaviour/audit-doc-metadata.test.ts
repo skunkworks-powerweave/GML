@@ -3,24 +3,33 @@
 // writes is a filter that silently matches nothing, and a key it omits is data
 // nobody knows is there.
 //
-// ── W3-24 / W3-06 / W3-25 / W3-27 ────────────────────────────────────────────
+// ── W3-06 / W3-24 ────────────────────────────────────────────────────────────
 //
 // Several non-auth rows described metadata the code never wrote:
 //
 //   helpdesk.ticket_opened       `ticketId`, `userId`, `category`  (writes topic, pageSlug, deliveredTo)
 //   helpdesk.ticket_rate_limited `userId`, `ipMasked`              (writes retryAfterMs)
+//   mentor.meeting.logged        `actorId`, `meetingId`, `durationMin` (writes pairingId, scheduledAt;
+//                                the meeting is the entity, the actor the user)
+//   resource.view.client_ping    `resourceId`, `userId`, `dwellSec`, "sent ~every 60 s of active
+//                                dwell" (PdfViewer pings once per document; writes beacon)
+//   resource.pdf.view            `resourceId`, `userId`, `pageOpened`, and said it covered the
+//                                client pings (writes kind, fileKey, piiAudited)
+//   quiz.schema.update           "a setting's key is present only when that save changed it" (the
+//                                editor pre-fills every setting, so every save writes them all)
 //
 // Executed: the real handlers, as a signed-in user, against Postgres; each
 // row they write is compared with its documented row, both ways.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Client } from "pg";
-import "./_ui.js";
+import { resetRequest } from "./_ui.js";
 import { needsDatabase, withClient, tag } from "./_harness.js";
 import { actAs, fixture, type Fixture } from "./_admin-fixture.js";
-import { closeAppPool } from "./_mentorship.js";
+import { buildWorld, closeAppPool, describe, formData, outcome, signIn as signInPerson } from "./_mentorship.js";
 
 const skip = needsDatabase();
 after(closeAppPool);
@@ -112,6 +121,112 @@ test("W3-06/W3-24 helpdesk.*: the ticket and the throttle rows hold what the tax
       assert.equal((await post()).status, 429);
       const [limited] = await rowsOf(c, me, "helpdesk.ticket_rate_limited");
       assertDocumented(limited!);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── resource.* ───────────────────────────────────────────────────────────────
+
+test("W3-24 resource.*: the PDF view and the viewer's ping hold what the taxonomy says", { skip }, async () => {
+  await withClient(async (c) => {
+    const t = tag("doc-res");
+    const f = fixture(c, t);
+    try {
+      const me = await signedIn(f, "teacher");
+      const resourceId = await f.row("resources", { name: `Doc ${t}`, kind: "Guide", file_key: `doc-test/${t}.pdf` });
+
+      // The /view page writes resource.pdf.view as it renders, before any
+      // byte is fetched (the viewer loads the PDF from /api/media/pdf/<id>).
+      const { default: ViewPage } = await import("../../apps/web/src/app/(authenticated)/repo/resource/[id]/view/page.tsx");
+      await ViewPage({ params: Promise.resolve({ id: resourceId }) });
+      const [view] = await rowsOf(c, me, "resource.pdf.view");
+      assertDocumented(view!);
+      assert.doesNotMatch(docRow("resource.pdf.view").firesWhen, /client ping/i, "the pings are their own action");
+
+      // PdfViewer's one ping when it paints the document.
+      const { POST } = await import("../../apps/web/src/app/api/audit/resource-view/route.ts");
+      const res = await POST(
+        new Request("http://x/api/audit/resource-view", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: resourceId }),
+        }),
+      );
+      assert.equal(res.status, 204);
+      const [ping] = await rowsOf(c, me, "resource.view.client_ping");
+      assertDocumented(ping!);
+      // PdfViewer sends one ping per document it paints (a useEffect on the
+      // resource id), not a dwell heartbeat.
+      const viewer = readFileSync(new URL("../../apps/web/src/components/pdf/PdfViewer.tsx", import.meta.url), "utf8");
+      assert.doesNotMatch(viewer, /setInterval/, "PdfViewer has started pinging on an interval; the doc row says once per paint");
+      assert.doesNotMatch(docRow("resource.view.client_ping").firesWhen, /every 60 s|dwell/i);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── mentor.meeting.logged ────────────────────────────────────────────────────
+
+test("W3-24 mentor.meeting.logged holds what the taxonomy says", { skip }, async () => {
+  resetRequest(); // the session _mentorship's signIn sets is read only when no fixture one is
+  const w = await buildWorld("doc-meet");
+  try {
+    await w.grant(w.mentor.id);
+    const { logMeetingAction } = await import("../../apps/web/src/app/(authenticated)/mentorship/[pairingId]/actions.ts");
+    signInPerson(w.mentor);
+    const r = await outcome(() =>
+      logMeetingAction(formData({ pairingId: w.pairingA, scheduledAt: "2026-10-02T10:30", durationMin: "45", notes: "doc test" })),
+    );
+    assert.equal(r.kind, "redirect", describe(r));
+    await withClient(async (c) => {
+      const [row] = await rowsOf(c, w.mentor.id, "mentor.meeting.logged");
+      assertDocumented(row!);
+    });
+  } finally {
+    signInPerson(null);
+    await w.cleanup();
+  }
+});
+
+// ── quiz.schema.update ───────────────────────────────────────────────────────
+
+test("W3-24 quiz.schema.update: a setting's key says the save carried it, not that it changed", { skip }, async () => {
+  await withClient(async (c) => {
+    const t = tag("doc-quiz");
+    const f = fixture(c, t);
+    try {
+      const admin = await signedIn(f, "programme_admin");
+      const phase = await f.row("phases", { label: t.slice(-24), sequence: 1_000_000 + randomInt(1_000_000_000) });
+      const term = await f.row("terms", { phase_id: phase, name: `Term ${t}`, sequence: 1 });
+      const subject = await f.row("rtt_subjects", { term_id: term, name: `Subject ${t}` });
+      const settings = { title: `Quiz ${t}`, passThreshold: 60, timeLimitSeconds: 600, maxAttempts: 3, active: true };
+      const quiz = await f.row("quizzes", {
+        slug: t,
+        title: settings.title,
+        rtt_subject_id: subject,
+        pass_threshold: settings.passThreshold,
+        time_limit_seconds: settings.timeLimitSeconds,
+        max_attempts: settings.maxAttempts,
+        active: settings.active,
+      });
+      // What the editor sends for a save that changes nothing: it pre-fills
+      // every setting from the quiz as stored (admin/quizzes/[id]/page.tsx).
+      const { saveQuizSchema } = await import("../../apps/web/src/app/(authenticated)/admin/quizzes/[id]/actions.ts");
+      await saveQuizSchema(quiz, JSON.stringify(settings));
+      const [row] = await rowsOf(c, admin, "quiz.schema.update");
+      for (const key of Object.keys(settings)) {
+        assert.ok(key in row!.metadata, `an unchanged ${key} was left out of the row`);
+      }
+      const { firesWhen, metadata } = docRow("quiz.schema.update");
+      assert.doesNotMatch(
+        `${firesWhen} | ${metadata}`,
+        /only when (that|the) save changed it|when changed/,
+        "the taxonomy says a key means the setting changed; this save changed nothing and wrote every key",
+      );
+      assertDocumented(row!, ["rttSubjectId"]);
     } finally {
       await f.cleanup();
     }
