@@ -54,13 +54,18 @@ export type MobileQuizRunnerProps = {
   questions: MobileQuizRunnerQuestion[];
   // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
   timeLimitSeconds?: number | null;
-  // Server action — receives slug + answers; redirects to
+  // The quiz_attempts row this runner was rendered for. Every submit names it,
+  // so a runner left open on an earlier attempt cannot close a newer one
+  // (W3-19); "" when there is none, which the action refuses.
+  attemptId: string;
+  // Server action — receives slug + attempt id + answers; redirects to
   // /quizzes/[slug]/result/[id]. Drop-in same shape as QuizRunner.
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
   // instead of silently shrinking the denominator.
   submitAction: (
     slug: string,
+    attemptId: string,
     answers: Array<{ questionId: string; selectedIndex: number | null }>,
   ) => Promise<void>;
 };
@@ -83,6 +88,7 @@ export function MobileQuizRunner({
   title,
   questions,
   timeLimitSeconds,
+  attemptId,
   submitAction,
 }: MobileQuizRunnerProps) {
   const [idx, setIdx] = useState(0);
@@ -146,7 +152,7 @@ export function MobileQuizRunner({
         questionId: qq.id,
         selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
       }));
-      submitAction(slug, answers).catch((e: unknown) => {
+      submitAction(slug, attemptId, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
         submittedRef.current = false; // a manual Submit may retry
       });
@@ -242,7 +248,7 @@ export function MobileQuizRunner({
     setServerErr(null);
     startTransition(async () => {
       try {
-        await submitAction(slug, answers);
+        await submitAction(slug, attemptId, answers);
       } catch (e) {
         setServerErr((e as Error).message);
         submittedRef.current = false;

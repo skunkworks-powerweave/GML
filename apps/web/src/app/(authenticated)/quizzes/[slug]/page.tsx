@@ -21,6 +21,7 @@ import {
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { getDeviceType } from "@/lib/device";
+import { isUuid } from "@/lib/ids";
 import { QuizRunner } from "@/components/quiz/QuizRunner";
 import { MobileQuizRunner } from "@/components/quiz/MobileQuizRunner";
 
@@ -53,6 +54,9 @@ function auditExpired(quiz: { id: string; timeLimitSeconds: number | null }, slu
 
 export async function submitQuizAttempt(
   slug: string,
+  // The attempt the runner was rendered for (quiz_attempts.id). See the
+  // transaction below for why a submit names it.
+  attemptId: string,
   answers: Array<{ questionId: string; selectedIndex: number | null }>,
 ): Promise<void> {
   "use server";
@@ -151,12 +155,23 @@ export async function submitQuizAttempt(
   // submission. The cap is counted inside the same transaction, and cannot be
   // raced across attempts either: quiz_attempts_one_open_uq makes a new
   // attempt wait for this transaction before it can open.
+  //
+  // THE ATTEMPT THE RUNNER WAS RENDERED FOR, NOT WHICHEVER IS OPEN (W3-19).
+  // The submit named no attempt, so it closed whatever attempt was open when
+  // it arrived. A runner left open on an earlier attempt -- the desktop tab
+  // after the learner submitted on the phone and pressed Retake -- then
+  // auto-submitted its blank answers at 00:00 into the retake: scored, the
+  // learner's last try gone, and their real answers refused as
+  // attempt_closed. The page hands each runner its attempt's id, and only
+  // that attempt, still open and still this learner's, can be closed here.
   const result = await db.transaction(async (tx) => {
+    if (!isUuid(attemptId)) return { kind: "attempt_closed" } as const;
     const [attempt] = await tx
       .update(quizAttempts)
       .set({ closedAt: sql`now()` })
       .where(
         and(
+          eq(quizAttempts.id, attemptId),
           eq(quizAttempts.quizId, quiz.id),
           eq(quizAttempts.userId, userId),
           isNull(quizAttempts.closedAt),
@@ -463,6 +478,9 @@ export default async function QuizRunnerPage({
   // runner's state -- answers and a countdown already at zero -- across a
   // re-render that brought a new attempt.
   const runnerKey = attempt?.id ?? "no-attempt";
+  // And the attempt its submit closes (see submitQuizAttempt). None is "",
+  // which the action refuses as attempt_closed.
+  const attemptId = attempt?.id ?? "";
 
   if (device === "mobile") {
     return (
@@ -473,6 +491,7 @@ export default async function QuizRunnerPage({
           title={quiz.title}
           questions={mappedQuestions}
           timeLimitSeconds={timeLimitSeconds}
+          attemptId={attemptId}
           submitAction={submitQuizAttempt}
         />
       </main>
@@ -496,6 +515,7 @@ export default async function QuizRunnerPage({
         title={quiz.title}
         questions={mappedQuestions}
         timeLimitSeconds={timeLimitSeconds}
+        attemptId={attemptId}
         submitAction={submitQuizAttempt}
       />
     </main>

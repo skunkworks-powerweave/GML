@@ -272,8 +272,13 @@ test("F32: the quiz editor can move a quiz to another RTT subject, and refuses o
 type AnyEl = { type: unknown; props: Record<string, unknown> };
 type RunnerProps = {
   slug: string;
+  attemptId: string;
   timeLimitSeconds?: number | null;
-  submitAction: (slug: string, answers: Array<{ questionId: string; selectedIndex: number | null }>) => Promise<void>;
+  submitAction: (
+    slug: string,
+    attemptId: string,
+    answers: Array<{ questionId: string; selectedIndex: number | null }>,
+  ) => Promise<void>;
 };
 
 function findElement(node: unknown, match: (el: AnyEl) => boolean): AnyEl | undefined {
@@ -301,10 +306,10 @@ async function openRunner(w: QuizWorld, searchParams: Record<string, string> = {
   return { html: renderSync(res.value), runner: runner?.props as RunnerProps | undefined };
 }
 
-/** What the runner's Submit button does: call the action the page handed it. */
+/** What the runner's Submit button does: call the action the page handed it, for the attempt it was handed. */
 function submit(runner: RunnerProps | undefined, answers: Array<{ questionId: string; selectedIndex: number | null }>) {
   assert.ok(runner, "the runner page rendered no runner");
-  return outcome(() => runner!.submitAction(runner!.slug, answers));
+  return outcome(() => runner!.submitAction(runner!.slug, runner!.attemptId, answers));
 }
 
 /** Take the quiz start to finish; returns the result page's submission id. */
@@ -505,6 +510,44 @@ test("F37: a timed quiz cannot be submitted around its clock from a second tab",
     const late = await submit(tabA, answerAll(w, 0));
     assert.doesNotMatch(late.redirect ?? "", /\/result\//, "an unbounded second sitting was scored");
     assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("W3-19: a runner left open on an earlier attempt cannot submit into the retake opened since", { skip }, async () => {
+  await withQuiz({ maxAttempts: 2, timeLimitSeconds: 600 }, async (w) => {
+    signIn(w.userId);
+    // The desktop tab and the phone both render attempt 1; the phone submits it.
+    const desktop = (await openRunner(w)).runner;
+    const phone = (await openRunner(w)).runner;
+    assert.match((await submit(phone, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    // "Retake" on the phone opens attempt 2.
+    const retake = (await openRunner(w)).runner;
+    // The desktop tab's 00:00 auto-submit fires with nothing answered.
+    const stale = await submit(desktop, answerAll(w, 2));
+    assert.equal(
+      stale.redirect,
+      `/quizzes/${w.slug}/history?error=attempt_closed`,
+      `the stale runner's submit was taken as the retake's: ${JSON.stringify(stale)}`,
+    );
+    assert.equal(await submissionCount(w), 1);
+    assert.equal(await openAttempts(w), 1, "the retake is still open");
+    // The learner's real answers to the retake are the ones scored.
+    assert.match((await submit(retake, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    const scores = await w.q<{ score: number }>(`SELECT score FROM quiz_submissions WHERE quiz_id = $1 ORDER BY submitted_at`, [w.quizId]);
+    assert.deepEqual(scores.map((s) => s.score), [100, 100]);
+  });
+});
+
+test("W3-19: a submit naming no attempt, or another quiz's, closes nothing", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(w.userId);
+    const { runner } = await openRunner(w);
+    for (const attemptId of ["", "not-a-uuid", randomUUID()]) {
+      const res = await submit(runner && { ...runner, attemptId }, answerAll(w, 0));
+      assert.equal(res.redirect, `/quizzes/${w.slug}/history?error=attempt_closed`, `attemptId=${JSON.stringify(attemptId)}`);
+    }
+    assert.equal(await openAttempts(w), 1);
+    assert.equal(await submissionCount(w), 0);
   });
 });
 

@@ -37,12 +37,17 @@ export type QuizRunnerProps = {
   questions: QuizRunnerQuestion[];
   // Spec 159 — optional time-limit in seconds. null/undefined = untimed.
   timeLimitSeconds?: number | null;
-  // Server action — receives slug + answers; redirects to /quizzes/[slug]/result/[id].
+  // The quiz_attempts row this runner was rendered for. Every submit names it,
+  // so a runner left open on an earlier attempt cannot close a newer one
+  // (W3-19); "" when there is none, which the action refuses.
+  attemptId: string;
+  // Server action — receives slug + attempt id + answers; redirects to /quizzes/[slug]/result/[id].
   // Spec 146: client sends ALL questions; skipped answers carry
   // `selectedIndex: null` so the server can count them as wrong (0 points)
   // instead of silently shrinking the denominator.
   submitAction: (
     slug: string,
+    attemptId: string,
     answers: Array<{ questionId: string; selectedIndex: number | null }>,
   ) => Promise<void>;
 };
@@ -66,6 +71,7 @@ export function QuizRunner({
   title,
   questions,
   timeLimitSeconds,
+  attemptId,
   submitAction,
 }: QuizRunnerProps) {
   const [idx, setIdx] = useState(0);
@@ -153,7 +159,7 @@ export function QuizRunner({
       // Fire-and-forget: same shape as the manual onSubmit but without
       // the useTransition wrapper (we're already inside an interval
       // callback, not a render path).
-      submitAction(slug, answers).catch((e: unknown) => {
+      submitAction(slug, attemptId, answers).catch((e: unknown) => {
         setServerErr((e as Error).message);
         submittedRef.current = false; // a manual Submit may retry
       });
@@ -212,7 +218,7 @@ export function QuizRunner({
     setServerErr(null);
     startTransition(async () => {
       try {
-        await submitAction(slug, answers);
+        await submitAction(slug, attemptId, answers);
       } catch (e) {
         setServerErr((e as Error).message);
         submittedRef.current = false;
