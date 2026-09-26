@@ -206,8 +206,8 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `helpdesk.ticket_opened` | A learner / teacher submitted the Help FAB form and a ticket row was inserted | `ticketId`, `userId`, `category` |
-| `helpdesk.ticket_rate_limited` | The same user hit the 5-per-hour rate-limit on ticket creation — no row written | `userId`, `ipMasked` |
+| `helpdesk.ticket_opened` | A signed-in user (any role) sent the Help panel's "Open helpdesk ticket" (`POST /api/helpdesk/tickets`). There is no ticket table: a `helpdesk.ticket` notification was inserted for every active `programme_admin` and `super_admin` other than the sender. `entity_type` `helpdesk`, `entity_id` the topic, or the page slug when there is none; `user_id` the sender | `topic` (null when none), `pageSlug`, `deliveredTo` (how many notifications were inserted) |
+| `helpdesk.ticket_rate_limited` | A ticket was refused with 429 because its sender had already opened 5 this hour; no notification was sent. Written at most once per user per hour, by the first refusal: the throttle refuses every later POST in that hour without a row, so a loop cannot grow the log. `entity_type` `helpdesk`, `entity_id` and `user_id` the sender | `retryAfterMs` (what was left of the sender's hour) |
 
 ## notifications.* / user_prefs.* / dashboard.* / quickfind.* — UI-channel events
 

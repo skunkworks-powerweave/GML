@@ -259,6 +259,57 @@ test("F97 resource-view: the beacon is throttled per user", { skip, timeout: 120
   });
 });
 
+// ── /api/helpdesk/tickets ────────────────────────────────────────────────────
+//
+// W3-06, the F97 case the other routes missed: the ticket throttle stopped the
+// notifications but wrote a helpdesk.ticket_rate_limited row for EVERY refused
+// POST, so a loop past the limit grew the log one permanent row per request
+// for the rest of the hour.
+
+const helpdesk = async () => {
+  const { POST } = await import("../../apps/web/src/app/api/helpdesk/tickets/route.ts");
+  return POST(
+    new Request("http://x/api/helpdesk/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ topic: "flood", pageSlug: "/dashboard" }),
+    }),
+  );
+};
+
+test("W3-06 helpdesk: a caller over the ticket limit is refused every time and audited once per window", { skip, timeout: 120_000 }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("hd-flood"));
+    try {
+      const me = await teacher(f);
+      // This user's hour already holds the five tickets the route allows, so
+      // no request here opens a ticket or notifies an administrator.
+      await c.query(`INSERT INTO rate_limits (key, window_start, count) VALUES ($1, now(), 5)`, [`helpdesk:${me}`]);
+
+      const serial: Response[] = [];
+      for (let i = 0; i < 25; i++) serial.push(await helpdesk());
+      // And a burst, which a read-then-insert dedup lets most of through.
+      const burst = await Promise.all(Array.from({ length: 25 }, () => helpdesk()));
+
+      for (const res of [...serial, ...burst]) {
+        assert.equal(res.status, 429, "a POST over the ticket limit was not refused");
+        assert.ok(Number(res.headers.get("retry-after")) > 0, "a 429 says when to retry");
+      }
+      assert.equal(
+        (await auditRows(c, me, "helpdesk.ticket_opened")).length,
+        0,
+        "a refused POST opened a ticket",
+      );
+      const rows = await auditRows(c, me, "helpdesk.ticket_rate_limited");
+      assert.equal(rows.length, 1, `50 refused POSTs wrote ${rows.length} permanent audit rows`);
+      assert.equal(rows[0]!.entity_id, me);
+      assert.equal(typeof rows[0]!.metadata.retryAfterMs, "number");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
 test("F97 resource-view: the viewer recorded is the session's, never a client-supplied viewerId", { skip }, async () => {
   await withClient(async (c) => {
     const f = fixture(c, tag("rv-viewer"));
