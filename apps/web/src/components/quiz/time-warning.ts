@@ -25,3 +25,10 @@ export function timeWarning(remaining: number, limit: number): string {
   for (const [at, text] of THRESHOLDS) if (at < limit && remaining <= at) said = text;
   return said;
 }
+
+/**
+ * Said instead of the time-up warning above when there was nothing to send: a
+ * runner that appeared with no time left and nothing chosen does not submit
+ * blank answers (W3-17), so "being submitted" would not be true.
+ */
+export const TIME_UP_NOTHING_SENT = "Time is up. Nothing was submitted.";

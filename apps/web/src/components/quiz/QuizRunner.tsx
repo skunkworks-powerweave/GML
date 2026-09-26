@@ -23,7 +23,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { PickedMark } from "./PickedMark";
-import { timeWarning } from "./time-warning";
+import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type QuizRunnerQuestion = {
   id: string;
@@ -83,6 +83,11 @@ export function QuizRunner({
   // The limit the attempt opened with, seeded once like `remaining`: which
   // spoken warnings are due depends on it (time-warning.ts).
   const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
+  // The time ran out with nothing to send (see the countdown effect). True
+  // from the start for a runner handed no time at all.
+  const [nothingSent, setNothingSent] = useState(
+    () => typeof timeLimitSeconds === "number" && timeLimitSeconds <= 0,
+  );
   // Spec 159 — a ref so the interval tick can call the latest selection
   // map / submit path without re-arming the timer when those change.
   const selectedRef = useRef(selected);
@@ -116,16 +121,31 @@ export function QuizRunner({
   // keep ticking at 00:00 and re-arm on a refused submit, so after the server
   // bounced a late attempt the runner POSTed the same answers again one second
   // later. If the auto-submit fails, the error is shown and Submit still works.
+  //
+  // NOTHING CHOSEN IN NO TIME IS NOT AN ANSWER (W3-17). A runner that appears
+  // with no time left gave the learner no second to answer, so an empty
+  // selection then is not their answer: sending it only recorded a 0% and, on
+  // a capped quiz, used up an attempt. It is not sent. Anything that IS chosen
+  // by the first tick still goes, as at any other 00:00. (The page mounts no
+  // runner for an attempt with no time left; this covers a load that took
+  // longer than the time there was.)
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
-    const deadline = Date.now() + timeLimitSeconds * 1000;
+    const mountedAt = Date.now();
+    const deadline = mountedAt + timeLimitSeconds * 1000;
+    const hadTime = deadline > mountedAt;
     // Auto-submit closure — reads from refs so it always sees the latest
     // selection map and the latest question list, even though the effect
     // captured the initial values.
     const autoSubmit = () => {
       if (submittedRef.current) return;
-      submittedRef.current = true;
       const live = selectedRef.current;
+      if (!hadTime && Object.keys(live).length === 0) {
+        setNothingSent(true);
+        return;
+      }
+      setNothingSent(false);
+      submittedRef.current = true;
       const answers = questionsRef.current.map((qq) => ({
         questionId: qq.id,
         selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
@@ -265,8 +285,13 @@ export function QuizRunner({
         ) : null}
         {remaining !== null ? (
           <span role="status" className="sr-only" data-testid="quiz-time-warning">
-            {timeWarning(remaining, openedWith)}
+            {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
           </span>
+        ) : null}
+        {nothingSent ? (
+          <p data-testid="quiz-time-up" style={{ marginTop: 8, fontSize: 13, color: "var(--rust)" }}>
+            The time for this attempt ran out before the page loaded, so nothing was submitted.
+          </p>
         ) : null}
         <div className="bar" style={{ marginTop: 14 }}>
           <div style={{ width: `${progressPct}%` }} />

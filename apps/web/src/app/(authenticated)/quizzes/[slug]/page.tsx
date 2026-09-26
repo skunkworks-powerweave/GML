@@ -36,6 +36,16 @@ export const metadata: Metadata = { title: "Quiz" };
 // limit -- because a grace that is also on the clock is no grace at all.
 const SUBMIT_GRACE_SECONDS = 30;
 
+/** The audit row for an attempt closed because its time ran out, by either path. */
+function auditExpired(quiz: { id: string; timeLimitSeconds: number | null }, slug: string): void {
+  void recordAudit({
+    action: "quiz.attempt.expired",
+    entityType: "quiz",
+    entityId: quiz.id,
+    metadata: { quizSlug: slug, limitSeconds: quiz.timeLimitSeconds },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Server action — wired into <QuizRunner> via the `submitAction` prop.
 // Computes percentage-correct, inserts the submission, fires audit, redirects.
@@ -209,14 +219,7 @@ export async function submitQuizAttempt(
   // the still-mounted runner submitted the same answers into it on its next
   // tick -- scored. The history page says why, shows past scores, and starts
   // nothing until the learner chooses "Take quiz again".
-  if (result.kind === "time_expired") {
-    void recordAudit({
-      action: "quiz.attempt.expired",
-      entityType: "quiz",
-      entityId: quiz.id,
-      metadata: { quizSlug: slug, limitSeconds: quiz.timeLimitSeconds },
-    });
-  }
+  if (result.kind === "time_expired") auditExpired(quiz, slug);
   if (result.kind !== "submitted") redirect(`/quizzes/${slug}/history?error=${result.kind}`);
   const submissionId = result.submissionId;
 
@@ -391,6 +394,43 @@ export default async function QuizRunnerPage({
       0,
       Math.round(remainingSeconds - (attempt.elapsedSeconds ?? 0)),
     );
+  }
+
+  // NO TIME LEFT: NO RUNNER.
+  //
+  // A runner handed 0 seconds showed 00:00 and auto-submitted on its first
+  // tick whatever it held -- nothing, after the reload that brought the
+  // learner here. Inside the grace that blank was scored, and on a capped quiz
+  // it used up an attempt the learner never acted on; after the grace it was
+  // refused, so coming back later cost nothing. The learner who came back
+  // sooner was the one penalised. Nobody can answer in no time, so no runner
+  // is mounted; the history page says why.
+  //
+  //  - Past the grace, no submit can be scored any more, so the attempt is
+  //    closed here and recorded as the submit path records it. Postgres's
+  //    clock decides, as it does at submit. This is also what closes an
+  //    attempt abandoned past its deadline: it stays open until the learner
+  //    comes back, and used to be closed by a runner flashing 00:00.
+  //  - Inside the grace it is left open: an auto-submit already on its way
+  //    from the tab that timed out (the 2G case the grace exists for) must
+  //    still be scored, not refused as attempt_closed.
+  if (quiz.timeLimitSeconds != null && attempt && remainingSeconds === 0) {
+    if (attempt.elapsedSeconds > quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS) {
+      const closed = await db
+        .update(quizAttempts)
+        .set({ closedAt: sql`now()` })
+        .where(
+          and(
+            eq(quizAttempts.id, attempt.id),
+            isNull(quizAttempts.closedAt),
+            sql`now() - ${quizAttempts.startedAt} > make_interval(secs => ${quiz.timeLimitSeconds + SUBMIT_GRACE_SECONDS})`,
+          ),
+        )
+        .returning({ id: quizAttempts.id });
+      if (closed.length > 0) auditExpired(quiz, slug);
+      redirect(`/quizzes/${slug}/history?error=time_expired`);
+    }
+    redirect(`/quizzes/${slug}/history?error=time_up`);
   }
 
   // Spec 134 — device-aware runner. Mobile gets the full-screen

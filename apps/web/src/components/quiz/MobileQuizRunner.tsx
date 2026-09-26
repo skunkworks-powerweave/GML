@@ -40,7 +40,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useSwipe } from "@/lib/use-swipe";
 import { PickedMark } from "./PickedMark";
-import { timeWarning } from "./time-warning";
+import { TIME_UP_NOTHING_SENT, timeWarning } from "./time-warning";
 
 export type MobileQuizRunnerQuestion = {
   id: string;
@@ -99,6 +99,10 @@ export function MobileQuizRunner({
   // The limit the attempt opened with, seeded once like `remaining`: which
   // spoken warnings are due depends on it (time-warning.ts).
   const [openedWith] = useState(() => (typeof timeLimitSeconds === "number" ? timeLimitSeconds : 0));
+  // The time ran out with nothing to send; as in QuizRunner.
+  const [nothingSent, setNothingSent] = useState(
+    () => typeof timeLimitSeconds === "number" && timeLimitSeconds <= 0,
+  );
   // Spec 159 — refs let the interval tick read the latest selection /
   // question list / submitted flag without re-arming the timer when those
   // change. submittedRef is the idempotency guard that prevents a race
@@ -121,15 +125,23 @@ export function MobileQuizRunner({
   // surfaces have identical auto-submit semantics: counted against a
   // deadline (a locked phone runs no interval callbacks, so counting ticks
   // showed more time than the server allows), and fired ONCE (it used to
-  // re-send the same answers every second after a refused auto-submit).
-  // See QuizRunner for the full reasoning.
+  // re-send the same answers every second after a refused auto-submit), and
+  // a runner that appeared with no time left sends nothing unless something
+  // was chosen (W3-17). See QuizRunner for the full reasoning.
   useEffect(() => {
     if (typeof timeLimitSeconds !== "number") return;
-    const deadline = Date.now() + timeLimitSeconds * 1000;
+    const mountedAt = Date.now();
+    const deadline = mountedAt + timeLimitSeconds * 1000;
+    const hadTime = deadline > mountedAt;
     const autoSubmit = () => {
       if (submittedRef.current) return;
-      submittedRef.current = true;
       const live = selectedRef.current;
+      if (!hadTime && Object.keys(live).length === 0) {
+        setNothingSent(true);
+        return;
+      }
+      setNothingSent(false);
+      submittedRef.current = true;
       const answers = questionsRef.current.map((qq) => ({
         questionId: qq.id,
         selectedIndex: live[qq.id] === undefined ? null : live[qq.id],
@@ -309,7 +321,7 @@ export function MobileQuizRunner({
             ) : null}
             {remaining !== null ? (
               <span role="status" className="sr-only" data-testid="mobile-quiz-time-warning">
-                {timeWarning(remaining, openedWith)}
+                {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
               </span>
             ) : null}
             <div
@@ -462,6 +474,11 @@ export function MobileQuizRunner({
           })}
         </div>
 
+        {nothingSent ? (
+          <p data-testid="mobile-quiz-time-up" style={{ marginTop: 14, fontSize: 13, color: "var(--rust)" }}>
+            The time for this attempt ran out before the page loaded, so nothing was submitted.
+          </p>
+        ) : null}
         {serverErr ? (
           <div
             data-testid="mobile-quiz-error"

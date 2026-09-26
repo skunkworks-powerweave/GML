@@ -414,6 +414,73 @@ const submissionCount = async (w: QuizWorld) =>
 const openAttempts = async (w: QuizWorld) =>
   (await w.q<{ n: number }>(`SELECT count(*)::int AS n FROM quiz_attempts WHERE quiz_id = $1 AND closed_at IS NULL`, [w.quizId]))[0]!.n;
 
+// ── W3-17: an open attempt with no time left when the page renders ──────────
+//
+// The page clamped what was left to 0 and still mounted a runner, whose first
+// tick auto-submitted what it held -- nothing, after a reload. Inside the grace
+// that blank was scored and used up a capped attempt the learner never acted on.
+
+test("W3-17: a reload inside the grace with no time left mounts no runner and uses up no attempt", { skip }, async () => {
+  await withQuiz({ maxAttempts: 1, timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    await openRunner(w);
+    // The tab died; the learner reloads 10 s after the limit, inside the grace.
+    await backdateOpenAttempt(w, 70);
+    const reload = await openRunner(w);
+    assert.equal(
+      reload.runner,
+      undefined,
+      `a runner was mounted with ${reload.runner?.timeLimitSeconds}s left; its first tick auto-submits blank answers`,
+    );
+    assert.equal(reload.redirect, `/quizzes/${w.slug}/history?error=time_up`);
+    assert.equal(await submissionCount(w), 0);
+    assert.equal(await openAttempts(w), 1, "inside the grace the attempt stays open for an auto-submit already on its way");
+    // Once the grace has passed the attempt is closed as out of time ...
+    await backdateOpenAttempt(w, 100);
+    assert.equal((await openRunner(w)).redirect, `/quizzes/${w.slug}/history?error=time_expired`);
+    assert.equal(await openAttempts(w), 0);
+    // ... and the learner's one attempt is still theirs.
+    const fresh = await openRunner(w);
+    assert.ok(fresh.runner, `the next visit opened no fresh attempt: ${JSON.stringify(fresh.redirect)}`);
+    assert.ok(fresh.runner!.timeLimitSeconds! >= 58, `a fresh attempt starts with ${fresh.runner!.timeLimitSeconds}s`);
+  });
+});
+
+test("W3-17: an auto-submit already on its way when the learner reloads is still scored", { skip }, async () => {
+  await withQuiz({ maxAttempts: 1, timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    const tab = (await openRunner(w)).runner;
+    await backdateOpenAttempt(w, 65);
+    await openRunner(w); // the reload, inside the grace
+    assert.match((await submit(tab, answerAll(w, 0))).redirect ?? "", /\/result\//);
+    assert.equal(await submissionCount(w), 1);
+  });
+});
+
+test("W3-17: an attempt abandoned past its deadline is closed when the page renders, not by a runner at 00:00", { skip }, async () => {
+  await withQuiz({ timeLimitSeconds: 60 }, async (w) => {
+    signIn(w.userId);
+    await openRunner(w);
+    await backdateOpenAttempt(w, 600);
+    const res = await openRunner(w);
+    assert.equal(res.runner, undefined, "a runner mounted at 00:00 for an attempt that ended ten minutes ago");
+    assert.equal(res.redirect, `/quizzes/${w.slug}/history?error=time_expired`);
+    assert.equal(await openAttempts(w), 0);
+    assert.equal(await submissionCount(w), 0);
+    let expired = 0;
+    for (let i = 0; i < 40 && expired === 0; i++) {
+      expired = (
+        await w.q<{ n: number }>(
+          `SELECT count(*)::int AS n FROM audit_log WHERE action = 'quiz.attempt.expired' AND entity_id = $1 AND user_id = $2`,
+          [w.quizId, w.userId],
+        )
+      )[0]!.n;
+      if (expired === 0) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(expired, 1, "closing the attempt at render is audited as the submit path does");
+  });
+});
+
 test("F37: submitting the same attempt twice records one submission", { skip }, async () => {
   await withQuiz({}, async (w) => {
     signIn(w.userId);
@@ -562,6 +629,7 @@ function mountLive<P>(component: (props: P) => unknown, props: P) {
   render();
   return {
     rerender: render,
+    tree: () => tree,
     text: () => hostElements(tree).map((el) => textOf(el)).join(" "),
     unmount: () => effects.forEach((e) => typeof e?.cleanup === "function" && (e.cleanup as () => void)()),
   };
@@ -660,6 +728,42 @@ test("F37: the countdown follows the deadline, so a phone that slept shows the t
       // 1 s + 30 s asleep + 1 s = 32 s of a 60 s limit.
       assert.match(live.text(), /00:28/, `${name} counted ticks instead of time: ${live.text().match(/\d\d:\d\d/)?.[0]}`);
       live.unmount();
+    } finally {
+      clock.restore();
+    }
+  }
+});
+
+/** The option buttons of the runner's current question, in order. */
+const optionButtons = (tree: unknown) =>
+  hostElements(tree).filter((el) => el.type === "button" && "aria-pressed" in el.props);
+
+test("W3-17: a runner that opens with no time left does not auto-submit blank answers", async () => {
+  for (const [name, Runner] of await runners()) {
+    const clock = fakeClock();
+    try {
+      const calls: unknown[] = [];
+      const submitAction = async (...args: unknown[]) => void calls.push(args);
+      const live = mountLive(Runner as never, { slug: "s", title: "T", questions: RUNNER_QUESTIONS, timeLimitSeconds: 0, submitAction } as never);
+      for (let i = 0; i < 3; i++) {
+        clock.tick(1000);
+        await flush();
+        live.rerender();
+      }
+      assert.equal(calls.length, 0, `${name} submitted blank answers the learner never had a second to give`);
+      assert.doesNotMatch(live.text(), /being submitted/, `${name} says answers are being submitted when none are`);
+      assert.match(live.text(), /Time is up/);
+      live.unmount();
+
+      // What the learner HAS chosen still goes, as at any other 00:00.
+      const picked = mountLive(Runner as never, { slug: "s", title: "T", questions: RUNNER_QUESTIONS, timeLimitSeconds: 0, submitAction } as never);
+      (optionButtons(picked.tree()).at(1)!.props.onClick as () => void)();
+      picked.rerender();
+      clock.tick(1000);
+      await flush();
+      assert.equal(calls.length, 1, `${name} dropped an answer the learner picked`);
+      assert.match(JSON.stringify(calls[0]), /"selectedIndex":1/);
+      picked.unmount();
     } finally {
       clock.restore();
     }

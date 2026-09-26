@@ -71,6 +71,11 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
       "You have used all your attempts at this quiz. Your previous scores are below.",
     time_expired:
       "Your time ran out before the answers reached us, so that attempt was not scored.",
+    // The runner page sends a learner here when they come back to a timed
+    // attempt with no time left but inside the submit grace: answers already
+    // sent may still arrive and be scored, so the attempt is not closed yet.
+    time_up:
+      "The time for that attempt is up. Answers already sent may still arrive and be scored; you can start a new attempt shortly.",
     attempt_closed:
       "That attempt had already been submitted or closed, so those answers were not recorded again. Your attempts are below.",
   };
