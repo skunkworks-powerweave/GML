@@ -35,8 +35,9 @@ type IncomingPayload = {
   maxAttempts?: number | null;
   // The RTT subject the quiz belongs to. A quiz must have exactly one scope
   // (quizzes_one_scope), so this can be changed but not cleared; the create
-  // form sets it, and this is how a wrong choice there is corrected.
-  rttSubjectId?: string;
+  // form sets it, and this is how a wrong choice there is corrected. `null`
+  // is accepted only where there is none to clear (see below).
+  rttSubjectId?: string | null;
   active?: boolean;
   questions?: IncomingQuestion[];
 };
@@ -200,7 +201,13 @@ export async function saveQuizSchema(
     }
     updateSet.maxAttempts = parsed.maxAttempts;
   }
-  if (parsed.rttSubjectId !== undefined) {
+  // null on a quiz that has no RTT subject (one on a curriculum subject) asks
+  // for what is already there, and is no change: an export taken before the
+  // editor stopped writing that null must still save (W3-16). On an RTT quiz
+  // null would clear the scope, and is refused below like any non-subject.
+  if (parsed.rttSubjectId === null && existing.rttSubjectId === null) {
+    // Nothing to change.
+  } else if (parsed.rttSubjectId !== undefined) {
     const [subject] = isUuid(parsed.rttSubjectId)
       ? await db
           .select({ id: rttSubjects.id })

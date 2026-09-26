@@ -52,7 +52,11 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     passThreshold: row.passThreshold,
     timeLimitSeconds: row.timeLimitSeconds,
     maxAttempts: row.maxAttempts,
-    rttSubjectId: row.rttSubjectId,
+    // Only when there is one. A quiz on a curriculum subject has none, and
+    // exporting "rttSubjectId": null made this editor's own untouched output
+    // unsaveable: the action reads any value as a move, and null is no RTT
+    // subject (W3-16).
+    ...(row.rttSubjectId ? { rttSubjectId: row.rttSubjectId } : {}),
     active: row.active,
     questions: qs.map((q) => ({
       prompt: q.prompt,
@@ -209,7 +213,8 @@ export default async function AdminQuizDetailPage({ params }: Props) {
           <code>maxAttempts</code> (<code>null</code> = unlimited; otherwise a
           whole number from 1 to 20 — attempts each learner may submit),{" "}
           <code>rttSubjectId</code> (the RTT subject the quiz belongs to; it can be
-          changed, not removed), and a{" "}
+          changed, not removed; a quiz on a curriculum subject has none, and
+          setting one moves it to that RTT subject), and a{" "}
           <code>questions[]</code> array. Each question must have{" "}
           <code>prompt</code> (string), <code>options</code> (array of ≥ 2
           strings), <code>correctIndex</code> (0-based integer into options),

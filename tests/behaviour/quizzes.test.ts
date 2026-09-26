@@ -267,6 +267,51 @@ test("F32: the quiz editor can move a quiz to another RTT subject, and refuses o
   });
 });
 
+test("W3-16: a quiz on a curriculum subject can be saved from its own editor, unchanged or edited", { skip }, async () => {
+  await withQuiz({}, async (w) => {
+    signIn(randomUUID(), "programme_admin");
+    // The one scope the create form cannot make but quizzes_one_scope allows,
+    // and legacy rows can hold: a curriculum subject, no RTT subject.
+    const [curric] = await w.q<{ id: string }>(`INSERT INTO subjects (name, code) VALUES ($1, $2) RETURNING id`, [
+      `Subject ${w.t}`,
+      w.t.slice(-20),
+    ]);
+    try {
+      await w.q(`UPDATE quizzes SET subject_id = $2, rtt_subject_id = NULL WHERE id = $1`, [w.quizId, curric!.id]);
+      const { default: Editor } = await editorPage();
+      const editor = findElement(
+        await Editor({ params: Promise.resolve({ id: w.quizId }) }),
+        (el) => typeof el.props.initialJson === "string",
+      );
+      const exported = JSON.parse(editor!.props.initialJson as string) as Record<string, unknown>;
+      assert.ok(!("rttSubjectId" in exported), `the export offers rttSubjectId=${JSON.stringify(exported.rttSubjectId)} to save back`);
+
+      const { saveQuizSchema } = await editorActions();
+      const unchanged = await saveQuizSchema(w.quizId, JSON.stringify(exported));
+      assert.equal(unchanged.ok, true, `the editor refused its own export: ${JSON.stringify(unchanged)}`);
+      const renamed = await saveQuizSchema(w.quizId, JSON.stringify({ ...exported, title: `Renamed ${w.t}` }));
+      assert.equal(renamed.ok, true, JSON.stringify(renamed));
+      // An export from before this fix carries an explicit null: nothing to clear.
+      const explicitNull = await saveQuizSchema(w.quizId, JSON.stringify({ rttSubjectId: null }));
+      assert.equal(explicitNull.ok, true, JSON.stringify(explicitNull));
+      const scope = () =>
+        w.q<{ title: string; subject_id: string | null; rtt_subject_id: string | null }>(
+          `SELECT title, subject_id, rtt_subject_id FROM quizzes WHERE id = $1`,
+          [w.quizId],
+        );
+      assert.deepEqual((await scope())[0], { title: `Renamed ${w.t}`, subject_id: curric!.id, rtt_subject_id: null });
+
+      // Moving it to an RTT subject still works, and leaves the curriculum scope.
+      const moved = await saveQuizSchema(w.quizId, JSON.stringify({ rttSubjectId: w.subjectId }));
+      assert.equal(moved.ok, true, JSON.stringify(moved));
+      assert.deepEqual((await scope())[0], { title: `Renamed ${w.t}`, subject_id: null, rtt_subject_id: w.subjectId });
+    } finally {
+      await w.q(`UPDATE quizzes SET rtt_subject_id = $2, subject_id = NULL WHERE id = $1`, [w.quizId, w.subjectId]);
+      await w.q(`DELETE FROM subjects WHERE id = $1`, [curric!.id]);
+    }
+  });
+});
+
 // ── Driving the runner as a browser does ─────────────────────────────────────
 
 type AnyEl = { type: unknown; props: Record<string, unknown> };
