@@ -17,8 +17,8 @@
 // somehow reaches this URL by typing it gets bounced.
 //
 // SM-4 (anti-download): the videoDefaultQuality dropdown only allows "480p".
-// 720p and 1080p render as disabled options with a tooltip explaining spec 041
-// deferred them. Hardcoding the disable here means a future drive-by edit
+// 720p and 1080p render as disabled options with a tooltip saying why (the
+// worker's ladder tops out at 480p; spec 041 deferred 720p). Hardcoding the disable here means a future drive-by edit
 // can't quietly enable them without also touching the zod allow-list.
 
 import { revalidatePath } from "next/cache";
@@ -228,8 +228,8 @@ export default async function SystemSettingsPage({
                 className="rounded border border-neutral-300 px-2 py-1"
               >
                 <option value="480p">480p (current)</option>
-                <option value="720p" disabled title="Deferred per spec 041 — worker pipeline does not transcode 720p today">
-                  720p (deferred — spec 041)
+                <option value="720p" disabled title="Not available: videos are encoded up to 480p">
+                  720p (not available: videos are encoded up to 480p)
                 </option>
                 <option value="1080p" disabled title="Not a goal — bandwidth-tight Ladakh deployments">
                   1080p (out of scope)

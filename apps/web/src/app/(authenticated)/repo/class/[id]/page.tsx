@@ -273,7 +273,7 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                 View learners ({cls.studentsCount}) →
               </div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
-                SM-9: opening this list writes an audit_log entry.
+                Opening this list is recorded in the audit log.
               </div>
             </Link>
           ) : (

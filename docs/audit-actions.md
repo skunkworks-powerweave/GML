@@ -96,7 +96,7 @@ applied or lifted the sign-in ban.
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `quiz.created` | A `programme_admin` or `super_admin` created a quiz on `/admin/quizzes` (it starts inactive, with no questions). `entity_type` `quizzes`, `entity_id` the quiz id, `user_id` the admin | `slug`, `title`, `passThreshold`, `rttSubjectId` |
-| `quiz.schema.update` | A `programme_admin` or `super_admin` saved the JSON editor on `/admin/quizzes/[id]`. `entity_type` `quizzes`, `entity_id` the quiz id, `user_id` the admin. A setting's key is present only when that save changed it | `questionCount`, `questionsReplaced` (boolean: the save carried a `questions` array); when changed, `title`, `passThreshold`, `timeLimitSeconds`, `maxAttempts`, `rttSubjectId`, `active` |
+| `quiz.schema.update` | A `programme_admin` or `super_admin` saved the JSON editor on `/admin/quizzes/[id]`. `entity_type` `quizzes`, `entity_id` the quiz id, `user_id` the admin. A setting's key is present when the save's payload set that field, whether or not its value changed: the editor pre-fills every setting from the stored quiz, so an ordinary save writes them all. To see what a save changed, compare with the quiz's previous row | `questionCount`, `questionsReplaced` (boolean: whether the save carried a questions array); when the payload carried them, `title`, `passThreshold`, `timeLimitSeconds` (null = untimed), `maxAttempts` (null = unlimited), `rttSubjectId`, `active` |
 | `quiz.submit` | A learner's attempt was scored via `/quizzes/[slug]`. Graded server-side against the quiz's questions (spec 146); the `quiz_submissions` row is written in the same transaction that closes the learner's open `quiz_attempts` row. `entity_type` `quiz_submission`, `entity_id` the submission id, `user_id` the learner | `quizSlug`, `score` (percent), `passed` (boolean), `questionCount`, `answeredCount` |
 | `quiz.attempt.expired` | A submission arrived after the quiz's time limit plus the 30 s grace; the attempt was closed and nothing was scored. `entity_type` `quiz` (singular), `entity_id` the quiz id, `user_id` the learner | `quizSlug`, `limitSeconds` |
 
@@ -163,8 +163,8 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `resource.pdf.view` | A PDF resource was opened in the canvas-renderer surface `/repo/resource/[id]/view` (spec 087) — both the initial server-side render and subsequent client pings | `resourceId`, `userId`, `pageOpened` (initial render only) |
-| `resource.view.client_ping` | A client-side ping from a PDF viewer kept-alive over the wire — same surface as above, sent ~every 60 s of active dwell | `resourceId`, `userId`, `dwellSec` |
+| `resource.pdf.view` | A PDF resource was opened: written when `/repo/resource/[id]/view` renders (spec 087), and again by `/api/media/pdf/[id]` each time the viewer fetches the file, before any byte is sent. `entity_type` `resource`, `entity_id` the resource id, `user_id` the viewer. The viewer's in-browser confirmation is its own action, `resource.view.client_ping` | `kind` (the resource's kind), `fileKey` (its Storage object key), `piiAudited` (false; the page render only) |
+| `resource.view.client_ping` | PdfViewer's one keepalive POST to `/api/audit/resource-view` when it first paints a document (spec 099): the viewer really rendered it, as against a page that rendered on the server and never loaded. `entity_type` `resource`, `entity_id` the resource id (not looked up), `user_id` the session user, never a viewer the client names. At most 30 per user per minute: over that the POST is refused with 429 and writes nothing, and nothing is written while the limiter is unavailable (503) | `beacon` (always true) |
 | `video.view` | A user landed on `/videos/[id]` and the HLS player started loading | `videoId`, `userId`, `quality` ("480p" / "720p") |
 | `video.context.attached` | The uploader attached one of her own unlinked (`generic`) videos to a cycle, meeting or quarterly slot from `/uploads`. `entity_type` `video_submission` | `contextType`, `contextId`, `quarter` (quarterly videos only, else null) |
 | `video.context.unlinked` | A video captioned or uploaded for an observation cycle arrived after the cycle was signed off, so it was not added to the closed record and was made `generic` again: its uploader sees it as not linked on `/uploads` and can attach it elsewhere. Written by the link step on both paths (`packages/db/src/uploads.ts`, linkSubmissionToContext), with no actor. `entity_type` `video_submission` | `contextType` ("observation_cycle"), `contextId` (the cycle), `reason` ("observation_cycle.signed_off") |
@@ -183,7 +183,7 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `mentor.meeting.logged` | A mentor logged a meeting against an active pairing | `pairingId`, `actorId`, `meetingId`, `durationMin` |
+| `mentor.meeting.logged` | A mentor, or a `programme_admin` / `super_admin`, logged a meeting against a pairing they can access. `entity_type` `mentor_meeting`, `entity_id` the new meeting's id, `user_id` whoever logged it. The duration and notes are not recorded here | `pairingId`, `scheduledAt` (ISO timestamp) |
 | `mentor.meeting.cancelled` | A mentor / admin cancelled an upcoming meeting (the other party is notified in the app while the "Meeting cancelled" notification kind is enabled, which is the default); entity is the meeting | `pairingId`, `scheduledAt` |
 | `mentor.meeting.removed` | A mentor / admin removed a meeting whose time had passed (a mistaken entry; nobody is notified); entity is the meeting | `pairingId`, `scheduledAt` |
 | `mentor.pairing.completed` | A pairing was marked complete (all required meetings logged) | `pairingId`, `actorId` |
@@ -206,17 +206,17 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `helpdesk.ticket_opened` | A learner / teacher submitted the Help FAB form and a ticket row was inserted | `ticketId`, `userId`, `category` |
-| `helpdesk.ticket_rate_limited` | The same user hit the 5-per-hour rate-limit on ticket creation — no row written | `userId`, `ipMasked` |
+| `helpdesk.ticket_opened` | A signed-in user (any role) sent the Help panel's "Open helpdesk ticket" (`POST /api/helpdesk/tickets`). There is no ticket table: a `helpdesk.ticket` notification was inserted for every active `programme_admin` and `super_admin` other than the sender. `entity_type` `helpdesk`, `entity_id` the topic, or the page slug when there is none; `user_id` the sender | `topic` (null when none), `pageSlug`, `deliveredTo` (how many notifications were inserted) |
+| `helpdesk.ticket_rate_limited` | A ticket was refused with 429 because its sender had already opened 5 this hour; no notification was sent. Written at most once per user per hour, by the first refusal: the throttle refuses every later POST in that hour without a row, so a loop cannot grow the log. `entity_type` `helpdesk`, `entity_id` and `user_id` the sender | `retryAfterMs` (what was left of the sender's hour) |
 
 ## notifications.* / user_prefs.* / dashboard.* / quickfind.* — UI-channel events
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `notifications.mark_read` | A user marked one or more notifications read via `/api/notifications/mark-read` | `userId`, `notificationIds`, `count` |
-| `user_prefs.update` | A user changed their UI preferences (language, theme, mobile-density) | `userId`, `changedKeys` |
+| `user_prefs.update` | A user saved a UI preference through `PUT /api/user-prefs` (Settings, the language picker, the first-run tour and its replay). `entity_type` `user_prefs`, `entity_id` and `user_id` the user. Written for every save that sets at least one preference, even to the value it already had; a PUT that sets none is refused (400 `empty_patch`) and writes nothing | `keys` (the names of the preferences the save set; their values are not recorded) |
 | `dashboard.viewed` | A user rendered `/dashboard` (loose "did the user come back?" signal) | `userId`, `role` |
-| `quickfind.query` | The CMD-K quick-find palette executed a search (spec 121) | `userId`, `query` (length only, NOT raw text — privacy), `resultCount` |
+| `quickfind.query` | The Cmd+K quick-find palette's search was answered (spec 121): `GET /api/quickfind` with 2 or more characters. `entity_type` `quickfind`, `user_id` the searcher. A refused search (too long, throttled, limiter unavailable) writes nothing. The text is kept as typed, as the learner search on `/repo/students` keeps its own: the row is the record of who looked up which teacher, school or session, and only a `programme_admin` or `super_admin` can read it (`/admin/audit`) | `q` (the trimmed search text, at most 240 characters), `resultCount` (rows shown, at most 20) |
 
 ## audit.* — meta-audit (read-on-write only)
 

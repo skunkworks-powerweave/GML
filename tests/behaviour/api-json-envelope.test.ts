@@ -114,6 +114,37 @@ test("F100 user-prefs: a body that is not JSON is 400 invalid_json, and nothing 
   });
 });
 
+// W3-27: PrefsSchema makes every field optional and strips unknown keys, so
+// `{}` -- or a body of keys it does not know -- parsed to an EMPTY patch that
+// still upserted the row (a row of defaults, or a bumped updated_at), wrote a
+// user_prefs.update row with `keys: []`, and answered 200 ok. Every call, with
+// no throttle. system-settings answers the same request 400 empty_patch.
+test("W3-27 user-prefs: a PUT that sets nothing is 400 empty_patch, and nothing is saved or audited", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prefs-empty"));
+    try {
+      const me = await signedIn(f, "teacher");
+      const { PUT } = await userPrefs();
+      for (const body of ["{}", JSON.stringify({ foo: 1, bar: "x" })]) {
+        const res = await read(await PUT(send("PUT", "/api/user-prefs", body)));
+        assert.deepEqual([res.status, res.body], [400, { error: "empty_patch" }], `${body} was answered as a successful update`);
+      }
+      const { rows } = await c.query(`SELECT 1 FROM user_prefs WHERE user_id = $1`, [me]);
+      assert.equal(rows.length, 0, "a PUT that set nothing upserted the defaults");
+      assert.equal(await auditCount(c, me, "user_prefs.update"), 0, "a PUT that set nothing was audited as an update");
+
+      // A real change, and clearing the tour timestamp (one key, null), still work.
+      for (const body of [{ density: "dense" }, { ftuxSeenAt: null }]) {
+        const ok = await read(await PUT(send("PUT", "/api/user-prefs", JSON.stringify(body))));
+        assert.deepEqual([ok.status, ok.body], [200, { ok: true }], JSON.stringify(body));
+      }
+      assert.equal(await auditCount(c, me, "user_prefs.update"), 2);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
 test("F100 helpdesk: a body that is not JSON opens no ticket", { skip }, async () => {
   await withClient(async (c) => {
     const f = fixture(c, tag("help-bad"));

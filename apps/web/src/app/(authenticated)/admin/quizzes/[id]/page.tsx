@@ -204,7 +204,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
           <strong style={{ color: "var(--ink-2)" }}>Schema reference.</strong>{" "}
           The payload accepts <code>title</code>, <code>passThreshold</code>,
           <code> active</code>, an optional <code>timeLimitSeconds</code>
-          (Spec 159; <code>null</code> = untimed; otherwise an integer
+          (<code>null</code> = untimed; otherwise an integer
           between 60 and 7200 = 1 min to 2 h), an optional{" "}
           <code>maxAttempts</code> (<code>null</code> = unlimited; otherwise a
           whole number from 1 to 20 — attempts each learner may submit),{" "}

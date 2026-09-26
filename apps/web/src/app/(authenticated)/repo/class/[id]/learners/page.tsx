@@ -72,7 +72,7 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
           <div className="label">Roster · {school?.code ?? "—"} · Grade {cls.grade}</div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Learners</h1>
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            {rows.length} of {cls.studentsCount} on record. PII access is logged (SM-9): your view of
+            {rows.length} of {cls.studentsCount} on record. PII access is logged: your view of
             this page is recorded in audit_log under <code className="mono">learners.view</code>.
           </p>
         </div>

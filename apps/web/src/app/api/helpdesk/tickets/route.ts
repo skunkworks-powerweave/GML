@@ -15,6 +15,8 @@
 //   POST (no session)             → 401 { error:"unauthenticated" }
 //   POST (body not JSON)          → 400 { error:"invalid_json" }
 //   POST (malformed body)         → 400 { error:"validation_failed", issues:[{path,message}] }
+//   POST (over 5 per user / hour) → 429 { error:"rate_limited", retryAfterMs } + Retry-After;
+//                                   audited once per user per hour, not per refusal
 //   GET / PUT / DELETE / PATCH    → 405 { error:"method_not_allowed" }
 //
 // An EMPTY body is still a ticket with the defaults (every field is optional).
@@ -56,6 +58,29 @@ const BodySchema = z.object({
 const HELPDESK_LIMIT = 5;
 const HELPDESK_WINDOW_MS = 60 * 60 * 1000;
 
+/**
+ * Whether this refusal may write its helpdesk.ticket_rate_limited row: once
+ * per user per throttle window. audit_log is append-only by trigger (_post/001)
+ * and never pruned, and the throttle keeps refusing for the rest of the hour,
+ * so a row per refused POST let one signed-in caller grow it without bound.
+ * The slot is counted atomically in rate_limits so a concurrent burst cannot
+ * slip past the way a read-then-insert dedup (recordAuditDedup) does. A
+ * counter we cannot reach means no row, never an unbounded write: the request
+ * is refused either way.
+ */
+async function takeRateLimitedAuditSlot(userId: string): Promise<boolean> {
+  const slot = await rateLimit({
+    bucket: "helpdesk-429-audit",
+    id: userId,
+    limit: 1,
+    windowMs: HELPDESK_WINDOW_MS,
+  }).catch((err: unknown) => {
+    console.warn("[helpdesk] rate-limit audit counter unavailable; not auditing this refusal", String(err));
+    return null;
+  });
+  return slot?.ok === true;
+}
+
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -79,12 +104,14 @@ export async function POST(req: Request) {
     });
     if (!rl.ok) {
       const retryAfterSec = Math.ceil(rl.retryAfterMs / 1000);
-      void recordAudit({
-        action: "helpdesk.ticket_rate_limited",
-        entityType: "helpdesk",
-        entityId: userId,
-        metadata: { retryAfterMs: rl.retryAfterMs },
-      });
+      if (await takeRateLimitedAuditSlot(userId)) {
+        void recordAudit({
+          action: "helpdesk.ticket_rate_limited",
+          entityType: "helpdesk",
+          entityId: userId,
+          metadata: { retryAfterMs: rl.retryAfterMs },
+        });
+      }
       return NextResponse.json(
         { error: "rate_limited", retryAfterMs: rl.retryAfterMs },
         {

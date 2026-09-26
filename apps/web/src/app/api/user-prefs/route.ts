@@ -1,9 +1,10 @@
 // GET /api/user-prefs — return current user's prefs (creating defaults if missing)
-// PUT /api/user-prefs — update current user's prefs (audit-on-change)
+// PUT /api/user-prefs — update current user's prefs (each save audited with the keys it set)
 //
 // 401 { error: "unauthenticated" } without a session; 400 { error:
 // "invalid_json" } for a body that is not JSON; 400 { error:
-// "validation_failed", issues: [{ path, message }] } for one that is.
+// "validation_failed", issues: [{ path, message }] } for one that is; 400
+// { error: "empty_patch" } for a valid body that sets no preference.
 
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
@@ -63,6 +64,16 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "validation_failed", issues: publicIssues(parse.error) }, { status: 400 });
   }
   const patch = parse.data;
+  // NOTHING TO SET, NOTHING TO DO. Every field is optional and unknown keys
+  // are stripped, so `{}` -- or a body of keys this route does not know --
+  // parsed to an empty patch that still upserted the row, wrote an audit row
+  // with `keys: []` and answered 200 ok, on every call. Checked on the PARSED
+  // patch so the unknown-keys body is refused too; `{ ftuxSeenAt: null }` is
+  // one key and is not affected. No client sends an empty patch
+  // (settings-form returns early on an empty delta). As system-settings does.
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json({ error: "empty_patch" }, { status: 400 });
+  }
   // NULL MUST SURVIVE AS NULL.
   //
   // This read `patch.ftuxSeenAt ? new Date(...) : undefined`, and Drizzle's
