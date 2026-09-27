@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -263,11 +264,11 @@ test("spec 168 — /login/forgot is a server component reading the email flag", 
     /data-testid="forgot-password-smtp-unavailable"/,
     `${FORGOT_PAGE} must render the data-testid="forgot-password-smtp-unavailable" banner when SMTP is unset`,
   );
-  assert.match(
-    src,
-    /Password reset is unavailable on this deployment/,
-    `${FORGOT_PAGE} must surface the literal "Password reset is unavailable on this deployment" copy so the user gets a clear, actionable signal`,
+  assert.ok(
+    readsKey(src, "forgot.unavailable"),
+    `${FORGOT_PAGE} must surface the "Password reset is unavailable on this deployment" copy (login.forgot.unavailable) so the user gets a clear, actionable signal`,
   );
+  assert.match(message("login.forgot.unavailable"), /Password reset is unavailable on this deployment/);
 });
 
 test("spec 168 — ForgotPasswordForm.tsx exists and declares 'use client'", () => {

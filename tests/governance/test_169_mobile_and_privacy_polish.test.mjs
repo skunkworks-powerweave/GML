@@ -315,11 +315,26 @@ test("spec 169 — HelpPanel hides the WhatsApp action row when contact phone is
 // in Hindi and Bhoti). So a `login` namespace exists again, READ. What stays
 // pinned is the part that was dead: login.forgot.* / login.reset.* and
 // forbidden.*, whose pages still hardcode their copy.
-test("spec 169 §D (superseded) — the dead login / forbidden namespaces stay deleted from every bundle", () => {
+test("spec 169 §D (superseded) — login.forgot / login.reset exist only because those pages read every key", () => {
+  // They were deleted once because no page read them. The forgot and reset
+  // pages now take all their copy from them, so every key must be read.
+  const pages = [
+    "apps/web/src/app/login/forgot/page.tsx",
+    "apps/web/src/app/login/forgot/ForgotPasswordForm.tsx",
+    "apps/web/src/app/login/email-actions.ts",
+    "apps/web/src/app/login/reset/page.tsx",
+    "apps/web/src/app/login/reset/ResetPasswordForm.tsx",
+    "apps/web/src/app/login/reset/actions.ts",
+  ]
+    .map(read)
+    .join("\n");
   for (const [name, path] of [["en", EN_JSON], ["hi", HI_JSON], ["bo", BO_JSON]]) {
     const bundle = readJson(path);
-    assert.equal(bundle.login?.forgot, undefined, `${name}.json must not re-declare the unread login.forgot.* namespace`);
-    assert.equal(bundle.login?.reset, undefined, `${name}.json must not re-declare the unread login.reset.* namespace`);
+    for (const group of ["forgot", "reset"]) {
+      for (const key of Object.keys(bundle.login?.[group] ?? {})) {
+        assert.ok(pages.includes(`"${group}.${key}"`), `${name}.json login.${group}.${key} is read by no page`);
+      }
+    }
     assert.equal(bundle.forbidden, undefined, `${name}.json must not re-declare the unread forbidden.* namespace`);
   }
   if (readJson(EN_JSON).login !== undefined) {

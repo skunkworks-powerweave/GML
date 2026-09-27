@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -41,12 +42,15 @@ test("login page reuses loginAction + EmailLinkForm", () => {
 });
 
 test("login page shows EN/HI/BO language hints", () => {
+  // The picker is fed the language bundle's self-names; the literals used to
+  // sit in a hidden span here only so this test could see them.
   const src = read(DESKTOP);
-  assert.match(src, /हिन्दी/);
-  assert.match(src, /Ladakhi/);
+  assert.match(src, /<LoginLanguagePicker/);
+  for (const key of ["english", "hindi", "bhoti"]) assert.ok(readsKey(src, key), `the picker label ${key} comes from the language bundle`);
+  assert.equal(message("language.hindi"), "हिन्दी");
 });
 
 test("brand panel has tagline from prototype", () => {
-  const src = read(DESKTOP);
-  assert.match(src, /from Leh to Drass/);
+  assert.ok(readsKey(read(DESKTOP), "hero"), "the brand panel reads login.hero");
+  assert.match(message("login.hero"), /from Leh to Drass/);
 });

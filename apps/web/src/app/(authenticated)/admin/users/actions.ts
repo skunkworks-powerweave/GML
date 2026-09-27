@@ -22,7 +22,8 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { revokeAllSessions, type RevokeResult } from "@/lib/supabase/sessions";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
-import { MUST_CHANGE_PASSWORD, passwordPolicyError } from "@/lib/password-policy";
+import { MUST_CHANGE_PASSWORD } from "@/lib/password-policy";
+import { passwordPolicyError } from "@/lib/password-policy-message";
 import { linkAccountToRecord } from "./link";
 
 export type UserActionState = { error?: string; ok?: string };
@@ -142,7 +143,7 @@ export async function createUserAction(
   if (!assignableBy(actor.role).includes(role)) {
     return { error: "You cannot assign that role." };
   }
-  const policy = passwordPolicyError(password);
+  const policy = await passwordPolicyError(password);
   if (policy) return { error: `Initial password: ${policy}` };
 
   const admin = supabaseAdmin();
@@ -510,7 +511,7 @@ export async function setPasswordAction(
 
   const targetId = String(formData.get("userId") ?? "");
   const password = String(formData.get("password") ?? "");
-  const policy = passwordPolicyError(password);
+  const policy = await passwordPolicyError(password);
   if (policy) return { error: policy };
 
   const permitted = await canActOn(actor, targetId);

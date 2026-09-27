@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { useTranslations } from "next-intl";
 import { resetPasswordAction, type ResetState } from "./actions";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 
@@ -17,12 +18,13 @@ export function ResetPasswordForm() {
     resetPasswordAction,
     undefined,
   );
+  const t = useTranslations("login");
 
   return (
     <form action={formAction} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>
-          New password
+          {t("reset.newPassword", { min: MIN_PASSWORD_LENGTH })}
         </span>
         <input
           data-testid="reset-password"
@@ -37,7 +39,7 @@ export function ResetPasswordForm() {
 
       <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>
-          Confirm password
+          {t("reset.confirmPassword")}
         </span>
         <input
           data-testid="reset-confirm"
@@ -73,7 +75,7 @@ export function ResetPasswordForm() {
           opacity: pending ? 0.6 : 1,
         }}
       >
-        {pending ? "Saving…" : "Set new password"}
+        {pending ? t("reset.saving") : t("reset.submit")}
       </button>
     </form>
   );

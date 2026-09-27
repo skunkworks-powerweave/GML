@@ -25,13 +25,15 @@
 // attacker cannot enumerate which deployments have email by reading bundled JS.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { authEmailEnabled } from "@/lib/auth-email";
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
 
 export const dynamic = "force-dynamic";
 
-export default function ForgotPasswordPage() {
+export default async function ForgotPasswordPage() {
   const emailEnabled = authEmailEnabled();
+  const t = await getTranslations("login");
 
   return (
     <div
@@ -46,7 +48,7 @@ export default function ForgotPasswordPage() {
     >
       <div style={{ maxWidth: 420, width: "100%" }}>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginBottom: 8 }}>
-          Reset your password
+          {t("forgot.title")}
         </h1>
         {emailEnabled ? (
           <ForgotPasswordForm />
@@ -67,10 +69,9 @@ export default function ForgotPasswordPage() {
                 lineHeight: 1.5,
               }}
             >
-              <strong>Password reset is unavailable on this deployment.</strong>
+              <strong>{t("forgot.unavailable")}</strong>
               <br />
-              Contact your programme administrator to have your password reset
-              manually.
+              {t("forgot.unavailableHelp")}
             </div>
             <Link
               href="/login"
@@ -81,7 +82,7 @@ export default function ForgotPasswordPage() {
                 color: "var(--ink-2)",
               }}
             >
-              ← Back to sign in
+              {t("forgot.back")}
             </Link>
           </>
         )}

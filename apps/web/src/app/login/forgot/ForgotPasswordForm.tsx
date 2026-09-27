@@ -14,6 +14,7 @@
 // all. Supabase's recovery flow replaces both.
 
 import { useActionState } from "react";
+import { useTranslations } from "next-intl";
 import { requestPasswordResetAction, type EmailActionState } from "../email-actions";
 
 export function ForgotPasswordForm() {
@@ -21,6 +22,7 @@ export function ForgotPasswordForm() {
     requestPasswordResetAction,
     undefined,
   );
+  const t = useTranslations("login");
 
   if (state?.ok) {
     return (
@@ -44,7 +46,7 @@ export function ForgotPasswordForm() {
   return (
     <form action={formAction} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>Email</span>
+        <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>{t("email")}</span>
         <input
           data-testid="forgot-email"
           name="email"
@@ -81,7 +83,7 @@ export function ForgotPasswordForm() {
           opacity: pending ? 0.6 : 1,
         }}
       >
-        {pending ? "Sending…" : "Send reset link"}
+        {pending ? t("forgot.sending") : t("forgot.submit")}
       </button>
     </form>
   );

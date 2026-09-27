@@ -3,11 +3,14 @@
 // `--deva` CSS font variable), and Tibetan/Bhoti (`bo`, rendered in the
 // Tibetan script and used for Ladakhi/Bhoti speakers in Leh and Kargil).
 //
-// Translation coverage is intentionally narrow: per the JSX prototype, only
-// global chrome (topbar, sidebar, bottom tabs, login affordances, section
-// gate) is translated. Page bodies stay English unless and until a future
-// spec explicitly translates them. See `apps/web/src/app/(authenticated)/layout.tsx`
-// for the runtime wiring.
+// Coverage is the whole interface: the chrome (topbar, sidebar, bottom tabs,
+// section gate) in locales/<locale>.json, and every page's own copy in
+// locales/<locale>/<namespace>.json. It used to be the chrome alone, so a
+// user who picked Hindi or Bhoti got a translated menu over English pages and
+// a half-English login screen (UAT, 2026-09-27). Content people type or an
+// administrator loads (names, module titles, notes) is data and is shown as
+// entered. See `apps/web/src/app/(authenticated)/layout.tsx` for the runtime
+// wiring.
 //
 // SM-7 reminder: locale state is per-user (read from `user_prefs.uiLanguage`)
 // and never sniffed from the Accept-Language header — the picker is the
@@ -20,6 +23,34 @@
 import enMessages from "./locales/en.json";
 import hiMessages from "./locales/hi.json";
 import boMessages from "./locales/bo.json";
+// Page copy, one namespace per product area, each in its own file per locale
+// (locales/<locale>/<namespace>.json) so an area's strings can be translated
+// and reviewed side by side. The chrome namespaces above (nav, action, ...)
+// stay in the single files.
+import enHome from "./locales/en/home.json";
+import enObservation from "./locales/en/observation.json";
+import enMentorship from "./locales/en/mentorship.json";
+import enRtt from "./locales/en/rtt.json";
+import enRepo from "./locales/en/repo.json";
+import enAdmin from "./locales/en/admin.json";
+import enAdminData from "./locales/en/adminData.json";
+import enVideo from "./locales/en/video.json";
+import hiHome from "./locales/hi/home.json";
+import hiObservation from "./locales/hi/observation.json";
+import hiMentorship from "./locales/hi/mentorship.json";
+import hiRtt from "./locales/hi/rtt.json";
+import hiRepo from "./locales/hi/repo.json";
+import hiAdmin from "./locales/hi/admin.json";
+import hiAdminData from "./locales/hi/adminData.json";
+import hiVideo from "./locales/hi/video.json";
+import boHome from "./locales/bo/home.json";
+import boObservation from "./locales/bo/observation.json";
+import boMentorship from "./locales/bo/mentorship.json";
+import boRtt from "./locales/bo/rtt.json";
+import boRepo from "./locales/bo/repo.json";
+import boAdmin from "./locales/bo/admin.json";
+import boAdminData from "./locales/bo/adminData.json";
+import boVideo from "./locales/bo/video.json";
 
 export const SUPPORTED_LOCALES = ["en", "hi", "bo"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
@@ -60,10 +91,19 @@ type MessageValue = string | { [key: string]: MessageValue };
 type MessageNamespace = Record<string, MessageValue>;
 type MessageBundle = Record<string, MessageNamespace>;
 
+/** The page namespaces, per locale; see the imports above. */
+export const PAGE_NAMESPACES = ["home","observation","mentorship","rtt","repo","admin","adminData","video"] as const;
+
+const PAGE_MESSAGES: Record<Locale, MessageBundle> = {
+  en: { home: enHome, observation: enObservation, mentorship: enMentorship, rtt: enRtt, repo: enRepo, admin: enAdmin, adminData: enAdminData, video: enVideo } as MessageBundle,
+  hi: { home: hiHome, observation: hiObservation, mentorship: hiMentorship, rtt: hiRtt, repo: hiRepo, admin: hiAdmin, adminData: hiAdminData, video: hiVideo } as MessageBundle,
+  bo: { home: boHome, observation: boObservation, mentorship: boMentorship, rtt: boRtt, repo: boRepo, admin: boAdmin, adminData: boAdminData, video: boVideo } as MessageBundle,
+};
+
 const MESSAGES: Record<Locale, MessageBundle> = {
-  en: enMessages as MessageBundle,
-  hi: hiMessages as MessageBundle,
-  bo: boMessages as MessageBundle,
+  en: { ...(enMessages as MessageBundle), ...PAGE_MESSAGES.en },
+  hi: { ...(hiMessages as MessageBundle), ...PAGE_MESSAGES.hi },
+  bo: { ...(boMessages as MessageBundle), ...PAGE_MESSAGES.bo },
 };
 
 /**

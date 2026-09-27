@@ -12,6 +12,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { auth, recoverySessionState } from "@/auth";
 import { ResetPasswordForm } from "./ResetPasswordForm";
 
@@ -26,6 +27,7 @@ export default async function ResetPasswordPage() {
   const recovery = signedIn ? await recoverySessionState() : "signed_out";
   if (recovery === "not_recovery") redirect("/settings");
   const session = recovery === "recovery" ? signedIn : null;
+  const t = await getTranslations("login");
 
   return (
     <div
@@ -40,7 +42,7 @@ export default async function ResetPasswordPage() {
     >
       <div style={{ maxWidth: 420, width: "100%" }}>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginBottom: 8 }}>
-          Choose a new password
+          {t("reset.title")}
         </h1>
 
         {session ? (
@@ -53,8 +55,7 @@ export default async function ResetPasswordPage() {
                 lineHeight: 1.5,
               }}
             >
-              Signed in as {session.user.email}. Setting a new password will end your
-              sessions on any other device.
+              {t("reset.signedInAs", { email: session.user.email ?? "" })}
             </p>
             <ResetPasswordForm />
           </>
@@ -75,14 +76,12 @@ export default async function ResetPasswordPage() {
                 lineHeight: 1.5,
               }}
             >
-              <strong>This reset link is no longer valid.</strong>
+              <strong>{t("reset.invalidTitle")}</strong>
               <br />
-              Recovery links can only be used once and expire shortly after they are
-              sent. Request a new one, or ask your programme administrator to set your
-              password.
+              {t("reset.invalidHelp")}
             </div>
             <Link href="/login/forgot" style={{ fontSize: 13, color: "var(--ink-2)" }}>
-              Request a new link
+              {t("reset.requestNew")}
             </Link>
           </>
         )}

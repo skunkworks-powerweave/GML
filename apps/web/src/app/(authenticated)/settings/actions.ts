@@ -15,7 +15,7 @@
 // sign-out implementation to keep working.
 
 import { auth, signOut, signInWithPassword } from "@/auth";
-import { passwordPolicyError } from "@/lib/password-policy";
+import { passwordPolicyError } from "@/lib/password-policy-message";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { clearMustChangePassword } from "@/lib/supabase/must-change-password";
 import { recordAudit } from "@/lib/audit";
@@ -52,7 +52,7 @@ export async function changePasswordAction(
   const confirm = String(formData.get("confirmPassword") ?? "");
 
   if (!current) return { error: "Enter your current password." };
-  const policy = passwordPolicyError(next);
+  const policy = await passwordPolicyError(next);
   if (policy) return { error: policy };
   if (next !== confirm) return { error: "The new passwords do not match." };
   if (next === current) return { error: "That is your current password." };

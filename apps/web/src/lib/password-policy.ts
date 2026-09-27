@@ -26,14 +26,15 @@ export const MIN_PASSWORD_LENGTH = 8;
  */
 export const MAX_PASSWORD_BYTES = 72;
 
-/** Why `password` is not acceptable, or null when it is. */
-export function passwordPolicyError(password: string): string | null {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return `The password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-  }
-  if (new TextEncoder().encode(password).length > MAX_PASSWORD_BYTES) {
-    return `The password is too long: at most ${MAX_PASSWORD_BYTES} characters (fewer in Hindi or Tibetan script).`;
-  }
+/**
+ * Why `password` is not acceptable, or null when it is. A code, not a
+ * sentence: this module is imported by client components (for the length
+ * floor), so the message in the user's language comes from
+ * ./password-policy-message.ts on the server.
+ */
+export function passwordPolicyProblem(password: string): "too_short" | "too_long" | null {
+  if (password.length < MIN_PASSWORD_LENGTH) return "too_short";
+  if (new TextEncoder().encode(password).length > MAX_PASSWORD_BYTES) return "too_long";
   return null;
 }
 

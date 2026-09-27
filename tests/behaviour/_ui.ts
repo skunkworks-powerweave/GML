@@ -60,6 +60,7 @@
 
 import { createRequire, registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const WEB_URL = new URL("../../apps/web/", import.meta.url);
 const SRC_DIR = fileURLToPath(new URL("src/", WEB_URL));
@@ -166,9 +167,27 @@ export function signIn(id: string, role: string, email: string | null = null): v
   request.session = { user: { id, email, name: null, image: null, role } };
 }
 
+/**
+ * The app's client-side i18n provider around `element`, for the fake
+ * request's locale -- as the root, login and (authenticated) layouts supply it
+ * in the app. A tree that already carries one (withIntl) keeps it: the inner
+ * provider wins.
+ */
+function inIntl(element: unknown): unknown {
+  const { NextIntlClientProvider } = webRequire("next-intl") as {
+    NextIntlClientProvider: import("react").ComponentType<Record<string, unknown>>;
+  };
+  const locale = request.locale;
+  return h(
+    NextIntlClientProvider as never,
+    { locale, messages: loadMessages(locale), timeZone: "Asia/Kolkata", onError: failOnIntlError },
+    element as never,
+  );
+}
+
 /** Synchronous render for client components and plain trees. */
 export function renderSync(element: unknown): string {
-  return ReactDOMServer.renderToStaticMarkup(element);
+  return ReactDOMServer.renderToStaticMarkup(inIntl(element) as never);
 }
 
 /**
@@ -176,7 +195,7 @@ export function renderSync(element: unknown): string {
  * Topbar and the layouts are all `async function`s).
  */
 export async function render(element: unknown): Promise<string> {
-  const { prelude } = await ReactDOMStatic.prerender(element);
+  const { prelude } = await ReactDOMStatic.prerender(inIntl(element) as never);
   const reader = prelude.getReader();
   const decoder = new TextDecoder();
   let html = "";
@@ -210,6 +229,32 @@ export function withAppRouter(child: unknown, calls: string[] = []): unknown {
   return h(AppRouterContext.Provider, { value: router }, child as never);
 }
 
+/**
+ * A missing or malformed message fails the test. next-intl's default logs it
+ * and renders the key ("home.title"), which a render test would pass straight
+ * over.
+ */
+function failOnIntlError(error: Error): never {
+  throw error;
+}
+
+/**
+ * next-intl's context for `locale`, taken from the real IntlProvider: mount()
+ * calls one component's hooks directly and cannot render a provider above it,
+ * so it puts this value where useContext() reads it instead.
+ */
+function intlContext(locale: RequestState["locale"]): { ctx: { _currentValue: unknown }; value: unknown } {
+  const { IntlProvider } = webRequire("next-intl") as { IntlProvider: (p: Record<string, unknown>) => unknown };
+  const el = mount(IntlProvider, {
+    locale,
+    messages: loadMessages(locale),
+    timeZone: "Asia/Kolkata",
+    onError: failOnIntlError,
+    children: null,
+  }).tree as unknown as { type: { _context?: { _currentValue: unknown }; _currentValue: unknown }; props: { value: unknown } };
+  return { ctx: el.type._context ?? el.type, value: el.props.value };
+}
+
 /** The app's real client-side i18n provider, fed the app's real bundle. */
 export async function withIntl(child: unknown, locale: RequestState["locale"]): Promise<unknown> {
   // Resolved from apps/web (the repo root does not depend on next-intl), and
@@ -221,12 +266,11 @@ export async function withIntl(child: unknown, locale: RequestState["locale"]): 
       children?: unknown;
     }>;
   };
-  const { loadMessages } = await import("../../apps/web/src/i18n/config.ts");
   // timeZone only silences next-intl's ENVIRONMENT_FALLBACK notice; nothing
   // rendered here formats a date.
   return h(
     NextIntlClientProvider as never,
-    { locale, messages: loadMessages(locale), timeZone: "Asia/Kolkata" },
+    { locale, messages: loadMessages(locale), timeZone: "Asia/Kolkata", onError: failOnIntlError },
     child as never,
   );
 }
@@ -255,7 +299,11 @@ export async function withIntl(child: unknown, locale: RequestState["locale"]): 
 
 type AnyElement = { type: unknown; props: Record<string, unknown> };
 
-export function mount<P>(component: (props: P) => unknown, props: P, opts: { effects?: boolean; client?: boolean } = {}) {
+export function mount<P>(
+  component: (props: P) => unknown,
+  props: P,
+  opts: { effects?: boolean; client?: boolean; intl?: RequestState["locale"] } = {},
+) {
   const internals = (React as unknown as Record<string, { H: unknown } | undefined>)
     .__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
   if (!internals || !("H" in internals)) {
@@ -317,15 +365,21 @@ export function mount<P>(component: (props: P) => unknown, props: P, opts: { eff
     useOptimistic<S>(v: S) { cursor++; return [v, () => undefined]; },
     useDebugValue() {},
   };
+  // A component that calls useTranslations() needs next-intl's context:
+  // `intl: "hi"` supplies the app's real Hindi bundle for its renders.
+  const intl = opts.intl ? intlContext(opts.intl) : null;
   const renderOnce = (): AnyElement => {
     const previous = internals.H;
+    const previousIntl = intl?.ctx._currentValue;
     internals.H = dispatcher;
+    if (intl) intl.ctx._currentValue = intl.value;
     cursor = 0;
     let out: AnyElement;
     try {
       out = component(props) as AnyElement;
     } finally {
       internals.H = previous;
+      if (intl) intl.ctx._currentValue = previousIntl;
     }
     const run = pendingEffects;
     pendingEffects = [];
@@ -421,4 +475,4 @@ export function elements(html: string, tag: string): Array<{ open: string; text:
   return out;
 }
 
-export { SRC_DIR };
+export { SRC_DIR, webRequire };
