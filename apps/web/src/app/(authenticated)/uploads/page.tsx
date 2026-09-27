@@ -30,8 +30,11 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { and, desc, eq } from "drizzle-orm";
 import { auth } from "@/auth";
+import { normalizeLocale } from "@/i18n/config";
+import { statusLabel, type VideoTranslate } from "@/lib/video/labels";
 import { actorFrom } from "@/lib/authz";
 import { db } from "@gml/db";
 import { videoSubmissions, files, observationCycles } from "@gml/db/schema";
@@ -55,16 +58,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// Reused from /videos/page.tsx (spec 067) so the visual language is identical.
-const STATE_LABEL: Record<string, string> = {
-  received: "received",
-  queued: "queued",
-  transcoding: "transcoding",
-  ready: "ready",
-  failed: "failed",
-  review_pending: "review pending",
-  reviewed: "reviewed",
-};
+// Status labels are shared with /videos/page.tsx (spec 067) so the visual
+// language is identical: lib/video/labels.ts, video.status.* in the bundles.
 
 // Maps video_submissions.status -> chip variant class (matches data.jsx STATUS_CHIPS).
 const STATE_CHIP: Record<string, string> = {
@@ -77,11 +72,8 @@ const STATE_CHIP: Record<string, string> = {
   reviewed: "chip-indigo",
 };
 
-const SOURCE_LABEL: Record<string, string> = {
-  whatsapp: "WhatsApp",
-  direct: "Web",
-  external_link: "External",
-};
+/** Sources with a label of their own (video.uploads.source.*); others show as stored. */
+const SOURCE_LABELLED: ReadonlySet<string> = new Set(["whatsapp", "direct", "external_link"]);
 
 const SOURCE_CHIP: Record<string, string> = {
   whatsapp: "chip-lichen",
@@ -89,25 +81,27 @@ const SOURCE_CHIP: Record<string, string> = {
   external_link: "",
 };
 
-// Human label for context_type rows that don't surface a code.
-const CONTEXT_LABEL: Record<string, string> = {
-  teach_back: "Teach-back",
-  mentor_meeting: "Mentor meeting",
-  mentee_quarterly: "Mentee quarterly",
-  classroom_session: "Classroom session",
-  // Said plainly: a generic video is the one the observer and mentor cannot see.
-  generic: "Not linked (only you and admins)",
-};
+// Human label for context_type rows that don't surface a code
+// (video.uploads.linked.*). Said plainly for generic: a generic video is the
+// one the observer and mentor cannot see.
+const CONTEXT_LABELLED: ReadonlySet<string> = new Set([
+  "teach_back",
+  "mentor_meeting",
+  "mentee_quarterly",
+  "classroom_session",
+  "generic",
+]);
 
-const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation", mentorship: "Mentorship" };
-
-/** What attachUploadAction redirected back with. Unknown codes show nothing. */
-const ATTACH_NOTICE: Record<string, { text: string; ok: boolean }> = {
-  done: { text: "Attached. The video now shows where you chose.", ok: true },
-  invalid: { text: "Choose what to attach the video to.", ok: false },
-  refused: { text: "The video could not be attached there. Choose another place.", ok: false },
-  not_attachable: { text: "Only your own videos that are not linked yet, and have not failed, can be attached.", ok: false },
-  locked: { text: "Unlock that section first, then attach the video.", ok: false },
+/**
+ * What attachUploadAction redirected back with (video.uploads.attachNotice.*).
+ * Unknown codes show nothing.
+ */
+const ATTACH_NOTICE: Record<string, { ok: boolean }> = {
+  done: { ok: true },
+  invalid: { ok: false },
+  refused: { ok: false },
+  not_attachable: { ok: false },
+  locked: { ok: false },
 };
 
 /**
@@ -138,7 +132,7 @@ const ATTACH_NOTICE: Record<string, { text: string; ok: boolean }> = {
  * the target at all -- then the card is dropped, because the video would
  * arrive linked to nothing.
  */
-function explainerCards(whatsappPhone: string | null, whatsappText: string | null, chosen: boolean, maxMb: number) {
+function explainerCards(whatsappPhone: string | null, whatsappText: string | null, chosen: boolean, maxMb: number, t: VideoTranslate) {
   const dialable = whatsappPhone ? whatsappPhone.replace(/[^0-9]/g, "") : null;
   const exact = whatsappText !== null && whatsappText !== "OBS-";
   return [
@@ -146,25 +140,27 @@ function explainerCards(whatsappPhone: string | null, whatsappText: string | nul
       ? [
           {
             icon: "wa",
-            title: "Forward via WhatsApp",
+            glyph: t("uploads.cards.whatsappGlyph"),
+            title: t("uploads.cards.whatsappTitle"),
             desc: exact
-              ? `Send your video to ${whatsappPhone} with the caption ${whatsappText}. Fastest on 2G/3G.`
-              : `Send your video to ${whatsappPhone} with your cycle code as the caption, e.g. OBS-2026-009. Fastest on 2G/3G.`,
+              ? t("uploads.cards.whatsappExact", { phone: whatsappPhone, caption: whatsappText })
+              : t("uploads.cards.whatsappCode", { phone: whatsappPhone }),
             accent: "var(--lichen)",
             primary: true,
-            cta: "Open WhatsApp",
+            cta: t("uploads.openWhatsapp"),
             href: `https://wa.me/${dialable}?text=${encodeURIComponent(whatsappText)}`,
           },
         ]
       : []),
     {
       icon: "up",
-      title: "Upload here",
+      glyph: t("uploads.cards.uploadGlyph"),
+      title: t("uploads.cards.uploadTitle"),
       // The limit beginUpload enforces (uploadLimitBytes), not a literal.
-      desc: `Choose a file below. Resumes on disconnect. Max file ${maxMb} MB. We'll transcode to HLS automatically.`,
+      desc: t("uploads.cards.uploadBody", { maxMb }),
       accent: "var(--indigo)",
       primary: false,
-      cta: "Start",
+      cta: t("uploads.cards.start"),
       // Until the page knows what the video is for, there is no tray to go to.
       href: chosen ? "#upload-tray" : "#upload-target",
     },
@@ -209,6 +205,8 @@ export default async function UploadsPage({
   if (!actor) redirect("/forbidden");
   const viewerId = session.user.id;
   const sp = (await searchParams) ?? {};
+  const t = await getTranslations("video");
+  const locale = normalizeLocale(await getLocale());
 
   // WHAT THIS UPLOAD IS FOR, from the link that brought the user here. First
   // its section's gate, since everything said about the target -- its name, a
@@ -254,7 +252,7 @@ export default async function UploadsPage({
   const device = await getDeviceType();
   const whatsappPhone = whatsappPhoneForUsers();
   const maxMb = Math.floor((await uploadLimitBytes()) / (1024 * 1024));
-  const cards = explainerCards(whatsappPhone, whatsappText, target !== null, maxMb);
+  const cards = explainerCards(whatsappPhone, whatsappText, target !== null, maxMb, t);
 
   const rows = await db
     .select({
@@ -293,22 +291,32 @@ export default async function UploadsPage({
   const attachOptions = rows.some(attachable)
     ? (choices ?? (await openUploadContexts(actor))).options.map((o) => ({ value: encodeTarget(o.target), title: `${o.title} · ${o.detail}` }))
     : [];
-  const attachNotice = sp.attach ? (ATTACH_NOTICE[sp.attach] ?? null) : null;
+  const attachCode = sp.attach && Object.hasOwn(ATTACH_NOTICE, sp.attach) ? sp.attach : null;
+  const attachNotice = attachCode ? { text: t(`uploads.attachNotice.${attachCode}`), ok: ATTACH_NOTICE[attachCode]!.ok } : null;
+  const sectionName = (s: GatedSection) => t(`uploads.section.${s}`);
+  const linkedLabel = (contextType: string) => (CONTEXT_LABELLED.has(contextType) ? t(`uploads.linked.${contextType}`) : "—");
 
   return (
     <div>
       <div className="page-header">
         <div className="label">
-          My uploads ·{" "}
-          <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)" }}>
-            मेरे अपलोड
-          </span>
+          {t("uploads.label")}
+          {/* The Hindi name beside the English one (SM-7). In Hindi or Bhoti
+              the label above is already in the reader's language. */}
+          {locale === "en" ? (
+            <>
+              {" · "}
+              <span style={{ fontFamily: "var(--deva)", color: "var(--ink-3)" }}>
+                मेरे अपलोड
+              </span>
+            </>
+          ) : null}
         </div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
-          Submit a lesson video
+          {t("uploads.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          Send it over WhatsApp or upload it here — whichever works on your network today.
+          {t("uploads.intro")}
         </p>
       </div>
 
@@ -329,7 +337,7 @@ export default async function UploadsPage({
         >
           {target ? (
             <>
-              <div className="label">This video is for</div>
+              <div className="label">{t("uploads.target.label")}</div>
               <div style={{ fontFamily: "var(--serif)", fontSize: 18, marginTop: 4 }}>
                 {target.description.title}
               </div>
@@ -338,7 +346,7 @@ export default async function UploadsPage({
               </p>
               {sp.context ? (
                 <Link href="/uploads" style={{ fontSize: 12, color: "var(--indigo)" }}>
-                  Choose something else
+                  {t("uploads.target.change")}
                 </Link>
               ) : null}
             </>
@@ -351,14 +359,15 @@ export default async function UploadsPage({
               ) : null}
               {locked ? (
                 <p style={{ fontSize: 13, margin: "0 0 10px" }}>
-                  That link is for the {SECTION_NAME[locked.section]} section.{" "}
-                  <a href={`/gate/${locked.section}?next=${encodeURIComponent(locked.back)}`}>
-                    Unlock {SECTION_NAME[locked.section]}
-                  </a>{" "}
-                  to upload to it.
+                  {t.rich("uploads.locked", {
+                    section: sectionName(locked.section),
+                    link: (chunks) => (
+                      <a href={`/gate/${locked!.section}?next=${encodeURIComponent(locked!.back)}`}>{chunks}</a>
+                    ),
+                  })}
                 </p>
               ) : null}
-              <div className="label">What is this video for?</div>
+              <div className="label">{t("uploads.choose.label")}</div>
               <ul style={{ listStyle: "none", padding: 0, margin: "10px 0 0", display: "grid", gap: 8 }}>
                 {(choices?.options ?? []).map((o) => (
                   <li key={o.href}>
@@ -375,16 +384,16 @@ export default async function UploadsPage({
                       className="btn btn-ghost"
                       style={{ textDecoration: "none" }}
                     >
-                      Unlock {SECTION_NAME[s]} to choose {s === "observation" ? "a cycle" : "a meeting or a quarterly video"}
+                      {t(`uploads.choose.unlock.${s}`)}
                     </a>
                   </li>
                 ))}
                 <li>
                   <Link href="/uploads?context=generic" className="btn btn-ghost" style={{ textDecoration: "none" }}>
-                    Something else
+                    {t("uploads.choose.other")}
                   </Link>
                   <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>
-                    Linked to nothing: only you and programme administrators will see it.
+                    {t("uploads.choose.otherHint")}
                   </span>
                 </li>
               </ul>
@@ -405,9 +414,9 @@ export default async function UploadsPage({
               border: "1px solid oklch(0.82 0.06 145)",
             }}
           >
-            <div style={{ fontWeight: 600, fontSize: 14 }}>On a slow 2G/3G link?</div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{t("uploads.slowLink.title")}</div>
             <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
-              Send the video to {whatsappPhone} on WhatsApp with your cycle code as the caption, e.g. OBS-2026-009.
+              {t("uploads.slowLink.body", { phone: whatsappPhone })}
             </p>
             <a
               href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(whatsappText)}`}
@@ -426,7 +435,7 @@ export default async function UploadsPage({
                 textDecoration: "none",
               }}
             >
-              Open WhatsApp
+              {t("uploads.openWhatsapp")}
             </a>
           </section>
         ) : null}
@@ -457,7 +466,7 @@ export default async function UploadsPage({
             >
               {cards.map((c) => (
                 <article
-                  key={c.title}
+                  key={c.icon}
                   className={`card${c.primary ? " card-hi" : ""}`}
                   style={{
                     padding: 22,
@@ -484,7 +493,7 @@ export default async function UploadsPage({
                     }}
                     aria-hidden
                   >
-                    {c.icon}
+                    {c.glyph}
                   </div>
                   <div
                     style={{
@@ -543,10 +552,9 @@ export default async function UploadsPage({
               marginBottom: 12,
             }}
           >
-            <div style={{ fontWeight: 600 }}>My recent uploads</div>
+            <div style={{ fontWeight: 600 }}>{t("uploads.recent.title")}</div>
             <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-              {rows.length} {rows.length === 1 ? "video" : "videos"} · most
-              recent first
+              {t("uploads.recent.count", { count: rows.length })}
             </span>
           </div>
 
@@ -569,11 +577,10 @@ export default async function UploadsPage({
                   marginBottom: 4,
                 }}
               >
-                You haven&apos;t uploaded anything yet.
+                {t("uploads.recent.empty")}
               </div>
               <div style={{ fontSize: 12 }}>
-                Use one of the options above — WhatsApp is the fastest on
-                a flaky connection.
+                {t("uploads.recent.emptyHint")}
               </div>
             </div>
           ) : (
@@ -581,29 +588,22 @@ export default async function UploadsPage({
               <table className="t">
                 <thead>
                   <tr>
-                    {[
-                      "File",
-                      "Source",
-                      "Linked to",
-                      "Size",
-                      "State",
-                      "Date",
-                    ].map((h) => (
-                      <th key={h}>{h}</th>
+                    {(["file", "source", "linked", "size", "state", "date"] as const).map((h) => (
+                      <th key={h}>{t(`uploads.recent.col.${h}`)}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r) => {
                     const isReady = r.status === "ready";
-                    const filename = r.filename ?? "(unnamed)";
+                    const filename = r.filename ?? t("uploads.recent.unnamed");
                     const isPdf = r.mimeType?.startsWith("application/pdf");
                     const linkedTo =
                       r.contextType === "observation_cycle"
                         ? (r.cycleCode ?? "—")
                         : r.contextType === "mentee_quarterly" && r.contextQuarter
-                          ? `${CONTEXT_LABEL.mentee_quarterly} · Q${r.contextQuarter}`
-                          : (CONTEXT_LABEL[r.contextType] ?? "—");
+                          ? t("uploads.linked.menteeQuarter", { quarter: r.contextQuarter })
+                          : linkedLabel(r.contextType);
                     const sourceChipCls = SOURCE_CHIP[r.source] ?? "";
                     const stateChipCls = STATE_CHIP[r.status] ?? "";
                     return (
@@ -614,13 +614,14 @@ export default async function UploadsPage({
                             className="mono"
                             style={{
                               display: "inline-block",
-                              width: 18,
+                              // At least as wide as "VID"; a translated tag may be wider.
+                              minWidth: 18,
                               marginRight: 6,
                               color: "var(--ink-3)",
                               fontSize: 10,
                             }}
                           >
-                            {isPdf ? "PDF" : "VID"}
+                            {isPdf ? "PDF" : t("uploads.recent.videoTag")}
                           </span>
                           {isReady ? (
                             <Link
@@ -641,7 +642,7 @@ export default async function UploadsPage({
                         </td>
                         <td>
                           <span className={`chip ${sourceChipCls}`.trim()}>
-                            {SOURCE_LABEL[r.source] ?? r.source}
+                            {SOURCE_LABELLED.has(r.source) ? t(`uploads.source.${r.source}`) : r.source}
                           </span>
                         </td>
                         <td
@@ -662,11 +663,11 @@ export default async function UploadsPage({
                                 name="target"
                                 defaultValue=""
                                 required
-                                aria-label={`Attach ${filename} to`}
+                                aria-label={t("uploads.attach.label", { filename })}
                                 style={{ fontSize: 11, maxWidth: 220 }}
                               >
                                 <option value="" disabled>
-                                  Attach to…
+                                  {t("uploads.attach.placeholder")}
                                 </option>
                                 {attachOptions.map((o) => (
                                   <option key={o.value} value={o.value}>
@@ -675,7 +676,7 @@ export default async function UploadsPage({
                                 ))}
                               </select>
                               <button type="submit" className="btn btn-sm" style={{ fontSize: 11 }}>
-                                Attach
+                                {t("uploads.attach.submit")}
                               </button>
                             </form>
                           ) : null}
@@ -688,7 +689,7 @@ export default async function UploadsPage({
                         </td>
                         <td>
                           <span className={`chip ${stateChipCls}`.trim()}>
-                            {STATE_LABEL[r.status] ?? r.status}
+                            {statusLabel(t, r.status)}
                           </span>
                         </td>
                         <td

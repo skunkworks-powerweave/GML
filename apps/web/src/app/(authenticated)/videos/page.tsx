@@ -23,31 +23,27 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import { actorFrom, lockedVideoScope, videoVisibilityFilter } from "@/lib/authz";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { UploadModal } from "@/components/video/UploadModal";
 import { whatsappPhoneForUsers } from "@/lib/env";
 import { getSystemSettings } from "@/lib/system-settings";
 import { signPosterUrls } from "@/lib/video/storage";
+import { contextTypeLabel, sourceLabel, statusLabel } from "@/lib/video/labels";
 import { parsePage } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Video library" };
-
-const STATE_LABEL: Record<string, string> = {
-  received: "received",
-  queued: "queued",
-  transcoding: "transcoding",
-  ready: "ready",
-  failed: "failed",
-  review_pending: "review pending",
-  reviewed: "reviewed",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("video");
+  return { title: t("library.metaTitle") };
+}
 
 const STATE_CHIP: Record<string, string> = {
   ready: "chip-lichen",
@@ -93,6 +89,9 @@ export default async function VideoLibraryPage({
   searchParams: Promise<{ status?: string; source?: string; page?: string }>;
 }) {
   const sp = await searchParams;
+  const t = await getTranslations("video");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
+  const cardDate = (d: Date) => d.toLocaleDateString(intl, { day: "numeric", month: "short", timeZone: "Asia/Kolkata" });
   const whatsappPhone = whatsappPhoneForUsers();
   const filter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : undefined;
   const sourceFilter = SOURCE_VALUES.has(sp.source ?? "") ? sp.source! : undefined;
@@ -223,13 +222,10 @@ export default async function VideoLibraryPage({
       <div className="page-header">
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div className="label">Video library</div>
-            <h1 className="serif" style={{ fontSize: 28, marginTop: 4 }}>Submissions &amp; lesson recordings</h1>
+            <div className="label">{t("library.label")}</div>
+            <h1 className="serif" style={{ fontSize: 28, marginTop: 4 }}>{t("library.title")}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 6, maxWidth: 540 }}>
-              Videos are watermarked per viewer and streamed in the browser, and every view is logged.
-              {whatsappPhone
-                ? " WhatsApp uploads land here automatically once a teacher sends a video with the right caption code."
-                : null}
+              {whatsappPhone ? t("library.introWithWhatsapp") : t("library.intro")}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -252,7 +248,7 @@ export default async function VideoLibraryPage({
               videoDefaultQuality={sysSettings?.videoDefaultQuality ?? "480p"}
             />
             {canSeeWhatsappLog && (
-              <Link href="/admin/whatsapp-log" className="btn">WhatsApp ingest log</Link>
+              <Link href="/admin/whatsapp-log" className="btn">{t("library.whatsappLog")}</Link>
             )}
           </div>
         </div>
@@ -263,10 +259,10 @@ export default async function VideoLibraryPage({
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {(
               [
-                { v: undefined, l: "All", n: counts.all },
-                { v: "ready", l: "Ready to review", n: counts.ready },
-                { v: "transcoding", l: "Transcoding", n: counts.transcoding },
-                { v: "queued", l: "Queued", n: counts.queued },
+                { v: undefined, l: t("library.filter.all"), n: counts.all },
+                { v: "ready", l: t("library.filter.ready"), n: counts.ready },
+                { v: "transcoding", l: t("library.filter.transcoding"), n: counts.transcoding },
+                { v: "queued", l: t("library.filter.queued"), n: counts.queued },
               ] as const
             ).map((f) => {
               const isActive = filter === f.v || (!filter && !f.v);
@@ -277,7 +273,7 @@ export default async function VideoLibraryPage({
               const href = q ? `/videos?${q}` : "/videos";
               return (
                 <Link
-                  key={f.l}
+                  key={f.v ?? "all"}
                   href={href}
                   aria-current={isActive ? "page" : undefined}
                   className="btn btn-sm"
@@ -299,28 +295,28 @@ export default async function VideoLibraryPage({
             {filter ? <input type="hidden" name="status" value={filter} /> : null}
             <select
               name="source"
-              aria-label="Filter by source"
+              aria-label={t("library.sourceFilter.label")}
               defaultValue={sourceFilter ?? ""}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12 }}
             >
-              <option value="">All sources</option>
+              <option value="">{t("library.sourceFilter.all")}</option>
               <option value="whatsapp">WhatsApp</option>
-              <option value="direct">Direct</option>
-              <option value="external_link">External link</option>
-              <option value="google_drive">Google Drive</option>
+              <option value="direct">{t("library.sourceFilter.direct")}</option>
+              <option value="external_link">{t("library.sourceFilter.externalLink")}</option>
+              <option value="google_drive">{t("library.sourceFilter.googleDrive")}</option>
             </select>
             <button type="submit" className="btn btn-sm">
-              Apply
+              {t("library.apply")}
             </button>
           </form>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{`Showing ${from}–${to} of ${matching}`}</span>
+            <span className="chip">{t("library.showing", { from, to, total: matching })}</span>
           </div>
         </div>
 
         {rows.length === 0 ? (
-          <div className="card card-hi" style={{ padding: 32, color: "var(--ink-3)" }}>No videos.</div>
+          <div className="card card-hi" style={{ padding: 32, color: "var(--ink-3)" }}>{t("library.empty")}</div>
         ) : (
           // One card per row on a phone, three on a desktop. An inline
           // repeat(3, 1fr) held at every width: 104 px cards on a phone,
@@ -365,7 +361,7 @@ export default async function VideoLibraryPage({
                       fontSize: 11,
                     }}
                   >
-                    {v.hlsKey ? "▶ click to play" : "no preview"}
+                    {v.hlsKey ? t("library.clickToPlay") : t("library.noPreview")}
                   </span>
                   {v.status !== "ready" && (
                     <div
@@ -382,19 +378,20 @@ export default async function VideoLibraryPage({
                         gap: 8,
                       }}
                     >
-                      {STATE_LABEL[v.status]}…
+                      {t("library.statusOverlay", { status: statusLabel(t, v.status) })}
                     </div>
                   )}
                 </div>
                 <div style={{ padding: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <span className="mono" style={{ fontSize: 10, color: "var(--ink-3)" }}>{v.id.slice(0, 10)}</span>
-                    <span className={`chip ${STATE_CHIP[v.status] ?? ""}`}>{STATE_LABEL[v.status]}</span>
+                    <span className={`chip ${STATE_CHIP[v.status] ?? ""}`}>{statusLabel(t, v.status)}</span>
                   </div>
-                  <div style={{ fontWeight: 500, marginTop: 6, fontSize: 13 }}>{v.contextType.replace("_", " ")}</div>
+                  <div style={{ fontWeight: 500, marginTop: 6, fontSize: 13 }}>{contextTypeLabel(t, v.contextType)}</div>
                   <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                    via {v.source}
-                    {v.durationSec ? ` · ${Math.floor(v.durationSec / 60)} min` : ""}
+                    {v.durationSec
+                      ? t("library.viaDuration", { source: sourceLabel(t, v.source), minutes: Math.floor(v.durationSec / 60) })
+                      : t("library.via", { source: sourceLabel(t, v.source) })}
                   </div>
                   <div
                     style={{
@@ -407,11 +404,9 @@ export default async function VideoLibraryPage({
                     }}
                   >
                     <span>
-                      {v.createdAt
-                        ? new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
-                        : "—"}
+                      {v.createdAt ? cardDate(new Date(v.createdAt)) : "—"}
                     </span>
-                    <span>{v.source}</span>
+                    <span>{sourceLabel(t, v.source)}</span>
                   </div>
                 </div>
               </Link>
@@ -419,15 +414,15 @@ export default async function VideoLibraryPage({
           </div>
         )}
         {lastPage > 1 ? (
-          <nav aria-label="Pages" style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <nav aria-label={t("library.pages")} style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
             {page > 1 ? (
               <Link href={pageHref(page - 1)} className="btn btn-sm">
-                ← Previous
+                {t("library.previous")}
               </Link>
             ) : null}
             {page < lastPage ? (
               <Link href={pageHref(page + 1)} className="btn btn-sm">
-                Next →
+                {t("library.next")}
               </Link>
             ) : null}
           </nav>

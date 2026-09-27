@@ -1,13 +1,19 @@
 // Spec 044 — fallback embed for external video URLs (YouTube / Google Drive).
 // Used when video_submissions.source === 'external_link'. No anti-download
 // guarantees on this path; documented in the IT handover.
+//
+// A server component (the video page renders it): its two sentences come from
+// the "video" namespace in the viewer's language (video.externalEmbed.*).
+
+import { getTranslations } from "next-intl/server";
 
 type ExternalEmbedProps = {
   url: string;
   watermark?: string;
 };
 
-export function ExternalEmbed({ url, watermark }: ExternalEmbedProps) {
+export async function ExternalEmbed({ url, watermark }: ExternalEmbedProps) {
+  const t = await getTranslations("video");
   const kind = detectKind(url);
   const embedUrl = toEmbedUrl(url, kind);
 
@@ -31,7 +37,13 @@ export function ExternalEmbed({ url, watermark }: ExternalEmbedProps) {
         />
       ) : (
         <div style={{ color: "var(--paper)", padding: 16, fontSize: 13 }}>
-          Unsupported external URL. <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--saffron)" }}>Open in a new tab</a>.
+          {t.rich("externalEmbed.unsupported", {
+            link: (chunks) => (
+              <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--saffron)" }}>
+                {chunks}
+              </a>
+            ),
+          })}
         </div>
       )}
 
@@ -71,7 +83,7 @@ export function ExternalEmbed({ url, watermark }: ExternalEmbedProps) {
           pointerEvents: "none",
         }}
       >
-        external · not download-gated
+        {t("externalEmbed.badge")}
       </div>
     </div>
   );

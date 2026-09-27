@@ -16,11 +16,14 @@
 
 export const CONFIRM_RETRY_DELAYS_MS = [2_000, 5_000, 15_000];
 
-export const UNCONFIRMED_MESSAGE =
-  "Your video is uploaded, but we could not confirm it with the server. Check your connection and tap Retry; it will not upload again.";
-
 export type CompleteAnswer = { ok: boolean; error?: string; retryable?: boolean };
-export type ConfirmResult = { ok: true } | { ok: false; error: string; retryable: boolean };
+/**
+ * `error` is the server's own message (already in the user's language), when
+ * it gave one. Without one the caller says it: retryable, "uploaded but not
+ * confirmed; tap Retry" (video.client.upload.unconfirmed); otherwise "could
+ * not be confirmed" (video.client.upload.notConfirmed).
+ */
+export type ConfirmResult = { ok: true } | { ok: false; error?: string; retryable: boolean };
 
 export async function confirmUpload(
   complete: () => Promise<CompleteAnswer>,
@@ -35,10 +38,11 @@ export async function confirmUpload(
     }
     if (answer?.ok) return { ok: true };
     if (answer && !answer.retryable) {
-      return { ok: false, error: answer.error ?? "Upload could not be confirmed.", retryable: false };
+      return { ok: false, error: answer.error, retryable: false };
     }
     if (attempt >= delaysMs.length) {
-      return { ok: false, error: UNCONFIRMED_MESSAGE, retryable: true };
+      // The bytes are stored; only the confirmation is missing.
+      return { ok: false, retryable: true };
     }
     await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
   }

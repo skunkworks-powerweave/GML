@@ -2,29 +2,36 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getLocale, getTranslations } from "next-intl/server";
 import { auth } from "@/auth";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import { actorFrom, assertCanAccessVideo, videoGateRequired } from "@/lib/authz";
 import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
 import { HlsPlayer } from "@/components/video/HlsPlayer";
 import { signPosterUrls } from "@/lib/video/storage";
+import { contextTypeLabel, sourceLabel, statusLabel, type VideoTranslate } from "@/lib/video/labels";
 import { ExternalEmbed } from "@/components/video/ExternalEmbed";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Video" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("video");
+  return { title: t("detail.metaTitle") };
+}
 
-const CONTEXT_HEADINGS: Record<string, string> = {
-  observation_cycle: "Classroom observation video",
-  teach_back: "Teach-back video",
-  mentor_meeting: "Mentor meeting recording",
-  mentee_quarterly: "Mentee quarterly video",
-  classroom_session: "Classroom session video",
-  generic: "Video",
-};
+/** The page's heading for each context (video.detail.heading.*). */
+const CONTEXT_HEADINGS: ReadonlySet<string> = new Set([
+  "observation_cycle",
+  "teach_back",
+  "mentor_meeting",
+  "mentee_quarterly",
+  "classroom_session",
+  "generic",
+]);
 
-function contextHeading(contextType: string): string {
-  return CONTEXT_HEADINGS[contextType] ?? "Video";
+function contextHeading(t: VideoTranslate, contextType: string): string {
+  return t(`detail.heading.${CONTEXT_HEADINGS.has(contextType) ? contextType : "generic"}`);
 }
 
 export default async function VideoPlayerPage({ params }: { params: Promise<{ id: string }> }) {
@@ -76,7 +83,10 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
   // black. Signed only now, after the ownership and gate checks above.
   const poster = playerSrc && video.posterKey ? (await signPosterUrls([video.posterKey])).get(video.posterKey) : undefined;
 
-  const watermark = `${session.user.name ?? session.user.email ?? "viewer"} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  const t = await getTranslations("video");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
+  const viewer = session.user.name ?? session.user.email ?? t("detail.viewer");
+  const watermark = `${viewer} · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
   const statusChipKind =
     video.status === "ready"
@@ -87,22 +97,25 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
           ? "chip-rust"
           : "";
   const uploadedLabel = video.createdAt
-    ? new Date(video.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+    ? new Date(video.createdAt).toLocaleDateString(intl, { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })
     : "—";
   const durationLabel = video.durationSec
-    ? `${Math.floor(video.durationSec / 60)}m ${String(video.durationSec % 60).padStart(2, "0")}s`
+    ? t("detail.duration", {
+        minutes: Math.floor(video.durationSec / 60),
+        seconds: String(video.durationSec % 60).padStart(2, "0"),
+      })
     : "—";
 
   return (
     <div>
       <div className="page-header">
         <Link href="/videos" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
-          ← Library
+          {t("detail.back")}
         </Link>
         {/* Named for what it is; the id is in the Metadata card below. */}
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 24 }}>{contextHeading(video.contextType)}</h1>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 24 }}>{contextHeading(t, video.contextType)}</h1>
         <div className="label" style={{ marginTop: 6 }}>
-          {video.contextType.replace("_", " ")} · via {video.source}
+          {t("detail.contextVia", { context: contextTypeLabel(t, video.contextType), source: sourceLabel(t, video.source) })}
         </div>
       </div>
 
@@ -111,7 +124,7 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
           100 px column whose values SectionCard's overflow:hidden clipped
           away entirely. */}
       <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <SectionCard title="Player" sub="Watermarked · streamed">
+        <SectionCard title={t("detail.player")} sub={t("detail.playerSub")}>
           <div style={{ padding: 14, position: "relative" }}>
             {video.source === "external_link" && video.externalUrl ? (
               <ExternalEmbed url={video.externalUrl} watermark={watermark} />
@@ -133,12 +146,12 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
                 }}
               >
                 {video.status === "transcoding" || video.status === "queued"
-                  ? "Transcoding in progress. Refresh in a minute or two."
+                  ? t("detail.state.transcoding")
                   : video.status === "received"
-                    ? "Received. Waiting for the worker to pick it up."
+                    ? t("detail.state.received")
                     : video.status === "failed"
-                      ? "Transcode failed. Contact your programme admin."
-                      : "No playable rendition."}
+                      ? t("detail.state.failed")
+                      : t("detail.state.none")}
               </div>
             )}
             <p
@@ -153,39 +166,37 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
                   links are bound to your network connection": the IP binding
                   went with the old token scheme, and the segment URLs are
                   bearer links that work from anywhere until they expire. */}
-              Your name and the time are shown over this video, and every view is
-              logged. Playback links expire within a few hours. Please do not share,
-              download or re-record classroom videos.
+              {t("detail.notice")}
             </p>
           </div>
         </SectionCard>
 
-        <SectionCard title="Metadata">
+        <SectionCard title={t("detail.metadata")}>
           <div style={{ padding: "0 14px 10px", fontSize: 12 }}>
-            <KVRow label="Video ID">
+            <KVRow label={t("detail.field.videoId")}>
               <span className="mono" style={{ fontSize: 11 }}>{id}</span>
             </KVRow>
-            <KVRow label="Caption">
+            <KVRow label={t("detail.field.caption")}>
               {video.captionRaw ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
             </KVRow>
-            <KVRow label="Source">
-              <span className="chip">{video.source}</span>
+            <KVRow label={t("detail.field.source")}>
+              <span className="chip">{sourceLabel(t, video.source)}</span>
             </KVRow>
-            <KVRow label="Context">
-              <span className="chip chip-indigo">{video.contextType.replace("_", " ")}</span>
+            <KVRow label={t("detail.field.context")}>
+              <span className="chip chip-indigo">{contextTypeLabel(t, video.contextType)}</span>
             </KVRow>
-            <KVRow label="Status">
-              <span className={`chip ${statusChipKind}`}>{video.status}</span>
+            <KVRow label={t("detail.field.status")}>
+              <span className={`chip ${statusChipKind}`}>{statusLabel(t, video.status)}</span>
             </KVRow>
-            <KVRow label="Duration">
+            <KVRow label={t("detail.field.duration")}>
               <span className="mono" style={{ fontSize: 11 }}>{durationLabel}</span>
             </KVRow>
-            <KVRow label="Uploaded">
+            <KVRow label={t("detail.field.uploaded")}>
               <span className="mono" style={{ fontSize: 11 }}>{uploadedLabel}</span>
             </KVRow>
-            <KVRow label="Watermark">
+            <KVRow label={t("detail.field.watermark")}>
               <span className="mono" style={{ fontSize: 11 }}>
-                {session.user.name ?? session.user.email ?? "viewer"}
+                {viewer}
               </span>
             </KVRow>
           </div>

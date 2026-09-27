@@ -35,12 +35,10 @@ export type PlaybackFailure = {
 export type RecoveryAction = { kind: "refresh"; delayMs: number } | { kind: "fail"; reason: FailReason };
 export type PlaybackRecovery = { onFatal(f: PlaybackFailure): RecoveryAction; onProgress(at: number): void };
 
-export const PLAYBACK_FAILURE_MESSAGES: Record<FailReason, string> = {
-  signed_out: "Your session has ended. Sign in again to keep watching.",
-  no_access: "You no longer have access to this video. Reload the page to check.",
-  unavailable: "This video is not available right now. Tell your programme admin.",
-  generic: "Playback failed. Check your connection and reload the page.",
-};
+// What the viewer is told for each reason is the player's to say, in the
+// viewer's language: video.client.player.failure.<reason> in the message
+// bundles (signed out: sign in again; no access: reload; unavailable: tell the
+// programme admin; generic: check the connection and reload).
 
 export function createPlaybackRecovery({ maxRefreshes = 2, baseDelayMs = 2_000 } = {}): PlaybackRecovery {
   let used = 0;
@@ -71,8 +69,12 @@ export type PlaybackHooks = {
   refreshSrc: () => Promise<string>;
   /** hls.js path: load this source (the component re-runs its effect). */
   onSource: (next: string) => void;
-  /** Show this message over the player; the reason decides what it offers (signed out: a sign-in link). */
-  onFail: (message: string, reason: FailReason) => void;
+  /**
+   * Playback has given up: show why over the player. The reason decides the
+   * message (video.client.player.failure.<reason>) and what it offers (signed
+   * out: a sign-in link).
+   */
+  onFail: (reason: FailReason) => void;
   resumeAt: ResumeRef;
   /** Shared across re-attachments, so the budget survives a source change. */
   policy: PlaybackRecovery;
@@ -118,7 +120,7 @@ export function attachNative(video: VideoLike, hooks: PlaybackHooks): () => void
       // And stop: no further source is assigned, so nothing retries behind
       // the message.
       done = true;
-      hooks.onFail(PLAYBACK_FAILURE_MESSAGES[action.reason], action.reason);
+      hooks.onFail(action.reason);
       return;
     }
     timer = setTimeout(() => {
@@ -171,7 +173,7 @@ export function attachHls(video: VideoLike, hls: HlsLike, errorEvent: string, ho
     if (action.kind === "fail") {
       done = true;
       hls.destroy();
-      hooks.onFail(PLAYBACK_FAILURE_MESSAGES[action.reason], action.reason);
+      hooks.onFail(action.reason);
       return;
     }
     hooks.resumeAt.current = at || hooks.resumeAt.current;
@@ -182,7 +184,7 @@ export function attachHls(video: VideoLike, hls: HlsLike, errorEvent: string, ho
         hooks.onSource(await hooks.refreshSrc());
       } catch {
         done = true;
-        hooks.onFail(PLAYBACK_FAILURE_MESSAGES.generic, "generic");
+        hooks.onFail("generic");
       }
     }, action.delayMs);
   });

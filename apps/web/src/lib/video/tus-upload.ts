@@ -37,6 +37,21 @@ import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
 
 export type UploadHandle = { abort: () => void };
 
+/**
+ * Why an upload failed, as a code. The words are the uploader's to say, in the
+ * user's language: video.client.upload.error.<code> in the message bundles,
+ * read by UploadProgress and MobileUploadRunner. This module has no translator.
+ */
+export type UploadErrorCode =
+  | "not_configured"
+  | "library_unavailable"
+  | "signed_out"
+  | "connection_dropped"
+  | "too_large"
+  | "refused"
+  | "session_expired"
+  | "failed";
+
 export type StartUploadOptions = {
   file: File;
   bucket: string;
@@ -52,7 +67,8 @@ export type StartUploadOptions = {
    *  not read from process.env here. */
   supabase: SupabaseBrowserConfig;
   onProgress: (uploaded: number, total: number) => void;
-  onError: (message: string) => void;
+  /** Why it failed; video.client.upload.error.<code> says it to the teacher. */
+  onError: (code: UploadErrorCode) => void;
   onSuccess: () => void;
 };
 
@@ -65,7 +81,7 @@ export async function startResumableUpload(
 ): Promise<UploadHandle | null> {
   const supabaseUrl = opts.supabase?.url;
   if (!supabaseUrl || !opts.supabase?.anonKey) {
-    opts.onError("Uploads are not configured on this deployment.");
+    opts.onError("not_configured");
     return null;
   }
 
@@ -75,12 +91,12 @@ export async function startResumableUpload(
     // require() but not for a dynamic import(). Same module either way.
     ({ accessToken } = await import("../supabase/browser"));
   } catch {
-    opts.onError("Upload library unavailable. Please send the video over WhatsApp instead.");
+    opts.onError("library_unavailable");
     return null;
   }
   const token = await accessToken(opts.supabase);
   if (!token) {
-    opts.onError("Your session has expired. Please sign in again.");
+    opts.onError("signed_out");
     return null;
   }
   const supabaseConfig = opts.supabase;
@@ -92,7 +108,7 @@ export async function startResumableUpload(
     // Kept from the previous implementation and still correct: on a corrupted
     // bundle or an offline-cached page the user needs to be told what to do
     // next, not shown a silently failed row.
-    opts.onError("Upload library unavailable. Please send the video over WhatsApp instead.");
+    opts.onError("library_unavailable");
     return null;
   }
 
@@ -154,7 +170,7 @@ export async function startResumableUpload(
     // A finished upload's resume entry would otherwise match the next upload
     // of the same file (see the resume filter below).
     removeFingerprintOnSuccess: true,
-    onError: (err) => opts.onError(uploadErrorMessage(err)),
+    onError: (err) => opts.onError(uploadErrorCode(err)),
     onProgress: (uploaded, total) => opts.onProgress(uploaded, total),
     onSuccess: () => opts.onSuccess(),
   });
@@ -203,7 +219,8 @@ function isTokenRefusal(err: unknown): boolean {
 }
 
 /**
- * What to tell the teacher when an upload fails.
+ * What to tell the teacher when an upload fails, as a code; the words, in the
+ * user's language, are video.client.upload.error.<code>.
  *
  * Classified from the RESPONSE tus carries, never from the error's text. The
  * text embeds the upload URL, whose id is base64, so a regex over it could read
@@ -220,27 +237,19 @@ function isTokenRefusal(err: unknown): boolean {
  *                           matched the refusal too, and signing in again only
  *                           produced a fresh token refused the same way.
  */
-export function uploadErrorMessage(err: unknown): string {
+export function uploadErrorCode(err: unknown): UploadErrorCode {
   const failure = (typeof err === "object" && err !== null ? err : {}) as TusFailure;
   const res = failure.originalResponse ?? null;
-  if (failure.originalRequest != null && res === null) {
-    return "The connection dropped. Reconnect and choose the same file to resume.";
-  }
+  // "Reconnect and choose the same file to resume."
+  if (failure.originalRequest != null && res === null) return "connection_dropped";
   const status = res ? res.getStatus() : 0;
   const body = res ? res.getBody() || "" : String(err);
-  if (status === 413 || /too large|exceeded/i.test(body)) {
-    return "That file is too large. Send it over WhatsApp instead.";
-  }
-  if (POLICY_REFUSED.test(body)) {
-    return "The server refused this upload. Send the video over WhatsApp for now, and tell your programme admin.";
-  }
+  if (status === 413 || /too large|exceeded/i.test(body)) return "too_large";
+  // "Send the video over WhatsApp for now, and tell your programme admin."
+  if (POLICY_REFUSED.test(body)) return "refused";
   // Reached only after a forced token refresh was refused too (see
   // onShouldRetry above), so here the session really has ended.
-  if (status === 401 || TOKEN_REFUSED.test(body)) {
-    return "Your session expired during the upload. Sign in again and retry.";
-  }
-  if (!res && /network|failed to fetch|econn|socket hang up/i.test(body)) {
-    return "The connection dropped. Reconnect and choose the same file to resume.";
-  }
-  return "Upload failed. Please try again, or send the video over WhatsApp.";
+  if (status === 401 || TOKEN_REFUSED.test(body)) return "session_expired";
+  if (!res && /network|failed to fetch|econn|socket hang up/i.test(body)) return "connection_dropped";
+  return "failed";
 }

@@ -20,6 +20,7 @@
 // video_submissions id.
 
 import { useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
 import { useRouter } from "next/navigation";
 import { startResumableUpload, type UploadHandle } from "@/lib/video/tus-upload";
@@ -47,11 +48,13 @@ type UploadState = {
   /** `unconfirmed`: the bytes are stored but the server has not confirmed them. */
   status: "uploading" | "confirming" | "unconfirmed" | "transcoding" | "ready" | "failed";
   videoSubmissionId?: string;
+  /** Already in the user's language: the server's own, or this tray's (video.client.*). */
   errorMessage?: string;
   handle?: UploadHandle;
 };
 
 export function UploadProgress({ contextType, contextId, quarter, onComplete }: UploadProgressProps) {
+  const t = useTranslations("video.client");
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
@@ -78,7 +81,10 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
     updateUpload(id, { status: "confirming", errorMessage: undefined });
     const res = await confirmUpload(() => completeUploadAction(submissionId));
     if (!res.ok) {
-      updateUpload(id, { status: res.retryable ? "unconfirmed" : "failed", errorMessage: res.error });
+      updateUpload(id, {
+        status: res.retryable ? "unconfirmed" : "failed",
+        errorMessage: res.retryable ? t("upload.unconfirmed") : (res.error ?? t("upload.notConfirmed")),
+      });
       return;
     }
     updateUpload(id, { status: "transcoding" });
@@ -122,10 +128,7 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
     } catch {
       // The request itself failed (offline, or the server threw). Nothing was
       // uploaded; the file can simply be chosen again.
-      updateUpload(id, {
-        status: "failed",
-        errorMessage: "Could not reach the server. Check your connection and choose the file again.",
-      });
+      updateUpload(id, { status: "failed", errorMessage: t("tray.unreachable") });
       return;
     }
     if (!reservation.ok) {
@@ -146,8 +149,8 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
       // lib/supabase/browser.ts.
       supabase: reservation.supabase,
       onProgress: (bytes, bytesTotal) => updateUpload(id, { bytes, bytesTotal }),
-      onError: (message) => {
-        updateUpload(id, { status: "failed", errorMessage: message });
+      onError: (code) => {
+        updateUpload(id, { status: "failed", errorMessage: t(`upload.error.${code}`) });
         // A failed upload can still have written a reserved row that the
         // reconciler will later mark failed; refresh so the table agrees with
         // the tray rather than showing a phantom pending upload.
@@ -190,11 +193,11 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
             fontWeight: 500,
           }}
         >
-          Upload video
+          {t("tray.button")}
         </button>
         <input ref={inputRef} type="file" accept="video/*" onChange={onFileChosen} style={{ display: "none" }} />
         <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-          MP4 / MOV / 3GP · resumable on network drop · 480p HLS transcode after upload
+          {t("tray.hint")}
         </span>
       </div>
 
@@ -273,7 +276,7 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
                         fontSize: 11,
                       }}
                     >
-                      Retry
+                      {t("tray.retry")}
                     </button>
                   ) : null}
                 </div>
@@ -287,7 +290,7 @@ export function UploadProgress({ contextType, contextId, quarter, onComplete }: 
                     letterSpacing: "0.05em",
                   }}
                 >
-                  {u.status === "uploading" ? `${pct}%` : u.status}
+                  {u.status === "uploading" ? `${pct}%` : t(`tray.status.${u.status}`)}
                 </div>
               </li>
             );

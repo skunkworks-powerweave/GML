@@ -51,6 +51,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { beginUploadAction, completeUploadAction } from "@/app/(authenticated)/uploads/actions";
 import { startResumableUpload } from "@/lib/video/tus-upload";
 import { confirmUpload } from "@/lib/video/confirm-upload";
@@ -83,20 +84,23 @@ export type ResolvedUploadTarget = {
 
 type Step = "choose" | "preview" | "uploading" | "done" | "failed";
 
+/**
+ * What the failed screen says: the server's own message (already in the
+ * user's language), or a key under video.client (with its arguments).
+ */
+type Shown = { text: string } | { key: string; values?: Record<string, string> };
+
 // Module-level so the governance test can pin the contract without parsing
-// JSX trees. Each tile is a deterministic full-bleed primary action.
+// JSX trees. Each tile is a deterministic full-bleed primary action; its
+// words are video.client.mobile.tiles.<id> (label, sub, icon).
 export const MOBILE_TILES = [
   {
     id: "record",
-    label: "Record now",
-    sub: "Opens your phone camera",
     capture: "environment" as const,
     accent: "var(--rust)",
   },
   {
     id: "pick",
-    label: "Pick from gallery",
-    sub: "Choose a video file",
     capture: null,
     accent: "var(--indigo)",
   },
@@ -166,6 +170,8 @@ export function MobileUploadRunner({
   target,
 }: MobileUploadRunnerProps) {
   const router = useRouter();
+  const t = useTranslations("video.client");
+  const tAction = useTranslations("action");
   const [step, setStep] = useState<Step>("choose");
   const [file, setFile] = useState<File | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
@@ -173,7 +179,7 @@ export function MobileUploadRunner({
   // where a direct upload goes.
   const [caption, setCaption] = useState<string>("");
   const [progress, setProgress] = useState(0);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<Shown | null>(null);
 
   // Two refs so the OS can distinguish "open camera" vs "open gallery"
   // (the `capture` attribute is opt-in per input).
@@ -244,13 +250,13 @@ export function MobileUploadRunner({
       // failed" -- which tells a teacher nothing. Nothing was uploaded, and
       // Retry starts again with the same file.
       if (!mountedRef.current) return;
-      setErrorMsg("Could not reach the server. Check your connection and tap Retry.");
+      setErrorMsg({ key: "mobile.error.unreachable" });
       setStep("failed");
       return;
     }
     if (!reservation.ok) {
       if (!mountedRef.current) return;
-      setErrorMsg(reservation.error);
+      setErrorMsg({ text: reservation.error });
       setStep("failed");
       return;
     }
@@ -265,12 +271,12 @@ export function MobileUploadRunner({
         // Server-supplied, not read from process.env in the browser -- see
         // lib/supabase/browser.ts.
         supabase: reservation.supabase,
-        onError: (message) => {
+        onError: (code) => {
           // Spec 149 — an error after unmount must NOT setState: React warns
           // and the error UI never reaches a user anyway. The cleanup in
           // useEffect has already torn the upload down.
           if (!mountedRef.current) return;
-          setErrorMsg(message);
+          setErrorMsg({ key: `upload.error.${code}` });
           setStep("failed");
         },
         onProgress: (bytesUploaded: number, bytesTotal: number) => {
@@ -289,7 +295,7 @@ export function MobileUploadRunner({
       // onError; a throw here is one it did not expect, and its text is not
       // for a teacher either.
       if (!mountedRef.current) return;
-      setErrorMsg(whatsappPhone ? "Upload failed. Try again, or send the video over WhatsApp." : "Upload failed. Please try again.");
+      setErrorMsg({ key: whatsappPhone ? "mobile.error.failedWhatsapp" : "mobile.error.failed" });
       setStep("failed");
     }
   }
@@ -308,7 +314,8 @@ export function MobileUploadRunner({
     if (!mountedRef.current) return;
     if (!res.ok) {
       unconfirmedRef.current = res.retryable ? submissionId : null;
-      setErrorMsg(res.error);
+      // Stored but unconfirmed: Retry confirms again, it does not re-upload.
+      setErrorMsg(res.retryable ? { key: "upload.unconfirmed" } : res.error ? { text: res.error } : { key: "upload.notConfirmed" });
       setStep("failed");
       return;
     }
@@ -324,8 +331,8 @@ export function MobileUploadRunner({
       try {
         router.push("/uploads");
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Redirect failed";
-        setErrorMsg(`${msg} — tap Back to return to My Uploads`);
+        const msg = err instanceof Error ? err.message : t("mobile.error.redirectDefault");
+        setErrorMsg({ key: "mobile.error.redirect", values: { error: msg } });
         setStep("failed");
       }
     }, 1200);
@@ -379,7 +386,7 @@ export function MobileUploadRunner({
       // unmount is a clean teardown (e.g. user already pressed Cancel and
       // we're navigating away) and we leave the error state alone.
       if (uploadRef.current) {
-        setErrorMsg("Upload cancelled — try again");
+        setErrorMsg({ key: "mobile.error.cancelled" });
         uploadRef.current.abort();
         uploadRef.current = null;
       }
@@ -439,10 +446,10 @@ export function MobileUploadRunner({
         <>
           <div style={{ marginBottom: 18 }}>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 24, margin: 0 }}>
-              Submit a lesson video
+              {t("mobile.chooseTitle")}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6 }}>
-              Pick a way that fits your network today.
+              {t("mobile.chooseIntro")}
             </p>
           </div>
 
@@ -485,16 +492,16 @@ export function MobileUploadRunner({
                     textTransform: "uppercase",
                   }}
                 >
-                  {tile.id === "record" ? "REC" : "PIC"}
+                  {t(`mobile.tiles.${tile.id}.icon`)}
                 </span>
                 <span style={{ flex: 1 }}>
                   <span style={{ display: "block", fontSize: 16, fontWeight: 600 }}>
-                    {tile.label}
+                    {t(`mobile.tiles.${tile.id}.label`)}
                   </span>
                   <span
                     style={{ display: "block", fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}
                   >
-                    {tile.sub}
+                    {t(`mobile.tiles.${tile.id}.sub`)}
                   </span>
                 </span>
               </button>
@@ -516,11 +523,10 @@ export function MobileUploadRunner({
               }}
             >
               <div style={{ fontWeight: 600, fontSize: 14 }}>
-                On a slow 2G/3G link?
+                {t("mobile.slowTitle")}
               </div>
               <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 4, lineHeight: 1.5 }}>
-                WhatsApp is faster than direct upload on weak signals — your phone
-                keeps retrying in the background.
+                {t("mobile.slowBody")}
               </p>
               <a
                 href={waHref}
@@ -540,7 +546,7 @@ export function MobileUploadRunner({
                   textDecoration: "none",
                 }}
               >
-                Open WhatsApp
+                {t("mobile.openWhatsapp")}
               </a>
             </div>
           ) : null}
@@ -551,10 +557,10 @@ export function MobileUploadRunner({
         <>
           <div style={{ marginBottom: 14 }}>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 22, margin: 0 }}>
-              Looks good?
+              {t("mobile.previewTitle")}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-              Add a caption so your mentor knows what this is.
+              {t("mobile.previewIntro")}
             </p>
           </div>
 
@@ -574,13 +580,13 @@ export function MobileUploadRunner({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={thumb}
-                alt="First frame of selected video"
+                alt={t("mobile.thumbAlt")}
                 data-testid="preview-thumb"
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
             ) : (
               <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                Preview unavailable (codec not browser-decodable)
+                {t("mobile.previewUnavailable")}
               </span>
             )}
           </div>
@@ -609,14 +615,14 @@ export function MobileUploadRunner({
             {/* This said "Caption — use OBS-<cycle>, TB-<uuid> or MM-<uuid>".
                 A direct upload is never routed by its caption -- the page's
                 target decides -- so following it achieved nothing. */}
-            Note for whoever reviews it (optional)
+            {t("mobile.noteLabel")}
           </label>
           <textarea
             id="mobile-upload-caption"
             data-testid="caption-textarea"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="What the lesson was about"
+            placeholder={t("mobile.notePlaceholder")}
             rows={3}
             style={{
               width: "100%",
@@ -651,7 +657,7 @@ export function MobileUploadRunner({
                 flex: 1,
               }}
             >
-              Back
+              {tAction("back")}
             </button>
             <button
               type="button"
@@ -669,7 +675,7 @@ export function MobileUploadRunner({
                 flex: 2,
               }}
             >
-              Start upload
+              {t("mobile.start")}
             </button>
           </div>
         </>
@@ -679,7 +685,7 @@ export function MobileUploadRunner({
         <>
           <div style={{ marginBottom: 18 }}>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 22, margin: 0 }}>
-              Uploading…
+              {t("mobile.uploadingTitle")}
             </h1>
             <p
               style={{
@@ -739,8 +745,7 @@ export function MobileUploadRunner({
               lineHeight: 1.6,
             }}
           >
-            Whoever plays your video back sees their own name and the time over
-            it — please do not redistribute outside the programme.
+            {t("mobile.watermarkNotice")}
           </div>
 
           {waHref ? (
@@ -754,7 +759,7 @@ export function MobileUploadRunner({
               }}
             >
               <div style={{ fontSize: 13, fontWeight: 500 }}>
-                If your connection is slow, send via WhatsApp instead
+                {t("mobile.slowFallback")}
               </div>
               <a
                 href={waHref}
@@ -769,6 +774,7 @@ export function MobileUploadRunner({
                   fontFamily: "var(--mono)",
                 }}
               >
+                {/* i18n-ignore: the link's own address (wa.me/<number>), shown as written */}
                 wa.me/{waDigits}
               </a>
             </div>
@@ -792,7 +798,7 @@ export function MobileUploadRunner({
               marginTop: 18,
             }}
           >
-            Cancel
+            {tAction("cancel")}
           </button>
         </>
       ) : null}
@@ -825,13 +831,12 @@ export function MobileUploadRunner({
             ✓
           </div>
           <div style={{ fontFamily: "var(--serif)", fontSize: 22, marginTop: 18 }}>
-            Uploaded
+            {t("mobile.doneTitle")}
           </div>
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
             {/* This promised "We'll notify your mentor when it's ready": nothing
                 notifies anyone when a transcode finishes. */}
-            Transcoding now. It can be played once that has finished.
-            Taking you to My Uploads…
+            {t("mobile.doneBody")}
           </p>
         </div>
       ) : null}
@@ -840,10 +845,14 @@ export function MobileUploadRunner({
         <>
           <div style={{ marginBottom: 18 }}>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 22, margin: 0 }}>
-              Upload failed
+              {t("mobile.failedTitle")}
             </h1>
             <p style={{ color: "var(--rust)", fontSize: 13, marginTop: 6 }}>
-              {errorMsg ?? (whatsappPhone ? "Something went wrong. Try again or use WhatsApp." : "Something went wrong. Please try again.")}
+              {errorMsg
+                ? "text" in errorMsg
+                  ? errorMsg.text
+                  : t(errorMsg.key, errorMsg.values)
+                : t(whatsappPhone ? "mobile.error.unknownWhatsapp" : "mobile.error.unknown")}
             </p>
           </div>
           <div style={{ display: "flex", gap: 10 }}>
@@ -865,7 +874,7 @@ export function MobileUploadRunner({
                 flex: 1,
               }}
             >
-              Back
+              {tAction("back")}
             </button>
             {file ? (
               <button
@@ -883,7 +892,7 @@ export function MobileUploadRunner({
                   flex: 1,
                 }}
               >
-                Retry
+                {t("mobile.retry")}
               </button>
             ) : null}
           </div>
