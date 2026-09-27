@@ -16,6 +16,7 @@
 // WhatsApp tab). Matches the spec-114 ConfirmModal pattern.
 
 import { useState, useTransition, type FormEvent } from "react";
+import { useTranslations } from "next-intl";
 
 type Recipient = { id: string; label: string };
 
@@ -36,10 +37,17 @@ export function RotateControls({ slug, label, recipients }: Props) {
   const [recipientId, setRecipientId] = useState<string>(
     recipients[0]?.id ?? "",
   );
+  // admin.client.rotateControls.*; `label` and the recipients' labels arrive
+  // already translated from the page. The rotate and share APIs answer with
+  // an error code (forbidden, invalid_slug, recipient_no_phone, ...); it is
+  // shown as its message, not as the code.
+  const t = useTranslations("admin.client.rotateControls");
+  const failure = (code: string | undefined, fallback: string) =>
+    code && t.has(`errors.${code}`) ? t(`errors.${code}`) : fallback;
 
   const handleRotate = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const message = `Rotate the ${label} gate password? Every active grant will be invalidated and every user will need to re-unlock with the new password.`;
+    const message = t("confirmRotate", { gate: label });
     if (typeof window !== "undefined" && !window.confirm(message)) {
       return;
     }
@@ -54,14 +62,14 @@ export function RotateControls({ slug, label, recipients }: Props) {
           const body = (await res.json().catch(() => ({}))) as {
             error?: string;
           };
-          setError(body.error ?? `Rotation failed (HTTP ${res.status}).`);
+          setError(failure(body.error, t("rotationFailedHttp", { status: res.status })));
           return;
         }
         const data = (await res.json()) as RotateResponse;
         setPlaintext(data.plaintext);
         setVersion(data.version);
       } catch (err) {
-        setError(`Rotation failed: ${(err as Error).message}`);
+        setError(t("rotationFailed", { error: (err as Error).message }));
       }
     });
   };
@@ -87,7 +95,7 @@ export function RotateControls({ slug, label, recipients }: Props) {
     if (!plaintext || !recipientId) return;
     const recipient = recipients.find((r) => r.id === recipientId);
     if (!recipient) return;
-    const confirmMsg = `Share the ${label} password with ${recipient.label} via WhatsApp? The plaintext will appear in both your WhatsApp history.`;
+    const confirmMsg = t("confirmShare", { gate: label, recipient: recipient.label });
     if (typeof window !== "undefined" && !window.confirm(confirmMsg)) {
       return;
     }
@@ -104,13 +112,13 @@ export function RotateControls({ slug, label, recipients }: Props) {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(body.error ?? `Share failed (HTTP ${res.status}).`);
+        setError(failure(body.error, t("shareFailedHttp", { status: res.status })));
         return;
       }
       const data = (await res.json()) as ShareResponse;
       window.open(data.url, "_blank", "noopener,noreferrer");
     } catch (err) {
-      setError(`Share failed: ${(err as Error).message}`);
+      setError(t("shareFailed", { error: (err as Error).message }));
     }
   };
 
@@ -122,7 +130,7 @@ export function RotateControls({ slug, label, recipients }: Props) {
           disabled={pending}
           className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium hover:border-neutral-500 disabled:opacity-50"
         >
-          {pending ? "Rotating…" : "Rotate password"}
+          {pending ? t("rotating") : t("rotate")}
         </button>
       </form>
 
@@ -138,7 +146,7 @@ export function RotateControls({ slug, label, recipients }: Props) {
       {plaintext ? (
         <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-            New password (v{version}) — shown ONCE
+            {t("newPassword", { version: version ?? "" })}
           </div>
           <div className="mt-2 flex items-center gap-2">
             <code
@@ -152,13 +160,13 @@ export function RotateControls({ slug, label, recipients }: Props) {
               onClick={handleCopy}
               className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs hover:border-neutral-500"
             >
-              Copy
+              {t("copy")}
             </button>
           </div>
           {recipients.length > 0 ? (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
               <label className="flex items-center gap-2">
-                <span className="text-neutral-600">Share with:</span>
+                <span className="text-neutral-600">{t("shareWith")}</span>
                 <select
                   value={recipientId}
                   onChange={(e) => setRecipientId(e.target.value)}
@@ -176,18 +184,16 @@ export function RotateControls({ slug, label, recipients }: Props) {
                 onClick={handleShare}
                 className="rounded-md border border-emerald-400 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
               >
-                Share via WhatsApp
+                {t("shareViaWhatsApp")}
               </button>
             </div>
           ) : (
             <div className="mt-3 text-xs text-neutral-500">
-              No staff with a phone number on file — share manually. WhatsApp
-              numbers are added per account at /admin/users.
+              {t("noRecipients")}
             </div>
           )}
           <p className="mt-3 text-xs text-neutral-600">
-            The password is not stored anywhere we can show it again. Capture
-            it now, then close this panel.
+            {t("notStored")}
           </p>
         </div>
       ) : null}

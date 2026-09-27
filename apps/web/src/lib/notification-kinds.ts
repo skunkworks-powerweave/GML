@@ -33,57 +33,24 @@ import { getSystemSettings } from "./system-settings";
 /**
  * Every notification kind an administrator can switch on or off.
  *
- * `key` is the literal written to `notifications.kind`; label and hint are the
- * settings-page UI. Adding a kind here is all that is needed -- the settings
- * form, the API's zod enum, the bell and the inbox all read this array.
+ * `key` is the literal written to `notifications.kind`. The settings form, the
+ * API's zod enum, the bell and the inbox all read this array. What a kind is
+ * CALLED is not here: the admin settings page names and explains each one
+ * (admin.systemSettings.notifications.kinds.*) and the inbox labels its rows
+ * (home.inbox.kind.*), in the reader's language -- so a new kind also needs
+ * its words in those two places. They were English label/hint strings here.
  */
 export const NOTIFICATION_CATEGORIES = [
-  {
-    key: "helpdesk.ticket",
-    label: "Help request",
-    hint: "Programme admin notified when a user submits the help form",
-  },
-  {
-    key: "cycle.assigned",
-    label: "Cycle assigned",
-    hint: "Observer/mentor notified when a new cycle is created",
-  },
-  {
-    key: "cycle.complete",
-    label: "Cycle complete",
-    hint: "All parties notified when a cycle closes",
-  },
-  {
-    key: "video.transcoded",
-    label: "Video transcoded",
-    hint: "Uploader notified when ffmpeg pipeline finishes",
-  },
-  {
-    key: "video.review_pending",
-    label: "Video review pending",
-    hint: "Programme admin alerted on quality flags",
-  },
-  {
-    key: "meeting.scheduled",
-    label: "Meeting scheduled",
-    hint: "Mentor + teacher receive calendar entry",
-  },
-  {
-    key: "meeting.cancelled",
-    label: "Meeting cancelled",
-    hint: "Both parties notified of cancellations",
-  },
-  {
-    key: "pairing.final_submitted",
-    label: "Final feedback in",
-    hint: "Programme admin and the other party notified when a pairing's final (Q4) form is submitted",
-  },
-  {
-    key: "digest.weekly",
-    label: "Weekly digest",
-    hint: "Friday roll-up across all activities",
-  },
-] as const satisfies ReadonlyArray<{ key: string; label: string; hint: string }>;
+  { key: "helpdesk.ticket" },
+  { key: "cycle.assigned" },
+  { key: "cycle.complete" },
+  { key: "video.transcoded" },
+  { key: "video.review_pending" },
+  { key: "meeting.scheduled" },
+  { key: "meeting.cancelled" },
+  { key: "pairing.final_submitted" },
+  { key: "digest.weekly" },
+] as const satisfies ReadonlyArray<{ key: string }>;
 
 export type NotificationKind = (typeof NOTIFICATION_CATEGORIES)[number]["key"];
 

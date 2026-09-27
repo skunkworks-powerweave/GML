@@ -21,8 +21,14 @@
 //
 // Role gate: programme_admin + super_admin only (matches the
 // programme-oversight semantics of /admin/audit and /admin/gates).
+//
+// Copy is in the admin namespace (whatsappLog.*), including the labels of
+// the statuses, parsing results and context types in the chips. Captions,
+// phone numbers, ids, environment-variable names and the errors a fetch or
+// transcode recorded are data and codes, shown as stored.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { desc, eq, and, gte, lte, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { videoSubmissions, auditLog, files } from "@gml/db/schema";
@@ -69,23 +75,24 @@ const RESENDABLE_STATUSES = new Set([
   "failed",
 ]);
 
-// What each ?error= the two actions (./actions.ts) redirect back with means.
-// The page used to read no `error` at all, so a refused Retry fetch -- on a row
-// from before the media id was kept, say -- reloaded the page unchanged.
-const ACTION_ERRORS: Record<string, string> = {
-  missing_submission_id: "No submission was given. Use the button on the row.",
-  submission_not_found: "That submission no longer exists.",
-  not_whatsapp_source: "That submission did not arrive through WhatsApp.",
-  cannot_resend_finalised: "That video has already been processed or reviewed, so it is not transcoded again.",
-  media_not_fetched:
-    "That video's media was never fetched from WhatsApp, so there is nothing to transcode. Use Retry fetch.",
-  no_media_id:
-    "That video arrived before the WhatsApp media id was recorded, so it cannot be fetched again. " +
-    "Ask the sender to send it again.",
-  already_fetched: "That video's media is already stored. Use Resend transcode instead.",
-  cannot_refetch_status:
-    "That video is already being processed or has been, so its media is not fetched again.",
-};
+// The ?error= codes the two actions (./actions.ts) redirect back with; each
+// one's message is whatsappLog.errors.<code>. The page used to read no
+// `error` at all, so a refused Retry fetch -- on a row from before the media
+// id was kept, say -- reloaded the page unchanged.
+const ACTION_ERROR_CODES = [
+  "missing_submission_id",
+  "submission_not_found",
+  "not_whatsapp_source",
+  "cannot_resend_finalised",
+  "media_not_fetched",
+  "no_media_id",
+  "already_fetched",
+  "cannot_refetch_status",
+] as const;
+
+// The settings whose absence has its own sentence saying what it breaks,
+// whatsappLog.config.missing.<name>; any other is .missing.other.
+const MISSING_SETTINGS = ["WHATSAPP_VERIFY_TOKEN", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"] as const;
 
 // A fetch is retried only for a video still waiting for its media or one whose
 // fetch gave up; a ready or reviewed video is never sent back through it.
@@ -96,7 +103,7 @@ function chipForContext(contextType: string): string {
   return "chip chip-lichen";
 }
 
-function parsingLabel(contextType: string): "matched" | "unmatched" {
+function parsingOf(contextType: string): "matched" | "unmatched" {
   return contextType === "generic" ? "unmatched" : "matched";
 }
 
@@ -106,7 +113,30 @@ export default async function WhatsappIngestLogPage({
   searchParams: Promise<{ parsing?: string; from?: string; to?: string; error?: string }>;
 }) {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("admin");
+  /** An enum value's label, or the value itself when it has none. */
+  const label = (group: "status" | "parsing" | "context", value: string) =>
+    t.has(`whatsappLog.${group}.${value}`) ? t(`whatsappLog.${group}.${value}`) : value;
+  const statusLabel = (status: string) => label("status", status);
+  const parsingLabel = (contextType: string) => label("parsing", parsingOf(contextType));
+  // A context type with no label of its own reads as its code, spaced out.
+  const contextLabel = (contextType: string) =>
+    t.has(`whatsappLog.context.${contextType}`)
+      ? t(`whatsappLog.context.${contextType}`)
+      : contextType.replace(/_/g, " ");
+  // A missing setting, and what its absence breaks.
+  const missingSetting = (name: string) =>
+    t.rich(
+      (MISSING_SETTINGS as readonly string[]).includes(name)
+        ? `whatsappLog.config.missing.${name}`
+        : "whatsappLog.config.missing.other",
+      { name, mono: (chunks) => <span className="font-mono">{chunks}</span> },
+    );
   const sp = await searchParams;
+  // Only the map's own codes count (lookupOwn): ?error=__proto__ is unknown.
+  const ACTION_ERRORS: Record<string, string> = Object.fromEntries(
+    ACTION_ERROR_CODES.map((code) => [code, t(`whatsappLog.errors.${code}`)]),
+  );
 
   // Audit the surface view itself — programme-admin oversight tooling is
   // SM-9-tracked the same way /admin/gates is.
@@ -174,11 +204,6 @@ export default async function WhatsappIngestLogPage({
   // and this page, the one an operator opens when a teacher says "I sent it",
   // said nothing about why.
   const health = await whatsappHealth();
-  const MISSING_EFFECT: Record<string, string> = {
-    WHATSAPP_VERIFY_TOKEN: "Meta's webhook verification is refused",
-    WHATSAPP_ACCESS_TOKEN: "videos are recorded but cannot be fetched from Meta",
-    WHATSAPP_PHONE_NUMBER_ID: "senders get no reply",
-  };
 
   // WHO SENT IT. The webhook writes the sender onto the submission
   // (video_submissions.whatsapp_from, migration 0036), and that is read first.
@@ -221,15 +246,9 @@ export default async function WhatsappIngestLogPage({
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
       <header>
-        <h1 className="text-2xl font-semibold">WhatsApp ingest log</h1>
+        <h1 className="text-2xl font-semibold">{t("whatsappLog.title")}</h1>
         <p className="text-sm text-neutral-500">
-          Every video sent to the GML WhatsApp number. A caption carrying
-          OBS- / TB- / MM- and a code the sender may use links the upload to
-          that observation cycle, teach-back, or mentor meeting; everything
-          else is kept as a generic submission, visible to admins and the
-          sender, with its caption and sender shown here. The app has no
-          control yet for attaching a generic video to a cycle afterwards:
-          ask the teacher to send it again with the cycle code as the caption.
+          {t("whatsappLog.intro")}
         </p>
       </header>
 
@@ -239,7 +258,7 @@ export default async function WhatsappIngestLogPage({
           data-testid="action-error"
           role="alert"
         >
-          {lookupOwn(ACTION_ERRORS, sp.error) ?? "That action could not be completed."}
+          {lookupOwn(ACTION_ERRORS, sp.error) ?? t("whatsappLog.errors.unknown")}
         </p>
       ) : null}
 
@@ -251,17 +270,14 @@ export default async function WhatsappIngestLogPage({
         >
           {health.state === "off" ? (
             <p>
-              WhatsApp ingest is off: WHATSAPP_APP_SECRET is not set, so the webhook refuses all
-              traffic. Direct upload is unaffected.
+              {t("whatsappLog.config.off")}
             </p>
           ) : (
             <>
-              <p className="font-medium">WhatsApp ingest is only partly configured.</p>
+              <p className="font-medium">{t("whatsappLog.config.partial")}</p>
               <ul className="mt-1 list-disc pl-5">
                 {health.missing.map((name) => (
-                  <li key={name}>
-                    <span className="font-mono">{name}</span> is not set: {MISSING_EFFECT[name] ?? "see README-IT.md"}.
-                  </li>
+                  <li key={name}>{missingSetting(name)}</li>
                 ))}
               </ul>
             </>
@@ -270,8 +286,7 @@ export default async function WhatsappIngestLogPage({
       ) : null}
       {health.deadFetches24h ? (
         <p className="text-sm text-rust" role="status">
-          {health.deadFetches24h} WhatsApp video fetch(es) gave up in the last 24 hours; each row below
-          shows why, with Retry fetch.
+          {t("whatsappLog.deadFetches", { count: health.deadFetches24h })}
         </p>
       ) : null}
 
@@ -280,19 +295,19 @@ export default async function WhatsappIngestLogPage({
         className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white p-4 text-sm"
       >
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">Parsing</span>
+          <span className="text-xs text-neutral-500">{t("whatsappLog.filters.parsing")}</span>
           <select
             name="parsing"
             defaultValue={sp.parsing ?? ""}
             className="rounded-md border border-neutral-300 px-2 py-1"
           >
-            <option value="">any</option>
-            <option value="matched">matched</option>
-            <option value="unmatched">unmatched</option>
+            <option value="">{t("whatsappLog.filters.any")}</option>
+            <option value="matched">{t("whatsappLog.parsing.matched")}</option>
+            <option value="unmatched">{t("whatsappLog.parsing.unmatched")}</option>
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">From</span>
+          <span className="text-xs text-neutral-500">{t("whatsappLog.filters.from")}</span>
           <input
             type="date"
             name="from"
@@ -301,7 +316,7 @@ export default async function WhatsappIngestLogPage({
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">To</span>
+          <span className="text-xs text-neutral-500">{t("whatsappLog.filters.to")}</span>
           <input
             type="date"
             name="to"
@@ -310,14 +325,14 @@ export default async function WhatsappIngestLogPage({
           />
         </label>
         <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">
-          Filter
+          {t("whatsappLog.filters.submit")}
         </button>
         {(sp.parsing || sp.from || sp.to) && (
           <Link
             href="/admin/whatsapp-log"
             className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50"
           >
-            Reset
+            {t("whatsappLog.filters.reset")}
           </Link>
         )}
       </form>
@@ -326,20 +341,20 @@ export default async function WhatsappIngestLogPage({
         <table className="w-full text-sm">
           <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
             <tr>
-              <th className="px-3 py-2">When</th>
-              <th className="px-3 py-2">From</th>
-              <th className="px-3 py-2">Caption</th>
-              <th className="px-3 py-2">Parsed context</th>
-              <th className="px-3 py-2">Submission</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Resend</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.when")}</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.from")}</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.caption")}</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.parsedContext")}</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.submission")}</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.status")}</th>
+              <th className="px-3 py-2">{t("whatsappLog.columns.resend")}</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
-                  No WhatsApp ingest events match the current filter.
+                  {t("whatsappLog.empty")}
                 </td>
               </tr>
             ) : (
@@ -355,7 +370,6 @@ export default async function WhatsappIngestLogPage({
                 const canResend = !awaitingMedia && RESENDABLE_STATUSES.has(r.status);
                 const why =
                   r.status === "failed" ? r.processingLog : awaitingMedia ? r.fetchError : null;
-                const parsing = parsingLabel(r.contextType);
                 return (
                   <tr key={r.id} className="border-t border-neutral-100">
                     <td className="px-3 py-2 text-xs">
@@ -367,7 +381,10 @@ export default async function WhatsappIngestLogPage({
                     </td>
                     <td className="px-3 py-2 text-xs">
                       <span className={chipForContext(r.contextType)}>
-                        {parsing} · {r.contextType.replace(/_/g, " ")}
+                        {t("whatsappLog.parsedContext", {
+                          parsing: parsingLabel(r.contextType),
+                          context: contextLabel(r.contextType),
+                        })}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs">
@@ -380,7 +397,7 @@ export default async function WhatsappIngestLogPage({
                     </td>
                     <td className="px-3 py-2 text-xs">
                       <span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>
-                        {awaitingMedia && r.status === "received" ? "awaiting media" : r.status}
+                        {awaitingMedia && r.status === "received" ? t("whatsappLog.awaitingMedia") : statusLabel(r.status)}
                       </span>
                       {why ? (
                         <div className="mt-1 max-w-xs break-words text-[11px] text-rust" data-testid="ingest-error">
@@ -396,7 +413,7 @@ export default async function WhatsappIngestLogPage({
                             type="submit"
                             className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
                           >
-                            Retry fetch
+                            {t("whatsappLog.retryFetch")}
                           </button>
                         </form>
                       ) : canResend ? (
@@ -406,7 +423,7 @@ export default async function WhatsappIngestLogPage({
                             type="submit"
                             className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
                           >
-                            Resend transcode
+                            {t("whatsappLog.resendTranscode")}
                           </button>
                         </form>
                       ) : (
@@ -422,13 +439,14 @@ export default async function WhatsappIngestLogPage({
       </div>
 
       <p className="text-xs text-neutral-400">
-        Showing the most recent {PAGE_LIMIT} WhatsApp submissions. For
-        full WhatsApp audit-trail history (parse failures, signature
-        rejections, media-fetch errors) see{" "}
-        <Link href="/admin/audit" className="underline">
-          /admin/audit
-        </Link>
-        .
+        {t.rich("whatsappLog.footer", {
+          limit: PAGE_LIMIT,
+          link: (chunks) => (
+            <Link href="/admin/audit" className="underline">
+              {chunks}
+            </Link>
+          ),
+        })}
       </p>
     </main>
   );

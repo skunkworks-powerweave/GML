@@ -31,7 +31,7 @@ test("the import panel shows the spreadsheet line the server reported", async ()
   const previous = AppRouterContext._currentValue;
   AppRouterContext._currentValue = (withAppRouter(null) as { props: { value: unknown } }).props.value;
   try {
-    const m = mount(ImportCsv as (p: unknown) => unknown, { entitySlug: "schools", entityLabel: "Schools", acceptedColumns: ["name"] });
+    const m = mount(ImportCsv as (p: unknown) => unknown, { entitySlug: "schools", entityLabel: "Schools", acceptedColumns: ["name"] }, { intl: "en" });
     const find = (id: string) => hostElements(m.tree).find((el) => el.props["data-testid"] === id)!;
     (find("import-csv-open").props.onClick as () => void)();
     m.rerender();
@@ -62,7 +62,7 @@ test("the import panel says what re-uploading a file does with rows that already
   const previous = AppRouterContext._currentValue;
   AppRouterContext._currentValue = (withAppRouter(null) as { props: { value: unknown } }).props.value;
   const panelText = (props: Record<string, unknown>) => {
-    const m = mount(ImportCsv as (p: unknown) => unknown, { entityLabel: "Table", acceptedColumns: ["name"], ...props });
+    const m = mount(ImportCsv as (p: unknown) => unknown, { entityLabel: "Table", acceptedColumns: ["name"], ...props }, { intl: "en" });
     (hostElements(m.tree).find((el) => el.props["data-testid"] === "import-csv-open")!.props.onClick as () => void)();
     m.rerender();
     return textOf(hostElements(m.tree).find((el) => el.props["data-testid"] === "import-csv-panel")!);

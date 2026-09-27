@@ -92,7 +92,12 @@ test("F134: the phone header's account controls and ? button are in the user's l
     const signOut = elements(html, "button").find((b) => attr(b.open, "data-testid") === "signout-button");
     assert.ok(signOut, "the phone header has a sign-out button");
     assert.equal(signOut.text.trim(), action.signOut, `${locale}: the button reads in the user's language`);
-    assert.ok((attr(signOut.open, "title") ?? "").startsWith(action.signOut), `${locale}: and so does its title`);
+    // "Sign out {email}" as one message (home.chrome.signOutTitle): Hindi and
+    // Bhoti put the address first, so the title no longer starts with the
+    // button's word -- it was "Sign out" glued to the address in every locale.
+    const signOutTitle = (loadMessages(locale).home as unknown as { chrome: Strings }).chrome.signOutTitle.replace("{email}", USER.email);
+    assert.equal(attr(signOut.open, "title"), signOutTitle, `${locale}: and so does its title`);
+    assert.notEqual(signOutTitle, `Sign out ${USER.email}`, `${locale}: the title is not the English one`);
     const settings = openingTags(html, "a").find((t) => attr(t, "data-testid") === "mobile-settings-link");
     assert.equal(attr(settings ?? "", "aria-label"), nav.settings, `${locale}: the avatar link is named in the user's language`);
     const help = openingTags(html, "button").find((t) => attr(t, "data-help-anchor") === "topbar-help");

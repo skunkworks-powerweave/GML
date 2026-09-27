@@ -22,6 +22,7 @@
 // so navigating away tears the timer down cleanly.
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { useTranslations } from "next-intl";
 import { PickedMark } from "./PickedMark";
 import { useQuizAnswers } from "./answer-drafts";
 import { loadLatencyMs } from "./deadline";
@@ -84,6 +85,7 @@ export function QuizRunner({
   serverNowMs,
   submitAction,
 }: QuizRunnerProps) {
+  const t = useTranslations("rtt.client.quizRunner");
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
   // Kept in this tab's sessionStorage as they are picked and restored for
@@ -198,10 +200,10 @@ export function QuizRunner({
     return (
       <div className="card card-hi" style={{ padding: 32, textAlign: "center" }}>
         <h2 style={{ fontFamily: "var(--serif)", fontSize: 20, margin: 0 }}>
-          No questions yet
+          {t("noQuestions")}
         </h2>
         <p style={{ color: "var(--ink-3)", marginTop: 8, fontSize: 13 }}>
-          This quiz has no questions. Ask an admin to add some.
+          {t("noQuestionsBody")}
         </p>
       </div>
     );
@@ -214,6 +216,8 @@ export function QuizRunner({
   const isLast = idx === totalCount - 1;
 
   const onPick = (i: number) => pickAnswer(q.id, i);
+  // What the polite region says (time-warning.ts): a key, "" for nothing.
+  const warning = remaining === null ? "" : nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with
@@ -255,12 +259,12 @@ export function QuizRunner({
           }}
         >
           <div>
-            <div className="label">Quiz</div>
+            <div className="label">{t("quiz")}</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>{title}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <span className="chip">{totalCount} questions</span>
-                <span className="chip chip-saffron">multiple choice</span>
+                <span className="chip">{t("questionCount", { count: totalCount })}</span>
+                <span className="chip chip-saffron">{t("multipleChoice")}</span>
               </span>
             </p>
           </div>
@@ -299,7 +303,7 @@ export function QuizRunner({
             }}
           >
             <span style={{ fontSize: 11, opacity: 0.7 }}>
-              Time remaining
+              {t("timeRemaining")}
             </span>
             <span style={{ fontWeight: 600 }}>
               {formatRemaining(remaining)}
@@ -308,12 +312,12 @@ export function QuizRunner({
         ) : null}
         {remaining !== null ? (
           <span role="status" className="sr-only" data-testid="quiz-time-warning">
-            {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
+            {warning ? t(`timeWarning.${warning}`) : ""}
           </span>
         ) : null}
         {nothingSent ? (
           <p data-testid="quiz-time-up" style={{ marginTop: 8, fontSize: 13, color: "var(--rust)" }}>
-            The time for this attempt ran out before the page loaded, so nothing was submitted.
+            {t("ranOut")}
           </p>
         ) : null}
         <div className="bar" style={{ marginTop: 14 }}>
@@ -327,7 +331,7 @@ export function QuizRunner({
           style={{ width: "100%", maxWidth: 640, padding: 32 }}
         >
           <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>
-            Question {idx + 1}
+            {t("question", { number: idx + 1 })}
           </div>
           <h2
             style={{
@@ -401,7 +405,7 @@ export function QuizRunner({
               disabled={idx === 0 || isPending}
               onClick={() => setIdx((i) => Math.max(0, i - 1))}
             >
-              ← Previous
+              {t("previous")}
             </button>
             {!isLast ? (
               <button
@@ -410,7 +414,7 @@ export function QuizRunner({
                 disabled={selection === undefined || isPending}
                 onClick={() => setIdx((i) => Math.min(totalCount - 1, i + 1))}
               >
-                Next →
+                {t("next")}
               </button>
             ) : (
               <button
@@ -419,7 +423,7 @@ export function QuizRunner({
                 disabled={selection === undefined || isPending}
                 onClick={onSubmit}
               >
-                {isPending ? "Submitting…" : "Submit answers"}
+                {isPending ? t("submitting") : t("submitAnswers")}
               </button>
             )}
           </div>

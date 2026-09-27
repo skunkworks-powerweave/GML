@@ -1,8 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { recoverySessionState } from "@/auth";
-import { passwordPolicyError } from "@/lib/password-policy";
+import { passwordPolicyError } from "@/lib/password-policy-message";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { clearMustChangePassword } from "@/lib/supabase/must-change-password";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
@@ -29,10 +30,12 @@ export async function resetPasswordAction(
   const confirm = String(formData.get("confirm") ?? "");
 
   // The one policy every password-setting path uses (lib/password-policy.ts).
-  const policy = passwordPolicyError(password);
+  // Messages in the user's language: this is returned straight to the form.
+  const t = await getTranslations("login");
+  const policy = await passwordPolicyError(password);
   if (policy) return { error: policy };
   if (password !== confirm) {
-    return { error: "Passwords do not match." };
+    return { error: t("reset.mismatch") };
   }
 
   // A RECOVERY session, not merely a session. No current password is asked
@@ -41,12 +44,10 @@ export async function resetPasswordAction(
   // who is sitting at it. See recoverySessionState() in auth.ts.
   const recovery = await recoverySessionState();
   if (recovery === "not_recovery") {
-    return {
-      error: "This page only sets a password from a reset link. To change your password, use Settings.",
-    };
+    return { error: t("reset.notRecovery") };
   }
   if (recovery !== "recovery") {
-    return { error: "This reset link has expired or was already used. Request a new one." };
+    return { error: t("reset.expired") };
   }
 
   const supabase = await createSupabaseServerClient();
@@ -58,9 +59,7 @@ export async function resetPasswordAction(
   // since revoked must not be able to set a new password.
   const { data, error: userErr } = await supabase.auth.getUser();
   if (userErr || !data?.user) {
-    return {
-      error: "This reset link has expired or was already used. Request a new one.",
-    };
+    return { error: t("reset.expired") };
   }
 
   const { error } = await supabase.auth.updateUser({ password });

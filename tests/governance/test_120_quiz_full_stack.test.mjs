@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -140,8 +141,9 @@ test("spec 120 — QuizRunner client component renders progress + options + subm
   assert.match(src, /progressPct/);
   // A/B/C/D label generator.
   assert.match(src, /String\.fromCharCode\(65 \+ i\)/);
-  // Submit button label matches the spec brief copy.
-  assert.match(src, /Submit answers/);
+  // Submit button label matches the spec brief copy (rtt.client.quizRunner).
+  assert.ok(readsKey(src, "submitAnswers"), "the runner reads its submit label by key");
+  assert.equal(message("rtt.client.quizRunner.submitAnswers"), "Submit answers");
   // Inline tokens (Phase 7/8 styling discipline).
   assert.match(src, /var\(--ink\)/);
   assert.match(src, /var\(--paper\)/);
@@ -159,7 +161,8 @@ test("spec 120 — result page shows score banner + per-question breakdown + ret
   assert.match(src, /correctIndex/);
   assert.match(src, /explanation/);
   // Retake CTA back to the runner.
-  assert.match(src, /Retake/);
+  assert.ok(readsKey(src, "common.retake"), "the result page reads its Retake label by key");
+  assert.equal(message("rtt.common.retake"), "Retake");
   assert.match(src, /href=\{`\/quizzes\/\$\{slug\}`\}/);
   // SM-9 light gate: only owner can view their result.
   assert.match(src, /redirect\("\/forbidden"\)/);
@@ -170,8 +173,9 @@ test("spec 120 — admin index is role-gated and renders the registry table", ()
   assert.match(src, /export const dynamic = "force-dynamic"/);
   assert.match(src, /requireRole\(\["programme_admin", "super_admin"\]\)/);
   assert.doesNotMatch(src, /^"use client"/m);
-  // The page header copy.
-  assert.match(src, /Programme quizzes/);
+  // The page header copy: read by key, English in the bundle.
+  assert.ok(readsKey(src, "quizzes.title"));
+  assert.equal(message("adminData.quizzes.title"), "Programme quizzes");
   // Cross-link back to /admin/forms.
   assert.match(src, /\/admin\/forms/);
   // Each row links to the detail page.
@@ -198,7 +202,8 @@ test("spec 120 — admin detail + parts + actions wire role gate, validation, au
   assert.match(actions, /export async function saveQuizSchema/);
   assert.match(actions, /requireRole\(\["programme_admin", "super_admin"\]\)/);
   // Validation: at least 2 options, correctIndex in bounds.
-  assert.match(actions, /at least 2 options/);
+  assert.ok(readsKey(actions, "quizzes.save.options"));
+  assert.match(message("adminData.quizzes.save.options"), /at least 2 options/);
   assert.match(actions, /correctIndex/);
   // Replace-all transaction.
   assert.match(actions, /db\.transaction/);

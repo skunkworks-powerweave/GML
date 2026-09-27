@@ -38,6 +38,7 @@
 // that rendition). 720p stays a disabled option: 480p is the ceiling (SM-4).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   attachHls,
   attachNative,
@@ -48,6 +49,14 @@ import {
 } from "@/lib/video/playback-recovery";
 
 type Level = { width: number; height: number };
+
+/**
+ * Why the player shows a message instead of the picture: a reason the recovery
+ * policy gave up for, a browser that can play HLS neither way ("unsupported":
+ * it is the browser, not the connection), or hls.js failing to load. The
+ * words are video.client.player.*, in the viewer's language.
+ */
+type PlayerFailure = { reason: FailReason | "unsupported" } | { reason: "load"; detail: string };
 
 /**
  * A rendition's label: its SHORT side, so a portrait 480x854 rung is "480p".
@@ -96,10 +105,6 @@ function hasMediaSource(): boolean {
   return Boolean(g.ManagedMediaSource || g.MediaSource || g.WebKitMediaSource);
 }
 
-/** Shown when neither engine can play here. It is the browser, not the connection. */
-export const UNSUPPORTED_BROWSER_MESSAGE =
-  "This browser cannot play these videos. Open this page in an up-to-date Chrome, Firefox or Safari.";
-
 type HlsPlayerProps = {
   /** Pre-signed master playlist URL — /api/media/<token>. Refresh from server before expiry. */
   src: string;
@@ -128,6 +133,8 @@ type HlsPlayerProps = {
 const SPEED_PRESETS = [1, 1.25, 1.5, 2] as const;
 
 export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPlayerProps) {
+  const t = useTranslations("video.client");
+  const tAction = useTranslations("action");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   // Where the viewer was when the stream died. A refresh swaps the source,
   // which resets currentTime to 0, so without this a re-sign at minute 38 of a
@@ -147,10 +154,9 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     const base = src.split("#")[0]!;
     return `${base}${base.includes("?") ? "&" : "?"}r=${Date.now()}`;
   }, [onRefresh, src]);
-  const [error, setError] = useState<string | null>(null);
-  // Why the recovery policy gave up, when it did: a signed-out viewer is
+  // Why playback has given up, when it has. A signed-out viewer is also
   // offered sign-in, which comes back to this video.
-  const [failReason, setFailReason] = useState<FailReason | null>(null);
+  const [failure, setFailure] = useState<PlayerFailure | null>(null);
   const [playbackRate, setPlaybackRateState] = useState<number>(1);
   const [quality, setQuality] = useState<string>("auto");
 
@@ -182,10 +188,9 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
       src: currentSrc,
       refreshSrc,
       onSource: setCurrentSrc,
-      onFail: (message: string, reason: FailReason) => {
+      onFail: (reason: FailReason) => {
         if (cancelled) return;
-        setError(message);
-        setFailReason(reason);
+        setFailure({ reason });
       },
       resumeAt: resumeAtRef,
       policy: recoveryRef.current,
@@ -197,7 +202,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
     // at all, and iOS is a primary target (field mentors watch on phones).
     const withoutHlsJs = (path: PlaybackPath) => {
       if (path === "native") detach = attachNative(video, hooks);
-      else setError(UNSUPPORTED_BROWSER_MESSAGE);
+      else setFailure({ reason: "unsupported" });
     };
     if (!hasMediaSource()) {
       withoutHlsJs(playbackPath(false, nativeHls));
@@ -229,7 +234,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
           detach = attachHls(video, hls as unknown as HlsLike, Hls.Events.ERROR, hooks);
         })
         .catch((err) => {
-          if (!cancelled) setError("Failed to load HLS player: " + String(err));
+          if (!cancelled) setFailure({ reason: "load", detail: String(err) });
         });
     }
 
@@ -329,7 +334,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
 
         {/* role="alert": the message replaces the picture, so a screen reader
             must hear it; it is rendered once, when playback has given up. */}
-        {error ? (
+        {failure ? (
           <div
             role="alert"
             style={{
@@ -346,15 +351,17 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
             }}
           >
             <div>
-              {error}
-              {failReason === "signed_out" ? (
+              {failure.reason === "load"
+                ? t("player.loadFailed", { error: failure.detail })
+                : t(`player.failure.${failure.reason}`)}
+              {failure.reason === "signed_out" ? (
                 <>
                   {" "}
                   <a
                     href={`/login?from=${encodeURIComponent(videoId ? `/videos/${videoId}` : "/videos")}`}
                     style={{ color: "var(--paper)", textDecoration: "underline" }}
                   >
-                    Sign in
+                    {tAction("signIn")}
                   </a>
                 </>
               ) : null}
@@ -378,8 +385,8 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
         }}
         data-testid="player-controls"
       >
-        <span style={{ color: "var(--ink-3)", fontSize: 11 }}>Speed</span>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }} role="group" aria-label="Playback speed">
+        <span style={{ color: "var(--ink-3)", fontSize: 11 }}>{t("player.speed")}</span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }} role="group" aria-label={t("player.speedGroup")}>
           {SPEED_PRESETS.map((rate) => {
             const isActive = playbackRate === rate;
             return (
@@ -404,7 +411,7 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           <label htmlFor="hls-quality" style={{ color: "var(--ink-3)", fontSize: 11 }}>
-            Quality
+            {t("player.quality")}
           </label>
           <select
             id="hls-quality"
@@ -414,14 +421,14 @@ export function HlsPlayer({ src, onRefresh, watermark, poster, videoId }: HlsPla
             data-testid="quality-select"
             style={{ padding: "2px 6px" }}
           >
-            <option value="auto">Auto</option>
+            <option value="auto">{t("player.auto")}</option>
             {renditionOptions(levels).map((label) => (
               <option key={label} value={label}>
                 {label}
               </option>
             ))}
-            <option value="720p" disabled title="Not produced: videos stream at up to 480p">
-              720p (not available)
+            <option value="720p" disabled title={t("player.notProduced")}>
+              {t("player.notAvailable")}
             </option>
           </select>
         </div>

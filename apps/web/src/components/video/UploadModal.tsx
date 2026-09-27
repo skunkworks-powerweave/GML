@@ -40,9 +40,13 @@
 // displays a video file URL. The watermarking + signed URL contract
 // belongs to HlsPlayer.tsx, not here.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { UploadProgress } from "./UploadProgress";
+
+/** A caption code in the WhatsApp instructions (the <code> tag in video.client.modal.caption.*). */
+const code = (chunks: ReactNode) => <code className="mono">{chunks}</code>;
 
 type UploadModalProps = {
   /** Programme WhatsApp number (E.164, no +). Falls back to a placeholder
@@ -71,6 +75,7 @@ function isUsableWhatsappPhone(phone: string | null | undefined): boolean {
 }
 
 export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalProps) {
+  const t = useTranslations("video.client");
   const [open, setOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -130,7 +135,7 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
         className="btn btn-primary"
         data-testid="upload-trigger"
       >
-        Upload
+        {t("modal.trigger")}
       </button>
 
       {open ? (
@@ -154,7 +159,7 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
             ref={dialogRef}
             role="dialog"
             aria-modal="true"
-            aria-label="Upload a video"
+            aria-label={t("modal.dialog")}
             tabIndex={-1}
             onClick={(e) => e.stopPropagation()}
             style={{
@@ -173,12 +178,12 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
           >
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
               <div>
-                <div className="label">Upload video</div>
-                <h2 className="serif" style={{ fontSize: 22, marginTop: 2 }}>Two ways to send a lesson</h2>
+                <div className="label">{t("modal.eyebrow")}</div>
+                <h2 className="serif" style={{ fontSize: 22, marginTop: 2 }}>{t("modal.title")}</h2>
               </div>
               <button
                 type="button"
-                aria-label="Close upload dialog"
+                aria-label={t("modal.close")}
                 onClick={() => setOpen(false)}
                 className="btn btn-sm"
                 style={{ background: "transparent", borderColor: "var(--line)" }}
@@ -205,12 +210,11 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
               data-testid="whatsapp-path"
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span className="chip chip-lichen">Recommended</span>
-                <h3 style={{ fontSize: 14, fontWeight: 600 }}>Send via WhatsApp</h3>
+                <span className="chip chip-lichen">{t("modal.recommended")}</span>
+                <h3 style={{ fontSize: 14, fontWeight: 600 }}>{t("modal.whatsappTitle")}</h3>
               </div>
               <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 6 }}>
-                The fastest path on a slow connection. Forward your video to the programme number with one of the
-                caption codes below. It lands in this library automatically once the worker finishes transcoding.
+                {t("modal.whatsappIntro")}
               </p>
               <div
                 style={{
@@ -224,7 +228,7 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                   background: "var(--paper)",
                 }}
               >
-                <span style={{ fontSize: 11, color: "var(--ink-3)" }}>Programme WhatsApp</span>
+                <span style={{ fontSize: 11, color: "var(--ink-3)" }}>{t("modal.programmeWhatsapp")}</span>
                 <span
                   className="mono"
                   style={{ fontSize: 13, fontWeight: 500, marginLeft: "auto" }}
@@ -239,7 +243,7 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                   className="btn btn-sm"
                   data-testid="copy-phone-button"
                 >
-                  {copyStatus === "copied" ? "Copied" : "Copy phone number"}
+                  {copyStatus === "copied" ? t("modal.copied") : t("modal.copy")}
                 </button>
               </div>
               <ul
@@ -253,31 +257,23 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
                   fontSize: 12,
                 }}
               >
-                <li>
-                  Caption <code className="mono">OBS-&lt;code&gt;</code> — attaches to an observation cycle (code from the
-                  cycle detail page).
-                </li>
+                {/* The codes (OBS-, TB-, MM-, Q1-, Q4-) are what the webhook
+                    reads, so they stay as they are in every language; the
+                    placeholders inside the angle brackets translate. */}
+                <li>{t.rich("modal.caption.obs", { code })}</li>
                 <li>
                   {/* There is no "teach-back session": TB- names the RTT
                       subject taught back (uploads/context.ts), and the
                       subject's page is where a teacher is given it. */}
-                  Caption <code className="mono">TB-&lt;subject&gt;</code> — a teach-back for an RTT subject (Upload a
-                  teach-back video on the subject&apos;s page gives its code).
+                  {t.rich("modal.caption.tb", { code })}
                 </li>
-                <li>
-                  Caption <code className="mono">MM-&lt;uuid&gt;</code> — attaches to a mentor meeting.
-                </li>
-                <li>
-                  Caption <code className="mono">Q1-&lt;uuid&gt;</code> or <code className="mono">Q4-&lt;uuid&gt;</code> —
-                  a mentee&apos;s quarterly video for her pairing.
-                </li>
+                <li>{t.rich("modal.caption.mm", { code })}</li>
+                <li>{t.rich("modal.caption.quarterly", { code })}</li>
               </ul>
               {/* This said a programme admin "can attach them from the WhatsApp
                   ingest log". No screen re-links a video; the log says so. */}
               <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 8 }}>
-                A video whose caption has no code, or one you may not use, still arrives, but linked to nothing: only
-                you and programme administrators can see it. Attach it from My uploads, or send it again with the
-                right code.
+                {t("modal.unlinked")}
               </p>
             </section>
             ) : null}
@@ -285,28 +281,29 @@ export function UploadModal({ whatsappPhone, videoDefaultQuality }: UploadModalP
             {/* Path 2 — Direct browser upload */}
             <section data-testid="browser-path">
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span className="chip">Admin / mentor</span>
-                <h3 style={{ fontSize: 14, fontWeight: 600 }}>Or upload from this browser</h3>
+                <span className="chip">{t("modal.adminMentor")}</span>
+                <h3 style={{ fontSize: 14, fontWeight: 600 }}>{t("modal.browserTitle")}</h3>
               </div>
               <p
                 style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 6, marginBottom: 10 }}
                 data-testid="upload-quality-explainer"
               >
-                Resumable upload, MP4 / MOV / 3GP, transcodes to{" "}
-                <strong>{videoDefaultQuality ?? "480p"} HLS</strong> after the upload finishes
-                (set by the programme admin in system settings). Use this when you
-                already have the file on disk (e.g. classroom recording).
+                {t.rich("modal.browserIntro", {
+                  quality: videoDefaultQuality ?? "480p",
+                  strong: (chunks) => <strong>{chunks}</strong>,
+                })}
               </p>
               {/* This tray is linked to nothing. A video for a cycle, a meeting or
                   a quarterly video belongs on /uploads, which asks what it is for
                   -- a generic one is invisible to the observer and mentor. */}
               <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0, marginBottom: 10 }}>
-                Uploaded here, a video is linked to nothing: only you and programme administrators see it. For an
-                observation cycle, a meeting or a quarterly video, use{" "}
-                <Link href="/uploads" style={{ color: "var(--indigo)" }}>
-                  My uploads
-                </Link>
-                , which asks what it is for.
+                {t.rich("modal.browserUnlinked", {
+                  link: (chunks) => (
+                    <Link href="/uploads" style={{ color: "var(--indigo)" }}>
+                      {chunks}
+                    </Link>
+                  ),
+                })}
               </p>
               <UploadProgress contextType="generic" onComplete={onUploadComplete} />
             </section>

@@ -10,6 +10,14 @@
 // already renders notifications, so the admins see the ticket alongside their
 // other operational events. Retention is handled by the spec 107 SM-8 cron.
 //
+// IN EACH ADMINISTRATOR'S LANGUAGE. The rows are written through
+// notifyLocalized (lib/notify-localized.ts): the subject, and the body when
+// the caller sent no message of their own, come from the "help" namespace
+// (help.ticket.*) in the language each administrator saved, with a known help
+// topic named by its title in that language. A `message` is the caller's own
+// text and is stored as sent. The JSON answers below are for the calling
+// code, not for people, and stay as they are.
+//
 // Method matrix:
 //   POST                          → 200 { ok:true, delivered:number }
 //   POST (no session)             → 401 { error:"unauthenticated" }
@@ -36,11 +44,13 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
-import { notifications, users } from "@gml/db/schema";
+import { users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { recordAudit } from "@/lib/audit";
 import { publicIssues, readJsonBody } from "@/lib/api-json";
 import { rateLimit } from "@/lib/rate-limit";
+import { helpFor } from "@/lib/help";
+import { notifyLocalized } from "@/lib/notify-localized";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +97,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
   const userId = session.user.id;
-  const userName = session.user.name ?? session.user.email ?? "a user";
+  // Null only for an account with neither a name nor an email; the ticket then
+  // says "a user" in each administrator's language (help.ticket.someone).
+  const userName = session.user.name ?? session.user.email ?? null;
 
   // Spec 154 — throttle helpdesk ticket creation. The previous shape had no
   // rate limit at all, which meant a logged-in user could spam unlimited
@@ -161,23 +173,35 @@ export async function POST(req: Request) {
   // the user told only that their request failed. Truncated to fit, with the
   // slug the part that gives way: the requester's name is the load-bearing
   // half of the line.
-  const subject = `Help request from ${userName} on ${pageSlug}`.slice(0, 200);
-  const bodyText = message?.trim().length
-    ? message
-    : `Help request from ${userName}${topic ? ` (topic: ${topic})` : ""} on ${pageSlug}.`;
+  const ownMessage = message?.trim().length ? message : null;
+  // A help topic the dictionary knows is named by its title, in the reader's
+  // language; anything else is shown as sent.
+  const knownTopic = topic && helpFor(topic) ? topic : null;
 
   let delivered = 0;
   if (recipients.length > 0) {
-    const rows = recipients.map((u) => ({
-      userId: u.id,
-      kind: "helpdesk.ticket",
-      subject,
-      body: bodyText,
-      entityType: "helpdesk",
-      entityId: topic ?? pageSlug,
-    }));
-    const inserted = await db.insert(notifications).values(rows).returning({ id: notifications.id });
-    delivered = inserted.length;
+    delivered = await notifyLocalized(
+      db,
+      "help",
+      recipients.map((u) => ({
+        userId: u.id,
+        kind: "helpdesk.ticket",
+        entityType: "helpdesk",
+        entityId: topic ?? pageSlug,
+        text: (t) => {
+          const name = userName ?? t("ticket.someone");
+          const topicName = knownTopic ? t(`entries.${knownTopic}.title`) : topic;
+          return {
+            subject: t("ticket.subject", { name, page: pageSlug }).slice(0, 200),
+            body:
+              ownMessage ??
+              (topicName
+                ? t("ticket.bodyTopic", { name, topic: topicName, page: pageSlug })
+                : t("ticket.body", { name, page: pageSlug })),
+          };
+        },
+      })),
+    );
   }
 
   void recordAudit({

@@ -23,9 +23,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { asc, eq } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { rttSubjects } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import { getActiveGrant } from "@/lib/gates";
 import { isUuid } from "@/lib/ids";
 import { menteeTeacherIds, mentorIdFor } from "@/lib/visibility";
@@ -43,7 +45,10 @@ import { formatDuration, statusChip, statusLabel } from "@/lib/scorm/format";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "RTT progress" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("progress.metaTitle") };
+}
 
 const STATUS_CHIP: Record<string, string> = {
   present: "chip chip-lichen",
@@ -51,10 +56,7 @@ const STATUS_CHIP: Record<string, string> = {
   excused: "chip",
 };
 
-const fmtDate = (d: Date | null) =>
-  d ? new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "unscheduled";
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
 
 export default async function RttProgressPage({
   searchParams,
@@ -65,6 +67,13 @@ export default async function RttProgressPage({
   if (!session?.user?.id) redirect("/login");
   const actor = { id: session.user.id, role: session.user.role };
   const sp = await searchParams;
+  const t = await getTranslations("rtt");
+  const intl = INTL_LOCALE[(await getLocale()) as Locale];
+  const fmtDate = (d: Date | null) =>
+    d ? new Date(d).toLocaleDateString(intl, { day: "numeric", month: "short", year: "numeric" }) : t("common.unscheduled");
+  // attendance_status (present / absent / excused) -> its label.
+  const attendanceLabel = (status: string) =>
+    ["present", "absent", "excused"].includes(status) ? t(`attendance.${status}`) : status;
   const subjectId = isUuid(sp.subject) ? sp.subject : null;
 
   const isAdmin = actor.role === "programme_admin" || actor.role === "super_admin";
@@ -75,21 +84,21 @@ export default async function RttProgressPage({
     const mine = await progressBySubject(db, actor.id, scope.subjectWhere);
     return (
       <div>
-        <Header title="My RTT progress" />
+        <Header title={t("progress.myTitle")} />
         <div className="page-body">
           {mine.length === 0 ? (
-            <p style={{ color: "var(--ink-3)" }}>No RTT subjects yet.</p>
+            <p style={{ color: "var(--ink-3)" }}>{t("progress.noSubjects")}</p>
           ) : (
             <div className="card card-hi" style={{ overflowX: "auto" }}>
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Subject</th>
-                    <th>Lessons</th>
-                    <th>Readings</th>
-                    <th>Assessments</th>
-                    <th>Modules</th>
-                    <th>Sessions</th>
+                    <th>{t("progress.col.subject")}</th>
+                    <th>{t("progress.col.lessons")}</th>
+                    <th>{t("progress.col.readings")}</th>
+                    <th>{t("progress.col.assessments")}</th>
+                    <th>{t("progress.col.modules")}</th>
+                    <th>{t("progress.col.sessions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -101,21 +110,21 @@ export default async function RttProgressPage({
                           {r.phaseLabel} · {r.termName}
                         </div>
                       </td>
-                      <td className="mono">{r.lessonsDone}/{r.lessonsTotal} lessons</td>
-                      <td className="mono">{r.readingsDone}/{r.readingsTotal} readings</td>
-                      <td className="mono">{r.quizzesPassed}/{r.quizzesTotal} quizzes passed</td>
+                      <td className="mono">{t("progress.lessonsDone", { done: r.lessonsDone, total: r.lessonsTotal })}</td>
+                      <td className="mono">{t("progress.readingsDone", { done: r.readingsDone, total: r.readingsTotal })}</td>
+                      <td className="mono">{t("progress.quizzesPassed", { passed: r.quizzesPassed, total: r.quizzesTotal })}</td>
                       <td className="mono">
                         {r.modulesTotal === 0 ? (
-                          <span title="This subject has no SCORM modules">—</span>
+                          <span title={t("progress.noModulesTitle")}>—</span>
                         ) : (
-                          `${r.modulesCompleted}/${r.modulesTotal} modules completed`
+                          t("progress.modulesCompleted", { done: r.modulesCompleted, total: r.modulesTotal })
                         )}
                       </td>
                       <td className="mono">
                         {r.sessionsMarked === 0 ? (
-                          <span title="No attendance has been taken for you in this subject yet">—</span>
+                          <span title={t("progress.noAttendanceTitle")}>—</span>
                         ) : (
-                          `${r.sessionsPresent}/${r.sessionsMarked} sessions attended`
+                          t("progress.sessionsAttended", { present: r.sessionsPresent, marked: r.sessionsMarked })
                         )}
                       </td>
                     </tr>
@@ -125,8 +134,7 @@ export default async function RttProgressPage({
             </div>
           )}
           <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 10 }}>
-            Lessons and readings count when you mark them done on the subject page. A module counts once it
-            reports that you passed or completed it. Sessions count once attendance has been taken.
+            {t("progress.footnote")}
           </p>
         </div>
       </div>
@@ -140,14 +148,12 @@ export default async function RttProgressPage({
     if (!(await getActiveGrant(actor.id, "mentorship"))) {
       return (
         <div>
-          <Header title="RTT progress & results" />
+          <Header title={t("progress.staffTitle")} />
           <div className="page-body">
             <p style={{ fontSize: 13 }}>
-              Your mentees&apos; quiz results, SCORM modules and attendance are part of the mentorship section.{" "}
-              <Link href={`/gate/mentorship?next=${encodeURIComponent("/rtt/progress")}`}>
-                Unlock mentorship
-              </Link>{" "}
-              to see them.
+              {t.rich("progress.mentorGate", {
+                link: (chunks) => <Link href={`/gate/mentorship?next=${encodeURIComponent("/rtt/progress")}`}>{chunks}</Link>,
+              })}
             </p>
           </div>
         </div>
@@ -171,12 +177,17 @@ export default async function RttProgressPage({
     scormResults(db, filter),
     attendanceRows(db, filter),
   ]);
-  const whose =
-    (isMentor ? "your mentees" : "every teacher") + (scope.place ? ` in ${placeLabel(scope.place)}` : "");
+  // Whose rows these are, for the section intros: the words are the
+  // messages' (a select), the place is data.
+  const whose = {
+    who: isMentor ? "mentees" : "everyone",
+    inPlace: scope.place ? "yes" : "no",
+    place: scope.place ? placeLabel(scope.place) : "",
+  };
 
   return (
     <div>
-      <Header title="RTT progress & results" />
+      <Header title={t("progress.staffTitle")} />
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
         <PlacePicker basePath="/rtt/progress" options={places} place={scope.place} keep={{ subject: subjectId }} />
         {/* A plain GET form: works with no JavaScript on a slow link. */}
@@ -184,9 +195,9 @@ export default async function RttProgressPage({
           {scope.place ? <input type="hidden" name="district" value={scope.place.districtId} /> : null}
           {scope.place?.zoneId ? <input type="hidden" name="zone" value={scope.place.zoneId} /> : null}
           <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
-            Subject
+            {t("progress.col.subject")}
             <select name="subject" defaultValue={subjectId ?? ""}>
-              <option value="">All subjects</option>
+              <option value="">{t("progress.allSubjects")}</option>
               {subjects.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -195,31 +206,31 @@ export default async function RttProgressPage({
             </select>
           </label>
           <button type="submit" className="btn btn-sm">
-            Show
+            {t("progress.show")}
           </button>
         </form>
 
         <section className="card card-hi" style={{ overflowX: "auto" }}>
           <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>Quiz results</div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{t("progress.quizResults")}</div>
             <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-              Each RTT quiz {whose} have taken: attempts, best score, and whether they passed.
+              {t("progress.quizResultsIntro", whose)}
             </div>
           </div>
           {results.rows.length === 0 ? (
             <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-              No quiz has been taken yet.
+              {t("progress.noQuizTaken")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  <th>Teacher</th>
-                  <th>Quiz</th>
-                  <th>Attempts</th>
-                  <th>Best</th>
-                  <th>Result</th>
-                  <th>Last taken</th>
+                  <th>{t("progress.col.teacher")}</th>
+                  <th>{t("progress.col.quiz")}</th>
+                  <th>{t("progress.col.attempts")}</th>
+                  <th>{t("progress.col.best")}</th>
+                  <th>{t("progress.col.result")}</th>
+                  <th>{t("progress.col.lastTaken")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -235,37 +246,37 @@ export default async function RttProgressPage({
                     </td>
                     <td className="mono">{r.attempts}</td>
                     <td className="mono">{r.bestScore}%</td>
-                    <td>{r.passed ? <span className="chip chip-lichen">Passed</span> : <span className="chip">Not passed</span>}</td>
+                    <td>{r.passed ? <span className="chip chip-lichen">{t("common.passed")}</span> : <span className="chip">{t("common.notPassed")}</span>}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.lastAt)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          {results.more ? <More /> : null}
+          {results.more ? <More t={t} /> : null}
         </section>
 
         <section className="card card-hi" style={{ overflowX: "auto" }}>
           <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>SCORM modules</div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{t("progress.scormModules")}</div>
             <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-              Each SCORM module {whose} have opened: status, score and time, as the module reports them.
+              {t("progress.scormIntro", whose)}
             </div>
           </div>
           {modules.rows.length === 0 ? (
             <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-              No SCORM module has been opened yet.
+              {t("progress.noScormOpened")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  <th>Teacher</th>
-                  <th>Module</th>
-                  <th>Status</th>
-                  <th>Score</th>
-                  <th>Time</th>
-                  <th>Last activity</th>
+                  <th>{t("progress.col.teacher")}</th>
+                  <th>{t("progress.col.module")}</th>
+                  <th>{t("progress.col.status")}</th>
+                  <th>{t("progress.col.score")}</th>
+                  <th>{t("progress.col.time")}</th>
+                  <th>{t("progress.col.lastActivity")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -280,38 +291,38 @@ export default async function RttProgressPage({
                       <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{r.subjectName}</div>
                     </td>
                     <td>
-                      <span className={statusChip(r.lessonStatus)}>{statusLabel(r.lessonStatus)}</span>
+                      <span className={statusChip(r.lessonStatus)}>{statusLabel(r.lessonStatus, t)}</span>
                     </td>
                     <td className="mono">{r.scoreRaw === null ? "—" : String(r.scoreRaw)}</td>
-                    <td className="mono">{formatDuration(r.timeCs)}</td>
+                    <td className="mono">{formatDuration(r.timeCs, t)}</td>
                     <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          {modules.more ? <More /> : null}
+          {modules.more ? <More t={t} /> : null}
         </section>
 
         <section className="card card-hi" style={{ overflowX: "auto" }}>
           <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>Attendance</div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{t("progress.attendance")}</div>
             <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-              Attendance taken at RTT sessions for {whose}, newest session first.
+              {t("progress.attendanceIntro", whose)}
             </div>
           </div>
           {attendance.rows.length === 0 ? (
             <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-              No attendance has been taken yet.
+              {t("progress.noAttendance")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  <th>Teacher</th>
-                  <th>Session</th>
-                  <th>Date</th>
-                  <th>Status</th>
+                  <th>{t("progress.col.teacher")}</th>
+                  <th>{t("progress.col.session")}</th>
+                  <th>{t("progress.col.date")}</th>
+                  <th>{t("progress.col.status")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -327,14 +338,14 @@ export default async function RttProgressPage({
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.scheduledAt)}</td>
                     <td>
-                      <span className={STATUS_CHIP[r.status] ?? "chip"}>{cap(r.status)}</span>
+                      <span className={STATUS_CHIP[r.status] ?? "chip"}>{attendanceLabel(r.status)}</span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          {attendance.more ? <More /> : null}
+          {attendance.more ? <More t={t} /> : null}
         </section>
       </div>
     </div>
@@ -353,10 +364,10 @@ function Header({ title }: { title: string }) {
 }
 
 /** Said, never silent: a capped table that looked complete would mislead. */
-function More() {
+function More({ t }: { t: Translate }) {
   return (
     <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--ink-3)", borderTop: "1px solid var(--line)" }}>
-      Showing the first {STAFF_ROW_LIMIT} rows. Choose a subject to narrow the list.
+      {t("progress.more", { limit: STAFF_ROW_LIMIT })}
     </div>
   );
 }

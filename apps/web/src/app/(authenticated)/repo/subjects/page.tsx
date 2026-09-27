@@ -10,6 +10,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -26,7 +27,10 @@ import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Subjects" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("subjects.metaTitle") };
+}
 
 // Hex → chip class. Subjects.color stores the design-system hex; we map it
 // to the closest semantic chip variant so the table picks up the new utility
@@ -58,6 +62,7 @@ export default async function RepoSubjectsIndexPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const t = await getTranslations("repo");
 
   const sp = await searchParams;
   // Grade-range filter — accept 1..12. Anything else (including the
@@ -119,11 +124,10 @@ export default async function RepoSubjectsIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Subjects</h1>
+        <div className="label">{t("common.repository")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("subjects.title")}</h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          Curricular subjects across Grades 1–10. Each subject links to its course outlines,
-          sessions and reading material.
+          {t("subjects.intro")}
         </p>
       </div>
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
@@ -136,13 +140,13 @@ export default async function RepoSubjectsIndexPage({
           {/* Spec 158 — name search input. Submits with the grade filter
               so the URL is one bookmarkable shareable state. */}
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Name
+            {t("common.name")}
             <input
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search subjects by name"
-              title="Search subjects by name"
+              aria-label={t("subjects.searchLabel")}
+              title={t("subjects.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
@@ -151,7 +155,7 @@ export default async function RepoSubjectsIndexPage({
           {/* A <label> for the select: this was a <span>, so the select had
               no accessible name. */}
           <label htmlFor="subjects-grade" className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Grade
+            {t("common.grade")}
           </label>
           <select
             id="subjects-grade"
@@ -160,15 +164,15 @@ export default async function RepoSubjectsIndexPage({
             className="text"
             style={{ maxWidth: 160, padding: "5px 10px", fontSize: 12 }}
           >
-            <option value="">All grades</option>
+            <option value="">{t("subjects.allGrades")}</option>
             {Array.from({ length: 12 }, (_, i) => i + 1).map((g) => (
               <option key={g} value={g}>
-                Grade {g}
+                {t("common.gradeN", { grade: g })}
               </option>
             ))}
           </select>
           <button type="submit" className="btn btn-sm">
-            Apply
+            {t("common.apply")}
           </button>
           {(gradeFilter !== null || qFilter) ? (
             <Link
@@ -176,23 +180,23 @@ export default async function RepoSubjectsIndexPage({
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Clear
+              {t("common.clear")}
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{rows.length} shown</span>
+            <span className="chip">{t("common.shown", { count: rows.length })}</span>
           </div>
         </form>
         {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="subjects"
-            emptyMessage="No subjects match this filter."
+            emptyMessage={t("subjects.empty")}
             items={rows.map((s) => {
               const gradesLabel =
                 s.gradesMin != null && s.gradesMax != null
-                  ? `Grades ${s.gradesMin}–${s.gradesMax}`
-                  : "All grades";
+                  ? t("subjects.gradesRange", { min: s.gradesMin, max: s.gradesMax })
+                  : t("subjects.allGrades");
               const chipClass = chipClassForColor(s.color).replace(/^chip\s*/, "");
               return {
                 id: s.id,
@@ -202,7 +206,7 @@ export default async function RepoSubjectsIndexPage({
                 secondary: [
                   { value: gradesLabel },
                   {
-                    value: `${s.outlines} outlines · ${s.sessions} sessions · ${s.readings} readings`,
+                    value: t("subjects.cardCounts", { outlines: s.outlines, sessions: s.sessions, readings: s.readings }),
                   },
                 ],
               };
@@ -212,13 +216,20 @@ export default async function RepoSubjectsIndexPage({
         <div className="card" style={device === "mobile" ? { display: "none" } : undefined} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
-              No subjects match this filter.
+              {t("subjects.empty")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  {["Subject", "Grades", "Outlines", "Sessions", "Readings", ""].map((h, i) => (
+                  {[
+                    t("common.subject"),
+                    t("subjects.grades"),
+                    t("common.outlines"),
+                    t("common.sessions"),
+                    t("common.readings"),
+                    "",
+                  ].map((h, i) => (
                     <th key={i}>{h}</th>
                   ))}
                 </tr>

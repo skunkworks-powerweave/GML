@@ -11,6 +11,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -26,10 +27,14 @@ import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
+import { districtLabel, type RepoTranslator } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Schools" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("schools.metaTitle") };
+}
 
 const READ_ROLES = new Set([
   "super_admin",
@@ -42,16 +47,17 @@ const READ_ROLES = new Set([
 // District chip palette (utility-class form):
 //   Leh    -> chip-indigo  (background var(--indigo-soft))
 //   Kargil -> chip-saffron (background var(--saffron-soft))
-const DISTRICT_CHIP: Record<string, { kind: string; label: string }> = {
-  leh: { kind: "chip-indigo", label: "Leh" },
-  kargil: { kind: "chip-saffron", label: "Kargil" },
-  kgl: { kind: "chip-saffron", label: "Kargil" },
+// The label is the district's name in the viewer's language (repo.district.*).
+const DISTRICT_CHIP: Record<string, { kind: string }> = {
+  leh: { kind: "chip-indigo" },
+  kargil: { kind: "chip-saffron" },
+  kgl: { kind: "chip-saffron" },
 };
 
-function chipFor(code: string | null | undefined) {
+function chipFor(t: RepoTranslator, code: string | null | undefined) {
   if (!code) return { kind: "", label: "—" };
   const k = code.toLowerCase();
-  return DISTRICT_CHIP[k] ?? { kind: "", label: code };
+  return { kind: DISTRICT_CHIP[k]?.kind ?? "", label: districtLabel(t, code) };
 }
 
 type SearchParams = Promise<{ district?: string; q?: string }>;
@@ -68,6 +74,7 @@ export default async function RepoSchoolsIndexPage({
   searchParams: SearchParams;
 }) {
   const session = await auth();
+  const t = await getTranslations("repo");
   const role = session?.user?.role ?? "teacher";
   // Mirrors src/admin/entities/schools.ts readRoles. The export route enforces
   // it server-side regardless; this only decides whether to offer the control.
@@ -170,9 +177,9 @@ export default async function RepoSchoolsIndexPage({
   };
 
   const filterTabs = [
-    { v: "all", l: "All", n: counts.all },
-    { v: "leh", l: "Leh", n: counts.leh },
-    { v: "kgl", l: "Kargil", n: counts.kgl },
+    { v: "all", l: t("common.all"), n: counts.all },
+    { v: "leh", l: t("district.leh"), n: counts.leh },
+    { v: "kgl", l: t("district.kargil"), n: counts.kgl },
   ];
 
   // Spec 138 — pick the right layout per device. The same `visible` rows
@@ -182,13 +189,12 @@ export default async function RepoSchoolsIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
+        <div className="label">{t("common.repository")}</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Schools
+          {t("schools.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          {totalSchools} government schools across Leh and Kargil districts. Click any row to see
-          its classes, teachers and sessions.
+          {t("schools.intro", { count: totalSchools })}
         </p>
       </div>
 
@@ -199,7 +205,7 @@ export default async function RepoSchoolsIndexPage({
           style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
         >
           <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            District
+            {t("common.district")}
           </span>
           {filterTabs.map((f) => {
             const active = districtFilter === f.v || (districtFilter === "kargil" && f.v === "kgl");
@@ -245,14 +251,14 @@ export default async function RepoSchoolsIndexPage({
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search schools by name"
-              title="Search schools by name"
+              aria-label={t("schools.searchLabel")}
+              title={t("schools.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
             <button type="submit" className="btn btn-sm">
-              Search
+              {t("common.search")}
             </button>
             {qFilter ? (
               <Link
@@ -264,7 +270,7 @@ export default async function RepoSchoolsIndexPage({
                 className="btn btn-sm"
                 style={{ textDecoration: "none" }}
               >
-                Clear
+                {t("common.clear")}
               </Link>
             ) : null}
           </form>
@@ -294,19 +300,23 @@ export default async function RepoSchoolsIndexPage({
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="schools"
-            emptyMessage="No schools match this filter."
+            emptyMessage={t("schools.empty")}
             items={visible.map((s) => {
-              const chip = chipFor(s.districtCode ?? s.districtName);
+              const chip = chipFor(t, s.districtCode ?? s.districtName);
               return {
                 id: s.id,
                 primary: s.name,
                 href: `/repo/school/${s.id}`,
                 chip: chip.label !== "—" ? { label: chip.label, kind: chip.kind } : null,
                 secondary: [
-                  { label: "Code", value: s.code, mono: true },
-                  { label: "Zone", value: s.zoneName ?? "—" },
+                  { label: t("common.code"), value: s.code, mono: true },
+                  { label: t("common.zone"), value: s.zoneName ?? "—" },
                   {
-                    value: `${s.teachersTotal ?? 0} teachers · ${s.classesTotal ?? 0} classes · ${s.sessionsTotal ?? 0} sessions`,
+                    value: t("schools.cardCounts", {
+                      teachers: s.teachersTotal ?? 0,
+                      classes: s.classesTotal ?? 0,
+                      sessions: s.sessionsTotal ?? 0,
+                    }),
                   },
                 ],
               };
@@ -325,25 +335,25 @@ export default async function RepoSchoolsIndexPage({
                 fontSize: 13,
               }}
             >
-              No schools match this filter.
+              {t("schools.empty")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  <th>Code</th>
-                  <th>Name</th>
-                  <th>Zone</th>
-                  <th>District</th>
-                  <th>Teachers</th>
-                  <th>Classes</th>
-                  <th>Sessions</th>
+                  <th>{t("common.code")}</th>
+                  <th>{t("common.name")}</th>
+                  <th>{t("common.zone")}</th>
+                  <th>{t("common.district")}</th>
+                  <th>{t("common.teachers")}</th>
+                  <th>{t("common.classes")}</th>
+                  <th>{t("common.sessions")}</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {visible.map((s) => {
-                  const chip = chipFor(s.districtCode ?? s.districtName);
+                  const chip = chipFor(t, s.districtCode ?? s.districtName);
                   return (
                     <tr key={s.id}>
                       <td className="mono" style={{ fontSize: 12 }}>
@@ -376,7 +386,7 @@ export default async function RepoSchoolsIndexPage({
                             color: "var(--ink-3)",
                             textDecoration: "none",
                           }}
-                          aria-label={`Open ${s.name}`}
+                          aria-label={t("common.openRecord", { name: s.name })}
                         >
                           ›
                         </Link>

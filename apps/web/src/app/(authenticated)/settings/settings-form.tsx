@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { signOutAction } from "./actions";
 import { ChangePasswordForm } from "./ChangePasswordForm";
@@ -56,6 +57,9 @@ const RENDERED_BY_LAYOUT: ReadonlyArray<keyof SettingsFormValues> = ["uiLanguage
 
 export function SettingsForm({ initial, email, roleLabel, roleChipKind, passwordRequired = false }: Props) {
   const router = useRouter();
+  const t = useTranslations("home.client.settingsForm");
+  const tAction = useTranslations("action");
+  const tLanguage = useTranslations("language");
   const [values, setValues] = useState<SettingsFormValues>(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -109,7 +113,10 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
       if ((err as Error).name === "AbortError") return; // superseded — silent
       sentRef.current = baselineRef.current;
       setSaveState("error");
-      setErrorMsg((err as Error).message || "Could not save");
+      // What the API said (an error code), or nothing; the badge says, in the
+      // user's language, that the save failed, and carries the code as its
+      // tooltip for whoever is asked to look into it.
+      setErrorMsg((err as Error).message || null);
     }
   }, [router]);
 
@@ -168,30 +175,30 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
     if (saveState === "saving") {
       return (
         <span style={{ fontSize: 11, color: "var(--ink-3)" }} aria-live="polite">
-          Saving…
+          {tAction("saving")}
         </span>
       );
     }
     if (saveState === "saved") {
       return (
         <span className="chip chip-lichen" aria-live="polite" role="status">
-          Saved
+          {tAction("saved")}
         </span>
       );
     }
     if (saveState === "error") {
       return (
-        <span className="chip chip-rust" role="alert">
-          {errorMsg ?? "Save failed"}
+        <span className="chip chip-rust" role="alert" title={errorMsg ?? undefined}>
+          {t("couldNotSave")}
         </span>
       );
     }
     return null;
-  }, [saveState, errorMsg]);
+  }, [saveState, errorMsg, t, tAction]);
 
   return (
     <>
-      <SectionCard title="Display" badge={saveBadge}>
+      <SectionCard title={t("display")} badge={saveBadge}>
         {/* ONLY WHAT TAKES EFFECT. Density and Text size were here and saved
             without changing anything: there are no density rules at all, and
             nearly every size in the app is an inline px value a body
@@ -201,31 +208,31 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
             come back when the sizes are rem-based. Until then, say what does
             work. */}
         <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 10, lineHeight: 1.5 }}>
-          For larger text, use your browser&apos;s zoom: Ctrl and + on a computer, or pinch on a phone.
+          {t("zoomHint")}
         </div>
         <ToggleRow
-          label="High contrast"
-          hint="Deepens ink + line tokens; easier in bright light."
+          label={t("highContrast")}
+          hint={t("highContrastHint")}
           value={values.highContrast}
           onChange={(v) => set("highContrast", v)}
         />
         <ToggleRow
-          label="Reduced motion"
-          hint="Disables transitions + animated pills."
+          label={t("reducedMotion")}
+          hint={t("reducedMotionHint")}
           value={values.reducedMotion}
           onChange={(v) => set("reducedMotion", v)}
         />
       </SectionCard>
 
-      <SectionCard title="Privacy">
+      <SectionCard title={t("privacy")}>
         {/* Was a "Watermark videos with my name" switch that the player never
             read -- it always draws the overlay. Stated rather than offered:
             honouring it would let a viewer remove the viewer-identifying
             overlay (SM-4) just before recording the screen. */}
         <div data-testid="watermark-always-on" style={{ padding: "10px 0" }}>
-          <div style={{ fontSize: 13, color: "var(--ink)" }}>Videos are watermarked with your name</div>
+          <div style={{ fontSize: 13, color: "var(--ink)" }}>{t("watermarkTitle")}</div>
           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2, lineHeight: 1.4 }}>
-            Always on, for every viewer. It identifies who was watching if a recording of the screen is shared.
+            {t("watermarkBody")}
           </div>
         </div>
         <div
@@ -239,32 +246,34 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
             lineHeight: 1.5,
           }}
         >
-          All session footage is confidential and downloads are disabled at the player level.
+          {t("footageNote")}
         </div>
       </SectionCard>
 
-      <SectionCard title="Language">
+      <SectionCard title={t("language")}>
         <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 10 }}>
-          Used for UI labels and notifications. Content (lesson titles, observation notes) is not auto-translated.
+          {t("languageNote")}
         </div>
+        {/* Each language by its own name, in its own script (language.*), so a
+            user can find theirs whatever the page is in. */}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <LangPill active={values.uiLanguage === "en"} onClick={() => pickLanguage("en")}>
-            English
+            <span lang="en">{tLanguage("english")}</span>
           </LangPill>
           <LangPill active={values.uiLanguage === "hi"} onClick={() => pickLanguage("hi")}>
-            <span style={{ fontFamily: "var(--deva)" }} lang="hi">हिन्दी</span>
+            <span style={{ fontFamily: "var(--deva)" }} lang="hi">{tLanguage("hindi")}</span>
           </LangPill>
           <LangPill active={values.uiLanguage === "bo"} onClick={() => pickLanguage("bo")}>
-            <span className="tib" lang="bo">བོད་ཡིག</span>
+            <span className="tib" lang="bo">{tLanguage("bhoti")}</span>
           </LangPill>
         </div>
       </SectionCard>
 
-      <SectionCard title="Account">
-        <KvRow label="Email">
+      <SectionCard title={t("account")}>
+        <KvRow label={t("email")}>
           <span className="mono" style={{ fontSize: 12 }}>{email}</span>
         </KvRow>
-        <KvRow label="Role">
+        <KvRow label={t("role")}>
           <span
             className={`chip${roleChipKind ? ` ${roleChipKind}` : ""}`}
             style={{ textTransform: "capitalize" }}
@@ -272,17 +281,17 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
             {roleLabel}
           </span>
         </KvRow>
-        <KvRow label="Password">
+        <KvRow label={t("password")}>
           {/* Was an <a href="/account/security"> — a route that has never
               existed. With self-service reset off until IT configures SMTP,
               this is the ONLY way a user can change the password an
               administrator chose for them. */}
           <ChangePasswordForm required={passwordRequired} />
         </KvRow>
-        <KvRow label="Replay tour">
+        <KvRow label={t("replayTour")}>
           <ReplayTourButton />
         </KvRow>
-        <KvRow label="Sign out">
+        <KvRow label={t("signOut")}>
           <form action={signOutAction}>
             {/* Same submit path as the Topbar, so the QuickFind-recents wipe
                 in SignOutButton runs here too. Previously this surface used a
@@ -298,7 +307,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
                 cursor: "pointer",
               }}
             >
-              End this session →
+              {t("endSession")}
             </SignOutButton>
           </form>
         </KvRow>
@@ -314,6 +323,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
 // a deep tree; FTUX is a once-a-quarter affordance so the page hit is
 // acceptable.
 function ReplayTourButton() {
+  const t = useTranslations("home.client.settingsForm.replay");
   const [state, setState] = useState<"idle" | "saving" | "error">("idle");
   const replay = async () => {
     setState("saving");
@@ -346,7 +356,7 @@ function ReplayTourButton() {
         textDecoration: "none",
       }}
     >
-      {state === "saving" ? "Re-arming…" : state === "error" ? "Failed — retry" : "Replay tour →"}
+      {state === "saving" ? t("rearming") : state === "error" ? t("failed") : t("idle")}
     </button>
   );
 }

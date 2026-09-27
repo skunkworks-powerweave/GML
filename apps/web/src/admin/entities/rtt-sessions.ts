@@ -17,17 +17,16 @@ import type { AdminEntity } from "../types";
 // do, and should not have to.
 export const rttSessionsEntity: AdminEntity = {
   slug: "rtt-sessions",
-  label: "RTT Sessions",
   table: rttSessions,
   readRoles: ["programme_admin", "super_admin", "mentor", "observer"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "title", label: "Title" },
-    { key: "type", label: "Type" },
-    { key: "scheduledAt", label: "Scheduled" },
-    { key: "durationMin", label: "Minutes" },
-    { key: "platform", label: "Platform" },
-    { key: "sequence", label: "Seq" },
+    { key: "title" },
+    { key: "type" },
+    { key: "scheduledAt" },
+    { key: "durationMin" },
+    { key: "platform" },
+    { key: "sequence" },
   ],
   formSchema: z.object({
     rttSubjectId: z.string().uuid(),
@@ -50,7 +49,7 @@ export const rttSessionsEntity: AdminEntity = {
         z
           .string()
           .max(2000)
-          .regex(/^https?:\/\//i, "Must be a web link, e.g. https://meet.google.com/abc-defg-hij")
+          .regex(/^https?:\/\//i, "validation.webLink")
           .url(),
       )
       .optional()

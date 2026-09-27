@@ -5,17 +5,13 @@
 // desktop UX stays pixel-identical after spec 136 split the page.tsx into a
 // server-side device branch.
 //
-// Spec 125 — labels translate via the next-intl client hook `useTranslations`.
+// Every visible string translates via the next-intl client hook
+// `useTranslations` (spec 125 did the tabs and buttons only; the brand panel,
+// instructions, field label and footer stayed English until UAT 2026-09-27).
 // The provider is supplied by ./layout.tsx (route-segment layout), which reads
 // the optional pre-auth `gml-locale` cookie and resolves the bundle server-
 // side. The Password tab toggle and email/password inputs stay as ordinary
 // client-side state; the language picker writes the cookie and refreshes.
-//
-// Spec 034 governance contract — the literals "हिन्दी" and "Ladakhi" must
-// remain in this file so the static script-test that reads the source can
-// see them. The picker also renders हिन्दी inside its <button> children, so
-// visible copy is in `language-picker.tsx`; the dead-code span at the bottom
-// is kept solely for the source-text gate.
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
@@ -34,6 +30,7 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
   const [mode, setMode] = useState<"password" | "magic">("password");
   const tAction = useTranslations("action");
   const tLanguage = useTranslations("language");
+  const t = useTranslations("login");
 
   return (
     <div style={{ minHeight: "100dvh", display: "grid", gridTemplateColumns: "1.05fr 1fr" }}>
@@ -61,7 +58,9 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
               alignItems: "center",
               justifyContent: "center",
               fontFamily: "var(--serif)",
-              fontSize: 18,
+              // 18px spilled "GML" out of the 36px tile on both sides.
+              fontSize: 13,
+              letterSpacing: "-0.02em",
               fontWeight: 700,
               color: "oklch(0.18 0.05 268)",
             }}
@@ -116,11 +115,10 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
               letterSpacing: "-0.02em",
             }}
           >
-            A learning system designed for the long road from Leh to Drass.
+            {t("hero")}
           </div>
           <p style={{ marginTop: 18, fontSize: 14, lineHeight: 1.55, color: "oklch(0.85 0.03 60)", maxWidth: 420 }}>
-            Goldenmile RTT — Refresher Teacher Training — supports teachers and mentor pairings across Leh and
-            Kargil, with WhatsApp-first video review and a paperwork system that respects how schools actually run.
+            {t("intro")}
           </p>
           <div
             style={{
@@ -132,10 +130,10 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
               color: "oklch(0.82 0.02 60)",
             }}
           >
-            <Stat n="500+" label="teachers" />
-            <Stat n="11" label="zones" />
-            <Stat n="3" label="phases" />
-            <Stat n="2" label="districts" />
+            <Stat n="500+" label={t("stats.teachers")} />
+            <Stat n="11" label={t("stats.zones")} />
+            <Stat n="3" label={t("stats.phases")} />
+            <Stat n="2" label={t("stats.districts")} />
           </div>
         </div>
 
@@ -149,7 +147,7 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
             color: "oklch(0.75 0.02 60)",
           }}
         >
-          Confidential · internal programme use only · audited
+          {t("confidential")}
         </div>
       </div>
 
@@ -170,8 +168,7 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
           {/* The email half only where the magic-link tab below is shown: it
               said so unconditionally, also where email is off. */}
           <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, marginBottom: 24 }}>
-            Use the credentials your programme administrator gave you
-            {emailEnabled ? ", or request a sign-in link by email." : "."}
+            {emailEnabled ? t("instructionsWithEmail") : t("instructions")}
           </p>
 
           {/* The magic-link tab only exists when outbound email does. On a
@@ -211,7 +208,7 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
                   through the POST so loginAction can send them back there. */}
               <input type="hidden" name="from" value={from} />
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>Email</span>
+                <span style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}>{t("email")}</span>
                 <input
                   name="email"
                   type="email"
@@ -281,15 +278,13 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
               fontFamily: "var(--mono)",
             }}
           >
-            <span>Sessions audited · 30-day rotation</span>
-            <span>v1.0 · build 2026.05</span>
+            <span>{t("footer")}</span>
+            <span>{t("version", { version: "1.0", build: "2026.05" })}</span>
           </div>
         </div>
 
         {/* Language switcher — absolute top-right per prototype. The picker
-            sets a gml-locale cookie and refreshes; ./layout.tsx reads it.
-            Static labels (English / हिन्दी / Ladakhi) ride the spec 034
-            test contract — the picker also shows them inside its buttons. */}
+            sets a gml-locale cookie and refreshes; ./layout.tsx reads it. */}
         <LoginLanguagePicker
           labels={{
             english: tLanguage("english"),
@@ -298,11 +293,6 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
           }}
         />
 
-        {/* Spec 034 governance contract — these literals must remain in this
-            file so the static script-test that reads the source can see them.
-            Visible copy is provided by the LoginLanguagePicker above (which
-            also includes हिन्दी inside its <button> children). */}
-        <span aria-hidden style={{ display: "none" }}>हिन्दी · Ladakhi</span>
       </div>
     </div>
   );

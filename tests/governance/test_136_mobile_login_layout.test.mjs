@@ -27,6 +27,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -278,18 +279,12 @@ test("spec 136 — DesktopLogin.tsx exists and preserves the original two-pane l
     /export function DesktopLogin/,
     "DesktopLogin must export a named DesktopLogin function",
   );
-  // Spec 034 contract — the Hindi + Ladakhi literal labels must still appear
-  // in the file the original spec gated on.
-  assert.match(
-    src,
-    /हिन्दी/,
-    "DesktopLogin must still contain the हिन्दी literal (spec 034 governance contract)",
-  );
-  assert.match(
-    src,
-    /Ladakhi/,
-    "DesktopLogin must still contain the Ladakhi literal (spec 034 governance contract)",
-  );
+  // Spec 034 contract — the desktop shell offers Hindi and Bhoti. The labels
+  // come from the language bundle (they used to sit in a hidden span here only
+  // so a source-text test could see them).
+  assert.match(src, /<LoginLanguagePicker/, "DesktopLogin must render the language picker");
+  assert.equal(message("language.hindi"), "हिन्दी");
+  assert.equal(message("language.ladakhi"), "Ladakhi");
 });
 
 test("spec 136 — no TODO / FIXME / placeholder markers leaked into shipped source", () => {

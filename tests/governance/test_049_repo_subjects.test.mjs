@@ -8,9 +8,19 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
+
+/**
+ * The page's copy is in the repo namespace: `src` reads repo.<key>, and the
+ * English bundle holds the prototype's words there.
+ */
+function readsCopy(src, key, english, what) {
+  assert.ok(readsKey(src, key), `${what} missing (repo.${key})`);
+  assert.equal(message(`repo.${key}`), english, `repo.${key}`);
+}
 
 const INDEX = "apps/web/src/app/(authenticated)/repo/subjects/page.tsx";
 const DETAIL = "apps/web/src/app/(authenticated)/repo/subject/[id]/page.tsx";
@@ -40,15 +50,22 @@ test("spec 049 — index queries subjects + roll-up counts via Drizzle", () => {
   }
   // Aggregates per JSX line 461-464.
   assert.match(src, /COUNT\(\*\)/i, "must compute roll-up counts");
-  // Reflects the JSX hero copy.
-  assert.match(src, /Subjects/);
-  assert.match(src, /Grades 1[–-]10/);
+  // Reflects the JSX hero copy (repo.subjects.*).
+  readsCopy(src, "subjects.title", "Subjects", "the h1");
+  assert.ok(readsKey(src, "subjects.intro"), "the hero copy (repo.subjects.intro)");
+  assert.match(message("repo.subjects.intro"), /Grades 1[–-]10/);
 });
 
 test("spec 049 — index renders Subject/Grades/Outlines/Sessions/Readings columns", () => {
   const src = read(INDEX);
-  for (const col of ["Subject", "Grades", "Outlines", "Sessions", "Readings"]) {
-    assert.match(src, new RegExp(`["']${col}["']`), `index must render the "${col}" column header`);
+  for (const [key, col] of [
+    ["common.subject", "Subject"],
+    ["subjects.grades", "Grades"],
+    ["common.outlines", "Outlines"],
+    ["common.sessions", "Sessions"],
+    ["common.readings", "Readings"],
+  ]) {
+    readsCopy(src, key, col, `index must render the "${col}" column header`);
   }
   // Mono dates / grades cell per JSX:470.
   assert.match(src, /var\(--mono\)/);
@@ -76,19 +93,26 @@ test("spec 049 — detail queries outlines + sessions + readings + teachers", ()
 
 test("spec 049 — detail renders the 4-stat strip + 3 section cards (JSX:508-557)", () => {
   const src = read(DETAIL);
-  // Stat tiles.
-  for (const stat of ["Grades covered", "Course outlines", "Sessions", "Readings"]) {
-    assert.match(src, new RegExp(stat), `detail must render Stat "${stat}"`);
+  // Stat tiles (repo namespace, read by key).
+  for (const [key, stat] of [
+    ["common.gradesCovered", "Grades covered"],
+    ["common.courseOutlines", "Course outlines"],
+    ["common.sessions", "Sessions"],
+    ["common.readings", "Readings"],
+  ]) {
+    assert.ok(src.includes(`<StatTile label={t("${key}")}`), `detail must render Stat "${stat}"`);
+    readsCopy(src, key, stat, `Stat "${stat}"`);
   }
   // Section cards.
-  assert.match(src, /Course outlines/);
-  assert.match(src, /Recent sessions/);
-  assert.match(src, /Reading material/);
-  // Outline status chip mapping per JSX:527.
-  assert.match(src, /In progress/);
-  assert.match(src, /Complete/);
+  readsCopy(src, "subject.outlinesTitle", "Course outlines ({count})", "the outlines card");
+  readsCopy(src, "subject.recentTitle", "Recent sessions ({count})", "the sessions card");
+  readsCopy(src, "subject.readingTitle", "Reading material ({count})", "the readings card");
+  // Outline status chip mapping per JSX:527: the stored status's label.
+  assert.match(src, /enumLabel\(t,\s*"outlineStatus"/);
+  assert.equal(message("repo.outlineStatus.in_progress"), "In progress");
+  assert.equal(message("repo.outlineStatus.complete"), "Complete");
   // Back link.
-  assert.match(src, /← Subjects/);
+  readsCopy(src, "subject.back", "← Subjects", "the back link");
 });
 
 test("spec 049 — detail respects SM-7 (Hindi name optional, deva font only when present)", () => {

@@ -6,15 +6,21 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { notifications } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { notificationKindFilter } from "@/lib/notification-kinds";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import { hrefForEntity, openHref } from "./links";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Inbox" };
+export async function generateMetadata(): Promise<Metadata> {
+  return { title: (await getTranslations("nav"))("inbox") };
+}
+
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
 
 // Kind → emoji glyph. Unknown kinds fall back to the bell.
 const KIND_ICON: Record<string, string> = {
@@ -43,27 +49,49 @@ function bucketFor(createdAt: Date, now: Date): "today" | "yesterday" | "week" |
   return "older";
 }
 
-const BUCKET_LABEL: Record<"today" | "yesterday" | "week" | "older", string> = {
-  today: "Today",
-  yesterday: "Yesterday",
-  week: "This week",
-  older: "Older",
+// A notification's kind and entity type are codes ("cycle.assigned",
+// "observation_cycle"). The row names them in the reader's language
+// (home.inbox.kind.* / home.inbox.entity.*); a code with no label yet is shown
+// as it is stored.
+const KIND_KEY: Record<string, string> = {
+  "helpdesk.ticket": "helpdeskTicket",
+  "cycle.assigned": "cycleAssigned",
+  "cycle.complete": "cycleComplete",
+  "video.transcoded": "videoTranscoded",
+  "video.review_pending": "videoReviewPending",
+  "meeting.scheduled": "meetingScheduled",
+  "meeting.cancelled": "meetingCancelled",
+  "pairing.final_submitted": "pairingFinalSubmitted",
+  "digest.weekly": "digestWeekly",
+  "quiz.due": "quizDue",
 };
+const ENTITY_TYPES = new Set([
+  "cycle",
+  "observation_cycle",
+  "video",
+  "video_submission",
+  "meeting",
+  "mentor_pairing",
+  "pairing",
+  "quiz",
+  "session",
+]);
 
-// Short relative timestamp ("now", "5m", "2h", "Yesterday", "Mon 14 Apr").
-function shortTime(createdAt: Date, now: Date): string {
+// Short relative timestamp ("now", "5m", "2h", "Yesterday", "Mon 14 Apr"), in
+// the reader's language; `intl` is the Intl locale for the date.
+function shortTime(createdAt: Date, now: Date, t: Translate, intl: string): string {
   const diffMs = now.getTime() - createdAt.getTime();
   const mins = Math.round(diffMs / 60_000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
+  if (mins < 1) return t("time.now");
+  if (mins < 60) return t("time.minutes", { count: mins });
   const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) return t("time.hours", { count: hours });
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
   const yesterdayStart = new Date(todayStart);
   yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-  if (createdAt >= yesterdayStart && createdAt < todayStart) return "Yesterday";
-  return createdAt.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+  if (createdAt >= yesterdayStart && createdAt < todayStart) return t("time.yesterday");
+  return createdAt.toLocaleDateString(intl, { weekday: "short", day: "numeric", month: "short" });
 }
 
 type Row = {
@@ -88,6 +116,10 @@ export default async function InboxPage({
 
   const sp = await searchParams;
   const filter = sp.filter === "unread" ? "unread" : "all";
+  const t = await getTranslations("home.inbox");
+  const tNav = await getTranslations("nav");
+  const tAction = await getTranslations("action");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
 
   // Unread-first, then most recent. Mirrors the (user_id, read_at, created_at) index from spec 025.
   // Drizzle's asc().nullsFirst() is not stable across pg-core minors — sql literal is the documented path.
@@ -147,11 +179,11 @@ export default async function InboxPage({
       <header style={{ marginBottom: 22, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-            Notifications
+            {tAction("notifications")}
           </div>
-          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Inbox</h1>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{tNav("inbox")}</h1>
           <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-            {unreadCount} unread · {totalShown} total · last 90 days
+            {t("counts", { unread: unreadCount, total: totalShown })}
           </p>
         </div>
 
@@ -171,7 +203,7 @@ export default async function InboxPage({
               fontFamily: "var(--sans)",
             }}
           >
-            Mark all read
+            {t("markAllRead")}
           </button>
         </form>
       </header>
@@ -193,7 +225,7 @@ export default async function InboxPage({
             border: "1px solid var(--line)",
           }}
         >
-          All
+          {t("filterAll")}
         </Link>
         <Link
           href="/inbox?filter=unread"
@@ -209,7 +241,7 @@ export default async function InboxPage({
             border: "1px solid var(--line)",
           }}
         >
-          Unread
+          {t("filterUnread")}
           {unreadCount > 0 ? (
             <span style={{ marginLeft: 6, fontFamily: "var(--mono)", fontSize: 11 }}>{unreadCount}</span>
           ) : null}
@@ -228,14 +260,16 @@ export default async function InboxPage({
         >
           <div style={{ fontSize: 40, marginBottom: 8 }}>📭</div>
           <h2 style={{ fontFamily: "var(--serif)", fontSize: 20, marginBottom: 6 }}>
-            {filter === "unread" ? "No unread notifications." : "Nothing in your inbox yet."}
+            {filter === "unread" ? t("empty.unread") : t("empty.all")}
           </h2>
           <p style={{ color: "var(--ink-3)", fontSize: 13, maxWidth: 420, margin: "0 auto" }}>
-            Operational events — assigned cycles, transcoded videos, scheduled meetings, due quizzes — will show up
-            here. Notifications are kept for 90 days.{" "}
-            <Link href="/dashboard" style={{ color: "var(--indigo)" }}>
-              Back to dashboard →
-            </Link>
+            {t.rich("empty.body", {
+              link: (chunks) => (
+                <Link href="/dashboard" style={{ color: "var(--indigo)" }}>
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
         </section>
       ) : (
@@ -255,14 +289,14 @@ export default async function InboxPage({
                     fontWeight: 600,
                   }}
                 >
-                  {BUCKET_LABEL[bucket]}
+                  {t(`bucket.${bucket}`)}
                   <span style={{ marginLeft: 6, fontFamily: "var(--mono)", color: "var(--ink-4)" }}>
                     {bucketRows.length}
                   </span>
                 </h2>
                 <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
                   {bucketRows.map((row) => (
-                    <NotificationRow key={row.id} row={row} now={now} />
+                    <NotificationRow key={row.id} row={row} now={now} t={t} intl={intl} />
                   ))}
                 </ul>
               </div>
@@ -274,7 +308,7 @@ export default async function InboxPage({
   );
 }
 
-function NotificationRow({ row, now }: { row: Row; now: Date }) {
+function NotificationRow({ row, now, t, intl }: { row: Row; now: Date; t: Translate; intl: string }) {
   const unread = row.readAt === null;
   const icon = KIND_ICON[row.kind] ?? "🔔";
   // Every item opens through the route that marks it read, and lands on its
@@ -343,12 +377,13 @@ function NotificationRow({ row, now }: { row: Row; now: Date }) {
           </div>
         ) : null}
         <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-4)", fontFamily: "var(--mono)" }}>
-          {row.kind}
-          {row.entityType ? ` · ${row.entityType}` : ""}
+          {KIND_KEY[row.kind] ? t(`kind.${KIND_KEY[row.kind]}`) : row.kind}
+          {row.entityType ? " · " : null}
+          {row.entityType ? (ENTITY_TYPES.has(row.entityType) ? t(`entity.${row.entityType}`) : row.entityType) : null}
         </div>
       </div>
       <span style={{ flexShrink: 0, fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--mono)" }}>
-        {shortTime(row.createdAt, now)}
+        {shortTime(row.createdAt, now, t, intl)}
       </span>
     </>
   );
@@ -358,7 +393,11 @@ function NotificationRow({ row, now }: { row: Row; now: Date }) {
       <a
         href={href}
         style={rowStyle}
-        aria-label={unread ? `${row.subject} (unread${destination ? "" : ", mark read"})` : row.subject}
+        aria-label={
+          unread
+            ? t(destination ? "rowUnread" : "rowUnreadMarkRead", { subject: row.subject })
+            : row.subject
+        }
       >
         {content}
       </a>

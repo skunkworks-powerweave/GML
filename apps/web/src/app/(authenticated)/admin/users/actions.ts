@@ -12,8 +12,13 @@
 // hands it over through whatever channel they already use; the account holder
 // changes it from /settings. When IT configures SMTP, the invite path can be
 // added without changing anything here.
+//
+// Every message goes straight back to the administrator's form, so it is in
+// their language (admin namespace, users.actions.*). What Supabase itself says
+// (a duplicate address, a refused update) is passed through as it comes.
 
 import { revalidatePath } from "next/cache";
+import { getTranslations } from "next-intl/server";
 import { eq, and, ne, isNull, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { users } from "@gml/db/schema";
@@ -22,7 +27,8 @@ import { supabaseAdmin } from "@/lib/supabase/server";
 import { revokeAllSessions, type RevokeResult } from "@/lib/supabase/sessions";
 import { recordAudit, noteAuditDegraded } from "@/lib/audit";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
-import { MUST_CHANGE_PASSWORD, passwordPolicyError } from "@/lib/password-policy";
+import { MUST_CHANGE_PASSWORD } from "@/lib/password-policy";
+import { passwordPolicyError } from "@/lib/password-policy-message";
 import { linkAccountToRecord } from "./link";
 
 export type UserActionState = { error?: string; ok?: string };
@@ -45,12 +51,23 @@ function assignableBy(actor: RoleName): readonly RoleName[] {
 
 type Actor = { id: string; role: RoleName };
 
+/** This module's messages, in the administrator's language. */
+async function messages() {
+  const t = await getTranslations("admin");
+  return {
+    t: (key: string, values?: Record<string, string | number>) => t(`users.actions.${key}`, values),
+    /** A role as the users page names it, not the enum code. */
+    role: (role: string) => (t.has(`client.roles.${role}`) ? t(`client.roles.${role}`) : role),
+  };
+}
+
 async function requireAdmin(): Promise<Actor | { error: string }> {
+  const { t } = await messages();
   const session = await auth();
-  if (!session) return { error: "Not signed in." };
+  if (!session) return { error: t("notSignedIn") };
   const { id, role } = session.user;
   if (role !== "programme_admin" && role !== "super_admin") {
-    return { error: "You do not have permission to manage users." };
+    return { error: t("noPermission") };
   }
   return { id, role };
 }
@@ -73,10 +90,11 @@ async function canActOn(
   actor: Actor,
   targetId: string,
 ): Promise<{ ok: true; targetRole: RoleName } | { ok: false; error: string }> {
+  const { t } = await messages();
   if (actor.id === targetId) {
     return {
       ok: false,
-      error: "You cannot change your own role or status. Ask another administrator.",
+      error: t("notYourself"),
     };
   }
   const [target] = await db
@@ -85,11 +103,11 @@ async function canActOn(
     .where(eq(users.id, targetId))
     .limit(1);
 
-  if (!target) return { ok: false, error: "No such user." };
+  if (!target) return { ok: false, error: t("noSuchUser") };
   const targetRole = target.role as RoleName;
 
   if (actor.role !== "super_admin" && (targetRole === "super_admin" || targetRole === "programme_admin")) {
-    return { ok: false, error: "Only a super admin can manage administrator accounts." };
+    return { ok: false, error: t("adminOnly") };
   }
   return { ok: true, targetRole };
 }
@@ -126,6 +144,7 @@ export async function createUserAction(
 ): Promise<UserActionState> {
   const actor = await requireAdmin();
   if ("error" in actor) return { error: actor.error };
+  const { t } = await messages();
 
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const name = String(formData.get("name") ?? "").trim();
@@ -137,13 +156,13 @@ export async function createUserAction(
   const linkKind = String(formData.get("linkKind") ?? "");
   const linkId = String(formData.get("linkId") ?? "").trim();
 
-  if (!email || !email.includes("@")) return { error: "Enter a valid email address." };
-  if (!isRoleName(role)) return { error: "Choose a role." };
+  if (!email || !email.includes("@")) return { error: t("invalidEmail") };
+  if (!isRoleName(role)) return { error: t("chooseRole") };
   if (!assignableBy(actor.role).includes(role)) {
-    return { error: "You cannot assign that role." };
+    return { error: t("cannotAssign") };
   }
-  const policy = passwordPolicyError(password);
-  if (policy) return { error: `Initial password: ${policy}` };
+  const policy = await passwordPolicyError(password);
+  if (policy) return { error: t("initialPassword", { problem: policy }) };
 
   const admin = supabaseAdmin();
   const { data, error } = await admin.auth.admin.createUser({
@@ -162,7 +181,7 @@ export async function createUserAction(
   if (error || !data?.user) {
     // Supabase's duplicate-address message is safe to surface: the caller is an
     // authenticated administrator who can already list every account.
-    return { error: error?.message ?? "Could not create the account." };
+    return { error: error?.message ?? t("createFailed") };
   }
 
   const newId = data.user.id;
@@ -194,16 +213,19 @@ export async function createUserAction(
     const leftBehind = await rollbackNewAccount(admin, newId, email);
     if (err instanceof AlreadyLinked) {
       return {
-        error: `That ${linkKind} record is already linked to another login. ${
-          leftBehind ?? "Nothing was created; reload the page for the current list."
-        }`,
+        error: t("alreadyLinked", {
+          kind: linkKind,
+          outcome: leftBehind ?? t("nothingCreatedReload"),
+        }),
       };
     }
     // The auth record exists but the profile is wrong. Leaving it would produce
     // an account that can authenticate with the password the administrator
     // chose -- possibly already promoted to the requested role -- so undo it and
     // report honestly rather than leaving an orphan.
-    return { error: `Could not set up the profile: ${String(err).slice(0, 200)}. ${leftBehind ?? "Nothing was created."}` };
+    return {
+      error: t("profileFailed", { detail: String(err).slice(0, 200), outcome: leftBehind ?? t("nothingCreated") }),
+    };
   }
 
   const wrote = await recordAudit({
@@ -218,7 +240,7 @@ export async function createUserAction(
 
   revalidatePath("/admin/users");
   return {
-    ok: `Created ${email}. Give them the password you set; they will be asked to choose their own when they first sign in.`,
+    ok: t("created", { email }),
   };
 }
 
@@ -239,11 +261,12 @@ async function rollbackNewAccount(
   newId: string,
   email: string,
 ): Promise<string | null> {
+  const { t } = await messages();
   try {
     await db.execute(sql`DELETE FROM public.users WHERE id = ${newId}::uuid`);
   } catch (err) {
     console.error(`[admin/users] could not remove the profile of the half-created account ${newId}:`, err);
-    return `The account for ${email} could not be removed and is still listed here; deactivate it if it is active.`;
+    return t("profileLeftBehind", { email });
   }
   try {
     const { error } = await admin.auth.admin.deleteUser(newId);
@@ -251,7 +274,7 @@ async function rollbackNewAccount(
     return null;
   } catch (err) {
     console.error(`[admin/users] could not remove the half-created login ${newId}:`, err);
-    return `The login for ${email} could not be removed; delete it in the Supabase dashboard (Authentication → Users) before creating it again.`;
+    return t("loginLeftBehind", { email });
   }
 }
 
@@ -263,11 +286,12 @@ export async function setRoleAction(
 ): Promise<UserActionState> {
   const actor = await requireAdmin();
   if ("error" in actor) return { error: actor.error };
+  const { t, role: roleName } = await messages();
 
   const targetId = String(formData.get("userId") ?? "");
   const role = String(formData.get("role") ?? "");
-  if (!isRoleName(role)) return { error: "Unknown role." };
-  if (!assignableBy(actor.role).includes(role)) return { error: "You cannot assign that role." };
+  if (!isRoleName(role)) return { error: t("unknownRole") };
+  if (!assignableBy(actor.role).includes(role)) return { error: t("cannotAssign") };
 
   const permitted = await canActOn(actor, targetId);
   if (!permitted.ok) return { error: permitted.error };
@@ -275,7 +299,7 @@ export async function setRoleAction(
   const result = await db.transaction(async (tx) => {
     if (permitted.targetRole === "super_admin" && role !== "super_admin") {
       if (await wouldStrandTheOrg(tx, targetId)) {
-        return { error: "This is the last active super admin. Promote someone else first." };
+        return { error: t("lastSuperAdmin") };
       }
     }
     await tx
@@ -315,8 +339,8 @@ export async function setRoleAction(
   return {
     ok:
       revoked && !revoked.ok
-        ? `Role updated to ${role}. Their administrator access has ended, but their existing sessions could not be ended: they stay signed in as ${role} until they sign out. To end those sessions, deactivate and reactivate the account.`
-        : `Role updated to ${role}.`,
+        ? t("roleUpdatedSessionsKept", { role: roleName(role) })
+        : t("roleUpdated", { role: roleName(role) }),
   };
 }
 
@@ -337,6 +361,7 @@ export async function setActiveAction(
 ): Promise<UserActionState> {
   const actor = await requireAdmin();
   if ("error" in actor) return { error: actor.error };
+  const { t } = await messages();
 
   const targetId = String(formData.get("userId") ?? "");
   const active = String(formData.get("active") ?? "") === "true";
@@ -347,7 +372,7 @@ export async function setActiveAction(
   const result = await db.transaction(async (tx) => {
     if (!active && permitted.targetRole === "super_admin") {
       if (await wouldStrandTheOrg(tx, targetId)) {
-        return { error: "This is the last active super admin. Promote someone else first." };
+        return { error: t("lastSuperAdmin") };
       }
     }
     await tx
@@ -393,21 +418,19 @@ export async function setActiveAction(
   if (active) {
     return {
       ok: ban.ok
-        ? "Account reactivated."
-        : `Account reactivated, but Supabase still blocks their sign-in (${ban.error}). Deactivate and reactivate them to retry.`,
+        ? t("reactivated")
+        : t("reactivatedStillBanned", { error: ban.error }),
     };
   }
   // No "deactivate again to retry": the row now offers only Reactivate. The
   // inactive profile is what matters most -- the access-token hook refuses to
   // mint for it, so a session that survived cannot be renewed and a sign-in
   // that got past a missing ban still gets no token.
-  const sessions = revoked?.ok
-    ? "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime."
-    : "Account deactivated, but their existing sessions could not be ended. They cannot be renewed while the account is inactive and stop working within one token lifetime.";
+  const sessions = revoked?.ok ? t("deactivated") : t("deactivatedSessionsKept");
   return {
     ok: ban.ok
       ? sessions
-      : `${sessions} Supabase did not block their sign-in (${ban.error}); the inactive account is still refused a session.`,
+      : t("banNotApplied", { outcome: sessions, error: ban.error }),
   };
 }
 
@@ -466,12 +489,13 @@ export async function setPhoneAction(
 ): Promise<UserActionState> {
   const actor = await requireAdmin();
   if ("error" in actor) return { error: actor.error };
+  const { t } = await messages();
 
   const targetId = String(formData.get("userId") ?? "");
   const typed = String(formData.get("phone") ?? "").trim();
   const phone = typed === "" ? null : normalisePhone(typed);
   if (typed !== "" && phone === null) {
-    return { error: "Enter a mobile number, e.g. 98765 43210 or +91 98765 43210." };
+    return { error: t("invalidPhone") };
   }
 
   if (targetId !== actor.id) {
@@ -484,7 +508,7 @@ export async function setPhoneAction(
     .set({ phone, updatedAt: new Date() })
     .where(eq(users.id, targetId))
     .returning({ id: users.id });
-  if (updated.length === 0) return { error: "No such user." };
+  if (updated.length === 0) return { error: t("noSuchUser") };
 
   // Whether a number is on file, not the number: the audit log is readable by
   // every administrator.
@@ -496,7 +520,7 @@ export async function setPhoneAction(
   if (!wrote) noteAuditDegraded("admin/users/setPhoneAction");
 
   revalidatePath("/admin/users");
-  return { ok: phone ? `WhatsApp number saved (${phone}).` : "WhatsApp number removed." };
+  return { ok: phone ? t("phoneSaved", { phone }) : t("phoneRemoved") };
 }
 
 // ── password ──────────────────────────────────────────────────────────────────
@@ -507,10 +531,11 @@ export async function setPasswordAction(
 ): Promise<UserActionState> {
   const actor = await requireAdmin();
   if ("error" in actor) return { error: actor.error };
+  const { t } = await messages();
 
   const targetId = String(formData.get("userId") ?? "");
   const password = String(formData.get("password") ?? "");
-  const policy = passwordPolicyError(password);
+  const policy = await passwordPolicyError(password);
   if (policy) return { error: policy };
 
   const permitted = await canActOn(actor, targetId);
@@ -544,8 +569,6 @@ export async function setPasswordAction(
 
   revalidatePath("/admin/users");
   return {
-    ok: revoked.ok
-      ? "Password set. Their other sessions have been signed out."
-      : "Password set, but their existing sessions could not be ended. Try again, or ask them to sign out.",
+    ok: revoked.ok ? t("passwordSet") : t("passwordSetSessionsKept"),
   };
 }

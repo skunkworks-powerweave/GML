@@ -12,6 +12,7 @@
 // A future spec can upgrade to a styled modal without touching the action.
 
 import { type FormEvent, useTransition } from "react";
+import { useTranslations } from "next-intl";
 import { deleteRowAction } from "./actions";
 
 type Props = {
@@ -22,11 +23,14 @@ type Props = {
 
 export function DeleteRowButton({ entitySlug, rowId, rowLabel }: Props) {
   const [pending, startTransition] = useTransition();
+  const t = useTranslations("adminData.client");
+  const tAction = useTranslations("action");
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const target = rowLabel ?? `row ${rowId.slice(0, 8)}`;
-    const message = `Delete ${target}? This cannot be undone.`;
+    // rowLabel is the entity's describeRow ("school:GPS Chuchot"): data.
+    const target = rowLabel ?? t("deleteRow.rowFallback", { id: rowId.slice(0, 8) });
+    const message = t("deleteRow.confirm", { target });
     if (typeof window !== "undefined" && !window.confirm(message)) {
       return;
     }
@@ -47,7 +51,7 @@ export function DeleteRowButton({ entitySlug, rowId, rowLabel }: Props) {
         disabled={pending}
         className="text-xs text-red-700 hover:underline disabled:opacity-50"
       >
-        {pending ? "Deleting…" : "Delete"}
+        {pending ? t("deleteRow.deleting") : tAction("delete")}
       </button>
     </form>
   );

@@ -16,14 +16,13 @@ import type { AdminEntity } from "../types";
 // Test: tests/behaviour/admin-entities.test.ts.
 export const rttLessonsEntity: AdminEntity = {
   slug: "rtt-lessons",
-  label: "RTT Lessons",
   table: rttLessons,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "rttModuleId", label: "RTT module" },
-    { key: "sequence", label: "Seq" },
-    { key: "title", label: "Title" },
+    { key: "rttModuleId" },
+    { key: "sequence" },
+    { key: "title" },
   ],
   formSchema: z.object({
     rttModuleId: z.string().uuid(),

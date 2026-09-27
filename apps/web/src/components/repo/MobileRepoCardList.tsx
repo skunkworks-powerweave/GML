@@ -17,10 +17,13 @@
 // the link. Safe-area-inset-* is handled by the page chrome shell; cards sit
 // in normal flow inside `.page-body`. No client JS is needed for the tap
 // target (Link covers everything), so the component is a plain server
-// component — Next.js will inline it into the page's SSR pass.
+// component — Next.js will inline it into the page's SSR pass. Its own two
+// strings (the default empty state and each card's "Open <name>" label) come
+// from the repo namespace, so it is async (getTranslations).
 
 import Link from "next/link";
 import type { CSSProperties, ReactNode } from "react";
+import { getTranslations } from "next-intl/server";
 
 /**
  * A single field rendered as a secondary line. `value` is the already-formatted
@@ -55,7 +58,7 @@ export type MobileRepoCardItem = {
   chip?: MobileRepoChip | null;
   /** Where tapping the card navigates. */
   href: string;
-  /** aria-label override (defaults to "Open <primary>"). */
+  /** aria-label override (defaults to "Open <primary>", translated). */
   ariaLabel?: string;
 };
 
@@ -159,18 +162,19 @@ function renderSecondary(field: MobileRepoSecondaryField, idx: number) {
   );
 }
 
-export function MobileRepoCardList({
+export async function MobileRepoCardList({
   items,
   emptyMessage,
   testIdSuffix,
 }: MobileRepoCardListProps) {
+  const t = await getTranslations("repo");
   if (items.length === 0) {
     return (
       <div
         data-testid={testIdSuffix ? `mobile-repo-cards-empty-${testIdSuffix}` : "mobile-repo-cards-empty"}
         style={emptyStyle}
       >
-        {emptyMessage ?? "Nothing here yet."}
+        {emptyMessage ?? t("mobileCards.empty")}
       </div>
     );
   }
@@ -183,7 +187,7 @@ export function MobileRepoCardList({
       {items.map((it) => {
         const aria =
           it.ariaLabel ??
-          (typeof it.primary === "string" ? `Open ${it.primary}` : undefined);
+          (typeof it.primary === "string" ? t("mobileCards.open", { name: it.primary }) : undefined);
         return (
           <Link
             key={String(it.id)}

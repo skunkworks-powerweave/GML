@@ -23,9 +23,13 @@
 // `importCsv` returns partial success (207) -- 40 rows in, 3 rejected -- and
 // collapsing that to "failed" would hide the 40 that landed, while collapsing
 // it to "done" would hide the 3 that did not.
+//
+// The panel's words are in the viewer's language (adminData.client.importCsv);
+// the column names it lists are the CSV's data contract and stay as they are.
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 type ImportResult = {
   ok: boolean;
@@ -59,6 +63,7 @@ export function ImportCsv({
   reportsDuplicates?: boolean;
 }) {
   const router = useRouter();
+  const t = useTranslations("adminData.client");
   const fileInput = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -107,12 +112,12 @@ export function ImportCsv({
         const body = (await res.json().catch(() => null)) as { error?: string; gate?: string } | null;
         setError(
           body?.error === "unknown_entity"
-            ? "That table does not accept imports."
+            ? t("importCsv.unknownEntity")
             : body?.error === "gate_required"
-              ? `Unlock the ${body.gate ?? "section"} section first, then import again.`
+              ? t("importCsv.gateRequired", { gate: body.gate ?? "none" })
               : res.status === 403
-              ? "You do not have permission to import into this table."
-              : `The import failed (HTTP ${res.status}).`,
+              ? t("importCsv.forbidden")
+              : t("importCsv.failed", { status: String(res.status) }),
         );
         return;
       }
@@ -123,7 +128,7 @@ export function ImportCsv({
         router.refresh();
       }
     } catch {
-      setError("The import could not be sent. Check your connection and try again.");
+      setError(t("importCsv.offline"));
     } finally {
       setBusy(false);
     }
@@ -136,9 +141,9 @@ export function ImportCsv({
         data-testid="import-csv-open"
         onClick={() => setOpen(true)}
         className="rounded-md border border-neutral-300 bg-white px-2 py-1 hover:border-neutral-400"
-        title={`Bulk-add rows to ${entityLabel} from a CSV file`}
+        title={t("importCsv.openTitle", { entity: entityLabel })}
       >
-        Import CSV
+        {t("importCsv.open")}
       </button>
     );
   }
@@ -151,7 +156,7 @@ export function ImportCsv({
       className="absolute right-6 z-20 mt-8 w-[28rem] rounded-lg border border-neutral-300 bg-white p-4 text-left shadow-lg"
     >
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-sm font-medium text-neutral-900">Import into {entityLabel}</h2>
+        <h2 className="text-sm font-medium text-neutral-900">{t("importCsv.title", { entity: entityLabel })}</h2>
         <button
           type="button"
           onClick={() => {
@@ -160,21 +165,19 @@ export function ImportCsv({
           }}
           className="text-xs text-neutral-500 hover:underline"
         >
-          Close
+          {t("importCsv.close")}
         </button>
       </div>
 
+      {/* The last sentence: uploading the whole file again after a partial
+          import used to add every row that had landed a second time. */}
       <p className="mb-3 text-xs text-neutral-600">
-        A CSV with a header row. Recognised columns:{" "}
-        <code className="text-[11px]">{acceptedColumns.join(", ")}</code>. Every row is validated
-        before it is written; rows that fail are reported and skipped, and the rest still land.
-        A row with an <code className="text-[11px]">id</code> (as in an export) updates that row;
-        a row without one is added
-        {reportsDuplicates ? ", unless it matches a record already on the table: that row is reported, not added again" : ""}.
-        {/* Uploading the whole file again after a partial import used to add
-            every row that had landed a second time. */}
-        {" "}After a partial import, import again only the rows reported as failed, or an export,
-        which carries ids.
+        {t.rich("importCsv.intro", {
+          columns: acceptedColumns.join(", "),
+          // i18n-ignore: ICU select keys, not words
+          duplicates: reportsDuplicates ? "yes" : "no",
+          code: (chunks) => <code className="text-[11px]">{chunks}</code>,
+        })}
       </p>
 
       <input
@@ -190,15 +193,17 @@ export function ImportCsv({
         <div className="mb-3 rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs">
           <div className="font-medium text-neutral-800">{fileName}</div>
           <div className="text-neutral-600">
-            {rowCount} data row{rowCount === 1 ? "" : "s"} · columns: {header.join(", ") || "none"}
+            {t("importCsv.fileSummary", {
+              count: rowCount,
+              n: String(rowCount),
+              columns: header.join(", ") || t("importCsv.none"),
+            })}
           </div>
           {unknownColumns.length > 0 ? (
             // Not an error -- the importer ignores what it does not know. But a
             // misspelt header silently dropping a column is exactly the kind of
             // thing you want to see BEFORE writing 400 rows.
-            <div className="mt-1 text-amber-700">
-              Ignored (not a column on this table): {unknownColumns.join(", ")}
-            </div>
+            <div className="mt-1 text-amber-700">{t("importCsv.ignored", { columns: unknownColumns.join(", ") })}</div>
           ) : null}
         </div>
       ) : null}
@@ -220,7 +225,11 @@ export function ImportCsv({
           }`}
         >
           <div className="font-medium">
-            {result.inserted} inserted · {result.updated ?? 0} updated · {result.skipped} skipped
+            {t("importCsv.result", {
+              inserted: String(result.inserted),
+              updated: String(result.updated ?? 0),
+              skipped: String(result.skipped),
+            })}
           </div>
           {result.errors.length > 0 ? (
             <ul className="mt-1 max-h-40 list-disc space-y-0.5 overflow-auto pl-4">
@@ -228,8 +237,7 @@ export function ImportCsv({
                 <li key={`${e.row}-${i}`}>
                   {/* The server already reports the spreadsheet line (header =
                       line 1); adding 2 again sent the operator two lines too far. */}
-                  {e.row >= 0 ? `Row ${e.row}: ` : ""}
-                  {e.message}
+                  {e.row >= 0 ? t("importCsv.rowMessage", { row: String(e.row), message: e.message }) : e.message}
                 </li>
               ))}
             </ul>
@@ -245,7 +253,7 @@ export function ImportCsv({
           data-testid="import-csv-submit"
           className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1 text-xs text-white disabled:opacity-40"
         >
-          {busy ? "Importing…" : `Import ${rowCount || ""} row${rowCount === 1 ? "" : "s"}`.trim()}
+          {busy ? t("importCsv.importing") : t("importCsv.submit", { count: rowCount, n: String(rowCount) })}
         </button>
         {csv ? (
           <button
@@ -253,7 +261,7 @@ export function ImportCsv({
             onClick={reset}
             className="rounded-md border border-neutral-300 px-3 py-1 text-xs hover:border-neutral-400"
           >
-            Choose another file
+            {t("importCsv.another")}
           </button>
         ) : null}
       </div>

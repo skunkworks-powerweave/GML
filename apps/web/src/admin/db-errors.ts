@@ -11,8 +11,10 @@
 // Postgres puts the offending column in the error's `detail` ("Key
 // (code)=(GPS-CHU) already exists.", "Key (zone_id)=(...) is not present in
 // table \"zones\".") or `column`; it is mapped back to the form's field name.
+// The sentence is in the viewer's language (adminData.dbError).
 
 import { getTableColumns } from "drizzle-orm";
+import type { Translate } from "./labels";
 import type { AdminEntity } from "./types";
 
 type PgError = { code?: string; detail?: string; column?: string; constraint?: string };
@@ -30,32 +32,51 @@ function keyColumns(detail: string | undefined): string[] {
 }
 
 /**
- * `field: what is wrong`, from a Postgres error; a generic sentence for
- * anything unrecognised (the full error still goes to the server log).
+ * What a write error was, as the fields it names and a message key: with
+ * fields, the key is the clause that follows "field: "; without, a sentence
+ * of its own.
  */
-export function describeWriteError(entity: AdminEntity, err: unknown): string {
+function writeProblem(entity: AdminEntity, err: unknown): { fields: string[]; key: string } {
   const e = (err ?? {}) as PgError;
   const fields = () => keyColumns(e.detail).map((c) => fieldFor(entity, c));
   switch (e.code) {
     case "23505": {
       const f = fields();
-      return f.length ? `${f.join(", ")}: a row with this value already exists` : "a row with these values already exists";
+      return { fields: f, key: f.length ? "dbError.duplicate" : "dbError.duplicateNoField" };
     }
-    case "23503": {
-      const f = fields();
-      return f.length ? `${f.join(", ")}: refers to a row that does not exist` : "refers to a row that does not exist";
-    }
+    case "23503":
+      return { fields: fields(), key: "dbError.missingRef" };
     case "23502":
-      return e.column ? `${fieldFor(entity, e.column)}: is required` : "a required value is missing";
+      return e.column
+        ? { fields: [fieldFor(entity, e.column)], key: "dbError.required" }
+        : { fields: [], key: "dbError.requiredNoField" };
     case "23514":
-      return "a value is outside what this table allows";
+      return { fields: [], key: "dbError.check" };
     case "22P02":
     case "22007":
     case "22008":
-      return "a value is not in the format this column needs";
+      return { fields: [], key: "dbError.format" };
     case "22001":
-      return "a value is too long for its column";
+      return { fields: [], key: "dbError.tooLong" };
     default:
-      return "the row could not be saved";
+      return { fields: [], key: "dbError.unknown" };
   }
+}
+
+/**
+ * `field: what is wrong`, from a Postgres error; a generic sentence for
+ * anything unrecognised (the full error still goes to the server log).
+ * `field` / `fieldMessage` are set when exactly one field is named, for the
+ * form to show under that input.
+ */
+export function describeWriteError(
+  t: Translate,
+  entity: AdminEntity,
+  err: unknown,
+): { text: string; field?: string; fieldMessage?: string } {
+  const { fields, key } = writeProblem(entity, err);
+  const message = t(key);
+  if (fields.length === 0) return { text: message };
+  const text = t("fieldMessage", { field: fields.join(", "), message });
+  return fields.length === 1 ? { text, field: fields[0], fieldMessage: message } : { text };
 }

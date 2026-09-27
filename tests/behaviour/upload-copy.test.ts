@@ -125,7 +125,7 @@ test("F13: the phone flow's success screen does not promise that the mentor is n
     });
     u.complete = async () => ({ ok: true });
     const { MobileUploadRunner } = await import("../../apps/web/src/components/video/MobileUploadRunner.tsx");
-    const m = mount(MobileUploadRunner as (p: unknown) => unknown, {});
+    const m = mount(MobileUploadRunner as (p: unknown) => unknown, {}, { intl: "en" });
     const els = () => hostElements(m.rerender());
     const drain = async () => {
       for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
@@ -149,7 +149,7 @@ test("F13: the phone flow's success screen does not promise that the mentor is n
 
 test("F13: the /videos upload dialog claims no re-link it does not have, and cites no spec", async () => {
   const { UploadModal } = await import("../../apps/web/src/components/video/UploadModal.tsx");
-  const m = mount(UploadModal as (p: unknown) => unknown, { whatsappPhone: "+919999999999", videoDefaultQuality: "480p" });
+  const m = mount(UploadModal as (p: unknown) => unknown, { whatsappPhone: "+919999999999", videoDefaultQuality: "480p" }, { intl: "en" });
   const open = hostElements(m.rerender()).find((el) => el.props["data-testid"] === "upload-trigger")!;
   (open.props.onClick as () => void)();
   const dialog = textOf(hostElements(m.rerender()).find((el) => el.props["data-testid"] === "upload-modal") ?? null);

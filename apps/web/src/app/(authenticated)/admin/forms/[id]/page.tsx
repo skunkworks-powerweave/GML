@@ -1,13 +1,19 @@
 // /admin/forms/[id] — JSON schema editor for a single feedback_forms row.
 // Server component (role gate + initial fetch); the editor + preview are
 // 'use client' children imported from ./parts. Save POSTs to /api/admin/forms/[id].
+//
+// Words are in the user's language (adminData.forms.detail); the schema is
+// raw JSON, data, and shown as it is.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { eq } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
+import type { Translate } from "@/admin/labels";
 import { requireRole } from "@/lib/guards";
+import { formEnumLabel } from "../labels";
 import { FormSchemaEditor, FormSchemaPreview } from "./parts";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +25,8 @@ type Props = {
 export default async function AdminFormDetailPage({ params }: Props) {
   await requireRole(["programme_admin", "super_admin"]);
   const { id } = await params;
+  const t = await getTranslations("adminData");
+  const tl = t as unknown as Translate;
 
   const [row] = await db
     .select()
@@ -29,7 +37,9 @@ export default async function AdminFormDetailPage({ params }: Props) {
   if (!row) notFound();
 
   const pretty = JSON.stringify(row.schema, null, 2);
-  const titleFromSchema = extractTitle(row.schema) ?? `${row.kind} · ${row.audience}`;
+  const kind = formEnumLabel(tl, "kind", row.kind);
+  const audience = formEnumLabel(tl, "audience", row.audience);
+  const titleFromSchema = extractTitle(row.schema) ?? t("forms.detail.fallbackTitle", { kind, audience });
 
   return (
     <main style={{ maxWidth: 1280, margin: "0 auto", padding: "24px 28px" }}>
@@ -44,7 +54,7 @@ export default async function AdminFormDetailPage({ params }: Props) {
             display: "inline-block",
           }}
         >
-          ← Forms registry
+          {t("forms.detail.back")}
         </Link>
         <div
           style={{
@@ -54,7 +64,7 @@ export default async function AdminFormDetailPage({ params }: Props) {
             color: "var(--ink-3)",
           }}
         >
-          Form schema · {row.kind} · {row.audience}
+          {t("forms.detail.eyebrow", { kind, audience })}
         </div>
         <div
           style={{
@@ -70,8 +80,7 @@ export default async function AdminFormDetailPage({ params }: Props) {
               {titleFromSchema}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6 }}>
-              Edit the raw JSON below. <strong>Save</strong> validates the JSON, bumps the
-              version, and records the change in the audit log.
+              {t.rich("forms.detail.intro", { strong: (chunks) => <strong>{chunks}</strong> })}
             </p>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -83,7 +92,7 @@ export default async function AdminFormDetailPage({ params }: Props) {
                 color: "var(--ink-3)",
               }}
             >
-              Current version
+              {t("forms.detail.currentVersion")}
             </div>
             <div
               style={{
@@ -107,7 +116,7 @@ export default async function AdminFormDetailPage({ params }: Props) {
                 color: row.active ? "var(--lichen)" : "var(--ink-3)",
               }}
             >
-              {row.active ? "active" : "inactive"}
+              {row.active ? t("common.active") : t("common.inactive")}
             </span>
           </div>
         </div>

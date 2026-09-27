@@ -1,0 +1,759 @@
+{
+  "fieldMessage": "{field}: {message}",
+  "common": {
+    "active": "सक्रिय",
+    "inactive": "निष्क्रिय",
+    "formsAndQuizzes": "फॉर्म और क्विज़"
+  },
+  "entities": {
+    "districts": {
+      "label": "ज़िले",
+      "columns": {
+        "name": "ज़िला",
+        "code": "कोड",
+        "createdAt": "बनाया गया"
+      }
+    },
+    "phases": {
+      "label": "RTT चरण",
+      "columns": {
+        "label": "चरण",
+        "sequence": "क्रम",
+        "startDate": "आरंभ",
+        "endDate": "समाप्ति"
+      }
+    },
+    "terms": {
+      "label": "RTT टर्म",
+      "columns": {
+        "phaseId": "चरण",
+        "name": "टर्म",
+        "sequence": "क्रम"
+      }
+    },
+    "schools": {
+      "label": "विद्यालय",
+      "columns": {
+        "name": "नाम",
+        "code": "कोड",
+        "zoneId": "ज़ोन",
+        "contactPhone": "फ़ोन",
+        "headTeacherName": "प्रधानाध्यापक",
+        "active": "सक्रिय"
+      },
+      "fields": {
+        "address": "पता"
+      }
+    },
+    "zones": {
+      "label": "ज़ोन",
+      "columns": {
+        "name": "ज़ोन",
+        "districtId": "ज़िला",
+        "createdAt": "बनाया गया"
+      }
+    },
+    "teachers": {
+      "label": "शिक्षक",
+      "columns": {
+        "userId": "लॉगिन खाता",
+        "fullName": "नाम",
+        "schoolId": "विद्यालय",
+        "phone": "फ़ोन",
+        "subjectSpecialism": "विषय",
+        "joinedPhase": "शुरुआती चरण",
+        "currentPhaseId": "वर्तमान चरण",
+        "active": "सक्रिय"
+      },
+      "help": {
+        "joinedPhase": "मुक्त पाठ, जैसे \"Phase 1\" -- शिक्षक ने किस चरण से शुरुआत की।"
+      }
+    },
+    "mentors": {
+      "label": "मेंटर",
+      "columns": {
+        "userId": "लॉगिन खाता",
+        "name": "नाम",
+        "bio": "परिचय",
+        "active": "सक्रिय"
+      },
+      "fields": {
+        "photoUrl": "फ़ोटो URL",
+        "expertiseAreas": "विशेषज्ञता के क्षेत्र"
+      }
+    },
+    "mentor-pairings": {
+      "label": "मेंटर ↔ मेंटी जोड़ियाँ",
+      "columns": {
+        "mentorId": "मेंटर",
+        "teacherId": "मेंटी शिक्षक",
+        "startedAt": "आरंभ हुआ",
+        "endedAt": "समाप्त हुआ",
+        "status": "स्थिति"
+      },
+      "fields": {
+        "conceptNote": "अवधारणा टिप्पणी"
+      },
+      "enum": {
+        "status": {
+          "active": "सक्रिय",
+          "review": "समीक्षाधीन",
+          "paused": "रुकी हुई",
+          "ended": "समाप्त",
+          "complete": "पूर्ण"
+        }
+      }
+    },
+    "rtt-attendance": {
+      "label": "RTT उपस्थिति",
+      "columns": {
+        "rttSessionId": "सत्र",
+        "teacherId": "शिक्षक",
+        "status": "स्थिति",
+        "markedAt": "दर्ज किया गया"
+      },
+      "enum": {
+        "status": {
+          "present": "उपस्थित",
+          "absent": "अनुपस्थित",
+          "excused": "छूट प्राप्त"
+        }
+      }
+    },
+    "rtt-sessions": {
+      "label": "RTT सत्र",
+      "columns": {
+        "title": "शीर्षक",
+        "type": "प्रकार",
+        "scheduledAt": "निर्धारित समय",
+        "durationMin": "मिनट",
+        "platform": "प्लेटफ़ॉर्म",
+        "sequence": "क्रम"
+      },
+      "fields": {
+        "rttSubjectId": "RTT विषय",
+        "linkOrRecording": "लिंक या रिकॉर्डिंग",
+        "notes": "टिप्पणियाँ"
+      },
+      "enum": {
+        "type": {
+          "synchronous": "समकालिक",
+          "asynchronous": "असमकालिक",
+          "webinar": "वेबिनार",
+          "quiz": "क्विज़"
+        }
+      }
+    },
+    "rtt-subjects": {
+      "label": "RTT विषय",
+      "columns": {
+        "name": "नाम",
+        "code": "कोड",
+        "termId": "टर्म",
+        "districtId": "ज़िला",
+        "zoneId": "ज़ोन",
+        "active": "सक्रिय"
+      },
+      "help": {
+        "districtId": "जो विषय पूरे कार्यक्रम में पढ़ाया जाता है, उसके लिए ज़िला और ज़ोन खाली छोड़ें।",
+        "zoneId": "या केवल एक ज़ोन। शिक्षक अपने ज़िले और ज़ोन के विषय देखते हैं।"
+      }
+    },
+    "rtt-modules": {
+      "label": "RTT मॉड्यूल",
+      "columns": {
+        "rttSubjectId": "RTT विषय",
+        "sequence": "क्रम",
+        "title": "शीर्षक",
+        "description": "विवरण"
+      },
+      "fields": {
+        "learningObjectives": "सीखने के उद्देश्य",
+        "courseObjectives": "पाठ्यक्रम के उद्देश्य",
+        "assuranceOfLearning": "सीखने का आश्वासन",
+        "evaluationCriteria": "मूल्यांकन मानदंड",
+        "textbookRefs": "पाठ्यपुस्तक संदर्भ"
+      }
+    },
+    "rtt-lessons": {
+      "label": "RTT पाठ",
+      "columns": {
+        "rttModuleId": "RTT मॉड्यूल",
+        "sequence": "क्रम",
+        "title": "शीर्षक"
+      },
+      "fields": {
+        "bodyMd": "मुख्य पाठ"
+      }
+    },
+    "rtt-readings": {
+      "label": "RTT पठन सामग्री",
+      "columns": {
+        "rttSubjectId": "RTT विषय",
+        "sequence": "क्रम",
+        "title": "शीर्षक",
+        "externalUrl": "लिंक"
+      }
+    },
+    "observation-cycles": {
+      "label": "अवलोकन चक्र",
+      "columns": {
+        "code": "कोड",
+        "teacherId": "शिक्षक",
+        "observerId": "अवलोकनकर्ता (उपयोगकर्ता)",
+        "kind": "प्रकार",
+        "scheduledAt": "निर्धारित समय",
+        "topic": "प्रकरण",
+        "status": "स्थिति"
+      },
+      "fields": {
+        "observerId": "अवलोकनकर्ता",
+        "subjectId": "विषय"
+      },
+      "enum": {
+        "kind": {
+          "baseline": "आधार रेखा",
+          "developmental": "विकासात्मक",
+          "evaluative": "मूल्यांकनात्मक"
+        },
+        "status": {
+          "nominated": "नामांकित",
+          "pre_submitted": "अवलोकन-पूर्व फॉर्म जमा",
+          "observed": "अवलोकित",
+          "post_submitted": "अवलोकन-पश्चात फॉर्म जमा",
+          "complete": "पूर्ण"
+        }
+      }
+    },
+    "subjects": {
+      "label": "विषय (पाठ्यक्रम)",
+      "columns": {
+        "name": "नाम",
+        "code": "कोड",
+        "color": "रंग",
+        "gradesMin": "कक्षा से",
+        "gradesMax": "कक्षा तक",
+        "displayOrder": "क्रम",
+        "active": "सक्रिय"
+      }
+    },
+    "classes": {
+      "label": "कक्षाएँ",
+      "columns": {
+        "schoolId": "विद्यालय",
+        "grade": "कक्षा",
+        "stage": "स्तर",
+        "studentsCount": "विद्यार्थी",
+        "sectionsCount": "सेक्शन संख्या",
+        "classTeacherName": "कक्षा शिक्षक",
+        "active": "सक्रिय"
+      }
+    },
+    "course-outlines": {
+      "label": "पाठ्यक्रम रूपरेखाएँ",
+      "columns": {
+        "name": "नाम",
+        "subjectId": "विषय",
+        "grade": "कक्षा",
+        "term": "टर्म",
+        "weeks": "सप्ताह",
+        "status": "स्थिति"
+      },
+      "fields": {
+        "sessionsCount": "सत्रों की संख्या",
+        "ownerTeacherId": "ज़िम्मेदार शिक्षक",
+        "learningOutcomes": "अधिगम परिणाम"
+      },
+      "enum": {
+        "status": {
+          "planned": "नियोजित",
+          "in_progress": "जारी",
+          "complete": "पूर्ण",
+          "archived": "संग्रहीत"
+        }
+      }
+    },
+    "outline-lessons": {
+      "label": "रूपरेखा के पाठ",
+      "columns": {
+        "outlineId": "रूपरेखा",
+        "sequence": "#",
+        "title": "शीर्षक",
+        "week": "सप्ताह"
+      }
+    },
+    "sessions": {
+      "label": "कक्षा सत्र",
+      "columns": {
+        "scheduledDate": "तारीख़",
+        "schoolId": "विद्यालय",
+        "classId": "कक्षा",
+        "subjectId": "विषय",
+        "teacherId": "शिक्षक",
+        "topic": "प्रकरण",
+        "status": "स्थिति",
+        "attendedCount": "उपस्थित",
+        "totalCount": "कुल विद्यार्थी",
+        "observed": "अवलोकित"
+      },
+      "fields": {
+        "outlineLessonId": "रूपरेखा का पाठ",
+        "scheduledTime": "निर्धारित घड़ी का समय",
+        "durationMin": "अवधि (मिनट)",
+        "observationCycleId": "अवलोकन चक्र"
+      },
+      "enum": {
+        "status": {
+          "planned": "नियोजित",
+          "in_progress": "जारी",
+          "complete": "पूर्ण",
+          "cancelled": "रद्द"
+        }
+      }
+    },
+    "resources": {
+      "label": "संसाधन (पठन सामग्री)",
+      "columns": {
+        "name": "नाम",
+        "kind": "प्रकार",
+        "owner": "प्रभारी",
+        "pages": "पृष्ठ",
+        "active": "सक्रिय"
+      },
+      "fields": {
+        "fileKey": "फ़ाइल कुंजी",
+        "externalUrl": "बाहरी URL",
+        "tags": "टैग"
+      },
+      "enum": {
+        "kind": {
+          "Policy": "नीति",
+          "Guide": "मार्गदर्शिका",
+          "Handbook": "पुस्तिका",
+          "Worksheet": "वर्कशीट",
+          "Template": "टेम्पलेट",
+          "Routine": "दिनचर्या",
+          "Calendar": "कैलेंडर",
+          "Checklist": "जाँच सूची",
+          "Lab-guide": "प्रयोगशाला मार्गदर्शिका",
+          "Rubric": "रूब्रिक",
+          "Other": "अन्य"
+        }
+      }
+    },
+    "resource-subjects": {
+      "label": "संसाधन ↔ विषय लिंक",
+      "columns": {
+        "resourceId": "संसाधन",
+        "subjectId": "विषय"
+      }
+    },
+    "learners": {
+      "label": "शिक्षार्थी (व्यक्तिगत जानकारी)",
+      "columns": {
+        "name": "नाम",
+        "classId": "कक्षा",
+        "schoolId": "विद्यालय",
+        "grade": "कक्षा",
+        "section": "सेक्शन",
+        "rollNumber": "रोल नंबर",
+        "age": "आयु",
+        "guardian": "अभिभावक",
+        "attendancePct": "उपस्थिति %",
+        "active": "सक्रिय"
+      }
+    }
+  },
+  "grid": {
+    "crumb": "<link>एडमिन</link> · डेटा",
+    "pageRows": "पृष्ठ {page} · {count, plural, =0 {# पंक्तियाँ} one {# पंक्ति} other {# पंक्तियाँ}}",
+    "exportCsv": "CSV निर्यात करें",
+    "exportTitle": "CSV डाउनलोड करें",
+    "exportLocked": "शिक्षार्थियों के रिकॉर्ड निर्यात करने के लिए सुपर एडमिन होना आवश्यक है",
+    "editRow": "पंक्ति संपादित करें",
+    "close": "बंद करें",
+    "rowId": "पंक्ति ID: <code>{id}</code>",
+    "addNew": "नई पंक्ति जोड़ें",
+    "notApplied": "लागू नहीं हुए: {filters}। नीचे की पंक्तियाँ {count, plural, one {इस फ़िल्टर} other {इन फ़िल्टरों}} से सीमित नहीं हैं।",
+    "notAppliedItem": "{column} \"{value}\" ({why})",
+    "skip": {
+      "notOneOf": "{options} में से कोई नहीं",
+      "pasteId": "पंक्ति की ID चिपकाएँ, जो उसके संपादन पैनल के ऊपर दिखती है",
+      "yesNo": "हाँ या नहीं",
+      "notNumber": "संख्या नहीं है",
+      "notDate": "तारीख़ नहीं है (YYYY-MM-DD)",
+      "notFilterable": "इस कॉलम पर फ़िल्टर नहीं लग सकता",
+      "unusable": "उपयोग योग्य नहीं"
+    },
+    "any": "कोई भी",
+    "yes": "हाँ",
+    "no": "नहीं",
+    "pasteId": "पंक्ति की ID चिपकाएँ",
+    "contains": "इसमें शामिल…",
+    "applyFilters": "फ़िल्टर लागू करें",
+    "clear": "साफ़ करें",
+    "cardPagination": "कार्ड सूची के पृष्ठ",
+    "prev": "← पिछला",
+    "next": "अगला →",
+    "page": "पृष्ठ {page}",
+    "actions": "कार्रवाइयाँ",
+    "noMatches": "सक्रिय फ़िल्टरों से कोई पंक्ति मेल नहीं खाती। सब कुछ देखने के लिए फ़िल्टर साफ़ करें।",
+    "empty": "अभी कोई पंक्ति नहीं। ऊपर एक जोड़ें।",
+    "errors": {
+      "still_referenced": "यह पंक्ति हटाई नहीं जा सकती क्योंकि दूसरे रिकॉर्ड अब भी इससे जुड़े हैं। पहले उन्हें हटाएँ या किसी और पंक्ति से जोड़ें।",
+      "duplicate": "यह बदलाव किसी मौजूदा पंक्ति से टकराता है।",
+      "delete_failed": "हटाने का काम पूरा नहीं हो सका। कुछ भी नहीं बदला गया।",
+      "stillReferencedBy": "यह पंक्ति हटाई नहीं जा सकती क्योंकि {entity} के रिकॉर्ड अब भी इससे जुड़े हैं। पहले उन्हें हटाएँ या किसी और पंक्ति से जोड़ें।",
+      "locked": "यह पंक्ति अपनी वर्तमान अवस्था में लॉक है और ग्रिड से हटाई नहीं जा सकती।",
+      "unknown": "वह कार्रवाई पूरी नहीं हो सकी।"
+    }
+  },
+  "write": {
+    "missingRowId": "पंक्ति की ID (rowId) नहीं दी गई",
+    "validationFailed": "जाँच में त्रुटि मिली",
+    "rowGone": "यह पंक्ति अब मौजूद नहीं है।"
+  },
+  "validation": {
+    "activeObserver": "कोई सक्रिय अवलोकनकर्ता खाता होना चाहिए",
+    "phaseEndsBeforeStart": "कोई चरण अपने आरंभ से पहले समाप्त नहीं हो सकता",
+    "resourceSource": "संसाधन में file_key या external_url में से कोई एक होना चाहिए",
+    "httpLink": "http:// या https:// वाला लिंक होना चाहिए",
+    "webLink": "वेब लिंक होना चाहिए, जैसे https://meet.google.com/abc-defg-hij",
+    "districtOrZone": "ज़िला या ज़ोन में से एक चुनें, दोनों नहीं: ज़ोन पहले से अपने ज़िले में आता है।",
+    "isoDate": "तारीख़ YYYY-MM-DD रूप में होनी चाहिए",
+    "attendedWithinTotal": "attended_count, total_count से अधिक नहीं हो सकता",
+    "uppercaseCode": "बड़े अक्षरों में कोड (जैसे ENG, MAT, EVS)",
+    "gradesOrder": "grades_min ≤ grades_max होना चाहिए"
+  },
+  "zod": {
+    "required": "आवश्यक",
+    "invalidType": "{expected} अपेक्षित था, {received} मिला",
+    "invalidDate": "अमान्य तारीख़",
+    "invalidInput": "अमान्य मान",
+    "invalidEnum": "अमान्य विकल्प। अपेक्षित {options}, मिला ''{received}''",
+    "invalidString": {
+      "uuid": "अमान्य UUID",
+      "url": "अमान्य URL",
+      "email": "अमान्य ईमेल",
+      "date": "अमान्य तारीख़",
+      "datetime": "अमान्य तारीख़ और समय",
+      "regex": "अमान्य"
+    },
+    "tooSmall": {
+      "string": "{mode, select, exact {ठीक {minimum} अक्षर होने चाहिए} inclusive {कम से कम {minimum} अक्षर होने चाहिए} other {{minimum} से अधिक अक्षर होने चाहिए}}",
+      "number": "{mode, select, exact {ठीक {minimum} होना चाहिए} inclusive {{minimum} या उससे अधिक होना चाहिए} other {{minimum} से अधिक होना चाहिए}}",
+      "array": "{mode, select, exact {ठीक {minimum} मद होने चाहिए} inclusive {कम से कम {minimum} मद होने चाहिए} other {{minimum} से अधिक मद होने चाहिए}}"
+    },
+    "tooBig": {
+      "string": "{mode, select, exact {ठीक {maximum} अक्षर होने चाहिए} inclusive {अधिकतम {maximum} अक्षर हो सकते हैं} other {{maximum} से कम अक्षर होने चाहिए}}",
+      "number": "{mode, select, exact {ठीक {maximum} होना चाहिए} inclusive {{maximum} या उससे कम होना चाहिए} other {{maximum} से कम होना चाहिए}}",
+      "array": "{mode, select, exact {ठीक {maximum} मद होने चाहिए} inclusive {अधिकतम {maximum} मद हो सकते हैं} other {{maximum} से कम मद होने चाहिए}}"
+    }
+  },
+  "dbError": {
+    "duplicate": "इस मान वाली पंक्ति पहले से मौजूद है",
+    "duplicateNoField": "इन मानों वाली पंक्ति पहले से मौजूद है",
+    "missingRef": "ऐसी पंक्ति की ओर संकेत करता है जो मौजूद नहीं है",
+    "required": "आवश्यक है",
+    "requiredNoField": "एक आवश्यक मान नहीं दिया गया",
+    "check": "कोई मान इस तालिका की अनुमत सीमा से बाहर है",
+    "format": "कोई मान इस कॉलम के आवश्यक प्रारूप में नहीं है",
+    "tooLong": "कोई मान अपने कॉलम के लिए बहुत लंबा है",
+    "unknown": "पंक्ति सहेजी नहीं जा सकी"
+  },
+  "guard": {
+    "cycleUndeletable": "यह चक्र \"{stage, select, nominated {नामांकित} pre_submitted {अवलोकन-पूर्व फॉर्म जमा} observed {अवलोकित} post_submitted {अवलोकन-पश्चात फॉर्म जमा} complete {पूर्ण} other {{stage}}}\" अवस्था में है और इसके अंतर्गत काम दर्ज है; इसे ग्रिड से हटाया नहीं जा सकता।",
+    "cycleFieldLocked": "यह चक्र \"{stage, select, nominated {नामांकित} pre_submitted {अवलोकन-पूर्व फॉर्म जमा} observed {अवलोकित} post_submitted {अवलोकन-पश्चात फॉर्म जमा} complete {पूर्ण} other {{stage}}}\" अवस्था में है: इसका {field, select, teacherId {शिक्षक} kind {प्रकार} other {अवलोकनकर्ता}} अब बदला नहीं जा सकता।"
+  },
+  "references": {
+    "classLabel": "{school} · कक्षा {grade}",
+    "currentValue": "{label} (वर्तमान मान)",
+    "deletedAccount": "{label} (हटाया गया खाता)",
+    "wrongRole": "{label} ({roles} खाता नहीं)",
+    "roleNoun": {
+      "teacher": "शिक्षक",
+      "observer": "अवलोकनकर्ता",
+      "mentor": "मेंटर",
+      "programme_admin": "कार्यक्रम व्यवस्थापक",
+      "super_admin": "सुपर एडमिन"
+    }
+  },
+  "import": {
+    "likelyDuplicate": "यह इस तालिका में पहले से मौजूद रिकॉर्ड जैसा लगता है (id {id}): उसे बदलने के लिए यह id, id कॉलम में डालें; इन्हीं विवरणों वाला दूसरा रिकॉर्ड जोड़ने के लिए \"पंक्ति जोड़ें\" का उपयोग करें",
+    "repeatsLine": "इस फ़ाइल की पंक्ति {line} को दोहराता है",
+    "notRowId": "id: यह पंक्ति की id नहीं है (नई पंक्ति जोड़ने के लिए इसे खाली छोड़ें)",
+    "addedMeanwhile": "id: यह फ़ाइल आयात होते समय यह पंक्ति जोड़ी गई; इसे फिर से आयात करें।",
+    "failed": "आयात पूरा नहीं हो सका। कुछ भी सहेजा नहीं गया।",
+    "invalidRow": "पंक्ति: अमान्य",
+    "truncated": "*** {limit} पंक्तियों पर काटा गया — यह निर्यात अधूरा है ***",
+    "parse": {
+      "MissingQuotes": "उद्धरण चिह्न वाला फ़ील्ड बंद नहीं हुआ",
+      "InvalidQuotes": "उद्धरण चिह्न वाले फ़ील्ड का अंतिम उद्धरण चिह्न ग़लत है",
+      "UndetectableDelimiter": "विभाजक चिह्न अपने-आप पहचाना नहीं जा सका; {delimiter} मान लिया गया",
+      "TooFewFields": "बहुत कम फ़ील्ड: {expected} फ़ील्ड अपेक्षित थे, {parsed} मिले",
+      "TooManyFields": "बहुत अधिक फ़ील्ड: {expected} फ़ील्ड अपेक्षित थे, {parsed} मिले"
+    }
+  },
+  "forms": {
+    "title": "कार्यक्रम फॉर्म",
+    "intro": "फॉर्म JSON स्कीमा के रूप में तय किए जाते हैं — एडमिन इन्हें बनाते हैं; शिक्षक और मेंटर इन्हें भरते हैं। स्कीमा संपादित करने पर संस्करण बढ़ता है और यह ऑडिट लॉग में दर्ज होता है।",
+    "toQuizzesTitle": "क्विज़ रजिस्टर पर जाएँ",
+    "toQuizzes": "क्विज़ →",
+    "columns": {
+      "title": "शीर्षक",
+      "kind": "प्रकार",
+      "audience": "कौन भरता है",
+      "version": "संस्करण",
+      "active": "सक्रिय"
+    },
+    "empty": "अभी कोई फ़ीडबैक फॉर्म नहीं जोड़ा गया। माइग्रेशन सीडर चलाएँ या SQL से जोड़ें।",
+    "editSchema": "स्कीमा संपादित करें →",
+    "footer": "{count, plural, one {# फॉर्म} other {# फॉर्म}} · प्रकार, भरने वाले और संस्करण (घटते क्रम) के अनुसार",
+    "fallbackTitle": "{kind} — {audience}",
+    "kind": {
+      "baseline": "आधार रेखा",
+      "progress_1": "प्रगति जाँच 1",
+      "progress_2": "प्रगति जाँच 2",
+      "final": "अंतिम"
+    },
+    "kindTitle": {
+      "baseline": "आधार रेखा",
+      "progress_1": "प्रगति जाँच (Q1 → Q2)",
+      "progress_2": "प्रगति जाँच (Q3 → Q4)",
+      "final": "अंतिम"
+    },
+    "audience": {
+      "mentor": "मेंटर",
+      "mentee": "मेंटी"
+    },
+    "audienceTitle": {
+      "mentor": "मेंटर भरते हैं",
+      "mentee": "मेंटी (शिक्षक) भरते हैं"
+    },
+    "detail": {
+      "back": "← फॉर्म रजिस्टर",
+      "eyebrow": "फॉर्म स्कीमा · {kind} · {audience}",
+      "fallbackTitle": "{kind} · {audience}",
+      "intro": "नीचे मूल JSON संपादित करें। <strong>सहेजें</strong> JSON की जाँच करता है, संस्करण बढ़ाता है और बदलाव ऑडिट लॉग में दर्ज करता है।",
+      "currentVersion": "वर्तमान संस्करण"
+    },
+    "save": {
+      "notSaved": "फॉर्म की परिभाषा सहेजी नहीं गई: {list}।",
+      "notSavedMore": "फॉर्म की परिभाषा सहेजी नहीं गई: {list} (और {count} अन्य)।",
+      "whole": "(पूरी परिभाषा)"
+    }
+  },
+  "quizzes": {
+    "title": "कार्यक्रम क्विज़",
+    "intro": "क्विज़ JSON के रूप में तय किए जाते हैं — एडमिन प्रश्न बनाते हैं; शिक्षक और मेंटर इन्हें हल करते हैं। क्विज़ में हर बदलाव ऑडिट लॉग में दर्ज होता है।",
+    "toFormsTitle": "फ़ीडबैक फॉर्म रजिस्टर पर जाएँ",
+    "toForms": "→ फ़ीडबैक फॉर्म",
+    "columns": {
+      "title": "शीर्षक",
+      "slug": "पता",
+      "scope": "दायरा",
+      "questions": "प्रश्न",
+      "pass": "उत्तीर्ण",
+      "active": "सक्रिय"
+    },
+    "empty": "अभी कोई क्विज़ नहीं। ऊपर एक बनाएँ, फिर उसके प्रश्न जोड़ें।",
+    "scope": {
+      "subject": "विषय",
+      "rttSubject": "RTT विषय"
+    },
+    "edit": "संपादित करें →",
+    "footer": "{count, plural, one {# क्विज़} other {# क्विज़}} · शीर्षक के क्रम में",
+    "create": {
+      "noSubject": "वह RTT विषय चुनें जिससे यह क्विज़ जुड़ा है।",
+      "title": "क्विज़ को कम से कम 2 अक्षरों का शीर्षक दें।",
+      "slug": "पते में केवल छोटे अंग्रेज़ी अक्षर, अंक और एकल हाइफ़न हों, और यह 60 अक्षरों या उससे कम का हो।",
+      "threshold": "उत्तीर्ण अंक 1 से 100 के बीच की पूर्ण संख्या होनी चाहिए।",
+      "slugTaken": "पता \"{slug}\" पहले से किसी क्विज़ का है। कोई दूसरा पता चुनें।",
+      "failedRetry": "क्विज़ नहीं बन सका। कृपया फिर कोशिश करें।",
+      "failed": "क्विज़ नहीं बन सका।"
+    },
+    "detail": {
+      "back": "← क्विज़ रजिस्टर",
+      "eyebrow": "क्विज़ · {slug}",
+      "intro": "नीचे JSON संपादित करें। <strong>सहेजें</strong> पेलोड की जाँच करता है और एक ही लेन-देन में इस क्विज़ के प्रश्नों को <code>questions</code> ऐरे से बदल देता है; केवल सेटिंग्स बदलनी हों तो ऐरे न दें। बदलाव ऑडिट लॉग में दर्ज होता है।",
+      "passThreshold": "उत्तीर्ण सीमा",
+      "untimed": "कोई समय-सीमा नहीं",
+      "timeLimit": "समय-सीमा: {minutes} मिनट",
+      "timeLimitSeconds": "समय-सीमा: {minutes} मिनट {seconds} सेकंड",
+      "submissions": "{count, plural, one {# प्रयास जमा हुआ} other {# प्रयास जमा हुए}}। हर परिणाम में प्रश्न ठीक वैसे ही रहते हैं जैसे उस शिक्षार्थी से पूछे गए थे, इसलिए यहाँ के बदलाव केवल नए प्रयासों पर लागू होते हैं। सभी प्रश्न हटाए नहीं जा सकते; क्विज़ बंद करने के लिए <code>active</code> को <code>false</code> करें।",
+      "schemaReference": "<strong>स्कीमा संदर्भ।</strong> पेलोड में ये स्वीकार हैं: <code>title</code>, <code>passThreshold</code>,<code> active</code>, वैकल्पिक <code>timeLimitSeconds</code>(<code>null</code> = कोई समय-सीमा नहीं; अन्यथा 60 से 7200 के बीच पूर्णांक = 1 मिनट से 2 घंटे), वैकल्पिक <code>maxAttempts</code> (<code>null</code> = असीमित; अन्यथा 1 से 20 तक की पूर्ण संख्या — हर शिक्षार्थी कितने प्रयास जमा कर सकता है), <code>rttSubjectId</code> (वह RTT विषय जिससे क्विज़ जुड़ा है; इसे बदला जा सकता है, हटाया नहीं जा सकता; पाठ्यक्रम विषय वाले क्विज़ में यह नहीं होता, और इसे देने पर क्विज़ उस RTT विषय में चला जाता है), और <code>questions[]</code> ऐरे। हर प्रश्न में <code>prompt</code> (पाठ), <code>options</code> (कम से कम 2 पाठों का ऐरे), <code>correctIndex</code> (options में 0 से गिना जाने वाला पूर्णांक) और वैकल्पिक <code>explanation</code> होना चाहिए।"
+    },
+    "save": {
+      "notObject": "पेलोड एक ऑब्जेक्ट होना चाहिए।",
+      "questionsArray": "questions एक ऐरे होना चाहिए।",
+      "questionNotObject": "प्रश्न {n} ऑब्जेक्ट नहीं है।",
+      "missingPrompt": "प्रश्न {n} में prompt नहीं है।",
+      "options": "प्रश्न {n} में कम से कम 2 विकल्प होने चाहिए।",
+      "correctIndex": "प्रश्न {n} का correctIndex 0..{max} होना चाहिए।",
+      "inUse": "शिक्षार्थी यह क्विज़ पहले ही जमा कर चुके हैं, इसलिए इसके सभी प्रश्न हटाए नहीं जा सकते। इसे बंद करने के लिए \"active\": false सेट करें।",
+      "timeLimit": "timeLimitSeconds या तो null (कोई समय-सीमा नहीं) हो या 60 (1 मिनट) और 7200 (2 घंटे) के बीच का पूर्णांक।",
+      "maxAttempts": "maxAttempts या तो null (असीमित) हो या 1 से 20 के बीच की पूर्ण संख्या।",
+      "rttSubject": "rttSubjectId किसी मौजूदा RTT विषय की id होनी चाहिए।",
+      "notFound": "यह क्विज़ अब मौजूद नहीं है। क्विज़ की सूची फिर से लोड करें।"
+    }
+  },
+  "scorm": {
+    "section": "RTT सामग्री",
+    "title": "SCORM पैकेज",
+    "intro": "SCORM 1.2 मॉड्यूल, हर एक अपने RTT विषय के पृष्ठ से खुलता है। शिक्षार्थियों की स्थिति, अंक और समय वैसे ही दर्ज होते हैं जैसे मॉड्यूल बताता है।",
+    "uploadOnlySuper": "पैकेज केवल सुपर एडमिन अपलोड कर सकते हैं: पैकेज की स्क्रिप्ट उसे खोलने वाले हर व्यक्ति की अनुमतियों के साथ चलती हैं, एडमिन की भी।",
+    "columns": {
+      "package": "पैकेज",
+      "state": "स्थिति",
+      "files": "फ़ाइलें",
+      "learners": "शिक्षार्थी",
+      "uploaded": "अपलोड"
+    },
+    "empty": "अभी कोई SCORM पैकेज नहीं।",
+    "active": "सक्रिय",
+    "withdrawn": "वापस लिया गया",
+    "files": "{count} फ़ाइलें · {size}",
+    "learners": "{count, plural, one {# शिक्षार्थी} other {# शिक्षार्थी}} · {finished} ने पूरा किया",
+    "tracking": {
+      "back": "← SCORM पैकेज",
+      "openAsLearner": "शिक्षार्थी के रूप में खोलें",
+      "withdraw": "शिक्षार्थियों से वापस लें",
+      "restore": "शिक्षार्थियों के लिए फिर से खोलें",
+      "columns": {
+        "learner": "शिक्षार्थी",
+        "role": "भूमिका",
+        "status": "स्थिति",
+        "score": "अंक",
+        "time": "समय",
+        "sessions": "सत्र",
+        "firstFinished": "पहली बार पूरा",
+        "lastActivity": "अंतिम गतिविधि"
+      },
+      "empty": "अभी तक किसी ने यह पैकेज नहीं खोला।",
+      "notCounted": "गिना नहीं गया",
+      "role": {
+        "teacher": "शिक्षक",
+        "observer": "अवलोकनकर्ता",
+        "mentor": "मेंटर",
+        "programme_admin": "कार्यक्रम व्यवस्थापक",
+        "super_admin": "सुपर एडमिन"
+      }
+    }
+  },
+  "client": {
+    "rowForm": {
+      "unknownEntity": "अज्ञात तालिका: {slug}",
+      "noRowId": "संपादन के लिए rowId आवश्यक है — कोई नहीं दी गई।",
+      "saveChanges": "बदलाव सहेजें",
+      "addRow": "पंक्ति जोड़ें",
+      "adding": "जोड़ रहे हैं…",
+      "updated": "पंक्ति अपडेट हो गई।",
+      "added": "पंक्ति जुड़ गई।",
+      "commaList": "मदों को अल्पविराम से अलग करें।",
+      "none": "— कोई नहीं —",
+      "choose": "चुनें…",
+      "yes": "हाँ",
+      "no": "नहीं",
+      "tooMany": "यहाँ सूची दिखाने के लिए पंक्तियाँ बहुत अधिक हैं: पंक्ति की ID चिपकाएँ: वह अपनी तालिका में उस पंक्ति के संपादन पैनल के ऊपर दिखती है, और उस तालिका के CSV निर्यात का पहला कॉलम है।"
+    },
+    "bulk": {
+      "selectRow": "पंक्ति {id} चुनें",
+      "selectAll": "सभी पंक्तियाँ चुनें",
+      "deselectAll": "सभी पंक्तियों का चयन हटाएँ",
+      "confirm": "{count, plural, one {# चुनी गई पंक्ति हटाएँ? यह वापस नहीं लिया जा सकता।} other {# चुनी गई पंक्तियाँ हटाएँ? यह वापस नहीं लिया जा सकता।}}",
+      "region": "सामूहिक कार्रवाई",
+      "selected": "{count, plural, one {# पंक्ति चुनी गई} other {# पंक्तियाँ चुनी गईं}}",
+      "clear": "चयन हटाएँ",
+      "deleting": "हटा रहे हैं…",
+      "delete": "चुनी गई {count} हटाएँ"
+    },
+    "deleteRow": {
+      "rowFallback": "पंक्ति {id}",
+      "confirm": "{target} हटाएँ? यह वापस नहीं लिया जा सकता।",
+      "deleting": "हटा रहे हैं…"
+    },
+    "importCsv": {
+      "open": "CSV आयात करें",
+      "openTitle": "CSV फ़ाइल से {entity} में कई पंक्तियाँ एक साथ जोड़ें",
+      "title": "{entity} में आयात करें",
+      "close": "बंद करें",
+      "intro": "हेडर पंक्ति वाली CSV फ़ाइल। पहचाने जाने वाले कॉलम: <code>{columns}</code>। लिखने से पहले हर पंक्ति की जाँच होती है; जो पंक्तियाँ विफल होती हैं वे बताई और छोड़ दी जाती हैं, और बाकी फिर भी जुड़ जाती हैं। <code>id</code> वाली पंक्ति (जैसे निर्यात में) उसी पंक्ति को अपडेट करती है; बिना id वाली पंक्ति जोड़ी जाती है{duplicates, select, yes {, जब तक वह तालिका में पहले से मौजूद किसी रिकॉर्ड से मेल न खाए: ऐसी पंक्ति बताई जाती है, दोबारा नहीं जोड़ी जाती} other {}}। आंशिक आयात के बाद केवल विफल बताई गई पंक्तियाँ, या id वाला कोई निर्यात, फिर से आयात करें।",
+      "fileSummary": "{count, plural, =0 {{n} डेटा पंक्तियाँ} one {{n} डेटा पंक्ति} other {{n} डेटा पंक्तियाँ}} · कॉलम: {columns}",
+      "none": "कोई नहीं",
+      "ignored": "अनदेखा किया गया (इस तालिका का कॉलम नहीं): {columns}",
+      "unknownEntity": "यह तालिका आयात स्वीकार नहीं करती।",
+      "gateRequired": "पहले {gate, select, observation {अवलोकन} mentorship {मेंटरशिप} none {यह} other {{gate}}} सेक्शन खोलें, फिर दोबारा आयात करें।",
+      "forbidden": "आपको इस तालिका में आयात करने की अनुमति नहीं है।",
+      "failed": "आयात विफल रहा (HTTP {status})।",
+      "offline": "आयात भेजा नहीं जा सका। अपना कनेक्शन जाँचें और फिर कोशिश करें।",
+      "result": "{inserted} जोड़ी गईं · {updated} अपडेट हुईं · {skipped} छोड़ी गईं",
+      "rowMessage": "पंक्ति {row}: {message}",
+      "importing": "आयात हो रहा है…",
+      "submit": "{count, plural, =0 {पंक्तियाँ आयात करें} one {{n} पंक्ति आयात करें} other {{n} पंक्तियाँ आयात करें}}",
+      "another": "दूसरी फ़ाइल चुनें"
+    },
+    "mobileCards": {
+      "noColumns": "{entity} के लिए कोई कॉलम तय नहीं है।",
+      "empty": "अभी {entity} में कुछ नहीं। एक जोड़ने के लिए ऊपर का फॉर्म इस्तेमाल करें।",
+      "cardLabel": "{entity} कार्ड {title}",
+      "rowIdTitle": "पंक्ति ID {id}",
+      "exportTitle": "{entity} को CSV के रूप में डाउनलोड करें",
+      "export": "CSV निर्यात करें",
+      "viewTitle": "{title} देखें",
+      "view": "पंक्ति देखें",
+      "yes": "हाँ",
+      "no": "नहीं"
+    },
+    "formEditor": {
+      "invalidJson": "JSON सही नहीं है: {error}",
+      "http": "HTTP त्रुटि {status}",
+      "heading": "स्कीमा (मूल JSON)",
+      "badJson": "× अमान्य JSON",
+      "parses": "✓ सही है · v{version}{dirty, select, yes { · सहेजा नहीं गया} other {}}",
+      "save": "स्कीमा सहेजें",
+      "discard": "बदलाव छोड़ें",
+      "saved": "सहेजा गया · v{version}",
+      "preview": "पूर्वावलोकन (केवल पढ़ने के लिए)",
+      "previewError": "स्कीमा सही नहीं है: {error}",
+      "section": "अनुभाग {n}",
+      "noItems": "(कोई मद नहीं)",
+      "noLabel": "(कोई लेबल नहीं)",
+      "options": "विकल्प: {options}"
+    },
+    "quizEditor": {
+      "invalidJson": "JSON सही नहीं है: {error}",
+      "heading": "क्विज़ JSON",
+      "badJson": "× अमान्य JSON",
+      "parses": "✓ सही है{dirty, select, yes { · सहेजा नहीं गया} other {}}",
+      "save": "क्विज़ सहेजें",
+      "discard": "बदलाव छोड़ें",
+      "saved": "सहेजा गया · {count} प्रश्न"
+    },
+    "newQuiz": {
+      "open": "+ नया क्विज़",
+      "title": "शीर्षक",
+      "titlePlaceholder": "इकाई के बीच की जाँच",
+      "address": "पता (वैकल्पिक)",
+      "addressHelp": "यह उस लिंक में दिखता है जिसे शिक्षार्थी खोलते हैं: /quizzes/<ph>पता</ph>। खाली छोड़ने पर यह शीर्षक से बनता है। क्विज़ सक्रिय होने पर चुने गए RTT विषय का पृष्ठ उसे दिखाता है।",
+      "passMark": "उत्तीर्ण अंक (%)",
+      "subject": "RTT विषय",
+      "chooseSubject": "वह विषय चुनें जिसका यह क्विज़ मूल्यांकन करता है",
+      "noSubjects": "हर क्विज़ किसी RTT विषय से जुड़ा होता है, और अभी कोई विषय नहीं है। पहले <link>RTT विषय</link> में एक बनाएँ।",
+      "creating": "बनाया जा रहा है…",
+      "create": "क्विज़ बनाएँ",
+      "note": "नया क्विज़ निष्क्रिय और खाली बनता है। अगली स्क्रीन पर प्रश्न जोड़ें, फिर उसे चालू करें — ताकि अधूरा क्विज़ किसी शिक्षार्थी तक न पहुँचे।"
+    },
+    "scormUpload": {
+      "tooLarge": "यह फ़ाइल {mb} MB से बड़ी है, जो किसी पैकेज की अधिकतम सीमा है।",
+      "offline": "अपलोड सर्वर तक नहीं पहुँचा। कनेक्शन जाँचें और फिर कोशिश करें।",
+      "refused": "अपलोड अस्वीकार हुआ (HTTP {status})।",
+      "heading": "पैकेज अपलोड करें",
+      "subject": "RTT विषय",
+      "chooseSubject": "वह विषय चुनें जिससे यह जुड़ा है",
+      "file": "SCORM 1.2 पैकेज (.zip, एक SCO, अधिकतम {mb} MB)",
+      "titleLabel": "शीर्षक (वैकल्पिक; अन्यथा पैकेज का अपना शीर्षक)",
+      "sending": "अपलोड और जाँच हो रही है…",
+      "submit": "पैकेज अपलोड करें"
+    }
+  }
+}

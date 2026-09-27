@@ -33,6 +33,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -213,12 +214,17 @@ test("spec 146 — result page renders the answered/correct/skipped breakdown", 
     /skippedCount/,
     "result page must compute `skippedCount` for the breakdown",
   );
-  // The breakdown must surface the totals visually.
+  // The breakdown must surface the totals visually: one message (with or
+  // without the skipped part) given the counts, from the rtt namespace.
   assert.match(
     src,
-    /of\s*\{totalCount\}\s*answered/,
-    "result page must render the `X of N answered` copy in the breakdown",
+    /t\.rich\(\s*skippedCount > 0 \? "result\.breakdownSkipped" : "result\.breakdown"/,
+    "result page must render the breakdown message",
   );
+  assert.match(src, /total:\s*totalCount/, "the breakdown is given the question total");
+  for (const key of ["rtt.result.breakdown", "rtt.result.breakdownSkipped"]) {
+    assert.match(message(key), /\{answered\} of \{total\} answered/, `${key}: the \`X of N answered\` copy`);
+  }
 });
 
 test("spec 146 — result page treats null and undefined identically as 'skipped' with honest copy", () => {
@@ -236,9 +242,11 @@ test("spec 146 — result page treats null and undefined identically as 'skipped
   );
   assert.match(
     src,
-    /<em>Skipped<\/em>/,
+    /<em>\{t\("result\.skipped"\)\}<\/em>/,
     "result page must use the 'Skipped' italic copy for null/undefined picks (spec 146)",
   );
+  assert.equal(message("rtt.result.skipped"), "Skipped");
+  assert.ok(!/No answer/.test(message("rtt.result.skipped")), "not the ambiguous 'No answer'");
 });
 
 test("spec 146 — quizSubmissions.answers $type<> accepts selectedIndex: number | null", () => {

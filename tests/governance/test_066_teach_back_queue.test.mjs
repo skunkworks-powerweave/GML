@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -55,9 +56,15 @@ test("spec 066 — auth gate + role-based redirect to /login and /forbidden", ()
 
 test("spec 066 — three filter pills (All / Pending review / Reviewed)", () => {
   const src = read(PAGE_PATH);
-  assert.match(src, /"All"/);
-  assert.match(src, /"Pending review"/);
-  assert.match(src, /"Reviewed"/);
+  // The pill labels are the rtt namespace's, read by key.
+  for (const [key, words] of [
+    ["common.all", "All"],
+    ["teachBack.tabPending", "Pending review"],
+    ["teachBack.tabReviewed", "Reviewed"],
+  ]) {
+    assert.ok(readsKey(src, key), `the ${words} pill reads rtt.${key}`);
+    assert.equal(message(`rtt.${key}`), words);
+  }
 });
 
 test("spec 066 — status chip colour mapping uses CSS variables (saffron + lichen)", () => {
@@ -81,14 +88,17 @@ test("spec 066 — Hindi name is rendered conditionally with the Devanagari font
 test("spec 066 — 'Mark reviewed' form posts to /api/teach-back/[id]/review", () => {
   const src = read(PAGE_PATH);
   assert.match(src, /\/api\/teach-back\/\$\{[^}]+\}\/review/);
-  assert.match(src, /Mark reviewed/);
+  // The button's label is the rtt namespace's (read by key).
+  assert.ok(readsKey(src, "teachBack.markReviewed"), "the form's button reads rtt.teachBack.markReviewed");
+  assert.equal(message("rtt.teachBack.markReviewed"), "Mark reviewed");
   assert.match(src, /method="POST"/);
 });
 
 test("spec 066 — right pane links to /videos/[id] (Tier-0 video player route)", () => {
   const src = read(PAGE_PATH);
   assert.match(src, /\/videos\/\$\{selected\.id\}/);
-  assert.match(src, /View video/);
+  assert.ok(readsKey(src, "teachBack.viewVideo"), "the link reads rtt.teachBack.viewVideo");
+  assert.equal(message("rtt.teachBack.viewVideo"), "View video");
 });
 
 test("spec 066 — inline style with CSS-variable tokens, no hardcoded hex", () => {

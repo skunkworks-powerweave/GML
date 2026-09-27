@@ -20,6 +20,7 @@
 
 import { createRequire, registerHooks } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { clientMessages } from "../../apps/web/src/i18n/config.ts";
 
 const WEB_URL = new URL("../../apps/web/", import.meta.url);
 const SRC_DIR = fileURLToPath(new URL("src/", WEB_URL));
@@ -99,8 +100,26 @@ export function form(fields: Record<string, string>): FormData {
   return fd;
 }
 
+/**
+ * Rendered inside next-intl's provider for the fake request's locale, as the
+ * login and (authenticated) layouts supply it in the app: the login and reset
+ * forms read their copy with useTranslations.
+ */
 export function renderSync(element: unknown): string {
-  return ReactDOMServer.renderToStaticMarkup(element);
+  const { NextIntlClientProvider } = webRequire("next-intl") as {
+    NextIntlClientProvider: import("react").ComponentType<Record<string, unknown>>;
+  };
+  const locale = request.locale;
+  const fail = (e: Error) => {
+    throw e;
+  };
+  return ReactDOMServer.renderToStaticMarkup(
+    React.createElement(
+      NextIntlClientProvider as never,
+      { locale, messages: clientMessages(locale), timeZone: "Asia/Kolkata", onError: fail },
+      element as never,
+    ),
+  );
 }
 
 /** Close the app's pg pool(s) so the process exits promptly. A no-op without DATABASE_URL. */

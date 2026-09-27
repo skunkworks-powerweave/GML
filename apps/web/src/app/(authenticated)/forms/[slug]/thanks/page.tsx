@@ -12,6 +12,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
@@ -22,7 +23,10 @@ import { isUuid } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Response saved" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("mentorship");
+  return { title: t("thanks.metaTitle") };
+}
 
 type FeedbackKind = "baseline" | "progress_1" | "progress_2" | "final";
 type FeedbackAudience = "mentor" | "mentee";
@@ -66,10 +70,11 @@ export default async function FormThanksPage({
   // Only ever used to build links; the pairing page checks access itself.
   const rawPairing = ((await searchParams) ?? {}).pairingId;
   const pairingId = typeof rawPairing === "string" && isUuid(rawPairing) ? rawPairing : null;
+  const t = await getTranslations("mentorship");
 
   // "Your response to Submitted has been recorded" was what a form with no
   // schema title (all four mentor forms) produced.
-  let title = "this form";
+  let title = t("thanks.thisForm");
   let hindiTitle: string | undefined;
   if (parsed) {
     const [form] = await db
@@ -85,7 +90,7 @@ export default async function FormThanksPage({
       .limit(1);
     if (form) {
       const raw = form.schema as { title?: string; hindiTitle?: string } | null;
-      title = formTitle(raw, form.kind, form.audience);
+      title = formTitle(raw, form.kind, form.audience, t, await getLocale());
       if (raw && typeof raw === "object") hindiTitle = raw.hindiTitle;
     }
   }
@@ -117,10 +122,10 @@ export default async function FormThanksPage({
           color: "var(--ink-3)",
         }}
       >
-        Response saved
+        {t("thanks.eyebrow")}
       </div>
       <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 6, lineHeight: 1.2 }}>
-        Thank you.
+        {t("thanks.title")}
         {hindiTitle ? (
           <span
             style={{
@@ -137,16 +142,17 @@ export default async function FormThanksPage({
         ) : null}
       </h1>
       <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-        Your response to <strong>{title}</strong> has been recorded.
-        {pairingId ? (
-          <>
-            {" "}You can read it again on the pairing&apos;s{" "}
-            <Link href={`/mentorship/${pairingId}/responses`} style={{ color: "var(--indigo)" }}>
-              submitted feedback
-            </Link>{" "}
-            page.
-          </>
-        ) : null}
+        {pairingId
+          ? t.rich("thanks.recordedWithLink", {
+              title,
+              strong: (chunks) => <strong>{chunks}</strong>,
+              link: (chunks) => (
+                <Link href={`/mentorship/${pairingId}/responses`} style={{ color: "var(--indigo)" }}>
+                  {chunks}
+                </Link>
+              ),
+            })
+          : t.rich("thanks.recorded", { title, strong: (chunks) => <strong>{chunks}</strong> })}
       </p>
 
       <div
@@ -172,7 +178,7 @@ export default async function FormThanksPage({
             textDecoration: "none",
           }}
         >
-          {pairingId ? "Back to pairing" : "Back to mentorship"}
+          {pairingId ? t("thanks.backToPairing") : t("thanks.backToMentorship")}
         </Link>
         <Link
           // /inbox has no forms on it; a mentor working through five mentees
@@ -188,7 +194,7 @@ export default async function FormThanksPage({
             textDecoration: "none",
           }}
         >
-          Open another form
+          {t("thanks.another")}
         </Link>
       </div>
     </div>

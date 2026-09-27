@@ -68,8 +68,9 @@ export async function Topbar({
   const tRole = await getTranslations("role");
   const tCrumb = await getTranslations("crumb");
   const tStatus = await getTranslations("status");
+  const t = await getTranslations("home.chrome");
   const bellBadge = formatBellBadge(unreadCount);
-  const queueLabel = queueDepth ? formatQueueLabel(queueDepth) : null;
+  const queueLabel = queueDepth ? formatQueueLabel(queueDepth, (part, count) => t(`queue.${part}`, { count })) : null;
   return (
     <header
       style={{
@@ -252,7 +253,7 @@ export async function Topbar({
           }}
         >
           <SignOutButton
-            title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
+            title={user.email ? t("signOutTitle", { email: user.email }) : tAction("signOut")}
             style={{
               padding: "5px 10px",
               border: "1px solid var(--line)",

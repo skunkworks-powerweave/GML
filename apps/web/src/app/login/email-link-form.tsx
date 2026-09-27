@@ -9,6 +9,7 @@
 // is applied server-side where a caller cannot drop it.
 
 import { useActionState } from "react";
+import { useTranslations } from "next-intl";
 import { sendMagicLinkAction, type EmailActionState } from "./email-actions";
 
 export function EmailLinkForm() {
@@ -16,6 +17,7 @@ export function EmailLinkForm() {
     sendMagicLinkAction,
     undefined,
   );
+  const t = useTranslations("login");
 
   if (state?.ok) {
     return (
@@ -28,10 +30,10 @@ export function EmailLinkForm() {
   return (
     <form action={formAction} className="flex flex-col gap-3 border-t border-neutral-200 pt-4">
       <p className="text-xs uppercase tracking-wide text-neutral-500">
-        Or sign in with an email link
+        {t("emailLink.heading")}
       </p>
       <label className="flex flex-col gap-1 text-sm">
-        <span>Email</span>
+        <span>{t("email")}</span>
         <input
           name="email"
           type="email"
@@ -50,7 +52,7 @@ export function EmailLinkForm() {
         disabled={pending}
         className="rounded-md border border-neutral-300 px-3 py-2 text-sm disabled:opacity-60"
       >
-        {pending ? "Sending…" : "Email me a sign-in link"}
+        {pending ? t("emailLink.sending") : t("emailLink.submit")}
       </button>
     </form>
   );

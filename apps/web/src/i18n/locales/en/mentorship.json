@@ -1,0 +1,307 @@
+{
+  "formKind": "{kind, select, baseline {Baseline} progress_1 {Progress check 1} progress_2 {Progress check 2} final {Final reflection} other {{kind}}}",
+  "formTitle": "{kind, select, baseline {Baseline} progress_1 {Progress check 1} progress_2 {Progress check 2} final {Final reflection} other {{kind}}} — {audience, select, mentor {Mentor} other {Mentee}}",
+  "audience": "{audience, select, mentor {mentor} mentee {mentee} other {{audience}}}",
+  "pairingStatus": "{status, select, active {active} review {review} paused {paused} ended {ended} complete {complete} other {{status}}}",
+  "videoStatus": "{status, select, received {received} queued {queued} transcoding {transcoding} ready {ready} failed {failed} review_pending {review pending} reviewed {reviewed} other {{status}}}",
+  "list": {
+    "metaTitle": "Pairings",
+    "eyebrow": "Mentorship",
+    "title": "Pairings",
+    "intro": "Quarterly feedback cycle (Q1 → Q2 → Q3 → Q4 → final). Meetings count cached per pairing.",
+    "statusLabel": "Status",
+    "tabs": {
+      "all": "All",
+      "active": "Active",
+      "review": "In review",
+      "paused": "Paused",
+      "complete": "Complete",
+      "ended": "Ended"
+    },
+    "empty": "No pairings match this filter.",
+    "meetings": "{count} meetings",
+    "lastMeeting": "· last {date}",
+    "pagesLabel": "Pairing pages",
+    "range": "Showing {first}–{last} of {total}",
+    "previous": "← Previous",
+    "next": "Next →"
+  },
+  "pairing": {
+    "metaTitle": "Pairing",
+    "errors": {
+      "invalidMeeting": "A meeting needs both a date and a time. Nothing was saved.",
+      "invalidMeetingTime": "That meeting date could not be read. Please pick it again.",
+      "invalidPairing": "That pairing reference was not valid.",
+      "pairingNotFound": "That pairing no longer exists.",
+      "invalidCommitment": "That commitment reference was not valid.",
+      "emptyCommitment": "A commitment needs some text before it can be added.",
+      "commitmentsFull": "This pairing already has 50 open commitments. Mark some done before adding more.",
+      "meetingsMentorOnly": "Meetings are logged by the mentor. Nothing was saved.",
+      "invalidDuration": "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
+      "meetingNotFound": "That meeting is not on this pairing any more.",
+      "meetingHasRecording": "That meeting has a recording attached, so it was kept.",
+      "pairingClosed": "This pairing is complete, so its record is closed. Nothing was saved.",
+      "unknown": "That action could not be completed. Please try again."
+    },
+    "contactMentor": "Mentor",
+    "contactMentee": "Mentee",
+    "whatsappText": "Hi {name}, checking in on our mentorship pairing.",
+    "backToAll": "← All pairings",
+    "eyebrow": "Pairing",
+    "headline": "Q{quarter} · Started {date} · {count, plural, one {# meeting} other {# meetings}}",
+    "whatsappAria": "Open WhatsApp chat",
+    "noPhone": "No phone on file for {who, select, mentor {your mentor} other {the mentee}}",
+    "logMeetingAria": "Log a new meeting",
+    "logMeeting": "+ Log meeting",
+    "completeAria": "Mark pairing complete",
+    "complete": "Complete pairing",
+    "meetingForm": {
+      "when": "When *",
+      "duration": "Duration (min)",
+      "notes": "Notes",
+      "notesPlaceholder": "What was discussed, what did the mentee commit to?",
+      "save": "Save meeting"
+    },
+    "quarter": {
+      "subtitle1": "Baseline + onboarding",
+      "subtitle2": "First developmental cycle",
+      "subtitle3": "Mid-year evaluation",
+      "subtitle4": "Endline + certification",
+      "done": "Closed",
+      "current": "In progress",
+      "future": "Upcoming",
+      "fillClosedAria": "Fill your Q{quarter} form (the quarter is closed)",
+      "fillClosed": "Fill your Q{quarter} form →",
+      "viewResponsesAria": "View Q{quarter} responses",
+      "viewResponses": "View responses →",
+      "noForm": "No form published for this quarter yet.",
+      "previewAria": "Preview Q{quarter} mentor form",
+      "preview": "Preview form →",
+      "submittedAria": "Q{quarter} form submitted: view responses",
+      "submitted": "✓ Submitted · view →",
+      "fillAria": "Fill Q{quarter} progress form",
+      "fill": "Fill progress form →"
+    },
+    "meetings": {
+      "title": "Meetings & touchpoints",
+      "subtitle": "Mentor logs every contact — phone, video, in-person, WhatsApp",
+      "empty": "No meetings logged yet.",
+      "month": {
+        "jan": "JAN",
+        "feb": "FEB",
+        "mar": "MAR",
+        "apr": "APR",
+        "may": "MAY",
+        "jun": "JUN",
+        "jul": "JUL",
+        "aug": "AUG",
+        "sep": "SEP",
+        "oct": "OCT",
+        "nov": "NOV",
+        "dec": "DEC"
+      },
+      "minutes": "{minutes}m",
+      "openRecording": "Open recording →",
+      "openRecordingN": "Open recording {n} →",
+      "attachAnotherAria": "Attach another recording of the meeting of {when}",
+      "attachAnother": "Attach another recording →",
+      "attachAria": "Attach the recording of the meeting of {when}",
+      "attach": "Attach recording →",
+      "cancelAria": "Cancel the meeting on {when}",
+      "removeAria": "Remove the meeting of {when} from the record",
+      "cancel": "Cancel meeting",
+      "remove": "Remove",
+      "confirmCancel": "Cancel the meeting on {when}? The other people on this pairing will be told.",
+      "confirmCancelSilent": "Cancel the meeting on {when}? Meeting-cancelled notices are switched off, so nobody will be told in the app. Let the other people on this pairing know yourself.",
+      "confirmRemove": "Remove the meeting of {when} from the record? It will stop counting towards this pairing's meetings. This cannot be undone.",
+      "yesCancel": "Yes, cancel it",
+      "yesRemove": "Yes, remove it",
+      "keep": "Keep it",
+      "pagesLabel": "Meeting pages",
+      "newer": "← Newer",
+      "older": "Older →"
+    },
+    "videos": {
+      "title": "Quarterly videos",
+      "subtitle": "The mentee's lesson videos at the baseline (Q1) and the endline (Q4)",
+      "q1": "Q1 · Baseline",
+      "q4": "Q4 · Endline",
+      "notSent": "Not sent yet.",
+      "videoOf": "Video of {date} →",
+      "upload": "Upload the Q{quarter} video →",
+      "uploadAnother": "Upload another Q{quarter} video →",
+      "opensInQ4": "Opens in Q4.",
+      "noQuarter": "Quarter not recorded"
+    },
+    "feedback": {
+      "title": "Q{quarter} progress feedback",
+      "subtitle": "4 mentor + 4 mentee forms across the year",
+      "body": "Mentor must complete an 8-question feedback form at the end of each quarter. Auto-saves draft. Closes the quarter on submit.",
+      "completed": "Forms completed",
+      "done": "{count} / 8 done",
+      "read": "Read the submitted feedback →"
+    },
+    "concept": {
+      "title": "Concept note",
+      "goal": "Pairing goal"
+    },
+    "commitments": {
+      "title": "Commitments register",
+      "subtitle": "What each of you agreed to do before the next meeting.",
+      "emptyClosed": "Nothing was agreed.",
+      "empty": "Nothing agreed yet. Add the first commitment below.",
+      "markAria": "Mark commitment: {text}",
+      "unmarkAria": "Unmark commitment: {text}",
+      "who": "{who, select, mentor {mentor} other {mentee}}",
+      "whoDue": "{who, select, mentor {mentor} other {mentee}} · {due}",
+      "done": "done",
+      "addPlaceholder": "Add a commitment…",
+      "addAria": "New commitment",
+      "whoAria": "Whose commitment",
+      "mentee": "mentee",
+      "mentor": "mentor",
+      "duePlaceholder": "Wk 8",
+      "dueAria": "Due",
+      "add": "Add"
+    }
+  },
+  "responses": {
+    "metaTitle": "Submitted feedback",
+    "back": "← Pairing",
+    "eyebrow": "Submitted feedback",
+    "introMentee": "The feedback forms you have submitted for this pairing.",
+    "introOthers": "Every feedback form submitted for this pairing, newest first.",
+    "empty": "No feedback has been submitted for this pairing yet.",
+    "chip": "{kind, select, baseline {Baseline} progress_1 {Progress check 1} progress_2 {Progress check 2} final {Final reflection} other {{kind}}} · {audience, select, mentor {mentor} mentee {mentee} other {{audience}}}",
+    "you": "You",
+    "formerUser": "A former user",
+    "noAnswers": "No answers were recorded."
+  },
+  "forms": {
+    "metaTitle": "Forms",
+    "eyebrow": "Feedback",
+    "title": "Forms",
+    "noRole": "There are no feedback forms for your role. The mentorship feedback cycle is completed by mentors and their mentees.",
+    "intro": "Feedback forms for the mentorship cycle. Answers save as you type.",
+    "errors": {
+      "formNotFound": "That form is no longer available, so your answers were not saved. Choose a current form below.",
+      "invalidFormSubmit": "That submission was incomplete and could not be saved. Please open the form again."
+    },
+    "locked": "Mentorship feedback is behind the mentorship password. <link>Enter it</link> to see who each form is for and to answer it.",
+    "noPairing": "You are not currently part of a mentorship pairing, so these forms cannot be submitted yet. They will become available once your programme administrator pairs you.",
+    "severalPairings": "You are in {count} mentorship pairings. Each form is answered for one of them — choose the name under the form. Every pairing is also listed at <link>Mentorship</link>, with its forms for each quarter.",
+    "empty": "No forms have been published yet.",
+    "forAudience": "for {audience, select, mentor {mentors} other {mentees}}",
+    "answeredOf": "{answered} of {total} answered",
+    "answered": "Answered",
+    "needsPairing": "Needs a pairing",
+    "notStarted": "Not started",
+    "links": {
+      "unlock": "Enter the mentorship password to answer",
+      "choose": "Choose a mentorship pairing",
+      "inactive": "{name} (not active)",
+      "all": "All {count} pairings…"
+    }
+  },
+  "form": {
+    "metaTitle": "Feedback form",
+    "aboutMentor": "With your mentor {name} · Q{quarter}",
+    "aboutMentee": "About {name} · Q{quarter}",
+    "backToPairing": "← Pairing",
+    "backToForms": "← Forms",
+    "eyebrow": "Form · {kind, select, baseline {baseline} progress_1 {progress 1} progress_2 {progress 2} final {final} other {{kind}}} · {audience, select, mentor {mentor} mentee {mentee} other {{audience}}}",
+    "draftLoaded": "Draft loaded · saved <when>{date}</when>",
+    "noDraft": "No draft yet",
+    "alreadySent": "You already sent this form on {date}. Sending it again replaces your earlier answers.",
+    "errors": {
+      "missingPairing": "This form has to be opened for a specific mentorship pairing so we can attach your answers to it. Choose the pairing from <mentorship>Mentorship</mentorship> or pick the name under the form on <forms>Forms</forms>.",
+      "wrongAudience": "This form is not meant for your role, so it cannot be submitted from your account. If you think that is wrong, contact your programme administrator.",
+      "pairingClosed": "This pairing is complete, so its record is closed and no more forms can be filed for it. Nothing was saved.",
+      "formBroken": "This form's definition is broken, so it cannot be submitted. Please tell your programme administrator.",
+      "invalid": "Your answers could not be saved.",
+      "invalidHelp": "Please check the required questions and try again.",
+      "unknown": "That submission could not be completed. Please try again."
+    },
+    "footer": "Your responses are saved as you type (draft) and only sealed into the record when you press <em>Submit</em>. Until then you can navigate away and return without losing what you typed.",
+    "broken": {
+      "eyebrow": "Form unavailable",
+      "title": "This form cannot be shown right now.",
+      "body": "The definition of <code>{slug}</code> is not one the form runner can draw. Nothing you have already submitted is affected. Please let your programme administrator know so they can correct it in Admin → Forms."
+    },
+    "notFound": {
+      "eyebrow": "Form not found",
+      "title": "No active form matches this URL.",
+      "body": "Slug <code>{slug}</code> doesn't resolve to any active <table>feedback_forms</table> row. Head back to your <link>forms</link> and open the form from there."
+    }
+  },
+  "thanks": {
+    "metaTitle": "Response saved",
+    "thisForm": "this form",
+    "eyebrow": "Response saved",
+    "title": "Thank you.",
+    "recorded": "Your response to <strong>{title}</strong> has been recorded.",
+    "recordedWithLink": "Your response to <strong>{title}</strong> has been recorded. You can read it again on the pairing's <link>submitted feedback</link> page.",
+    "backToPairing": "Back to pairing",
+    "backToMentorship": "Back to mentorship",
+    "another": "Open another form"
+  },
+  "notifications": {
+    "meetingLogged": "A mentorship meeting was logged for {when}",
+    "meetingCancelled": "Mentorship meeting {when} cancelled",
+    "finalSubmitted": "Final (Q4) feedback was submitted on a mentorship pairing"
+  },
+  "client": {
+    "formRunner": {
+      "choose": "Choose…",
+      "likert": {
+        "stronglyDisagree": "Strongly disagree",
+        "disagree": "Disagree",
+        "neutral": "Neutral",
+        "agree": "Agree",
+        "stronglyAgree": "Strongly agree"
+      },
+      "rating": {
+        "notRated": "Not yet rated",
+        "emerging": "Emerging",
+        "developing": "Developing",
+        "proficient": "Proficient",
+        "strong": "Strong",
+        "exemplary": "Exemplary"
+      },
+      "rateAria": "Rate {n} of {max}",
+      "rateAriaSelected": "Rate {n} of {max} (selected)",
+      "notSavedYet": "Not saved yet",
+      "savedJustNow": "Saved just now",
+      "savedAgo": "Saved {seconds}s ago",
+      "submitting": "Submitting…",
+      "failure": {
+        "expired": "Your session expired — sign in again. Your answers are kept on this device.",
+        "locked": "The mentorship section locked — enter its password again. Your answers are kept on this device.",
+        "rejected": "Not saved — the server refused these answers. They are kept on this device; if it keeps happening, tell your programme administrator.",
+        "offline": "Offline — answers kept on this device, retrying…",
+        "error": "Not saved — answers kept on this device, retrying…"
+      }
+    },
+    "mobileFormRunner": {
+      "stepAria": "Step {n} of {total}",
+      "reviewTitle": "Review your answers",
+      "reviewHelp": "Tap “Edit” on any row to go back. Press Submit when ready — your responses will be sealed into the record.",
+      "question": "Question {n} of {total}",
+      "previous": "← Previous",
+      "review": "Review →",
+      "next": "Next →"
+    },
+    "validation": {
+      "required": "{label} is required.",
+      "tooManySelections": "{label} has too many selections.",
+      "tooLong": "{label} is too long (max {max} characters).",
+      "notAChoice": "{label}: \"{value}\" is not one of the available choices.",
+      "notANumber": "{label} must be a number.",
+      "notWhole": "{label} must be a whole number.",
+      "belowMin": "{label} must be at least {min}.",
+      "aboveMax": "{label} must be at most {max}.",
+      "tooShortText": "{label} must be at least {min} characters.",
+      "tooLongText": "{label} must be at most {max} characters."
+    }
+  }
+}

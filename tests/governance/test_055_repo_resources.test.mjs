@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -39,8 +40,17 @@ test("spec 055 — index queries the three required tables", () => {
 
 test("spec 055 — index renders the JSX prototype's table headers (Title/Kind/Subjects/Owner/Pages/Updated)", () => {
   const src = read(INDEX_PATH);
-  for (const h of ["Title", "Kind", "Subjects", "Owner", "Pages", "Updated"]) {
-    assert.match(src, new RegExp(`"${h}"`), `index must include "${h}" table header`);
+  // The headers are in the repo namespace, read by key.
+  for (const [key, h] of [
+    ["common.title", "Title"],
+    ["common.kind", "Kind"],
+    ["common.subjects", "Subjects"],
+    ["common.owner", "Owner"],
+    ["common.pages", "Pages"],
+    ["common.updated", "Updated"],
+  ]) {
+    assert.ok(readsKey(src, key), `index must include "${h}" table header (repo.${key})`);
+    assert.equal(message(`repo.${key}`), h);
   }
 });
 
@@ -102,8 +112,16 @@ test("spec 055 — detail page 404s when the resource id is unknown or inactive"
 
 test("spec 055 — detail KV sidebar renders every prototype label", () => {
   const src = read(DETAIL_PATH);
-  for (const label of ["Kind", "Owner", "Pages", "Updated", "Subjects", "Tags"]) {
-    assert.match(src, new RegExp(`label="${label}"`), `KV row for "${label}" must be present`);
+  for (const [key, label] of [
+    ["common.kind", "Kind"],
+    ["common.owner", "Owner"],
+    ["common.pages", "Pages"],
+    ["common.updated", "Updated"],
+    ["common.subjects", "Subjects"],
+    ["resource.tags", "Tags"],
+  ]) {
+    assert.ok(src.includes(`<KVRow label={t("${key}")}>`), `KV row for "${label}" must be present`);
+    assert.equal(message(`repo.${key}`), label);
   }
 });
 
@@ -112,9 +130,11 @@ test("spec 055 — detail page differentiates fileKey viewer vs externalUrl link
   // fileKey → "View PDF" button routing to /view (spec 087 relabel — viewer is in-browser only);
   // externalUrl → "Open external link".
   assert.match(src, /res\.fileKey/);
-  assert.match(src, /View PDF/);
+  assert.ok(readsKey(src, "resource.viewPdf"));
+  assert.equal(message("repo.resource.viewPdf"), "View PDF");
   assert.match(src, /res\.externalUrl/);
-  assert.match(src, /Open external link/);
+  assert.ok(readsKey(src, "resource.external"));
+  assert.equal(message("repo.resource.external"), "Open external link");
 });
 
 test("spec 055 — detail page uses CSS-variable tokens inline (no hardcoded hex)", () => {

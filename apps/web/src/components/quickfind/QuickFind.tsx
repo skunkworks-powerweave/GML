@@ -30,6 +30,7 @@ import { QUICKFIND_OPEN_EVENT } from "./events";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 
 // Mirror of the QuickFindResult type exported by the API route. Kept inline so
 // the client component doesn't have to import server-only code.
@@ -58,23 +59,28 @@ const DEBOUNCE_MS = 180;
 const RECENTS_CAP = 5;
 const MIN_QUERY = 2;
 
-const KIND_LABEL: Record<QuickFindResult["kind"], string> = {
-  teacher: "Teacher",
-  school: "School",
-  class: "Class",
-  subject: "Subject",
-  observation_cycle: "Observation",
-  mentor_pairing: "Mentor pairing",
-  outline: "Outline",
-  session: "Session",
+/** Result kind → its label key under home.client.quickFind.kind. */
+const KIND_KEY: Record<QuickFindResult["kind"], string> = {
+  teacher: "teacher",
+  school: "school",
+  class: "class",
+  subject: "subject",
+  observation_cycle: "observationCycle",
+  mentor_pairing: "mentorPairing",
+  outline: "outline",
+  session: "session",
 };
 
-/** What the palette shows in place of results for a search that was not answered. */
-export type SearchRefusal = { primary: string; secondary: string };
+/**
+ * What the palette shows in place of results for a search that was not
+ * answered: the keys of its two lines under home.client.quickFind.refusal,
+ * and the values the second one takes.
+ */
+export type SearchRefusal = { primary: string; secondary: string; values?: { seconds: number } };
 
 const SEARCH_UNAVAILABLE: SearchRefusal = {
-  primary: "Search unavailable",
-  secondary: "Search is not working right now. Try again in a moment.",
+  primary: "unavailable.primary",
+  secondary: "unavailable.secondary",
 };
 
 /**
@@ -90,17 +96,13 @@ const SEARCH_UNAVAILABLE: SearchRefusal = {
 export function refusalFor(status: number, retryAfter: string | null): SearchRefusal {
   if (status === 429) {
     const seconds = Math.ceil(Number(retryAfter));
-    return {
-      primary: "Too many searches",
-      secondary:
-        Number.isFinite(seconds) && seconds > 0
-          ? `Searching is paused for your account. Try again in ${seconds} s.`
-          : "Searching is paused for your account. Try again in a minute.",
-    };
+    return Number.isFinite(seconds) && seconds > 0
+      ? { primary: "throttled.primary", secondary: "throttled.secondaryIn", values: { seconds } }
+      : { primary: "throttled.primary", secondary: "throttled.secondary" };
   }
-  if (status === 401) return { primary: "Signed out", secondary: "Your session has ended. Sign in again to search." };
+  if (status === 401) return { primary: "signedOut.primary", secondary: "signedOut.secondary" };
   // The route's only 400 is query_too_long: longer than any value it searches.
-  if (status === 400) return { primary: "Search too long", secondary: "Shorten the search and try again." };
+  if (status === 400) return { primary: "tooLong.primary", secondary: "tooLong.secondary" };
   return SEARCH_UNAVAILABLE;
 }
 
@@ -178,6 +180,7 @@ function writeRecents(userId: string, recents: QuickFindResult[]): void {
 const NOOP_SUBSCRIBE = (): (() => void) => () => {};
 
 export default function QuickFind({ userId }: QuickFindProps): React.ReactElement | null {
+  const t = useTranslations("home.client.quickFind");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<QuickFindResult[]>([]);
@@ -373,7 +376,7 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Quick find"
+      aria-label={t("ariaLabel")}
       onClick={closePanel}
       style={{
         position: "fixed",
@@ -415,8 +418,8 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onInputKeyDown}
-            placeholder="Search teachers, schools, sessions…"
-            aria-label="Quick find search"
+            placeholder={t("placeholder")}
+            aria-label={t("inputLabel")}
             style={{
               flex: 1,
               border: "none",
@@ -436,6 +439,7 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
               color: "var(--ink-3)",
             }}
           >
+            {/* i18n-ignore: the name printed on the key itself */}
             Esc
           </span>
         </div>
@@ -443,27 +447,30 @@ export default function QuickFind({ userId }: QuickFindProps): React.ReactElemen
         <div style={{ maxHeight: "55vh", overflowY: "auto" }}>
           {showRecents ? (
             recents.length === 0 ? (
-              <EmptyHint primary="Recently viewed" secondary="Start typing to search across the repository." />
+              <EmptyHint primary={t("recent")} secondary={t("startTyping")} />
             ) : (
               <ResultList
-                heading="Recently viewed"
+                heading={t("recent")}
                 items={recents}
                 activeIdx={safeIdx}
                 onSelect={handleSelect}
               />
             )
           ) : loading && !showRecents && results.length === 0 ? (
-            <EmptyHint primary="Searching…" secondary={`Query: "${query.trim()}"`} />
+            <EmptyHint primary={t("searching")} secondary={t("query", { q: query.trim() })} />
           ) : refusal ? (
-            <EmptyHint primary={refusal.primary} secondary={refusal.secondary} />
+            <EmptyHint
+              primary={t(`refusal.${refusal.primary}`)}
+              secondary={t(`refusal.${refusal.secondary}`, refusal.values)}
+            />
           ) : results.length === 0 ? (
             <EmptyHint
-              primary="No matches"
-              secondary={query.trim().length < MIN_QUERY ? "Type at least 2 characters." : `No results for "${query.trim()}"`}
+              primary={t("noMatches")}
+              secondary={query.trim().length < MIN_QUERY ? t("typeMore", { min: MIN_QUERY }) : t("noResultsFor", { q: query.trim() })}
             />
           ) : (
             <ResultList
-              heading={`Results · ${results.length}`}
+              heading={t("results", { count: results.length })}
               items={results}
               activeIdx={safeIdx}
               onSelect={handleSelect}
@@ -501,6 +508,7 @@ function ResultList({
   activeIdx: number;
   onSelect: (item: QuickFindResult) => void;
 }) {
+  const t = useTranslations("home.client.quickFind.kind");
   return (
     <ul role="listbox" aria-label={heading} style={{ listStyle: "none", margin: 0, padding: 0 }}>
       <li
@@ -571,7 +579,7 @@ function ResultList({
                   whiteSpace: "nowrap",
                 }}
               >
-                {KIND_LABEL[item.kind]}
+                {KIND_KEY[item.kind] ? t(KIND_KEY[item.kind]) : item.kind}
               </span>
             </Link>
           </li>

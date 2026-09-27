@@ -84,14 +84,14 @@ function checkPhone(raw: string | undefined, varName: string): EnvCheck {
     return {
       present: false,
       value: null,
-      reason: `${varName} is set but empty after trimming whitespace`,
+      reason: `${varName} is set but empty after trimming whitespace`, // i18n-ignore: operator log line (assertEnv SEVERE), never shown
     };
   }
   if (!PHONE_PATTERN.test(trimmed)) {
     return {
       present: false,
       value: null,
-      reason: `${varName} = ${JSON.stringify(trimmed)} does not match E.164 pattern /^\\+\\d{8,15}$/`,
+      reason: `${varName} = ${JSON.stringify(trimmed)} does not match E.164 pattern /^\\+\\d{8,15}$/`, // i18n-ignore: operator log line (assertEnv SEVERE), never shown
     };
   }
   return { present: true, value: trimmed, reason: "" };
@@ -106,14 +106,14 @@ function checkEmail(raw: string | undefined, varName: string): EnvCheck {
     return {
       present: false,
       value: null,
-      reason: `${varName} is set but empty after trimming whitespace`,
+      reason: `${varName} is set but empty after trimming whitespace`, // i18n-ignore: operator log line (assertEnv SEVERE), never shown
     };
   }
   if (!EMAIL_PATTERN.test(trimmed)) {
     return {
       present: false,
       value: null,
-      reason: `${varName} = ${JSON.stringify(trimmed)} is not a syntactically valid email address`,
+      reason: `${varName} = ${JSON.stringify(trimmed)} is not a syntactically valid email address`, // i18n-ignore: operator log line (assertEnv SEVERE), never shown
     };
   }
   return { present: true, value: trimmed, reason: "" };

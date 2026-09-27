@@ -21,12 +21,17 @@
 // auto-clears on the next picker open so it never blocks a retry.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 
 /** Locale enum mirrors `@/i18n/config::SUPPORTED_LOCALES`. */
 export type LocaleCode = "en" | "hi" | "bo";
 
-/** Display labels (native script for non-English so the user can identify their language). */
+/**
+ * Display labels: each language's own name, in its own script, whatever the
+ * page's language -- so a user can find theirs. Not translated, on purpose.
+ */
 const LABELS: Record<LocaleCode, { native: string; chip: string }> = {
+  // i18n-ignore: a language's self-name ("English") stays as it is in every locale
   en: { native: "English", chip: "EN" },
   hi: { native: "हिन्दी", chip: "हि" },
   bo: { native: "བོད་ཡིག", chip: "བོ" },
@@ -47,7 +52,10 @@ type Props = {
   ariaLabel?: string;
 };
 
-export default function LanguagePicker({ current, ariaLabel = "Language" }: Props) {
+export default function LanguagePicker({ current, ariaLabel }: Props) {
+  const t = useTranslations("home.client.languagePicker");
+  const tLanguage = useTranslations("language");
+  const pickerLabel = ariaLabel ?? tLanguage("pickerLabel");
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<LocaleCode | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +95,7 @@ export default function LanguagePicker({ current, ariaLabel = "Language" }: Prop
           body: JSON.stringify({ uiLanguage: next }),
         });
         if (!res.ok) {
-          setError("Couldn't save language preference. Try again.");
+          setError(t("saveFailed"));
           setPending(null);
           return;
         }
@@ -97,11 +105,11 @@ export default function LanguagePicker({ current, ariaLabel = "Language" }: Prop
         // Settings pills use it -- this just predates that.)
         window.location.reload();
       } catch {
-        setError("Network error — language not saved.");
+        setError(t("networkError"));
         setPending(null);
       }
     },
-    [current],
+    [current, t],
   );
 
   const summaryChip = LABELS[current].chip;
@@ -119,7 +127,7 @@ export default function LanguagePicker({ current, ariaLabel = "Language" }: Prop
       }}
     >
       <summary
-        aria-label={ariaLabel}
+        aria-label={pickerLabel}
         style={{
           listStyle: "none",
           cursor: pending ? "progress" : "pointer",

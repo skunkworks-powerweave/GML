@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -168,9 +169,12 @@ test("spec 122 — HelpPanel wires the three 'Talk to a person' affordances", ()
   // WhatsApp deep-link.
   assert.match(src, /wa\.me/, "must use wa.me deep-link for the WhatsApp button");
   assert.match(src, /encodeURIComponent/, "must URL-encode the WhatsApp prefill message");
-  // mailto deep-link.
+  // mailto deep-link. The subject is in the sender's language
+  // (help.client.panel.mailSubject), with the page slug as its argument.
   assert.match(src, /mailto:/, "must use mailto: for the email button");
-  assert.match(src, /Help:\s*\$\{pageSlug\}/, "mailto subject must include the page slug");
+  assert.ok(readsKey(src, "panel.mailSubject"), "mailto subject must come from the help bundle");
+  assert.match(src, /t\("panel\.mailSubject",\s*\{\s*page:\s*pageSlug\s*\}\)/, "mailto subject must include the page slug");
+  assert.equal(message("help.client.panel.mailSubject"), "Help: {page}");
   // Helpdesk POST.
   assert.match(src, /\/api\/helpdesk\/tickets/, "must POST to /api/helpdesk/tickets");
   assert.match(src, /method:\s*["']POST["']/, "ticket button must use POST");

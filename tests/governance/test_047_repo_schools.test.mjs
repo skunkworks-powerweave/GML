@@ -7,9 +7,19 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
+
+/**
+ * The page's copy is in the repo namespace: `src` reads repo.<key>, and the
+ * English bundle holds the prototype's words there.
+ */
+function readsCopy(src, key, english, what) {
+  assert.ok(readsKey(src, key), `${what} missing (repo.${key})`);
+  assert.equal(message(`repo.${key}`), english, `repo.${key}`);
+}
 
 const INDEX_PATH = "apps/web/src/app/(authenticated)/repo/schools/page.tsx";
 const DETAIL_PATH = "apps/web/src/app/(authenticated)/repo/school/[id]/page.tsx";
@@ -76,8 +86,17 @@ test("schools index renders district filter pills (all / leh / kgl) with count b
 
 test("schools index table has the expected columns from prototype", () => {
   const src = read(INDEX_PATH);
-  for (const col of ["Code", "Name", "Zone", "District", "Teachers", "Classes", "Sessions"]) {
-    assert.match(src, new RegExp(`>\\s*${col}\\s*<`), `column ${col} missing from index header`);
+  for (const [key, col] of [
+    ["common.code", "Code"],
+    ["common.name", "Name"],
+    ["common.zone", "Zone"],
+    ["common.district", "District"],
+    ["common.teachers", "Teachers"],
+    ["common.classes", "Classes"],
+    ["common.sessions", "Sessions"],
+  ]) {
+    assert.match(src, new RegExp(`<th>\\{t\\("${key.replace(".", "\\.")}"\\)\\}</th>`), `column ${col} missing from index header`);
+    readsCopy(src, key, col, `column ${col}`);
   }
   // Detail link uses /repo/school/[id]
   assert.match(src, /\/repo\/school\/\$\{s\.id\}/);
@@ -107,29 +126,54 @@ test("school detail uses 1.6fr / 1fr two-column body grid (matches JSX prototype
 
 test("school detail renders Classes table with Grade/Stage/Students/Sections/Class teacher", () => {
   const src = read(DETAIL_PATH);
-  for (const col of ["Grade", "Stage", "Students", "Sections", "Class teacher"]) {
-    assert.match(src, new RegExp(`>\\s*${col}\\s*<`), `Classes column ${col} missing`);
+  for (const [key, col] of [
+    ["common.grade", "Grade"],
+    ["common.stage", "Stage"],
+    ["common.students", "Students"],
+    ["common.sections", "Sections"],
+    ["common.classTeacher", "Class teacher"],
+  ]) {
+    readsCopy(src, key, col, `Classes column ${col}`);
   }
 });
 
 test("school detail renders Sessions table with Date/Time/Grade/Subject/Topic/Teacher/Status", () => {
   const src = read(DETAIL_PATH);
-  for (const col of ["Date", "Time", "Grade", "Subject", "Topic", "Teacher", "Status"]) {
-    assert.match(src, new RegExp(`>\\s*${col}\\s*<`), `Sessions column ${col} missing`);
+  for (const [key, col] of [
+    ["common.date", "Date"],
+    ["common.time", "Time"],
+    ["common.grade", "Grade"],
+    ["common.subject", "Subject"],
+    ["common.topic", "Topic"],
+    ["common.teacher", "Teacher"],
+    ["common.status", "Status"],
+  ]) {
+    readsCopy(src, key, col, `Sessions column ${col}`);
   }
 });
 
 test("school detail Details KV card has the expected rows from prototype", () => {
   const src = read(DETAIL_PATH);
-  for (const label of ["Code", "Zone", "District", "Teachers", "Classes", "Sessions logged", "Principal", "Onboarded"]) {
-    assert.match(src, new RegExp(`label="${label}"`), `KV label "${label}" missing`);
+  for (const [key, label] of [
+    ["common.code", "Code"],
+    ["common.zone", "Zone"],
+    ["common.district", "District"],
+    ["common.teachers", "Teachers"],
+    ["common.classes", "Classes"],
+    ["common.sessionsLogged", "Sessions logged"],
+    ["school.principal", "Principal"],
+    ["school.onboarded", "Onboarded"],
+  ]) {
+    assert.ok(src.includes(`<KVRow label={t("${key}")}>`), `KV label "${label}" missing`);
+    readsCopy(src, key, label, `KV label "${label}"`);
   }
 });
 
 test("school detail Teachers sidebar renders Hindi name conditionally (SM-7)", () => {
   const src = read(DETAIL_PATH);
-  // SM-7: Hindi name is always conditional and uses var(--deva).
-  assert.match(src, /t\.hindiName\s*\?/);
+  // SM-7: Hindi name is always conditional and uses var(--deva). (The row is
+  // `tc`: `t` is the page's translator.)
+  assert.match(src, /\btc\.hindiName\s*\?/);
   assert.match(src, /var\(--deva\)/);
 });
 
@@ -156,7 +200,9 @@ test("schools index uses district-aware chip colours (indigo for Leh, saffron fo
 
 test("schools index renders the Repository label + serif h1 'Schools' + subtitle", () => {
   const src = read(INDEX_PATH);
-  assert.match(src, />\s*Repository\s*</);
+  readsCopy(src, "common.repository", "Repository", "the Repository label");
   assert.match(src, /fontFamily:\s*"var\(--serif\)"/);
-  assert.match(src, />\s*Schools\s*</);
+  readsCopy(src, "schools.title", "Schools", "the h1");
+  readsCopy(src, "schools.intro", message("repo.schools.intro"), "the subtitle");
+  assert.match(message("repo.schools.intro"), /government schools across Leh and Kargil districts/);
 });

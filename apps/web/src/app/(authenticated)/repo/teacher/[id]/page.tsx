@@ -6,6 +6,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -24,10 +25,14 @@ import { teacherCycleHistory, teacherPairingHistory } from "@/lib/gated-reads";
 import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
+import { enumLabel, present, repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Teacher" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("teacher.metaTitle") };
+}
 
 const SUBJECT_COLOR: Record<string, { chip: string }> = {
   English: { chip: "chip-indigo" },
@@ -76,6 +81,8 @@ export default async function RepoTeacherDetailPage({
   // the section-access checks below need; actorFrom only narrows a null session.
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  const t = await getTranslations("repo");
+  const intl = await repoIntlLocale();
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
@@ -158,6 +165,12 @@ export default async function RepoTeacherDetailPage({
     (teacher.subjectSpecialism &&
       SUBJECT_COLOR[teacher.subjectSpecialism]) || { chip: "" };
 
+  // Stored statuses and kinds, as labels in the viewer's language.
+  const sessionStatusText = (status: string) => enumLabel(t, "sessionStatusPlain", status);
+  const cycleStatusText = (status: string) => enumLabel(t, "cycleStatus", status);
+  const cycleKindText = (kind: string) => enumLabel(t, "cycleKind", kind);
+  const pairingStatusText = (status: string) => enumLabel(t, "pairingStatus", status);
+
   // Spec 137 — device-aware MobileDetailFrame adoption. Wraps the desktop
   // two-column body in the thin-header chrome on mobile; on desktop the
   // existing layout renders unchanged. Data fetching above is untouched.
@@ -172,21 +185,25 @@ export default async function RepoTeacherDetailPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
-          ← Teachers
+          {t("teacher.back")}
         </Link>
         <div>
           <div className="label">
-            Teacher ·{" "}
-            <span
-              className="mono"
-              style={{
-                fontFamily: "var(--mono)",
-                textTransform: "none",
-                letterSpacing: 0,
-              }}
-            >
-              {teacher.id.slice(0, 8)}
-            </span>
+            {t.rich("teacher.label", {
+              id: teacher.id.slice(0, 8),
+              mono: (chunks) => (
+                <span
+                  className="mono"
+                  style={{
+                    fontFamily: "var(--mono)",
+                    textTransform: "none",
+                    letterSpacing: 0,
+                  }}
+                >
+                  {chunks}
+                </span>
+              ),
+            })}
           </div>
           <h1
             style={{
@@ -212,9 +229,14 @@ export default async function RepoTeacherDetailPage({
             ) : null}
           </h1>
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            {teacher.subjectSpecialism ? `Teaches ${teacher.subjectSpecialism}` : "Teacher"}
-            {school ? ` at ${school.code} ${school.name}` : ""}
-            {phaseRow ? `. Currently in ${phaseRow.label} of the RTT programme.` : "."}
+            {t("teacher.intro", {
+              hasSubject: present(teacher.subjectSpecialism),
+              subject: teacher.subjectSpecialism ?? "",
+              hasSchool: present(school),
+              school: school ? `${school.code} ${school.name}` : "",
+              hasPhase: present(phaseRow),
+              phase: phaseRow?.label ?? "",
+            })}
           </p>
         </div>
       </div>
@@ -234,11 +256,11 @@ export default async function RepoTeacherDetailPage({
             }}
           >
             <div style={{ fontWeight: 600, fontSize: 13 }}>
-              Sessions taught ({recentSessions.length})
+              {t("teacher.sessionsTitle", { count: recentSessions.length })}
             </div>
             <div style={{ marginLeft: "auto" }}>
               <Link href="/repo/sessions" className="btn btn-sm">
-                All sessions →
+                {t("common.allSessions")}
               </Link>
             </div>
           </div>
@@ -251,26 +273,26 @@ export default async function RepoTeacherDetailPage({
                 margin: 0,
               }}
             >
-              No sessions recorded yet.
+              {t("common.noSessionsYet")}
             </p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Grade</th>
-                    <th>Subject</th>
-                    <th>Topic</th>
-                    <th>Status</th>
+                    <th>{t("common.date")}</th>
+                    <th>{t("common.time")}</th>
+                    <th>{t("common.grade")}</th>
+                    <th>{t("common.subject")}</th>
+                    <th>{t("common.topic")}</th>
+                    <th>{t("common.status")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recentSessions.map((s) => (
                     <tr key={s.id}>
                       <td className="mono" style={{ fontSize: 12 }}>
-                        {new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                        {new Date(s.scheduledDate).toLocaleDateString(intl, {
                           day: "numeric",
                           month: "short",
                         })}
@@ -278,7 +300,7 @@ export default async function RepoTeacherDetailPage({
                       <td className="mono" style={{ fontSize: 12 }}>
                         {s.scheduledTime ? s.scheduledTime.slice(0, 5) : "—"}
                       </td>
-                      <td>{s.classGrade ? `Grade ${s.classGrade}` : "—"}</td>
+                      <td>{s.classGrade ? t("common.gradeN", { grade: s.classGrade }) : "—"}</td>
                       <td>{s.subjectName ?? "—"}</td>
                       <td>{s.topic ?? "—"}</td>
                       <td>
@@ -292,7 +314,7 @@ export default async function RepoTeacherDetailPage({
                               SESSION_STATUS_COLOR[s.status] ?? "var(--ink-3)",
                           }}
                         >
-                          {s.status.replace("_", " ")}
+                          {sessionStatusText(s.status)}
                         </span>
                       </td>
                     </tr>
@@ -314,10 +336,10 @@ export default async function RepoTeacherDetailPage({
                 borderBottom: "1px solid var(--line)",
               }}
             >
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Details</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("common.details")}</div>
             </div>
             <dl style={{ padding: "0 14px 8px", margin: 0 }}>
-              <KVRow label="Subject">
+              <KVRow label={t("common.subject")}>
                 {teacher.subjectSpecialism ? (
                   <span className={`chip ${subjColor.chip}`}>
                     {teacher.subjectSpecialism}
@@ -326,7 +348,7 @@ export default async function RepoTeacherDetailPage({
                   <span style={{ color: "var(--ink-4)" }}>—</span>
                 )}
               </KVRow>
-              <KVRow label="School">
+              <KVRow label={t("common.school")}>
                 {school ? (
                   <Link
                     href={`/repo/school/${school.id}`}
@@ -342,13 +364,13 @@ export default async function RepoTeacherDetailPage({
                 )}
               </KVRow>
               {school?.zoneName ? (
-                <KVRow label="Zone">{school.zoneName}</KVRow>
+                <KVRow label={t("common.zone")}>{school.zoneName}</KVRow>
               ) : null}
-              <KVRow label="Phase">{phaseRow?.label ?? "—"}</KVRow>
+              <KVRow label={t("common.phase")}>{phaseRow?.label ?? "—"}</KVRow>
               {teacher.joinedPhase ? (
-                <KVRow label="Joined phase">{teacher.joinedPhase}</KVRow>
+                <KVRow label={t("teacher.joinedPhase")}>{teacher.joinedPhase}</KVRow>
               ) : null}
-              <KVRow label="Phone">
+              <KVRow label={t("teacher.phone")}>
                 {teacher.phone ? (
                   <span
                     className="mono"
@@ -360,23 +382,23 @@ export default async function RepoTeacherDetailPage({
                   <span style={{ color: "var(--ink-4)" }}>—</span>
                 )}
               </KVRow>
-              <KVRow label="Onboarded">
+              <KVRow label={t("teacher.onboarded")}>
                 <span
                   className="mono"
                   style={{ fontSize: 12, color: "var(--ink-2)" }}
                 >
-                  {new Date(teacher.createdAt).toLocaleDateString("en-IN", {
+                  {new Date(teacher.createdAt).toLocaleDateString(intl, {
                     day: "numeric",
                     month: "short",
                     year: "numeric",
                   })}
                 </span>
               </KVRow>
-              <KVRow label="Status">
+              <KVRow label={t("common.status")}>
                 <span
                   className={`chip ${teacher.active ? "chip-lichen" : ""}`}
                 >
-                  {teacher.active ? "active" : "inactive"}
+                  {teacher.active ? t("teacher.statusActive") : t("teacher.statusInactive")}
                 </span>
               </KVRow>
             </dl>
@@ -391,13 +413,12 @@ export default async function RepoTeacherDetailPage({
                 borderBottom: "1px solid var(--line)",
               }}
             >
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Mentor pairing</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("teacher.pairingTitle")}</div>
             </div>
             <div style={{ padding: 14 }}>
               {pairings === null ? (
                 <LockedNote
-                  what="Mentorship details are"
-                  href={unlockHref("mentorship")}
+                  text={t.rich("teacher.lockedMentorship", { link: unlockLink(unlockHref("mentorship")) })}
                 />
               ) : activePairing && activePairing.mentorId ? (
                 <Link
@@ -413,8 +434,8 @@ export default async function RepoTeacherDetailPage({
                 >
                   <div className="label">
                     {activePairing.mentorBase
-                      ? `${activePairing.mentorBase} · mentor`
-                      : "mentor"}
+                      ? t("teacher.mentorLabelBase", { base: activePairing.mentorBase })
+                      : t("teacher.mentorLabel")}
                   </div>
                   <div style={{ fontWeight: 500, marginTop: 4 }}>
                     {activePairing.mentorName ?? "—"}
@@ -446,19 +467,19 @@ export default async function RepoTeacherDetailPage({
                       className="mono"
                       style={{ fontSize: 11, color: "var(--ink-3)" }}
                     >
-                      {activePairing.meetingsCount ?? 0} meetings
+                      {t("teacher.meetings", { count: activePairing.meetingsCount ?? 0 })}
                     </span>
                     <span
                       className={`chip ${activePairing.status === "active" ? "chip-lichen" : ""}`}
                       style={{ marginLeft: "auto" }}
                     >
-                      {activePairing.status}
+                      {pairingStatusText(activePairing.status)}
                     </span>
                   </div>
                 </Link>
               ) : (
                 <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                  No mentor paired yet.
+                  {t("teacher.noMentor")}
                 </p>
               )}
             </div>
@@ -474,19 +495,19 @@ export default async function RepoTeacherDetailPage({
               }}
             >
               <div style={{ fontWeight: 600, fontSize: 13 }}>
-                Recent observation cycles
-                {recentCycles ? ` (${recentCycles.length})` : ""}
+                {recentCycles
+                  ? t("teacher.cyclesTitleCount", { count: recentCycles.length })
+                  : t("teacher.cyclesTitle")}
               </div>
             </div>
             <div style={{ padding: 14 }}>
               {recentCycles === null ? (
                 <LockedNote
-                  what="Observation history is"
-                  href={unlockHref("observation")}
+                  text={t.rich("teacher.lockedObservation", { link: unlockLink(unlockHref("observation")) })}
                 />
               ) : recentCycles.length === 0 ? (
                 <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                  No cycles yet.
+                  {t("teacher.noCycles")}
                 </p>
               ) : (
                 <ul
@@ -522,7 +543,7 @@ export default async function RepoTeacherDetailPage({
                           {c.code}
                         </span>
                         <span style={{ fontSize: 12, flex: 1, marginLeft: 8 }}>
-                          {c.topic ?? c.kind}
+                          {c.topic ?? cycleKindText(c.kind)}
                         </span>
                         <span
                           className="mono"
@@ -534,7 +555,7 @@ export default async function RepoTeacherDetailPage({
                               CYCLE_STATUS_COLOR[c.status] ?? "var(--ink-3)",
                           }}
                         >
-                          {c.status.replace("_", " ")}
+                          {cycleStatusText(c.status)}
                         </span>
                       </Link>
                     </li>
@@ -561,16 +582,22 @@ export default async function RepoTeacherDetailPage({
  * A gated card's content when the viewer has not unlocked that section. Says
  * why the card is empty and offers the unlock, returning here afterwards,
  * rather than rendering "No cycles yet." -- which would be a false statement.
+ * `text` is the whole sentence (repo.teacher.locked*), its <link> the unlock.
  */
-function LockedNote({ what, href }: { what: string; href: string }) {
-  return (
-    <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-      {what} behind the section password.{" "}
+function LockedNote({ text }: { text: React.ReactNode }) {
+  return <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>{text}</p>;
+}
+
+/** The unlock link inside a LockedNote sentence (the message's <link> tag). */
+function unlockLink(href: string) {
+  function UnlockLink(chunks: React.ReactNode) {
+    return (
       <Link href={href} style={{ color: "var(--indigo)" }}>
-        Unlock →
+        {chunks}
       </Link>
-    </p>
-  );
+    );
+  }
+  return UnlockLink;
 }
 
 function KVRow({

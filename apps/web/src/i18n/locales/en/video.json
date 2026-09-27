@@ -1,0 +1,333 @@
+{
+  "status": {
+    "received": "received",
+    "queued": "queued",
+    "transcoding": "transcoding",
+    "ready": "ready",
+    "failed": "failed",
+    "review_pending": "review pending",
+    "reviewed": "reviewed"
+  },
+  "contextType": {
+    "observation_cycle": "observation cycle",
+    "teach_back": "teach back",
+    "mentor_meeting": "mentor meeting",
+    "mentee_quarterly": "mentee quarterly",
+    "classroom_session": "classroom session",
+    "generic": "generic"
+  },
+  "sourceName": "{source, select, whatsapp {whatsapp} direct {direct} external_link {external_link} google_drive {google_drive} other {{source}}}",
+  "library": {
+    "metaTitle": "Video library",
+    "label": "Video library",
+    "title": "Submissions & lesson recordings",
+    "intro": "Videos are watermarked per viewer and streamed in the browser, and every view is logged.",
+    "introWithWhatsapp": "Videos are watermarked per viewer and streamed in the browser, and every view is logged. WhatsApp uploads land here automatically once a teacher sends a video with the right caption code.",
+    "whatsappLog": "WhatsApp ingest log",
+    "filter": {
+      "all": "All",
+      "ready": "Ready to review",
+      "transcoding": "Transcoding",
+      "queued": "Queued"
+    },
+    "sourceFilter": {
+      "label": "Filter by source",
+      "all": "All sources",
+      "direct": "Direct",
+      "externalLink": "External link",
+      "googleDrive": "Google Drive"
+    },
+    "apply": "Apply",
+    "showing": "Showing {from}–{to} of {total}",
+    "empty": "No videos.",
+    "clickToPlay": "▶ click to play",
+    "noPreview": "no preview",
+    "statusOverlay": "{status}…",
+    "via": "via {source}",
+    "viaDuration": "via {source} · {minutes} min",
+    "pages": "Pages",
+    "previous": "← Previous",
+    "next": "Next →"
+  },
+  "detail": {
+    "metaTitle": "Video",
+    "heading": {
+      "observation_cycle": "Classroom observation video",
+      "teach_back": "Teach-back video",
+      "mentor_meeting": "Mentor meeting recording",
+      "mentee_quarterly": "Mentee quarterly video",
+      "classroom_session": "Classroom session video",
+      "generic": "Video"
+    },
+    "back": "← Library",
+    "contextVia": "{context} · via {source}",
+    "player": "Player",
+    "playerSub": "Watermarked · streamed",
+    "state": {
+      "transcoding": "Transcoding in progress. Refresh in a minute or two.",
+      "received": "Received. Waiting for the worker to pick it up.",
+      "failed": "Transcode failed. Contact your programme admin.",
+      "none": "No playable rendition."
+    },
+    "notice": "Your name and the time are shown over this video, and every view is logged. Playback links expire within a few hours. Please do not share, download or re-record classroom videos.",
+    "metadata": "Metadata",
+    "field": {
+      "videoId": "Video ID",
+      "caption": "Caption",
+      "source": "Source",
+      "context": "Context",
+      "status": "Status",
+      "duration": "Duration",
+      "uploaded": "Uploaded",
+      "watermark": "Watermark"
+    },
+    "duration": "{minutes}m {seconds}s",
+    "viewer": "viewer"
+  },
+  "externalEmbed": {
+    "unsupported": "Unsupported external URL. <link>Open in a new tab</link>.",
+    "badge": "external · not download-gated"
+  },
+  "uploads": {
+    "label": "My uploads",
+    "title": "Submit a lesson video",
+    "intro": "Send it over WhatsApp or upload it here — whichever works on your network today.",
+    "source": {
+      "whatsapp": "WhatsApp",
+      "direct": "Web",
+      "external_link": "External"
+    },
+    "linked": {
+      "teach_back": "Teach-back",
+      "mentor_meeting": "Mentor meeting",
+      "mentee_quarterly": "Mentee quarterly",
+      "classroom_session": "Classroom session",
+      "generic": "Not linked (only you and admins)",
+      "menteeQuarter": "Mentee quarterly · Q{quarter}"
+    },
+    "section": {
+      "observation": "Observation",
+      "mentorship": "Mentorship"
+    },
+    "attachNotice": {
+      "done": "Attached. The video now shows where you chose.",
+      "invalid": "Choose what to attach the video to.",
+      "refused": "The video could not be attached there. Choose another place.",
+      "not_attachable": "Only your own videos that are not linked yet, and have not failed, can be attached.",
+      "locked": "Unlock that section first, then attach the video."
+    },
+    "cards": {
+      "whatsappGlyph": "wa",
+      "uploadGlyph": "up",
+      "whatsappTitle": "Forward via WhatsApp",
+      "whatsappExact": "Send your video to {phone} with the caption {caption}. Fastest on 2G/3G.",
+      "whatsappCode": "Send your video to {phone} with your cycle code as the caption, e.g. OBS-2026-009. Fastest on 2G/3G.",
+      "uploadTitle": "Upload here",
+      "uploadBody": "Choose a file below. Resumes on disconnect. Max file {maxMb} MB. We'll transcode to HLS automatically.",
+      "start": "Start"
+    },
+    "openWhatsapp": "Open WhatsApp",
+    "target": {
+      "label": "This video is for",
+      "change": "Choose something else"
+    },
+    "locked": "That link is for the {section} section. <link>Unlock {section}</link> to upload to it.",
+    "choose": {
+      "label": "What is this video for?",
+      "unlock": {
+        "observation": "Unlock Observation to choose a cycle",
+        "mentorship": "Unlock Mentorship to choose a meeting or a quarterly video"
+      },
+      "other": "Something else",
+      "otherHint": "Linked to nothing: only you and programme administrators will see it."
+    },
+    "slowLink": {
+      "title": "On a slow 2G/3G link?",
+      "body": "Send the video to {phone} on WhatsApp with your cycle code as the caption, e.g. OBS-2026-009."
+    },
+    "recent": {
+      "title": "My recent uploads",
+      "count": "{count, plural, one {# video} other {# videos}} · most recent first",
+      "empty": "You haven't uploaded anything yet.",
+      "emptyHint": "Use one of the options above — WhatsApp is the fastest on a flaky connection.",
+      "col": {
+        "file": "File",
+        "source": "Source",
+        "linked": "Linked to",
+        "size": "Size",
+        "state": "State",
+        "date": "Date"
+      },
+      "unnamed": "(unnamed)",
+      "videoTag": "VID"
+    },
+    "attach": {
+      "label": "Attach {filename} to",
+      "placeholder": "Attach to…",
+      "submit": "Attach"
+    }
+  },
+  "context": {
+    "error": {
+      "unknown": "Unknown upload context.",
+      "quarterOnly": "A quarter applies only to a mentee's quarterly video.",
+      "chooseCycle": "Choose which observation cycle this video is for.",
+      "cycleSignedOff": "This cycle has been signed off. Its record is closed, so no more evidence can be added.",
+      "chooseMeeting": "Choose which meeting this recording is for.",
+      "closedPairing": "This pairing is complete. Its record is closed, so no more videos can be added.",
+      "choosePairing": "Choose which mentorship pairing this video is for.",
+      "chooseQuarter": "Say whether this is the Q1 (baseline) or the Q4 (endline) video.",
+      "q4NotYet": "The Q4 video is recorded in the pairing's last quarter; this pairing is in Q{quarter}.",
+      "chooseSubject": "Choose which RTT subject this teach-back is for."
+    },
+    "title": {
+      "lesson": "Lesson video for {code}",
+      "meeting": "Recording of the meeting on {date} · {mentor} ↔ {teacher}",
+      "quarterlyQ1": "Q1 baseline video · {mentor} ↔ {teacher}",
+      "quarterlyQ4": "Q4 endline video · {mentor} ↔ {teacher}",
+      "teachBack": "Teach-back video for {subject}",
+      "classroomSession": "Classroom session video",
+      "generic": "Not linked to a cycle, meeting or pairing"
+    },
+    "audience": {
+      "cycle": "It goes on the cycle's Evidence, where the teacher, the observer and the mentor review it.",
+      "meeting": "It goes on that meeting in the pairing, for the mentor and the mentee.",
+      "quarterly": "It goes on the pairing page, for the mentor and the mentee.",
+      "teachBack": "It goes to the teach-back queue, where mentors and observers review it.",
+      "private": "Only you and programme administrators can see it."
+    },
+    "option": {
+      "quarterlyQ1": "Q1 baseline video for your mentor",
+      "quarterlyQ4": "Q4 endline video for your mentor",
+      "meeting": "Recording of your meeting on {date}",
+      "teachBack": "Teach-back for {subject}",
+      "cycleStatus": "Cycle {status, select, nominated {nominated} pre_submitted {pre submitted} observed {observed} post_submitted {post submitted} complete {complete} other {{status}}}"
+    }
+  },
+  "actions": {
+    "signIn": "Please sign in again.",
+    "notConfigured": "Uploads are not configured on this deployment. Please contact your administrator.",
+    "locked": "Unlock that section first: enter its password, then send the video again.",
+    "empty": "That file looks empty.",
+    "tooLarge": "That file is larger than the {mb} MB limit. Send it over WhatsApp instead.",
+    "complete": {
+      "storage_unavailable": "Storage did not answer. Your video is uploaded; try confirming it again.",
+      "object_missing": "We could not find the uploaded file. Please try again.",
+      "object_truncated": "The upload finished early and is incomplete. Please try again.",
+      "object_too_large": "That file is larger than it was declared and was refused.",
+      "not_found": "That upload could not be found."
+    }
+  },
+  "client": {
+    "upload": {
+      "error": {
+        "not_configured": "Uploads are not configured on this deployment.",
+        "library_unavailable": "Upload library unavailable. Please send the video over WhatsApp instead.",
+        "signed_out": "Your session has expired. Please sign in again.",
+        "connection_dropped": "The connection dropped. Reconnect and choose the same file to resume.",
+        "too_large": "That file is too large. Send it over WhatsApp instead.",
+        "refused": "The server refused this upload. Send the video over WhatsApp for now, and tell your programme admin.",
+        "session_expired": "Your session expired during the upload. Sign in again and retry.",
+        "failed": "Upload failed. Please try again, or send the video over WhatsApp."
+      },
+      "unconfirmed": "Your video is uploaded, but we could not confirm it with the server. Check your connection and tap Retry; it will not upload again.",
+      "notConfirmed": "Upload could not be confirmed."
+    },
+    "player": {
+      "failure": {
+        "signed_out": "Your session has ended. Sign in again to keep watching.",
+        "no_access": "You no longer have access to this video. Reload the page to check.",
+        "unavailable": "This video is not available right now. Tell your programme admin.",
+        "generic": "Playback failed. Check your connection and reload the page.",
+        "unsupported": "This browser cannot play these videos. Open this page in an up-to-date Chrome, Firefox or Safari."
+      },
+      "loadFailed": "Failed to load HLS player: {error}",
+      "speed": "Speed",
+      "speedGroup": "Playback speed",
+      "quality": "Quality",
+      "auto": "Auto",
+      "notProduced": "Not produced: videos stream at up to 480p",
+      "notAvailable": "720p (not available)"
+    },
+    "modal": {
+      "trigger": "Upload",
+      "dialog": "Upload a video",
+      "eyebrow": "Upload video",
+      "title": "Two ways to send a lesson",
+      "close": "Close upload dialog",
+      "recommended": "Recommended",
+      "whatsappTitle": "Send via WhatsApp",
+      "whatsappIntro": "The fastest path on a slow connection. Forward your video to the programme number with one of the caption codes below. It lands in this library automatically once the worker finishes transcoding.",
+      "programmeWhatsapp": "Programme WhatsApp",
+      "copied": "Copied",
+      "copy": "Copy phone number",
+      "caption": {
+        "obs": "Caption <code>OBS-'<'code'>'</code> — attaches to an observation cycle (code from the cycle detail page).",
+        "tb": "Caption <code>TB-'<'subject'>'</code> — a teach-back for an RTT subject (Upload a teach-back video on the subject's page gives its code).",
+        "mm": "Caption <code>MM-'<'uuid'>'</code> — attaches to a mentor meeting.",
+        "quarterly": "Caption <code>Q1-'<'uuid'>'</code> or <code>Q4-'<'uuid'>'</code> — a mentee's quarterly video for her pairing."
+      },
+      "unlinked": "A video whose caption has no code, or one you may not use, still arrives, but linked to nothing: only you and programme administrators can see it. Attach it from My uploads, or send it again with the right code.",
+      "adminMentor": "Admin / mentor",
+      "browserTitle": "Or upload from this browser",
+      "browserIntro": "Resumable upload, MP4 / MOV / 3GP, transcodes to <strong>{quality} HLS</strong> after the upload finishes (set by the programme admin in system settings). Use this when you already have the file on disk (e.g. classroom recording).",
+      "browserUnlinked": "Uploaded here, a video is linked to nothing: only you and programme administrators see it. For an observation cycle, a meeting or a quarterly video, use <link>My uploads</link>, which asks what it is for."
+    },
+    "tray": {
+      "button": "Upload video",
+      "hint": "MP4 / MOV / 3GP · resumable on network drop · 480p HLS transcode after upload",
+      "unreachable": "Could not reach the server. Check your connection and choose the file again.",
+      "retry": "Retry",
+      "status": {
+        "confirming": "confirming",
+        "unconfirmed": "unconfirmed",
+        "transcoding": "transcoding",
+        "ready": "ready",
+        "failed": "failed"
+      }
+    },
+    "mobile": {
+      "tiles": {
+        "record": {
+          "label": "Record now",
+          "sub": "Opens your phone camera",
+          "icon": "REC"
+        },
+        "pick": {
+          "label": "Pick from gallery",
+          "sub": "Choose a video file",
+          "icon": "PIC"
+        }
+      },
+      "chooseTitle": "Submit a lesson video",
+      "chooseIntro": "Pick a way that fits your network today.",
+      "slowTitle": "On a slow 2G/3G link?",
+      "slowBody": "WhatsApp is faster than direct upload on weak signals — your phone keeps retrying in the background.",
+      "openWhatsapp": "Open WhatsApp",
+      "previewTitle": "Looks good?",
+      "previewIntro": "Add a caption so your mentor knows what this is.",
+      "thumbAlt": "First frame of selected video",
+      "previewUnavailable": "Preview unavailable (codec not browser-decodable)",
+      "noteLabel": "Note for whoever reviews it (optional)",
+      "notePlaceholder": "What the lesson was about",
+      "start": "Start upload",
+      "uploadingTitle": "Uploading…",
+      "watermarkNotice": "Whoever plays your video back sees their own name and the time over it — please do not redistribute outside the programme.",
+      "slowFallback": "If your connection is slow, send via WhatsApp instead",
+      "doneTitle": "Uploaded",
+      "doneBody": "Transcoding now. It can be played once that has finished. Taking you to My Uploads…",
+      "failedTitle": "Upload failed",
+      "retry": "Retry",
+      "error": {
+        "unreachable": "Could not reach the server. Check your connection and tap Retry.",
+        "failedWhatsapp": "Upload failed. Try again, or send the video over WhatsApp.",
+        "failed": "Upload failed. Please try again.",
+        "redirect": "{error} — tap Back to return to My Uploads",
+        "redirectDefault": "Redirect failed",
+        "cancelled": "Upload cancelled — try again",
+        "unknownWhatsapp": "Something went wrong. Try again or use WhatsApp.",
+        "unknown": "Something went wrong. Please try again."
+      }
+    }
+  }
+}

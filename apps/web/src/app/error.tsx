@@ -23,6 +23,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 
 export default function RouteError({
   error,
@@ -31,6 +32,10 @@ export default function RouteError({
   error: Error & { digest?: string };
   unstable_retry: () => void;
 }) {
+  // The root layout provides these strings (home.client.routeError) in the
+  // user's language: this boundary renders inside it, outside every other
+  // layout and its provider.
+  const t = useTranslations("home.client.routeError");
   useEffect(() => {
     // Structured so a log processor can find it. console.error is the only
     // sink available in a client component; the server has already logged the
@@ -44,30 +49,29 @@ export default function RouteError({
       data-testid="route-error"
     >
       <p className="text-5xl">!</p>
-      <h1 className="text-xl font-semibold">Something went wrong</h1>
-      <p className="text-sm text-neutral-600">
-        This page couldn&rsquo;t load. It may be a temporary connection problem &mdash; try
-        again in a moment.
-      </p>
+      <h1 className="text-xl font-semibold">{t("title")}</h1>
+      <p className="text-sm text-neutral-600">{t("body")}</p>
       <div className="flex gap-2">
         <button
           type="button"
           onClick={() => unstable_retry()}
           className="rounded-md bg-neutral-900 px-4 py-2 text-sm text-white"
         >
-          Try again
+          {t("tryAgain")}
         </button>
         <Link
           href="/dashboard"
           className="rounded-md border border-neutral-300 px-4 py-2 text-sm text-neutral-800"
         >
-          Go to dashboard
+          {t("goToDashboard")}
         </Link>
       </div>
       {error.digest ? (
         <p className="text-xs text-neutral-400">
-          Reference <code data-testid="error-digest">{error.digest}</code> &mdash; quote this
-          when reporting the problem.
+          {t.rich("reference", {
+            digest: error.digest,
+            code: (chunks) => <code data-testid="error-digest">{chunks}</code>,
+          })}
         </p>
       ) : null}
     </main>

@@ -1,0 +1,759 @@
+{
+  "fieldMessage": "{field}: {message}",
+  "common": {
+    "active": "active",
+    "inactive": "inactive",
+    "formsAndQuizzes": "Forms & Quizzes"
+  },
+  "entities": {
+    "districts": {
+      "label": "Districts",
+      "columns": {
+        "name": "District",
+        "code": "Code",
+        "createdAt": "Created"
+      }
+    },
+    "phases": {
+      "label": "RTT Phases",
+      "columns": {
+        "label": "Phase",
+        "sequence": "Seq",
+        "startDate": "Starts",
+        "endDate": "Ends"
+      }
+    },
+    "terms": {
+      "label": "RTT Terms",
+      "columns": {
+        "phaseId": "Phase",
+        "name": "Term",
+        "sequence": "Seq"
+      }
+    },
+    "schools": {
+      "label": "Schools",
+      "columns": {
+        "name": "Name",
+        "code": "Code",
+        "zoneId": "Zone",
+        "contactPhone": "Phone",
+        "headTeacherName": "Head",
+        "active": "Active"
+      },
+      "fields": {
+        "address": "Address"
+      }
+    },
+    "zones": {
+      "label": "Zones",
+      "columns": {
+        "name": "Zone",
+        "districtId": "District",
+        "createdAt": "Created"
+      }
+    },
+    "teachers": {
+      "label": "Teachers",
+      "columns": {
+        "userId": "Login account",
+        "fullName": "Name",
+        "schoolId": "School",
+        "phone": "Phone",
+        "subjectSpecialism": "Subject",
+        "joinedPhase": "Joined at",
+        "currentPhaseId": "Current phase",
+        "active": "Active"
+      },
+      "help": {
+        "joinedPhase": "Free text, e.g. \"Phase 1\" -- where the teacher started."
+      }
+    },
+    "mentors": {
+      "label": "Mentors",
+      "columns": {
+        "userId": "Login account",
+        "name": "Name",
+        "bio": "Bio",
+        "active": "Active"
+      },
+      "fields": {
+        "photoUrl": "Photo URL",
+        "expertiseAreas": "Expertise areas"
+      }
+    },
+    "mentor-pairings": {
+      "label": "Mentor ↔ Mentee Pairings",
+      "columns": {
+        "mentorId": "Mentor",
+        "teacherId": "Mentee teacher",
+        "startedAt": "Started",
+        "endedAt": "Ended",
+        "status": "Status"
+      },
+      "fields": {
+        "conceptNote": "Concept note"
+      },
+      "enum": {
+        "status": {
+          "active": "active",
+          "review": "review",
+          "paused": "paused",
+          "ended": "ended",
+          "complete": "complete"
+        }
+      }
+    },
+    "rtt-attendance": {
+      "label": "RTT Attendance",
+      "columns": {
+        "rttSessionId": "Session",
+        "teacherId": "Teacher",
+        "status": "Status",
+        "markedAt": "Marked"
+      },
+      "enum": {
+        "status": {
+          "present": "present",
+          "absent": "absent",
+          "excused": "excused"
+        }
+      }
+    },
+    "rtt-sessions": {
+      "label": "RTT Sessions",
+      "columns": {
+        "title": "Title",
+        "type": "Type",
+        "scheduledAt": "Scheduled",
+        "durationMin": "Minutes",
+        "platform": "Platform",
+        "sequence": "Seq"
+      },
+      "fields": {
+        "rttSubjectId": "RTT subject",
+        "linkOrRecording": "Link or recording",
+        "notes": "Notes"
+      },
+      "enum": {
+        "type": {
+          "synchronous": "synchronous",
+          "asynchronous": "asynchronous",
+          "webinar": "webinar",
+          "quiz": "quiz"
+        }
+      }
+    },
+    "rtt-subjects": {
+      "label": "RTT Subjects",
+      "columns": {
+        "name": "Name",
+        "code": "Code",
+        "termId": "Term",
+        "districtId": "District",
+        "zoneId": "Zone",
+        "active": "Active"
+      },
+      "help": {
+        "districtId": "Leave district and zone empty for a subject taught across the whole programme.",
+        "zoneId": "Or one zone only. Teachers see the subjects of their own district and zone."
+      }
+    },
+    "rtt-modules": {
+      "label": "RTT Modules",
+      "columns": {
+        "rttSubjectId": "RTT subject",
+        "sequence": "Seq",
+        "title": "Title",
+        "description": "Description"
+      },
+      "fields": {
+        "learningObjectives": "Learning objectives",
+        "courseObjectives": "Course objectives",
+        "assuranceOfLearning": "Assurance of learning",
+        "evaluationCriteria": "Evaluation criteria",
+        "textbookRefs": "Textbook refs"
+      }
+    },
+    "rtt-lessons": {
+      "label": "RTT Lessons",
+      "columns": {
+        "rttModuleId": "RTT module",
+        "sequence": "Seq",
+        "title": "Title"
+      },
+      "fields": {
+        "bodyMd": "Body md"
+      }
+    },
+    "rtt-readings": {
+      "label": "RTT Readings",
+      "columns": {
+        "rttSubjectId": "RTT subject",
+        "sequence": "Seq",
+        "title": "Title",
+        "externalUrl": "Link"
+      }
+    },
+    "observation-cycles": {
+      "label": "Observation Cycles",
+      "columns": {
+        "code": "Code",
+        "teacherId": "Teacher",
+        "observerId": "Observer (user)",
+        "kind": "Kind",
+        "scheduledAt": "Scheduled",
+        "topic": "Topic",
+        "status": "Stage"
+      },
+      "fields": {
+        "observerId": "Observer",
+        "subjectId": "Subject"
+      },
+      "enum": {
+        "kind": {
+          "baseline": "baseline",
+          "developmental": "developmental",
+          "evaluative": "evaluative"
+        },
+        "status": {
+          "nominated": "nominated",
+          "pre_submitted": "pre submitted",
+          "observed": "observed",
+          "post_submitted": "post submitted",
+          "complete": "complete"
+        }
+      }
+    },
+    "subjects": {
+      "label": "Subjects (curriculum)",
+      "columns": {
+        "name": "Name",
+        "code": "Code",
+        "color": "Color",
+        "gradesMin": "Grades from",
+        "gradesMax": "Grades to",
+        "displayOrder": "Order",
+        "active": "Active"
+      }
+    },
+    "classes": {
+      "label": "Classes",
+      "columns": {
+        "schoolId": "School",
+        "grade": "Grade",
+        "stage": "Stage",
+        "studentsCount": "Students",
+        "sectionsCount": "Sections",
+        "classTeacherName": "Class teacher",
+        "active": "Active"
+      }
+    },
+    "course-outlines": {
+      "label": "Course outlines",
+      "columns": {
+        "name": "Name",
+        "subjectId": "Subject",
+        "grade": "Grade",
+        "term": "Term",
+        "weeks": "Weeks",
+        "status": "Status"
+      },
+      "fields": {
+        "sessionsCount": "Sessions count",
+        "ownerTeacherId": "Owner teacher",
+        "learningOutcomes": "Learning outcomes"
+      },
+      "enum": {
+        "status": {
+          "planned": "planned",
+          "in_progress": "in progress",
+          "complete": "complete",
+          "archived": "archived"
+        }
+      }
+    },
+    "outline-lessons": {
+      "label": "Outline lessons",
+      "columns": {
+        "outlineId": "Outline",
+        "sequence": "#",
+        "title": "Title",
+        "week": "Week"
+      }
+    },
+    "sessions": {
+      "label": "Classroom sessions",
+      "columns": {
+        "scheduledDate": "Date",
+        "schoolId": "School",
+        "classId": "Class",
+        "subjectId": "Subject",
+        "teacherId": "Teacher",
+        "topic": "Topic",
+        "status": "Status",
+        "attendedCount": "Present",
+        "totalCount": "Roll",
+        "observed": "Observed"
+      },
+      "fields": {
+        "outlineLessonId": "Outline lesson",
+        "scheduledTime": "Scheduled time",
+        "durationMin": "Duration min",
+        "observationCycleId": "Observation cycle"
+      },
+      "enum": {
+        "status": {
+          "planned": "planned",
+          "in_progress": "in progress",
+          "complete": "complete",
+          "cancelled": "cancelled"
+        }
+      }
+    },
+    "resources": {
+      "label": "Resources (reading material)",
+      "columns": {
+        "name": "Name",
+        "kind": "Kind",
+        "owner": "Owner",
+        "pages": "Pages",
+        "active": "Active"
+      },
+      "fields": {
+        "fileKey": "File key",
+        "externalUrl": "External URL",
+        "tags": "Tags"
+      },
+      "enum": {
+        "kind": {
+          "Policy": "Policy",
+          "Guide": "Guide",
+          "Handbook": "Handbook",
+          "Worksheet": "Worksheet",
+          "Template": "Template",
+          "Routine": "Routine",
+          "Calendar": "Calendar",
+          "Checklist": "Checklist",
+          "Lab-guide": "Lab-guide",
+          "Rubric": "Rubric",
+          "Other": "Other"
+        }
+      }
+    },
+    "resource-subjects": {
+      "label": "Resource ↔ Subject links",
+      "columns": {
+        "resourceId": "Resource",
+        "subjectId": "Subject"
+      }
+    },
+    "learners": {
+      "label": "Learners (PII)",
+      "columns": {
+        "name": "Name",
+        "classId": "Class",
+        "schoolId": "School",
+        "grade": "Grade",
+        "section": "Section",
+        "rollNumber": "Roll #",
+        "age": "Age",
+        "guardian": "Guardian",
+        "attendancePct": "Attend %",
+        "active": "Active"
+      }
+    }
+  },
+  "grid": {
+    "crumb": "<link>Admin</link> · Data",
+    "pageRows": "Page {page} · {count, plural, one {# row} other {# rows}}",
+    "exportCsv": "Export CSV",
+    "exportTitle": "Download CSV",
+    "exportLocked": "Exporting learner records requires a super administrator",
+    "editRow": "Edit row",
+    "close": "Close",
+    "rowId": "Row id: <code>{id}</code>",
+    "addNew": "Add new",
+    "notApplied": "Not applied: {filters}. The rows below are not narrowed by {count, plural, one {it} other {them}}.",
+    "notAppliedItem": "{column} \"{value}\" ({why})",
+    "skip": {
+      "notOneOf": "not one of {options}",
+      "pasteId": "paste the row's id, shown at the top of its Edit panel",
+      "yesNo": "yes or no",
+      "notNumber": "not a number",
+      "notDate": "not a date (YYYY-MM-DD)",
+      "notFilterable": "this column cannot be filtered",
+      "unusable": "unusable"
+    },
+    "any": "any",
+    "yes": "yes",
+    "no": "no",
+    "pasteId": "paste the row's id",
+    "contains": "contains…",
+    "applyFilters": "Apply filters",
+    "clear": "Clear",
+    "cardPagination": "Card list pagination",
+    "prev": "← Prev",
+    "next": "Next →",
+    "page": "Page {page}",
+    "actions": "Actions",
+    "noMatches": "No rows match the active filters. Clear filters to see everything.",
+    "empty": "No rows yet. Add one above.",
+    "errors": {
+      "still_referenced": "That row can't be deleted because other records still reference it. Remove or reassign those first.",
+      "duplicate": "That change conflicts with an existing row.",
+      "delete_failed": "That delete could not be completed. Nothing was changed.",
+      "stillReferencedBy": "That row can't be deleted because {entity} records still reference it. Remove or reassign those first.",
+      "locked": "That row is locked in its current state and cannot be deleted from the grid.",
+      "unknown": "That action could not be completed."
+    }
+  },
+  "write": {
+    "missingRowId": "Missing rowId",
+    "validationFailed": "Validation failed",
+    "rowGone": "That row no longer exists."
+  },
+  "validation": {
+    "activeObserver": "must be an active observer account",
+    "phaseEndsBeforeStart": "A phase cannot end before it starts",
+    "resourceSource": "resource must have either a file_key or an external_url",
+    "httpLink": "Must be an http:// or https:// link",
+    "webLink": "Must be a web link, e.g. https://meet.google.com/abc-defg-hij",
+    "districtOrZone": "Choose a district or a zone, not both: a zone is already in its district.",
+    "isoDate": "must be a date as YYYY-MM-DD",
+    "attendedWithinTotal": "attended_count must not exceed total_count",
+    "uppercaseCode": "Uppercase code (e.g. ENG, MAT, EVS)",
+    "gradesOrder": "grades_min must be ≤ grades_max"
+  },
+  "zod": {
+    "required": "Required",
+    "invalidType": "Expected {expected}, received {received}",
+    "invalidDate": "Invalid date",
+    "invalidInput": "Invalid input",
+    "invalidEnum": "Invalid enum value. Expected {options}, received ''{received}''",
+    "invalidString": {
+      "uuid": "Invalid uuid",
+      "url": "Invalid url",
+      "email": "Invalid email",
+      "date": "Invalid date",
+      "datetime": "Invalid datetime",
+      "regex": "Invalid"
+    },
+    "tooSmall": {
+      "string": "{mode, select, exact {String must contain exactly {minimum} character(s)} inclusive {String must contain at least {minimum} character(s)} other {String must contain over {minimum} character(s)}}",
+      "number": "{mode, select, exact {Number must be exactly equal to {minimum}} inclusive {Number must be greater than or equal to {minimum}} other {Number must be greater than {minimum}}}",
+      "array": "{mode, select, exact {Array must contain exactly {minimum} element(s)} inclusive {Array must contain at least {minimum} element(s)} other {Array must contain more than {minimum} element(s)}}"
+    },
+    "tooBig": {
+      "string": "{mode, select, exact {String must contain exactly {maximum} character(s)} inclusive {String must contain at most {maximum} character(s)} other {String must contain under {maximum} character(s)}}",
+      "number": "{mode, select, exact {Number must be exactly {maximum}} inclusive {Number must be less than or equal to {maximum}} other {Number must be less than {maximum}}}",
+      "array": "{mode, select, exact {Array must contain exactly {maximum} element(s)} inclusive {Array must contain at most {maximum} element(s)} other {Array must contain less than {maximum} element(s)}}"
+    }
+  },
+  "dbError": {
+    "duplicate": "a row with this value already exists",
+    "duplicateNoField": "a row with these values already exists",
+    "missingRef": "refers to a row that does not exist",
+    "required": "is required",
+    "requiredNoField": "a required value is missing",
+    "check": "a value is outside what this table allows",
+    "format": "a value is not in the format this column needs",
+    "tooLong": "a value is too long for its column",
+    "unknown": "the row could not be saved"
+  },
+  "guard": {
+    "cycleUndeletable": "This cycle is at stage \"{stage, select, nominated {nominated} pre_submitted {pre_submitted} observed {observed} post_submitted {post_submitted} complete {complete} other {{stage}}}\" and has work recorded under it; it cannot be deleted from the grid.",
+    "cycleFieldLocked": "This cycle is at stage \"{stage, select, nominated {nominated} pre_submitted {pre_submitted} observed {observed} post_submitted {post_submitted} complete {complete} other {{stage}}}\": its {field, select, teacherId {teacher} kind {kind} other {observer}} can no longer be changed."
+  },
+  "references": {
+    "classLabel": "{school} · Grade {grade}",
+    "currentValue": "{label} (current value)",
+    "deletedAccount": "{label} (deleted account)",
+    "wrongRole": "{label} (not a {roles} account)",
+    "roleNoun": {
+      "teacher": "teacher",
+      "observer": "observer",
+      "mentor": "mentor",
+      "programme_admin": "programme_admin",
+      "super_admin": "super_admin"
+    }
+  },
+  "import": {
+    "likelyDuplicate": "looks like a record already on this table (id {id}): to change it, put that id in an id column; to add a second record with these details, use Add row",
+    "repeatsLine": "repeats line {line} of this file",
+    "notRowId": "id: not a row id (leave it empty to add a new row)",
+    "addedMeanwhile": "id: that row was added while this file was importing; import it again.",
+    "failed": "The import could not be completed. Nothing was saved.",
+    "invalidRow": "row: invalid",
+    "truncated": "*** TRUNCATED at {limit} rows — this export is INCOMPLETE ***",
+    "parse": {
+      "MissingQuotes": "Quoted field unterminated",
+      "InvalidQuotes": "Trailing quote on quoted field is malformed",
+      "UndetectableDelimiter": "Unable to auto-detect delimiting character; defaulted to {delimiter}",
+      "TooFewFields": "Too few fields: expected {expected} fields but parsed {parsed}",
+      "TooManyFields": "Too many fields: expected {expected} fields but parsed {parsed}"
+    }
+  },
+  "forms": {
+    "title": "Programme forms",
+    "intro": "Forms are defined as JSON schemas — admins compose them; teachers and mentors fill them. Editing a schema bumps the version and is recorded in the audit log.",
+    "toQuizzesTitle": "Switch to the quiz registry",
+    "toQuizzes": "Quizzes →",
+    "columns": {
+      "title": "Title",
+      "kind": "Kind",
+      "audience": "Audience",
+      "version": "Version",
+      "active": "Active"
+    },
+    "empty": "No feedback forms seeded yet. Run the migration seeder or insert via SQL.",
+    "editSchema": "Edit schema →",
+    "footer": "{count, plural, one {# form} other {# forms}} · ordered by kind, audience, version desc",
+    "fallbackTitle": "{kind} — {audience}",
+    "kind": {
+      "baseline": "baseline",
+      "progress_1": "progress_1",
+      "progress_2": "progress_2",
+      "final": "final"
+    },
+    "kindTitle": {
+      "baseline": "Baseline",
+      "progress_1": "Progress (Q1 → Q2)",
+      "progress_2": "Progress (Q3 → Q4)",
+      "final": "Final"
+    },
+    "audience": {
+      "mentor": "mentor",
+      "mentee": "mentee"
+    },
+    "audienceTitle": {
+      "mentor": "Filled by mentor",
+      "mentee": "Filled by mentee (teacher)"
+    },
+    "detail": {
+      "back": "← Forms registry",
+      "eyebrow": "Form schema · {kind} · {audience}",
+      "fallbackTitle": "{kind} · {audience}",
+      "intro": "Edit the raw JSON below. <strong>Save</strong> validates the JSON, bumps the version, and records the change in the audit log.",
+      "currentVersion": "Current version"
+    },
+    "save": {
+      "notSaved": "The form definition was not saved: {list}.",
+      "notSavedMore": "The form definition was not saved: {list} (and {count} more).",
+      "whole": "(the whole definition)"
+    }
+  },
+  "quizzes": {
+    "title": "Programme quizzes",
+    "intro": "Quizzes are defined as JSON — admins compose questions; teachers and mentors take them. Editing a quiz lands in the audit log.",
+    "toFormsTitle": "Switch to the feedback-form registry",
+    "toForms": "→ Feedback forms",
+    "columns": {
+      "title": "Title",
+      "slug": "Slug",
+      "scope": "Scope",
+      "questions": "Questions",
+      "pass": "Pass",
+      "active": "Active"
+    },
+    "empty": "No quizzes yet. Create one above, then add its questions.",
+    "scope": {
+      "subject": "subject",
+      "rttSubject": "rtt_subject"
+    },
+    "edit": "Edit →",
+    "footer": "{count, plural, one {# quiz} other {# quizzes}} · ordered by title",
+    "create": {
+      "noSubject": "Choose the RTT subject this quiz belongs to.",
+      "title": "Give the quiz a title of at least 2 characters.",
+      "slug": "The slug must be lowercase letters, numbers and single hyphens, 60 characters or fewer.",
+      "threshold": "The pass threshold must be a whole number between 1 and 100.",
+      "slugTaken": "A quiz already uses the address \"{slug}\". Choose another slug.",
+      "failedRetry": "That quiz could not be created. Please try again.",
+      "failed": "That quiz could not be created."
+    },
+    "detail": {
+      "back": "← Quizzes registry",
+      "eyebrow": "Quiz · {slug}",
+      "intro": "Edit the JSON below. <strong>Save</strong> validates the payload and replaces this quiz's questions with the <code>questions</code> array in a single transaction; leave the array out to change only the settings. The change is recorded in the audit log.",
+      "passThreshold": "Pass threshold",
+      "untimed": "untimed",
+      "timeLimit": "time limit: {minutes}m",
+      "timeLimitSeconds": "time limit: {minutes}m {seconds}s",
+      "submissions": "{count, plural, one {# submitted attempt} other {# submitted attempts}}. Each result keeps the questions exactly as that learner was asked them, so changes here apply to new attempts only. The questions cannot all be removed; set <code>active</code> to <code>false</code> to take the quiz offline.",
+      "schemaReference": "<strong>Schema reference.</strong> The payload accepts <code>title</code>, <code>passThreshold</code>,<code> active</code>, an optional <code>timeLimitSeconds</code>(<code>null</code> = untimed; otherwise an integer between 60 and 7200 = 1 min to 2 h), an optional <code>maxAttempts</code> (<code>null</code> = unlimited; otherwise a whole number from 1 to 20 — attempts each learner may submit), <code>rttSubjectId</code> (the RTT subject the quiz belongs to; it can be changed, not removed; a quiz on a curriculum subject has none, and setting one moves it to that RTT subject), and a <code>questions[]</code> array. Each question must have <code>prompt</code> (string), <code>options</code> (array of ≥ 2 strings), <code>correctIndex</code> (0-based integer into options), and an optional <code>explanation</code>."
+    },
+    "save": {
+      "notObject": "Payload must be an object.",
+      "questionsArray": "questions must be an array.",
+      "questionNotObject": "Question {n} is not an object.",
+      "missingPrompt": "Question {n} is missing a prompt.",
+      "options": "Question {n} must have at least 2 options.",
+      "correctIndex": "Question {n}'s correctIndex must be 0..{max}.",
+      "inUse": "Learners have already submitted this quiz, so its questions cannot all be removed. Set \"active\": false to take it offline.",
+      "timeLimit": "timeLimitSeconds must be null (untimed) or an integer between 60 (1 min) and 7200 (2 h).",
+      "maxAttempts": "maxAttempts must be null (unlimited) or a whole number between 1 and 20.",
+      "rttSubject": "rttSubjectId must be the id of an existing RTT subject.",
+      "notFound": "That quiz no longer exists. Reload the list of quizzes."
+    }
+  },
+  "scorm": {
+    "section": "RTT content",
+    "title": "SCORM packages",
+    "intro": "SCORM 1.2 modules, each launched from its RTT subject's page. Learners' status, score and time are recorded as the module reports them.",
+    "uploadOnlySuper": "Only a super_admin can upload a package: a package's scripts run with the permissions of whoever opens it, including administrators.",
+    "columns": {
+      "package": "Package",
+      "state": "State",
+      "files": "Files",
+      "learners": "Learners",
+      "uploaded": "Uploaded"
+    },
+    "empty": "No SCORM packages yet.",
+    "active": "Active",
+    "withdrawn": "Withdrawn",
+    "files": "{count} files · {size}",
+    "learners": "{count, plural, one {# learner} other {# learners}} · {finished} finished",
+    "tracking": {
+      "back": "← SCORM packages",
+      "openAsLearner": "Open as a learner",
+      "withdraw": "Withdraw from learners",
+      "restore": "Restore for learners",
+      "columns": {
+        "learner": "Learner",
+        "role": "Role",
+        "status": "Status",
+        "score": "Score",
+        "time": "Time",
+        "sessions": "Sessions",
+        "firstFinished": "First finished",
+        "lastActivity": "Last activity"
+      },
+      "empty": "Nobody has opened this package yet.",
+      "notCounted": "not counted",
+      "role": {
+        "teacher": "teacher",
+        "observer": "observer",
+        "mentor": "mentor",
+        "programme_admin": "programme_admin",
+        "super_admin": "super_admin"
+      }
+    }
+  },
+  "client": {
+    "rowForm": {
+      "unknownEntity": "Unknown entity: {slug}",
+      "noRowId": "Edit mode requires a rowId — none was supplied.",
+      "saveChanges": "Save changes",
+      "addRow": "Add row",
+      "adding": "Adding…",
+      "updated": "Row updated.",
+      "added": "Row added.",
+      "commaList": "Separate items with commas.",
+      "none": "— none —",
+      "choose": "Choose…",
+      "yes": "yes",
+      "no": "no",
+      "tooMany": "Too many rows to list here: paste the row's id: it is shown at the top of that row's Edit panel in its own table, and is the first column of that table's Export CSV."
+    },
+    "bulk": {
+      "selectRow": "Select row {id}",
+      "selectAll": "Select all rows",
+      "deselectAll": "Deselect all rows",
+      "confirm": "{count, plural, one {Delete # selected row? This cannot be undone.} other {Delete # selected rows? This cannot be undone.}}",
+      "region": "Bulk actions",
+      "selected": "{count, plural, one {# row selected} other {# rows selected}}",
+      "clear": "Clear selection",
+      "deleting": "Deleting…",
+      "delete": "Delete {count} selected"
+    },
+    "deleteRow": {
+      "rowFallback": "row {id}",
+      "confirm": "Delete {target}? This cannot be undone.",
+      "deleting": "Deleting…"
+    },
+    "importCsv": {
+      "open": "Import CSV",
+      "openTitle": "Bulk-add rows to {entity} from a CSV file",
+      "title": "Import into {entity}",
+      "close": "Close",
+      "intro": "A CSV with a header row. Recognised columns: <code>{columns}</code>. Every row is validated before it is written; rows that fail are reported and skipped, and the rest still land. A row with an <code>id</code> (as in an export) updates that row; a row without one is added{duplicates, select, yes {, unless it matches a record already on the table: that row is reported, not added again} other {}}. After a partial import, import again only the rows reported as failed, or an export, which carries ids.",
+      "fileSummary": "{count, plural, one {{n} data row} other {{n} data rows}} · columns: {columns}",
+      "none": "none",
+      "ignored": "Ignored (not a column on this table): {columns}",
+      "unknownEntity": "That table does not accept imports.",
+      "gateRequired": "Unlock the {gate, select, observation {observation} mentorship {mentorship} none {section} other {{gate}}} section first, then import again.",
+      "forbidden": "You do not have permission to import into this table.",
+      "failed": "The import failed (HTTP {status}).",
+      "offline": "The import could not be sent. Check your connection and try again.",
+      "result": "{inserted} inserted · {updated} updated · {skipped} skipped",
+      "rowMessage": "Row {row}: {message}",
+      "importing": "Importing…",
+      "submit": "{count, plural, =0 {Import rows} one {Import {n} row} other {Import {n} rows}}",
+      "another": "Choose another file"
+    },
+    "mobileCards": {
+      "noColumns": "No display columns configured for {entity}.",
+      "empty": "No {entity} yet. Use the form above to add one.",
+      "cardLabel": "{entity} card {title}",
+      "rowIdTitle": "Row id {id}",
+      "exportTitle": "Download {entity} as CSV",
+      "export": "Export CSV",
+      "viewTitle": "View {title}",
+      "view": "View row",
+      "yes": "yes",
+      "no": "no"
+    },
+    "formEditor": {
+      "invalidJson": "JSON does not parse: {error}",
+      "http": "HTTP {status}",
+      "heading": "Schema (raw JSON)",
+      "badJson": "× invalid JSON",
+      "parses": "✓ parses · v{version}{dirty, select, yes { · unsaved} other {}}",
+      "save": "Save schema",
+      "discard": "Discard",
+      "saved": "Saved · v{version}",
+      "preview": "Preview (read-only)",
+      "previewError": "Schema does not parse: {error}",
+      "section": "Section {n}",
+      "noItems": "(no items)",
+      "noLabel": "(no label)",
+      "options": "options: {options}"
+    },
+    "quizEditor": {
+      "invalidJson": "JSON does not parse: {error}",
+      "heading": "Quiz JSON",
+      "badJson": "× invalid JSON",
+      "parses": "✓ parses{dirty, select, yes { · unsaved} other {}}",
+      "save": "Save quiz",
+      "discard": "Discard",
+      "saved": "Saved · {count} questions"
+    },
+    "newQuiz": {
+      "open": "+ New quiz",
+      "title": "Title",
+      "titlePlaceholder": "Mid-unit check",
+      "address": "Address (optional)",
+      "addressHelp": "Appears in the link learners open: /quizzes/<ph>address</ph>. Left blank, it is taken from the title. The chosen RTT subject's page lists the quiz once it is active.",
+      "passMark": "Pass mark (%)",
+      "subject": "RTT subject",
+      "chooseSubject": "Choose the subject this quiz assesses",
+      "noSubjects": "A quiz belongs to an RTT subject, and there are none yet. Create one in <link>RTT subjects</link> first.",
+      "creating": "Creating…",
+      "create": "Create quiz",
+      "note": "Created inactive and empty. You add questions on the next screen, then switch it on — so a half-built quiz is never served to a learner."
+    },
+    "scormUpload": {
+      "tooLarge": "This file is larger than {mb} MB, the most a package can be.",
+      "offline": "The upload did not reach the server. Check the connection and try again.",
+      "refused": "The upload was refused (HTTP {status}).",
+      "heading": "Upload a package",
+      "subject": "RTT subject",
+      "chooseSubject": "Choose the subject it belongs to",
+      "file": "SCORM 1.2 package (.zip, one SCO, up to {mb} MB)",
+      "titleLabel": "Title (optional; the package's own title otherwise)",
+      "sending": "Uploading and checking…",
+      "submit": "Upload package"
+    }
+  }
+}

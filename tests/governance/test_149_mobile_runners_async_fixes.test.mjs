@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -241,18 +242,20 @@ test("spec 149 — MobileUploadRunner unmount cleanup surfaces the cancelled err
   // contributor can't silently soften "Upload cancelled — try again" into
   // a less actionable phrase. The em-dash is intentional (matches the
   // surrounding LMS error-message voice, e.g. spec 135 "Try WhatsApp
-  // instead.").
+  // instead."). The words are in the bundle, in the user's language
+  // (video.client.mobile.error.cancelled); the cleanup sets that key.
   assert.match(
     src,
-    /setErrorMsg\(\s*"Upload cancelled — try again"\s*\)/,
+    /setErrorMsg\(\s*\{\s*key:\s*"mobile\.error\.cancelled"\s*\}\s*\)/,
     "MobileUploadRunner unmount cleanup must call setErrorMsg('Upload cancelled — try again') so the user sees why their video didn't reach the server",
   );
+  assert.equal(message("video.client.mobile.error.cancelled"), "Upload cancelled — try again");
   // The setErrorMsg must be GUARDED on uploadRef.current — without the
   // guard a clean teardown (user pressed Cancel first, which nulled the
   // ref) would set a stale error message that the user never asked for.
   assert.match(
     src,
-    /if\s*\(\s*uploadRef\.current\s*\)\s*\{[\s\S]{0,300}setErrorMsg\(\s*"Upload cancelled — try again"\s*\)/,
+    /if\s*\(\s*uploadRef\.current\s*\)\s*\{[\s\S]{0,300}setErrorMsg\(\s*\{\s*key:\s*"mobile\.error\.cancelled"\s*\}\s*\)/,
     "MobileUploadRunner unmount cleanup must guard the setErrorMsg call on uploadRef.current being truthy",
   );
   // The abort + null sequence — abort the tus instance, then drop the

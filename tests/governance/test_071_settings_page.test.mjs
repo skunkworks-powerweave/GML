@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -36,16 +37,19 @@ test("Spec 071: page reads user_prefs via Drizzle from @gml/db", () => {
 
 test("Spec 071: page header matches GML design tokens (serif h1 26px)", () => {
   const src = read(PAGE);
-  assert.match(src, /Your preferences/);
+  assert.ok(readsKey(src, "title"), "the heading reads home.settings.title");
+  assert.equal(message("home.settings.title"), "Your preferences");
   assert.match(src, /fontFamily:\s*"var\(--serif\)"/);
   assert.match(src, /fontSize:\s*26/);
   assert.match(src, /var\(--ink-3\)/);
 });
 
 test("Spec 071: 4 section cards exist (Display / Privacy / Language / Account)", () => {
+  // Titled from home.client.settingsForm, in the user's language.
   const src = read(FORM);
-  for (const t of ["Display", "Privacy", "Language", "Account"]) {
-    assert.match(src, new RegExp(`title="${t}"`), `must render SectionCard with title="${t}"`);
+  for (const [key, t] of [["display", "Display"], ["privacy", "Privacy"], ["language", "Language"], ["account", "Account"]]) {
+    assert.match(src, new RegExp(`<SectionCard title=\\{t\\("${key}"\\)`), `must render SectionCard titled home.client.settingsForm.${key}`);
+    assert.equal(message(`home.client.settingsForm.${key}`), t);
   }
 });
 
@@ -75,10 +79,17 @@ test("Spec 071: watermark stated as always on (no switch); DEFAULT_PREFS keeps i
 });
 
 test("Spec 071: UI language picker renders English + हिन्दी + བོད་ཡིག", () => {
+  // Each pill names its language in that language's own script, from the
+  // chrome's language namespace (the same self-names the login picker shows).
   const src = read(FORM);
-  assert.match(src, /\bEnglish\b/);
-  assert.match(src, /हिन्दी/);
-  assert.match(src, /བོད་ཡིག/);
+  for (const key of ["english", "hindi", "bhoti"]) assert.ok(readsKey(src, key), `the pill reads language.${key}`);
+  assert.equal(message("language.english"), "English");
+  assert.equal(message("language.hindi"), "हिन्दी");
+  assert.equal(message("language.bhoti"), "བོད་ཡིག");
+  for (const locale of ["hi", "bo"]) {
+    assert.equal(message("language.hindi", locale), "हिन्दी", `${locale}: Hindi is named in Devanagari`);
+    assert.equal(message("language.bhoti", locale), "བོད་ཡིག", `${locale}: Bhoti is named in Tibetan`);
+  }
   // SM-7: Hindi label scoped to Devanagari font-family
   assert.match(src, /fontFamily:\s*"var\(--deva\)"/);
 });
@@ -108,9 +119,11 @@ test("Spec 071: Account section shows read-only email + role chip", () => {
   assert.match(pageSrc, /programme_admin/);
   assert.match(pageSrc, /teacher/);
   assert.match(pageSrc, /var\(--indigo-soft\)|var\(--indigo\)/);
-  // Form renders email + role-pill KV rows
-  assert.match(formSrc, /label="Email"/);
-  assert.match(formSrc, /label="Role"/);
+  // Form renders email + role-pill KV rows (labels from home.client.settingsForm)
+  assert.match(formSrc, /<KvRow label=\{t\("email"\)\}/);
+  assert.match(formSrc, /<KvRow label=\{t\("role"\)\}/);
+  assert.equal(message("home.client.settingsForm.email"), "Email");
+  assert.equal(message("home.client.settingsForm.role"), "Role");
 });
 
 test("Spec 071: no hex colors — only CSS-variable tokens", () => {

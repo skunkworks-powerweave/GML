@@ -190,6 +190,57 @@
       "unavailable": "Sign-in is temporarily unavailable. Try again in a few minutes.",
       "link_expired": "That sign-in or reset link has expired or was already used. Request a new one, or sign in with your password.",
       "link_invalid": "That link is not valid. Request a new one, or sign in with your password."
+    },
+    "hero": "A learning system designed for the long road from Leh to Drass.",
+    "intro": "Goldenmile RTT — Refresher Teacher Training — supports teachers and mentor pairings across Leh and Kargil, with WhatsApp-first video review and a paperwork system that respects how schools actually run.",
+    "stats": {
+      "teachers": "teachers",
+      "zones": "zones",
+      "phases": "phases",
+      "districts": "districts"
+    },
+    "confidential": "Confidential · internal programme use only · audited",
+    "instructions": "Use the credentials your programme administrator gave you.",
+    "instructionsWithEmail": "Use the credentials your programme administrator gave you, or request a sign-in link by email.",
+    "email": "Email",
+    "footer": "Sessions audited · 30-day rotation",
+    "version": "v{version} · build {build}",
+    "mobileTagline": "Sign in to keep teaching. Works on patchy network — your session is cached locally.",
+    "mobileFooter": "Goldenmile programme · audited",
+    "emailLink": {
+      "heading": "Or sign in with an email link",
+      "submit": "Email me a sign-in link",
+      "sending": "Sending…",
+      "sent": "If that address has an account, a message is on its way. Check your inbox, including spam.",
+      "disabled": "Email sign-in is not enabled on this deployment. Use your password.",
+      "enterEmail": "Enter your email address."
+    },
+    "forgot": {
+      "title": "Reset your password",
+      "submit": "Send reset link",
+      "sending": "Sending…",
+      "unavailable": "Password reset is unavailable on this deployment.",
+      "unavailableHelp": "Contact your programme administrator to have your password reset manually.",
+      "disabled": "Password resets are handled by your administrator on this deployment. Contact them to have your password set.",
+      "back": "← Back to sign in"
+    },
+    "reset": {
+      "title": "Choose a new password",
+      "signedInAs": "Signed in as {email}. Setting a new password will end your sessions on any other device.",
+      "newPassword": "New password ({min}+ characters)",
+      "confirmPassword": "Confirm new password",
+      "submit": "Set new password",
+      "saving": "Saving…",
+      "mismatch": "Passwords do not match.",
+      "notRecovery": "This page only sets a password from a reset link. To change your password, use Settings.",
+      "expired": "This reset link has expired or was already used. Request a new one.",
+      "invalidTitle": "This reset link is no longer valid.",
+      "invalidHelp": "Recovery links can only be used once and expire shortly after they are sent. Request a new one, or ask your programme administrator to set your password.",
+      "requestNew": "Request a new link"
     }
+  },
+  "password": {
+    "tooShort": "The password must be at least {min} characters.",
+    "tooLong": "The password is too long: at most {max} characters (fewer in Hindi or Tibetan script)."
   }
 }

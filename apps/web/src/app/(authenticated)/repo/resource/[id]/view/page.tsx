@@ -18,6 +18,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources } from "@gml/db/schema";
@@ -25,10 +26,14 @@ import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
 import { PdfViewer } from "@/components/pdf/PdfViewer";
+import { enumLabel } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Reading viewer" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("view.metaTitle") };
+}
 
 export default async function RepoResourceViewPage({
   params,
@@ -66,7 +71,11 @@ export default async function RepoResourceViewPage({
   // nothing ever created, so every PDF view 502'd.
   const signedUrl = `/api/media/pdf/${res.id}`;
 
-  const watermark = `${session.user.email ?? session.user.name ?? "viewer"} · OBS-CONFIDENTIAL`;
+  const t = await getTranslations("repo");
+  // The tag is a fixed code burned into screenshots; only the fallback for a
+  // viewer with neither email nor name is a word, in their language.
+  const watermark = `${session.user.email ?? session.user.name ?? t("view.watermarkFallback")} · OBS-CONFIDENTIAL`;
+  const kindLabel = enumLabel(t, "resourceKind", res.kind);
 
   return (
     <div>
@@ -86,7 +95,7 @@ export default async function RepoResourceViewPage({
             marginTop: 8,
           }}
         >
-          {res.kind}{" "}
+          {kindLabel}{" "}
           <span style={{ fontFamily: "var(--mono)", textTransform: "none", letterSpacing: 0 }}>
             · {res.id.slice(0, 8)}
           </span>
@@ -95,7 +104,7 @@ export default async function RepoResourceViewPage({
           {res.name}
         </h1>
         <p style={{ color: "var(--ink-3)", fontSize: 12, marginTop: 4 }}>
-          In-browser viewer · signed URL expires in 5 minutes · refresh the page if it stops loading.
+          {t("view.note")}
         </p>
       </header>
 
@@ -117,8 +126,7 @@ export default async function RepoResourceViewPage({
           lineHeight: 1.55,
         }}
       >
-        PDF viewing is logged. Document is confidential — do not redistribute.
-        (Anti-download is a deterrent, not DRM.)
+        {t("view.footer")}
       </footer>
     </div>
   );

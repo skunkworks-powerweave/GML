@@ -52,18 +52,21 @@ import {
   type LessonStatus,
 } from "./cmi";
 
+// The error strings (LMSGetErrorString) and diagnostics (LMSGetDiagnostic)
+// below are part of the SCORM 1.2 API a package talks to, not interface text
+// this LMS shows: they stay English, as the standard spells them.
 export const SCORM_ERRORS: Readonly<Record<string, string>> = {
-  "0": "No error",
-  "101": "General exception",
-  "201": "Invalid argument error",
-  "202": "Element cannot have children",
-  "203": "Element not an array - cannot have count",
-  "301": "Not initialized",
-  "401": "Not implemented error",
-  "402": "Invalid set value, element is a keyword",
-  "403": "Element is read only",
-  "404": "Element is write only",
-  "405": "Incorrect data type",
+  "0": "No error", // i18n-ignore: SCORM API string, returned to the package
+  "101": "General exception", // i18n-ignore: SCORM API string, returned to the package
+  "201": "Invalid argument error", // i18n-ignore: SCORM API string, returned to the package
+  "202": "Element cannot have children", // i18n-ignore: SCORM API string, returned to the package
+  "203": "Element not an array - cannot have count", // i18n-ignore: SCORM API string, returned to the package
+  "301": "Not initialized", // i18n-ignore: SCORM API string, returned to the package
+  "401": "Not implemented error", // i18n-ignore: SCORM API string, returned to the package
+  "402": "Invalid set value, element is a keyword", // i18n-ignore: SCORM API string, returned to the package
+  "403": "Element is read only", // i18n-ignore: SCORM API string, returned to the package
+  "404": "Element is write only", // i18n-ignore: SCORM API string, returned to the package
+  "405": "Incorrect data type", // i18n-ignore: SCORM API string, returned to the package
 };
 
 export type RuntimeInit = {
@@ -208,27 +211,27 @@ export class Scorm12Runtime {
   }
 
   private initialize(arg: unknown): string {
-    if (arg !== "" && arg !== undefined) return this.fail("201", "LMSInitialize takes the empty string", "false");
-    if (this.phase === "running") return this.fail("101", "LMSInitialize was already called", "false");
-    if (this.phase === "finished") return this.fail("101", "this launch's session has finished; relaunch the module", "false");
+    if (arg !== "" && arg !== undefined) return this.fail("201", "LMSInitialize takes the empty string", "false"); // i18n-ignore: SCORM API string, returned to the package
+    if (this.phase === "running") return this.fail("101", "LMSInitialize was already called", "false"); // i18n-ignore: SCORM API string, returned to the package
+    if (this.phase === "finished") return this.fail("101", "this launch's session has finished; relaunch the module", "false"); // i18n-ignore: SCORM API string, returned to the package
     this.phase = "running";
     this.startedAt = this.now();
     return this.ok("true");
   }
 
   private commit(arg: unknown): string {
-    if (this.phase !== "running") return this.fail("301", "LMSCommit before LMSInitialize or after LMSFinish", "false");
-    if (arg !== "" && arg !== undefined) return this.fail("201", "LMSCommit takes the empty string", "false");
-    return this.transport(this.payload(false)) ? this.ok("true") : this.fail("101", "the commit could not be sent", "false");
+    if (this.phase !== "running") return this.fail("301", "LMSCommit before LMSInitialize or after LMSFinish", "false"); // i18n-ignore: SCORM API string, returned to the package
+    if (arg !== "" && arg !== undefined) return this.fail("201", "LMSCommit takes the empty string", "false"); // i18n-ignore: SCORM API string, returned to the package
+    return this.transport(this.payload(false)) ? this.ok("true") : this.fail("101", "the commit could not be sent", "false"); // i18n-ignore: SCORM API string, returned to the package
   }
 
   private finish(arg: unknown): string {
-    if (this.phase !== "running") return this.fail("301", "LMSFinish before LMSInitialize or after LMSFinish", "false");
-    if (arg !== "" && arg !== undefined) return this.fail("201", "LMSFinish takes the empty string", "false");
+    if (this.phase !== "running") return this.fail("301", "LMSFinish before LMSInitialize or after LMSFinish", "false"); // i18n-ignore: SCORM API string, returned to the package
+    if (arg !== "" && arg !== undefined) return this.fail("201", "LMSFinish takes the empty string", "false"); // i18n-ignore: SCORM API string, returned to the package
     if (this.lessonStatus === "not attempted") this.lessonStatus = "incomplete";
     const sent = this.transport(this.payload(true));
     this.phase = "finished";
-    return sent ? this.ok("true") : this.fail("101", "the final commit could not be sent", "false");
+    return sent ? this.ok("true") : this.fail("101", "the final commit could not be sent", "false"); // i18n-ignore: SCORM API string, returned to the package
   }
 
   /** The status to record: the SCO's, or the mastery judgement of its score (see the top of this file). */
@@ -258,22 +261,22 @@ export class Scorm12Runtime {
 
   private getValue(raw: unknown): string {
     const element = String(raw ?? "");
-    if (this.phase !== "running") return this.fail("301", "LMSGetValue before LMSInitialize or after LMSFinish", "");
+    if (this.phase !== "running") return this.fail("301", "LMSGetValue before LMSInitialize or after LMSFinish", ""); // i18n-ignore: SCORM API string, returned to the package
     const found = this.lookup(element, "get");
     if (typeof found === "string") return this.fail(found, `${element || "(empty)"}: ${SCORM_ERRORS[found]}`, "");
-    if (!found.get) return this.fail("404", `${element} is write-only`, "");
+    if (!found.get) return this.fail("404", `${element} is write-only`, ""); // i18n-ignore: SCORM API string, returned to the package
     return this.ok(found.get());
   }
 
   private setValue(raw: unknown, rawValue: unknown): string {
     const element = String(raw ?? "");
     const value = String(rawValue ?? "");
-    if (this.phase !== "running") return this.fail("301", "LMSSetValue before LMSInitialize or after LMSFinish", "false");
+    if (this.phase !== "running") return this.fail("301", "LMSSetValue before LMSInitialize or after LMSFinish", "false"); // i18n-ignore: SCORM API string, returned to the package
     const found = this.lookup(element, "set", value);
     if (typeof found === "string") return this.fail(found, `${element || "(empty)"}: ${SCORM_ERRORS[found]}`, "false");
-    if (found.keyword) return this.fail("402", `${element} is a keyword`, "false");
-    if (!found.set) return this.fail("403", `${element} is read-only`, "false");
-    if (!found.set(value)) return this.fail("405", `${element} cannot be ${JSON.stringify(value.slice(0, 40))}${found.detail ? ` (${found.detail})` : ""}`, "false");
+    if (found.keyword) return this.fail("402", `${element} is a keyword`, "false"); // i18n-ignore: SCORM API string, returned to the package
+    if (!found.set) return this.fail("403", `${element} is read-only`, "false"); // i18n-ignore: SCORM API string, returned to the package
+    if (!found.set(value)) return this.fail("405", `${element} cannot be ${JSON.stringify(value.slice(0, 40))}${found.detail ? ` (${found.detail})` : ""}`, "false"); // i18n-ignore: SCORM API string, returned to the package
     return this.ok("true");
   }
 
@@ -289,17 +292,17 @@ export class Scorm12Runtime {
       "cmi.core._children": kw(() => CORE_CHILDREN),
       "cmi.core.student_id": ro(() => this.init.studentId),
       "cmi.core.student_name": ro(() => this.init.studentName),
-      "cmi.core.lesson_location": this.field(() => this.lessonLocation, (v) => (this.lessonLocation = v), (v) => v.length <= LESSON_LOCATION_MAX, "at most 255 characters"),
+      "cmi.core.lesson_location": this.field(() => this.lessonLocation, (v) => (this.lessonLocation = v), (v) => v.length <= LESSON_LOCATION_MAX, "at most 255 characters"), // i18n-ignore: SCORM API string, returned to the package
       "cmi.core.credit": ro(() => "credit"),
-      "cmi.core.lesson_status": this.field(() => this.lessonStatus, (v) => (this.lessonStatus = v), (v) => SETTABLE_STATUSES.has(v), "passed, completed, failed, incomplete or browsed"),
+      "cmi.core.lesson_status": this.field(() => this.lessonStatus, (v) => (this.lessonStatus = v), (v) => SETTABLE_STATUSES.has(v), "passed, completed, failed, incomplete or browsed"), // i18n-ignore: SCORM API string, returned to the package
       "cmi.core.entry": ro(() => this.init.entry),
       "cmi.core.score._children": kw(() => SCORE_CHILDREN),
-      "cmi.core.score.raw": this.field(() => this.scoreRaw, (v) => (this.scoreRaw = v), score, "a number 0-100, or blank"),
-      "cmi.core.score.min": this.field(() => this.scoreMin, (v) => (this.scoreMin = v), score, "a number 0-100, or blank"),
-      "cmi.core.score.max": this.field(() => this.scoreMax, (v) => (this.scoreMax = v), score, "a number 0-100, or blank"),
+      "cmi.core.score.raw": this.field(() => this.scoreRaw, (v) => (this.scoreRaw = v), score, "a number 0-100, or blank"), // i18n-ignore: SCORM API string, returned to the package
+      "cmi.core.score.min": this.field(() => this.scoreMin, (v) => (this.scoreMin = v), score, "a number 0-100, or blank"), // i18n-ignore: SCORM API string, returned to the package
+      "cmi.core.score.max": this.field(() => this.scoreMax, (v) => (this.scoreMax = v), score, "a number 0-100, or blank"), // i18n-ignore: SCORM API string, returned to the package
       "cmi.core.total_time": ro(() => formatTimespan(this.init.totalTimeCs)),
       "cmi.core.lesson_mode": ro(() => "normal"),
-      "cmi.core.exit": { set: (v) => (EXITS.has(v) ? ((this.exit = v), true) : false), detail: "time-out, suspend, logout or blank" },
+      "cmi.core.exit": { set: (v) => (EXITS.has(v) ? ((this.exit = v), true) : false), detail: "time-out, suspend, logout or blank" }, // i18n-ignore: SCORM API string, returned to the package
       "cmi.core.session_time": {
         set: (v) => {
           const cs = parseTimespan(v);
@@ -309,9 +312,9 @@ export class Scorm12Runtime {
         },
         detail: "HHHH:MM:SS.SS",
       },
-      "cmi.suspend_data": this.field(() => this.suspendData, (v) => (this.suspendData = v), (v) => v.length <= SUSPEND_DATA_MAX, "at most 4096 characters"),
+      "cmi.suspend_data": this.field(() => this.suspendData, (v) => (this.suspendData = v), (v) => v.length <= SUSPEND_DATA_MAX, "at most 4096 characters"), // i18n-ignore: SCORM API string, returned to the package
       "cmi.launch_data": ro(() => this.init.launchData ?? ""),
-      "cmi.comments": this.field(() => this.comments, (v) => (this.comments = v), (v) => v.length <= 4096, "at most 4096 characters"),
+      "cmi.comments": this.field(() => this.comments, (v) => (this.comments = v), (v) => v.length <= 4096, "at most 4096 characters"), // i18n-ignore: SCORM API string, returned to the package
       "cmi.comments_from_lms": ro(() => ""),
       "cmi.objectives._children": kw(() => OBJECTIVE_CHILDREN),
       "cmi.objectives._count": kw(() => String(this.objectives.length)),

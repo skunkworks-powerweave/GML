@@ -27,8 +27,10 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { getTranslations } from "next-intl/server";
 import { rttSubjects } from "@gml/db/schema";
 import { BUCKETS } from "@gml/shared/storage/buckets";
+import { scormMessage, scormText, type RttTranslate } from "./messages";
 import { validateScormPackage, type ScormPackageError } from "./package";
 import { insertPackage } from "./store";
 import { putScormObject, removeScormObjects } from "./storage";
@@ -66,6 +68,7 @@ async function removeUploaded(id: string, keys: string[]): Promise<void> {
   }
 }
 
+/** A refusal, its message in the language of the administrator who uploaded. */
 export type IngestError = { code: ScormPackageError["code"] | "unknown_subject" | "storage_failed"; message: string; paths?: string[] };
 
 export type IngestResult =
@@ -76,11 +79,18 @@ export async function ingestPackage(
   db: Db,
   input: { bytes: Uint8Array; rttSubjectId: string; title: string | null; uploadedByUserId: string },
 ): Promise<IngestResult> {
+  // The refusals are read by the administrator who uploaded: in her language.
+  const t = (await getTranslations("rtt")) as unknown as RttTranslate;
   const [subject] = await db.select({ id: rttSubjects.id }).from(rttSubjects).where(eq(rttSubjects.id, input.rttSubjectId)).limit(1);
-  if (!subject) return { ok: false, status: 422, error: { code: "unknown_subject", message: "That RTT subject does not exist." } };
+  if (!subject) {
+    return { ok: false, status: 422, error: { code: "unknown_subject", message: scormText(scormMessage("unknownSubject"), t) } };
+  }
 
   const checked = validateScormPackage(input.bytes);
-  if (!checked.ok) return { ok: false, status: 422, error: checked.error };
+  if (!checked.ok) {
+    const { code, detail, paths } = checked.error;
+    return { ok: false, status: 422, error: { code, message: scormText(detail, t), ...(paths ? { paths } : {}) } };
+  }
   const pkg = checked.pkg;
 
   const id = randomUUID();
@@ -99,7 +109,7 @@ export async function ingestPackage(
       return {
         ok: false,
         status: 502,
-        error: { code: "storage_failed", message: "The package could not be stored, and nothing was kept. Try the upload again." },
+        error: { code: "storage_failed", message: scormText(scormMessage("storageFailed"), t) },
       };
     }
   }

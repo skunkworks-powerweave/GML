@@ -4,15 +4,14 @@ import type { AdminEntity } from "../types";
 
 export const outlineLessonsEntity: AdminEntity = {
   slug: "outline-lessons",
-  label: "Outline lessons",
   table: outlineLessons,
   readRoles: ["teacher", "observer", "mentor", "programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "outlineId", label: "Outline" },
-    { key: "sequence", label: "#" },
-    { key: "title", label: "Title" },
-    { key: "week", label: "Week" },
+    { key: "outlineId" },
+    { key: "sequence" },
+    { key: "title" },
+    { key: "week" },
   ],
   formSchema: z.object({
     outlineId: z.string().uuid(),

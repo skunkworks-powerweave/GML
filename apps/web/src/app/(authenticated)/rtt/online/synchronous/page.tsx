@@ -8,15 +8,20 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, eq, gte, inArray, isNotNull } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { rttSessions, rttSubjects, terms, phases } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import { rttScope } from "@/lib/rtt/scope";
 import { webLink } from "@/lib/rtt/links";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Webinars & live quizzes" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("sync.metaTitle") };
+}
 
 // rtt_sessions.type uses the same string convention as the seed/import scripts:
 // synchronous | asynchronous | webinar | quiz. The synchronous surface excludes
@@ -38,14 +43,16 @@ type SyncSessionRow = {
   phaseLabel: string | null;
 };
 
-const TYPE_PILL: Record<string, { bg: string; ink: string; label: string }> = {
-  webinar: { bg: "var(--indigo-soft)", ink: "var(--indigo)", label: "Webinar" },
-  quiz: { bg: "var(--saffron-soft)", ink: "var(--saffron)", label: "Live quiz" },
-  synchronous: { bg: "var(--lichen-soft)", ink: "var(--lichen)", label: "Live" },
+// Each pill's label is rtt.sync.type.<type>.
+const TYPE_PILL: Record<string, { bg: string; ink: string; type: string }> = {
+  webinar: { bg: "var(--indigo-soft)", ink: "var(--indigo)", type: "webinar" },
+  quiz: { bg: "var(--saffron-soft)", ink: "var(--saffron)", type: "quiz" },
+  synchronous: { bg: "var(--lichen-soft)", ink: "var(--lichen)", type: "synchronous" },
 };
 
-// Mon→Fri only (RTT cohorts skip weekends).
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+// Mon→Fri only (RTT cohorts skip weekends): days after the week's Monday.
+// Their names are the viewer's language's (Intl), not a list here.
+const WEEKDAYS = [0, 1, 2, 3, 4];
 
 function startOfWeekMonday(d: Date): Date {
   const c = new Date(d);
@@ -66,17 +73,24 @@ function isoDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function fmtTime(d: Date): string {
-  return d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
+function fmtTime(d: Date, intl: string): string {
+  return d.toLocaleTimeString(intl, { hour: "numeric", minute: "2-digit", hour12: true });
 }
 
-function fmtMonthDay(d: Date): string {
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+function fmtMonthDay(d: Date, intl: string): string {
+  return d.toLocaleDateString(intl, { day: "numeric", month: "short" });
+}
+
+/** A day's short name in the viewer's language: "Mon" in English. */
+function fmtWeekday(d: Date, intl: string): string {
+  return d.toLocaleDateString(intl, { weekday: "short" });
 }
 
 export default async function RttOnlineSynchronousPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const t = await getTranslations("rtt");
+  const intl = INTL_LOCALE[(await getLocale()) as Locale];
   // Sessions of the subjects this viewer is shown (lib/rtt/scope.ts): a
   // retired subject's webinars stayed on the calendar for everyone.
   const scope = await rttScope(db, { id: session.user.id, role: session.user.role });
@@ -145,14 +159,13 @@ export default async function RttOnlineSynchronousPage() {
     <div>
       <header style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-          RTT online hub
+          {t("sync.eyebrow")}
         </div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Online · Synchronous
+          {t("sync.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          Webinars and live quizzes scheduled across the next three working weeks.
-          {totalScheduled > 0 ? ` ${totalScheduled} session${totalScheduled === 1 ? "" : "s"} in window.` : ""}
+          {totalScheduled > 0 ? t("sync.introWithCount", { count: totalScheduled }) : t("sync.intro")}
         </p>
       </header>
 
@@ -168,14 +181,16 @@ export default async function RttOnlineSynchronousPage() {
           }}
         >
           <p style={{ fontSize: 14, margin: 0 }}>
-            No webinars scheduled. Schedule via{" "}
             {/* /admin/data/sessions manages the CLASSROOM sessions table, which is
                 not what this calendar renders -- nothing entered there has ever
                 appeared here. This calendar reads rtt_sessions. */}
-            <Link href="/admin/data/rtt-sessions" style={{ color: "var(--indigo)" }}>
-              /admin/data/rtt-sessions
-            </Link>
-            .
+            {t.rich("sync.empty", {
+              link: (chunks) => (
+                <Link href="/admin/data/rtt-sessions" style={{ color: "var(--indigo)" }}>
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
         </div>
       ) : (
@@ -199,9 +214,9 @@ export default async function RttOnlineSynchronousPage() {
             }}
           >
             <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-              <h2 style={{ fontFamily: "var(--serif)", fontSize: 18, margin: 0 }}>3-week calendar</h2>
+              <h2 style={{ fontFamily: "var(--serif)", fontSize: 18, margin: 0 }}>{t("sync.calendar")}</h2>
               <span style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--mono)" }}>
-                {fmtMonthDay(weekStart)} – {fmtMonthDay(addDays(windowEnd, -1))}
+                {fmtMonthDay(weekStart, intl)} – {fmtMonthDay(addDays(windowEnd, -1), intl)}
               </span>
             </header>
 
@@ -224,7 +239,7 @@ export default async function RttOnlineSynchronousPage() {
                     padding: "4px 6px",
                   }}
                 >
-                  {wd}
+                  {fmtWeekday(addDays(weekStart, wd), intl)}
                 </div>
               ))}
 
@@ -234,6 +249,7 @@ export default async function RttOnlineSynchronousPage() {
                   weekStart={addDays(weekStart, w * 7)}
                   grid={grid}
                   isCurrent={isoDateKey(addDays(weekStart, w * 7)) === isoDateKey(weekStart)}
+                  intl={intl}
                 />
               ))}
             </div>
@@ -254,14 +270,14 @@ export default async function RttOnlineSynchronousPage() {
           >
             <header>
               <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-3)" }}>
-                Next up
+                {t("sync.nextUp")}
               </div>
-              <h2 style={{ fontFamily: "var(--serif)", fontSize: 18, margin: "4px 0 0" }}>Upcoming webinars</h2>
+              <h2 style={{ fontFamily: "var(--serif)", fontSize: 18, margin: "4px 0 0" }}>{t("sync.upcoming")}</h2>
             </header>
 
             {upcoming.length === 0 ? (
               <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                Nothing live in the next three weeks.
+                {t("sync.nothingLive")}
               </p>
             ) : (
               <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -292,24 +308,25 @@ export default async function RttOnlineSynchronousPage() {
                             fontWeight: 600,
                           }}
                         >
-                          {pill.label}
+                          {t(`sync.type.${pill.type}`)}
                         </span>
                         <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>
-                          {u.scheduledAt
-                            ? new Date(u.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
-                            : "—"}
-                          {u.scheduledAt ? ` · ${fmtTime(new Date(u.scheduledAt))}` : ""}
+                          {u.scheduledAt ? fmtMonthDay(new Date(u.scheduledAt), intl) : "—"}
+                          {u.scheduledAt ? ` · ${fmtTime(new Date(u.scheduledAt), intl)}` : ""}
                         </span>
                       </div>
                       <div style={{ fontSize: 13, fontWeight: 500 }}>{u.title}</div>
                       <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                        {u.subjectName ?? "(unlinked subject)"}
+                        {u.subjectName ?? t("sync.unlinkedSubject")}
                         {u.phaseLabel ? ` · ${u.phaseLabel}` : ""}
                         {u.termName ? ` · ${u.termName}` : ""}
                       </div>
                       {u.notes ? (
                         <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                          Facilitator: <span style={{ color: "var(--ink-2)" }}>{u.notes}</span>
+                          {t.rich("sync.facilitator", {
+                            name: u.notes,
+                            strong: (chunks) => <span style={{ color: "var(--ink-2)" }}>{chunks}</span>,
+                          })}
                         </div>
                       ) : null}
                       {/* A web link or nothing (lib/rtt/links.ts): a stored
@@ -321,7 +338,7 @@ export default async function RttOnlineSynchronousPage() {
                           rel="noopener noreferrer"
                           style={{ fontSize: 12, color: "var(--indigo)" }}
                         >
-                          Join link →
+                          {t("sync.joinLink")}
                         </a>
                       ) : null}
                     </li>
@@ -331,11 +348,13 @@ export default async function RttOnlineSynchronousPage() {
             )}
 
             <footer style={{ marginTop: 8, paddingTop: 10, borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--ink-3)" }}>
-              Schedule changes? Open{" "}
-              <Link href="/admin/data/rtt-sessions" style={{ color: "var(--indigo)" }}>
-                /admin/data/rtt-sessions
-              </Link>
-              .
+              {t.rich("sync.scheduleChanges", {
+                link: (chunks) => (
+                  <Link href="/admin/data/rtt-sessions" style={{ color: "var(--indigo)" }}>
+                    {chunks}
+                  </Link>
+                ),
+              })}
             </footer>
           </aside>
         </section>
@@ -348,15 +367,18 @@ function WeekRow({
   weekStart,
   grid,
   isCurrent,
+  intl,
 }: {
   weekStart: Date;
   grid: Map<string, SyncSessionRow[]>;
   isCurrent: boolean;
+  /** The Intl locale times and dates are written in (INTL_LOCALE). */
+  intl: string;
 }) {
   // On a phone (one column, see the calendar grid) only the days with a
   // session are shown, under their week's label; a week with none shows
   // nothing. The desktop grid shows every day.
-  const weekHasSessions = WEEKDAYS.some((_, dIdx) => (grid.get(isoDateKey(addDays(weekStart, dIdx)))?.length ?? 0) > 0);
+  const weekHasSessions = WEEKDAYS.some((dIdx) => (grid.get(isoDateKey(addDays(weekStart, dIdx)))?.length ?? 0) > 0);
   return (
     <>
       <div
@@ -372,9 +394,9 @@ function WeekRow({
           alignSelf: "start",
         }}
       >
-        {fmtMonthDay(weekStart)}
+        {fmtMonthDay(weekStart, intl)}
       </div>
-      {WEEKDAYS.map((wd, dIdx) => {
+      {WEEKDAYS.map((dIdx) => {
         const day = addDays(weekStart, dIdx);
         const key = isoDateKey(day);
         const bucket = grid.get(key) ?? [];
@@ -394,7 +416,7 @@ function WeekRow({
           >
             <div style={{ fontSize: 10, color: "var(--ink-3)", fontFamily: "var(--mono)" }}>
               {/* The weekday is a column header on a desktop; a phone has none. */}
-              <span className="md:hidden">{wd} </span>
+              <span className="md:hidden">{fmtWeekday(day, intl)} </span>
               {day.getDate()}
             </div>
             {bucket.length === 0 ? (
@@ -418,7 +440,7 @@ function WeekRow({
                     }}
                   >
                     <span style={{ fontFamily: "var(--mono)", fontSize: 10 }}>
-                      {b.scheduledAt ? fmtTime(new Date(b.scheduledAt)) : "—"}
+                      {b.scheduledAt ? fmtTime(new Date(b.scheduledAt), intl) : "—"}
                     </span>
                     <span style={{ fontWeight: 500, color: "var(--ink)" }}>{b.title}</span>
                     {b.notes ? (

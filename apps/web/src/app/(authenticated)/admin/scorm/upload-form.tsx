@@ -12,38 +12,47 @@
 //
 // The limit arrives as a prop: lib/scorm/package.ts reads zip archives with
 // node:zlib and must not be pulled into the browser bundle.
+//
+// Words: adminData.client.scormUpload, in the viewer's language. A refusal the
+// server explains is shown as the server wrote it.
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 export type UploadOutcome = { ok: true; id: string } | { ok: false; message: string; paths?: string[] };
 
+/** A translator over adminData.client.scormUpload (the form's useTranslations). */
+export type UploadText = (key: "tooLarge" | "offline" | "refused", values: Record<string, string | number>) => string;
+
 export async function sendScormUpload(
   form: FormData,
-  opts: { maxBytes: number; fetch?: (url: string, init: RequestInit) => Promise<Response> },
+  opts: { maxBytes: number; text: UploadText; fetch?: (url: string, init: RequestInit) => Promise<Response> },
 ): Promise<UploadOutcome> {
   const file = form.get("file");
   if (file instanceof Blob && file.size > opts.maxBytes) {
-    return { ok: false, message: `This file is larger than ${opts.maxBytes / 1024 / 1024} MB, the most a package can be.` };
+    return { ok: false, message: opts.text("tooLarge", { mb: opts.maxBytes / 1024 / 1024 }) };
   }
   let res: Response;
   try {
     res = await (opts.fetch ?? fetch)("/api/scorm/packages", { method: "POST", body: form, credentials: "same-origin" });
   } catch {
-    return { ok: false, message: "The upload did not reach the server. Check the connection and try again." };
+    return { ok: false, message: opts.text("offline", {}) };
   }
   const body = (await res.json().catch(() => null)) as { id?: string; error?: { message?: string; paths?: string[] } | string } | null;
   if (res.status === 201 && body?.id) return { ok: true, id: body.id };
   const error = typeof body?.error === "object" ? body.error : null;
   return {
     ok: false,
-    message: error?.message ?? `The upload was refused (HTTP ${res.status}).`,
+    message: error?.message ?? opts.text("refused", { status: String(res.status) }),
     ...(error?.paths?.length ? { paths: error.paths } : {}),
   };
 }
 
 export function UploadScormForm({ subjects, maxBytes }: { subjects: Array<{ id: string; label: string }>; maxBytes: number }) {
   const router = useRouter();
+  const t = useTranslations("adminData.client");
+  const text: UploadText = (key, values) => t(`scormUpload.${key}`, values);
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<{ message: string; paths?: string[] } | null>(null);
 
@@ -51,7 +60,7 @@ export function UploadScormForm({ subjects, maxBytes }: { subjects: Array<{ id: 
     e.preventDefault();
     setSending(true);
     setProblem(null);
-    const outcome = await sendScormUpload(new FormData(e.currentTarget), { maxBytes });
+    const outcome = await sendScormUpload(new FormData(e.currentTarget), { maxBytes, text });
     if (outcome.ok) {
       router.push(`/admin/scorm/${outcome.id}`);
       return;
@@ -62,12 +71,12 @@ export function UploadScormForm({ subjects, maxBytes }: { subjects: Array<{ id: 
 
   return (
     <form onSubmit={onSubmit} className="card card-hi" style={{ padding: 14, display: "grid", gap: 10, maxWidth: 640 }}>
-      <div style={{ fontWeight: 600, fontSize: 13 }}>Upload a package</div>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>{t("scormUpload.heading")}</div>
       <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
-        RTT subject
+        {t("scormUpload.subject")}
         <select name="rttSubjectId" required defaultValue="">
           <option value="" disabled>
-            Choose the subject it belongs to
+            {t("scormUpload.chooseSubject")}
           </option>
           {subjects.map((s) => (
             <option key={s.id} value={s.id}>
@@ -77,16 +86,16 @@ export function UploadScormForm({ subjects, maxBytes }: { subjects: Array<{ id: 
         </select>
       </label>
       <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
-        {`SCORM 1.2 package (.zip, one SCO, up to ${maxBytes / 1024 / 1024} MB)`}
+        {t("scormUpload.file", { mb: maxBytes / 1024 / 1024 })}
         <input type="file" name="file" accept=".zip,application/zip" required />
       </label>
       <label style={{ display: "grid", gap: 4, fontSize: 12 }}>
-        Title (optional; the package&apos;s own title otherwise)
+        {t("scormUpload.titleLabel")}
         <input type="text" name="title" maxLength={240} />
       </label>
       <div>
         <button type="submit" className="btn btn-sm btn-primary" disabled={sending}>
-          {sending ? "Uploading and checking…" : "Upload package"}
+          {sending ? t("scormUpload.sending") : t("scormUpload.submit")}
         </button>
       </div>
       {problem ? (

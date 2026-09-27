@@ -12,8 +12,8 @@
 // language pill row sits at the bottom with env(safe-area-inset-bottom)
 // padding so the home-indicator on notch devices doesn't overlap the pills.
 //
-// Spec 125 — labels still translate via next-intl. The route-segment layout
-// supplies the provider; we read action + language bundles client-side.
+// Every visible string translates via next-intl (login, action and language
+// namespaces). The route-segment layout supplies the provider.
 //
 // Spec 034 governance contract — the Hindi literal (हिं) remains inside the
 // language pill row so the static script-test that reads the source sees it.
@@ -51,6 +51,7 @@ export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) 
   const [mode, setMode] = useState<"password" | "magic">("password");
   const tAction = useTranslations("action");
   const tLanguage = useTranslations("language");
+  const t = useTranslations("login");
   const router = useRouter();
 
   function pickLocale(locale: "en" | "hi" | "bo") {
@@ -143,7 +144,7 @@ export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) 
             {tAction("welcomeBack")}
           </div>
           <div style={{ fontSize: 12, color: "oklch(0.85 0.03 60)", marginTop: 8, lineHeight: 1.45 }}>
-            Sign in to keep teaching. Works on patchy network — your session is cached locally.
+            {t("mobileTagline")}
           </div>
         </div>
       </div>
@@ -211,7 +212,7 @@ export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) 
                   letterSpacing: "0.05em",
                 }}
               >
-                Email
+                {t("email")}
               </span>
               <input
                 data-testid="mobile-email"
@@ -316,8 +317,8 @@ export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) 
             flexWrap: "wrap",
           }}
         >
-          <span>Goldenmile programme · audited</span>
-          <span>v1.0 · build 2026.05</span>
+          <span>{t("mobileFooter")}</span>
+          <span>{t("version", { version: "1.0", build: "2026.05" })}</span>
         </div>
       </div>
 

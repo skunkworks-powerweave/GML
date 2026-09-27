@@ -22,6 +22,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { and, desc, eq, gte, ilike, lte, sql, type SQL } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@gml/db";
@@ -30,10 +31,14 @@ import { sessions, schools, classes, subjects, teachers } from "@gml/db/schema";
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
+import { enumLabel } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Sessions" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("sessions.metaTitle") };
+}
 
 const ALLOWED_ROLES = new Set([
   "super_admin",
@@ -43,11 +48,12 @@ const ALLOWED_ROLES = new Set([
   "teacher",
 ]);
 
-const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
-  planned: { kind: "", label: "Planned" },
-  in_progress: { kind: "chip-saffron", label: "In progress" },
-  complete: { kind: "chip-lichen", label: "Complete" },
-  cancelled: { kind: "", label: "Cancelled" },
+// The label is repo.sessionStatus.<status>, in the viewer's language.
+const STATUS_CHIP: Record<string, { kind: string }> = {
+  planned: { kind: "" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  cancelled: { kind: "" },
 };
 
 const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "cancelled"]);
@@ -92,6 +98,8 @@ export default async function RepoSessionsIndex({
   const session = await auth();
   const role = session?.user?.role;
   if (!role || !ALLOWED_ROLES.has(role)) redirect("/forbidden");
+  const t = await getTranslations("repo");
+  const statusLabel = (status: string) => enumLabel(t, "sessionStatus", STATUS_CHIP[status] ? status : "planned");
 
   const sp = await searchParams;
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
@@ -169,10 +177,10 @@ export default async function RepoSessionsIndex({
   };
 
   const filterTabs = [
-    { v: "all", l: "All", n: counts.all },
-    { v: "planned", l: "Planned", n: counts.planned },
-    { v: "in_progress", l: "Today", n: counts.in_progress },
-    { v: "complete", l: "Complete", n: counts.complete },
+    { v: "all", l: t("sessions.tabs.all"), n: counts.all },
+    { v: "planned", l: t("sessions.tabs.planned"), n: counts.planned },
+    { v: "in_progress", l: t("sessions.tabs.today"), n: counts.in_progress },
+    { v: "complete", l: t("sessions.tabs.complete"), n: counts.complete },
   ];
 
   // Spec 138 — device-aware card/table fork.
@@ -181,11 +189,10 @@ export default async function RepoSessionsIndex({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Sessions</h1>
+        <div className="label">{t("common.repository")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("sessions.title")}</h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 720 }}>
-          Every classroom session held — planned, in progress and complete. Each session links to its
-          school, class, subject, teacher and course outline.
+          {t("sessions.intro")}
         </p>
       </div>
 
@@ -239,20 +246,20 @@ export default async function RepoSessionsIndex({
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search sessions by topic"
-              title="Search sessions by topic"
+              aria-label={t("sessions.searchLabel")}
+              title={t("sessions.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
             <select
               name="subject"
-              aria-label="Filter by subject"
+              aria-label={t("sessions.subjectFilter")}
               defaultValue={subjectFilter}
               className="text"
               style={{ maxWidth: 200, padding: "5px 10px", fontSize: 12 }}
             >
-              <option value="all">All subjects</option>
+              <option value="all">{t("sessions.allSubjects")}</option>
               {subjectOptions.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -263,7 +270,7 @@ export default async function RepoSessionsIndex({
               type="date"
               name="from"
               defaultValue={fromFilter ?? ""}
-              aria-label="from"
+              aria-label={t("sessions.from")}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12 }}
             />
@@ -271,12 +278,12 @@ export default async function RepoSessionsIndex({
               type="date"
               name="to"
               defaultValue={toFilter ?? ""}
-              aria-label="to"
+              aria-label={t("sessions.to")}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12 }}
             />
             <button type="submit" className="btn btn-sm">
-              Apply
+              {t("common.apply")}
             </button>
             {qFilter ? (
               <Link
@@ -292,13 +299,13 @@ export default async function RepoSessionsIndex({
                 className="btn btn-sm"
                 style={{ textDecoration: "none" }}
               >
-                Clear
+                {t("common.clear")}
               </Link>
             ) : null}
           </form>
 
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{visible.length} shown</span>
+            <span className="chip">{t("common.shown", { count: visible.length })}</span>
           </div>
         </div>
 
@@ -306,24 +313,28 @@ export default async function RepoSessionsIndex({
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="sessions"
-            emptyMessage="No sessions recorded yet."
+            emptyMessage={t("common.noSessionsYet")}
             items={visible.map((s) => {
               const statusInfo = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
               return {
                 id: s.id,
-                primary: s.topic ?? "(untitled session)",
+                primary: s.topic ?? t("sessions.untitled"),
                 hindi: s.teacherHindi ?? null,
                 href: `/repo/session/${s.id}`,
-                chip: { label: statusInfo.label, kind: statusInfo.kind },
+                chip: { label: statusLabel(s.status), kind: statusInfo.kind },
                 secondary: [
                   {
                     value: `${s.scheduledDate}${s.scheduledTime ? ` · ${s.scheduledTime}` : ""}`,
                     mono: true,
                   },
                   {
-                    value: `${s.subjectName ?? "—"} · Grade ${s.grade ?? "—"} · ${s.schoolCode ?? "—"}`,
+                    value: t("sessions.cardMeta", {
+                      subject: s.subjectName ?? "—",
+                      grade: s.grade ?? "—",
+                      school: s.schoolCode ?? "—",
+                    }),
                   },
-                  { label: "Teacher", value: s.teacherName ?? "—" },
+                  { label: t("common.teacher"), value: s.teacherName ?? "—" },
                 ],
               };
             })}
@@ -335,14 +346,14 @@ export default async function RepoSessionsIndex({
           <table className="t">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Time</th>
-                <th>School</th>
-                <th>Grade</th>
-                <th>Subject</th>
-                <th>Topic</th>
-                <th>Teacher</th>
-                <th>Status</th>
+                <th>{t("common.date")}</th>
+                <th>{t("common.time")}</th>
+                <th>{t("common.school")}</th>
+                <th>{t("common.grade")}</th>
+                <th>{t("common.subject")}</th>
+                <th>{t("common.topic")}</th>
+                <th>{t("common.teacher")}</th>
+                <th>{t("common.status")}</th>
                 <th />
               </tr>
             </thead>
@@ -353,7 +364,7 @@ export default async function RepoSessionsIndex({
                     colSpan={9}
                     style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}
                   >
-                    No sessions recorded yet.
+                    {t("common.noSessionsYet")}
                   </td>
                 </tr>
               ) : (
@@ -388,7 +399,7 @@ export default async function RepoSessionsIndex({
                         ) : null}
                       </td>
                       <td>
-                        <span className={`chip ${statusInfo.kind}`.trim()}>{statusInfo.label}</span>
+                        <span className={`chip ${statusInfo.kind}`.trim()}>{statusLabel(s.status)}</span>
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <Link
@@ -396,7 +407,7 @@ export default async function RepoSessionsIndex({
                           className="btn btn-sm btn-primary"
                           style={{ textDecoration: "none" }}
                         >
-                          Open →
+                          {t("sessions.open")}
                         </Link>
                       </td>
                     </tr>

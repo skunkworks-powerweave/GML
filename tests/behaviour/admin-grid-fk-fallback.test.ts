@@ -32,7 +32,14 @@ const NEW_HINT = /paste the row.s id: it is shown at the top of that row.s Edit 
 
 test("the UUID box's hint says where the row's id is shown", async () => {
   const { RowForm } = await import(`${APP}/row-form.tsx`);
-  const html = decodeEntities(renderSync(h(RowForm, { entitySlug: "outline-lessons", mode: "create", options: { outlineId: null } })));
+  // The entity's words, as the page hands them to the form (admin/labels.ts).
+  const { rowFormText } = await import("../../apps/web/src/admin/labels.ts");
+  const { ADMIN_ENTITIES } = await import("../../apps/web/src/admin/registry.ts");
+  const { getTranslations } = await import("next-intl/server");
+  const text = rowFormText((await getTranslations("adminData")) as never, ADMIN_ENTITIES["outline-lessons"]!);
+  const html = decodeEntities(
+    renderSync(h(RowForm, { entitySlug: "outline-lessons", mode: "create", options: { outlineId: null }, text })),
+  );
   assert.doesNotMatch(html, OLD_HINT, "the grid shows no ids to paste");
   assert.match(html, NEW_HINT);
 });

@@ -32,139 +32,61 @@
 // unusable on a phone.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 
 type Role = "super_admin" | "programme_admin" | "mentor" | "observer" | "teacher";
 
 type Step = {
   target: string;
-  title: string;
-  body: string;
-  /** The body where WhatsApp cannot take a video, when `body` mentions it. */
-  bodyWithoutWhatsApp?: string;
+  /**
+   * The step's copy: home.client.tour.steps.<key>.title and .body, in the
+   * user's language. Steps that say the same thing share a key.
+   */
+  key: string;
+  /**
+   * The step's body mentions WhatsApp, and .bodyWithoutWhatsApp says it
+   * without, for a deployment where WhatsApp cannot take a video.
+   */
+  whatsAppVariant?: true;
 };
 
-// FTUX_TOURS map — verbatim from help.jsx::FTUX_TOURS. Five steps per persona
+// FTUX_TOURS map — after help.jsx::FTUX_TOURS. Five steps per persona
 // (selecting the *right* persona is more important than padding to six — the
 // prototype settled on a 4–5 length to keep the overlay finishable in under
 // 90 seconds). super_admin maps onto programme_admin. The observer has a
 // tour of its own: it was the mentor's, whose first step ("Your mentees live
 // here") pointed at an item observers do not have.
-// Exported for tests/behaviour/ui-navigation.test.ts, which checks that the
-// copy promises only help affordances that exist.
+// Exported for tests/behaviour/ui-help.test.ts, which checks that the copy
+// promises only help affordances that exist.
 export const FTUX_TOURS: Record<Role, Step[]> = {
   mentor: [
-    {
-      target: "[data-help-anchor='nav-mentorship']",
-      title: "Your mentees live here",
-      body:
-        "Up to five teachers you guide. Tap to see how each one is progressing through their four quarterly check-ins.",
-    },
-    {
-      target: "[data-help-anchor='nav-observation']",
-      title: "Observation cycles",
-      body:
-        "Every time you watch a lesson — live or by video — it's a cycle. Five steps: pre-form, observe, video, post-form, sign-off.",
-    },
-    {
-      target: "[data-help-anchor='nav-teach-back']",
-      title: "Pending video reviews",
-      body:
-        "Teachers upload their lessons. Aim to give written feedback within 48 hours.",
-    },
-    {
-      target: "[data-help-anchor='nav-repo']",
-      title: "The repository",
-      body:
-        "Everything about every school, class, subject, lesson and reading material. Searchable. Browse it like a library.",
-    },
-    {
-      target: "[data-help-anchor='topbar-help']",
-      title: "Help is always here",
-      body:
-        // Rewritten: it promised dotted-underline words and ⓘ icons, and no
-        // page renders either. The ? button is what ships.
-        "Tap the ? button to look up any term or message the programme team. It sits here on a computer and at the bottom right on a phone. On a keyboard, ? opens it too.",
-    },
+    { target: "[data-help-anchor='nav-mentorship']", key: "mentees" },
+    { target: "[data-help-anchor='nav-observation']", key: "observationCycles" },
+    { target: "[data-help-anchor='nav-teach-back']", key: "pendingReviews" },
+    { target: "[data-help-anchor='nav-repo']", key: "repository" },
+    // Its body was rewritten: it promised dotted-underline words and ⓘ icons,
+    // and no page renders either. The ? button is what ships.
+    { target: "[data-help-anchor='topbar-help']", key: "helpTap" },
   ],
   teacher: [
-    {
-      target: "[data-help-anchor='nav-rtt']",
-      title: "Your current phase",
-      body:
-        "You're in Phase 2 — Application. Modules, lessons, readings and your cohort sessions all live here.",
-    },
-    {
-      target: "[data-help-anchor='nav-observation']",
-      title: "Your observations",
-      body:
-        "Each cycle starts with a small Pre-form, then your lesson is watched (or you upload a video), then your mentor writes feedback.",
-    },
-    {
-      target: "[data-help-anchor='nav-uploads']",
-      title: "Send a lesson video",
-      body:
-        "Forward it via WhatsApp (easiest on slow networks) or upload here. Resumes if your connection drops.",
-      bodyWithoutWhatsApp: "Upload it here, from a phone or a computer. Resumes if your connection drops.",
-    },
-    {
-      target: "[data-help-anchor='topbar-help']",
-      title: "Help is always here",
-      body:
-        "Stuck on a word or a step? Tap the ? button — here on a computer, bottom right on your phone — to look it up or to message the programme team.",
-    },
+    { target: "[data-help-anchor='nav-rtt']", key: "teacherPhase" },
+    { target: "[data-help-anchor='nav-observation']", key: "teacherObservations" },
+    { target: "[data-help-anchor='nav-uploads']", key: "teacherVideo", whatsAppVariant: true },
+    { target: "[data-help-anchor='topbar-help']", key: "teacherHelp" },
   ],
   programme_admin: [
-    {
-      target: "[data-help-anchor='nav-repo']",
-      title: "Repository = your records",
-      body:
-        "Schools, classes, subjects, teachers, sessions, reading material. Everything cross-linked. Start here for any look-up.",
-    },
-    {
-      target: "[data-help-anchor='nav-tbl-teachers']",
-      title: "Operational tables",
-      body:
-        "Add or update teachers, schools and pairings. Every change is logged.",
-    },
-    {
-      target: "[data-help-anchor='nav-audit']",
-      title: "Audit log",
-      body:
-        "Every action — logins, uploads, gate attempts — is recorded here. Read-only, kept for seven years.",
-    },
-    {
-      target: "[data-help-anchor='topbar-help']",
-      title: "Help is always here",
-      body:
-        "Press ? any time, or use this ? button, to open the help panel: every term explained, plus the helpdesk contacts.",
-    },
+    { target: "[data-help-anchor='nav-repo']", key: "adminRepository" },
+    { target: "[data-help-anchor='nav-tbl-teachers']", key: "adminTables" },
+    { target: "[data-help-anchor='nav-audit']", key: "adminAudit" },
+    { target: "[data-help-anchor='topbar-help']", key: "adminHelp" },
   ],
   // help.jsx::FTUX_TOURS.super_admin = FTUX_TOURS.programme_admin
   super_admin: [],
   observer: [
-    {
-      target: "[data-help-anchor='nav-observation']",
-      title: "Your observation cycles",
-      body:
-        "The cycles you are assigned to. Read the teacher's pre-form, watch the lesson live or by video, then file your observer form.",
-    },
-    {
-      target: "[data-help-anchor='nav-teach-back']",
-      title: "Teach-back reviews",
-      body: "Teachers record themselves teaching an RTT lesson. Watch each one and mark it reviewed.",
-    },
-    {
-      target: "[data-help-anchor='nav-repo']",
-      title: "The repository",
-      body:
-        "Everything about every school, class, subject, lesson and reading material. Searchable. Browse it like a library.",
-    },
-    {
-      target: "[data-help-anchor='topbar-help']",
-      title: "Help is always here",
-      body:
-        "Tap the ? button to look up any term or message the programme team. It sits here on a computer and at the bottom right on a phone. On a keyboard, ? opens it too.",
-    },
+    { target: "[data-help-anchor='nav-observation']", key: "observerCycles" },
+    { target: "[data-help-anchor='nav-teach-back']", key: "observerTeachBack" },
+    { target: "[data-help-anchor='nav-repo']", key: "repository" },
+    { target: "[data-help-anchor='topbar-help']", key: "helpTap" },
   ],
 };
 // Mirror the prototype's role aliasing (see help.jsx lines 484-485).
@@ -225,13 +147,11 @@ export function captionPosition(
 }
 
 export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
+  const t = useTranslations("home.client.tour");
   // Memoised on `role`. The `?? []` fallback allocated a fresh array on every
   // render, so the effect below saw a new dependency each time and re-ran
   // continuously for any role without a configured tour.
-  const steps = useMemo(
-    () => (FTUX_TOURS[role] ?? []).map((s) => (!whatsapp && s.bodyWithoutWhatsApp ? { ...s, body: s.bodyWithoutWhatsApp } : s)),
-    [role, whatsapp],
-  );
+  const steps = useMemo(() => FTUX_TOURS[role] ?? [], [role]);
   const [dismissed, setDismissed] = useState<boolean>(Boolean(ftuxSeenAt));
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
@@ -292,6 +212,8 @@ export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
   const step = steps[i];
   if (!step) return null;
   const lastStep = i === steps.length - 1;
+  const title = t(`steps.${step.key}.title`);
+  const body = t(`steps.${step.key}.${!whatsapp && step.whatsAppVariant ? "bodyWithoutWhatsApp" : "body"}`);
 
   // Caption placement: see captionPosition. overflowY because a long Hindi or
   // Bhoti body can outgrow maxHeight; the buttons stay reachable by scrolling
@@ -303,7 +225,7 @@ export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
     : { visibility: "hidden" as const };
 
   return (
-    <div className="ftux-root" role="dialog" aria-label="Product tour" aria-modal="true">
+    <div className="ftux-root" role="dialog" aria-label={t("ariaLabel")} aria-modal="true">
       {/* Backdrop with rect cutout — keeps the spotlit element brightly lit
           while dimming the rest of the page. */}
       <svg className="ftux-backdrop" width="100%" height="100%" aria-hidden="true">
@@ -342,7 +264,7 @@ export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
       {/* Caption card — up to 360px wide; Next / Back / Skip controls */}
       <div className="ftux-caption" style={captionPos}>
         <div className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-          Tour · step {i + 1} of {steps.length}
+          {t("progress", { step: i + 1, total: steps.length })}
         </div>
         <h3
           style={{
@@ -352,9 +274,9 @@ export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
             letterSpacing: "-0.01em",
           }}
         >
-          {step.title}
+          {title}
         </h3>
-        <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--ink-2)" }}>{step.body}</p>
+        <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--ink-2)" }}>{body}</p>
         <div className="ftux-dots" aria-hidden="true">
           {steps.map((_, n) => (
             <span key={n} className={`ftux-dot ${n === i ? "on" : ""}`} />
@@ -362,17 +284,17 @@ export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <button type="button" className="btn btn-sm" onClick={finish}>
-            Skip tour
+            {t("skip")}
           </button>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {i > 0 && (
               <button type="button" className="btn btn-sm" onClick={() => setI((n) => n - 1)}>
-                ← Back
+                {t("back")}
               </button>
             )}
             {lastStep ? (
               <button type="button" className="btn btn-primary btn-sm" onClick={finish}>
-                Got it
+                {t("done")}
               </button>
             ) : (
               <button
@@ -380,7 +302,7 @@ export function FTUXTour({ role, ftuxSeenAt, whatsapp }: FTUXTourProps) {
                 className="btn btn-primary btn-sm"
                 onClick={() => setI((n) => n + 1)}
               >
-                Next →
+                {t("next")}
               </button>
             )}
           </div>

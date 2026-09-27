@@ -7,6 +7,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -21,25 +22,30 @@ import {
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
+import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Subject" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("subject.metaTitle") };
+}
 
-// Status → chip-* utility class + label. Matches JSX `Chip kind={...}` pattern
-// using the global utilities now in globals.css.
-const OUTLINE_STATUS_CHIP: Record<string, { cls: string; label: string }> = {
-  planned: { cls: "", label: "Planned" },
-  in_progress: { cls: "chip-saffron", label: "In progress" },
-  complete: { cls: "chip-lichen", label: "Complete" },
-  archived: { cls: "", label: "Archived" },
+// Status → chip-* utility class. Matches JSX `Chip kind={...}` pattern
+// using the global utilities now in globals.css. The label is
+// repo.outlineStatus / repo.sessionStatus, in the viewer's language.
+const OUTLINE_STATUS_CHIP: Record<string, { cls: string }> = {
+  planned: { cls: "" },
+  in_progress: { cls: "chip-saffron" },
+  complete: { cls: "chip-lichen" },
+  archived: { cls: "" },
 };
 
-const SESSION_STATUS_CHIP: Record<string, { cls: string; label: string }> = {
-  planned: { cls: "", label: "Planned" },
-  in_progress: { cls: "chip-saffron", label: "In progress" },
-  complete: { cls: "chip-lichen", label: "Complete" },
-  cancelled: { cls: "chip-rust", label: "Cancelled" },
+const SESSION_STATUS_CHIP: Record<string, { cls: string }> = {
+  planned: { cls: "" },
+  in_progress: { cls: "chip-saffron" },
+  complete: { cls: "chip-lichen" },
+  cancelled: { cls: "chip-rust" },
 };
 
 export default async function RepoSubjectDetailPage({
@@ -49,6 +55,8 @@ export default async function RepoSubjectDetailPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const t = await getTranslations("repo");
+  const intl = await repoIntlLocale();
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
@@ -137,6 +145,7 @@ export default async function RepoSubjectDetailPage({
   const sessionsTotal = totalsRows[0]?.sessionsTotal ?? 0;
   const readingsTotal = totalsRows[0]?.readingsTotal ?? 0;
 
+  const kindLabel = (kind: string) => enumLabel(t, "resourceKind", kind);
   const gradesLabel =
     subject.gradesMin != null && subject.gradesMax != null
       ? `${subject.gradesMin}–${subject.gradesMax}`
@@ -154,10 +163,10 @@ export default async function RepoSubjectDetailPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8 }}
         >
-          ← Subjects
+          {t("subject.back")}
         </Link>
         <div>
-          <div className="label">Repository · Subject</div>
+          <div className="label">{t("subject.label")}</div>
           <h1
             style={{
               fontFamily: "var(--serif)",
@@ -195,9 +204,9 @@ export default async function RepoSubjectDetailPage({
             ) : null}
           </h1>
           <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-            Grades {gradesLabel}
-            {gradesCount > 0 ? ` (${gradesCount} grades)` : ""}. FLN-aligned for foundational
-            grades; SCERT framework for higher classes.
+            {gradesCount > 0
+              ? t("subject.gradesCount", { grades: gradesLabel, count: gradesCount })
+              : t("subject.grades", { grades: gradesLabel })}
           </p>
         </div>
       </div>
@@ -209,26 +218,26 @@ export default async function RepoSubjectDetailPage({
       <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         {/* 4-stat strip */}
         <section className="grid grid-cols-2 gap-[14px] md:grid-cols-4">
-          <StatTile label="Grades covered" value={gradesLabel} />
-          <StatTile label="Course outlines" value={String(outlinesTotal)} />
-          <StatTile label="Sessions" value={String(sessionsTotal)} />
-          <StatTile label="Readings" value={String(readingsTotal)} />
+          <StatTile label={t("common.gradesCovered")} value={gradesLabel} />
+          <StatTile label={t("common.courseOutlines")} value={String(outlinesTotal)} />
+          <StatTile label={t("common.sessions")} value={String(sessionsTotal)} />
+          <StatTile label={t("common.readings")} value={String(readingsTotal)} />
         </section>
 
         {/* Course outlines */}
         <SectionCard
-          title={`Course outlines (${outlinesTotal})`}
-          sub="By grade and term"
+          title={t("subject.outlinesTitle", { count: outlinesTotal })}
+          sub={t("subject.outlinesSub")}
         >
           <table className="t">
             <thead>
               <tr>
-                <th>Outline</th>
-                <th>Grade</th>
-                <th>Term</th>
-                <th>Sessions</th>
-                <th>Weeks</th>
-                <th>Status</th>
+                <th>{t("common.outline")}</th>
+                <th>{t("common.grade")}</th>
+                <th>{t("common.term")}</th>
+                <th>{t("common.sessions")}</th>
+                <th>{t("common.weeks")}</th>
+                <th>{t("common.status")}</th>
                 <th></th>
               </tr>
             </thead>
@@ -236,12 +245,13 @@ export default async function RepoSubjectDetailPage({
               {outlines.length === 0 ? (
                 <tr>
                   <td colSpan={7} style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}>
-                    No outlines yet.
+                    {t("subject.noOutlines")}
                   </td>
                 </tr>
               ) : (
                 outlines.map((o) => {
                   const chip = OUTLINE_STATUS_CHIP[o.status] ?? OUTLINE_STATUS_CHIP.planned;
+                  const chipLabel = enumLabel(t, "outlineStatus", OUTLINE_STATUS_CHIP[o.status] ? o.status : "planned");
                   return (
                     <tr key={o.id}>
                       <td style={{ fontWeight: 500 }}>
@@ -257,7 +267,7 @@ export default async function RepoSubjectDetailPage({
                       <td>{o.sessionsCount}</td>
                       <td>{o.weeks ?? "—"}</td>
                       <td>
-                        <span className={`chip ${chip.cls}`.trim()}>{chip.label}</span>
+                        <span className={`chip ${chip.cls}`.trim()}>{chipLabel}</span>
                       </td>
                       <td style={{ color: "var(--ink-4)", textAlign: "right" }}>
                         <Link href={`/repo/outline/${o.id}`} style={{ color: "var(--ink-4)" }}>
@@ -273,33 +283,34 @@ export default async function RepoSubjectDetailPage({
         </SectionCard>
 
         {/* Recent sessions */}
-        <SectionCard title={`Recent sessions (${sessionsTotal})`}>
+        <SectionCard title={t("subject.recentTitle", { count: sessionsTotal })}>
           <table className="t">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>School</th>
-                <th>Grade</th>
-                <th>Topic</th>
-                <th>Teacher</th>
-                <th>Status</th>
+                <th>{t("common.date")}</th>
+                <th>{t("common.school")}</th>
+                <th>{t("common.grade")}</th>
+                <th>{t("common.topic")}</th>
+                <th>{t("common.teacher")}</th>
+                <th>{t("common.status")}</th>
               </tr>
             </thead>
             <tbody>
               {recentSessions.length === 0 ? (
                 <tr>
                   <td colSpan={6} style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}>
-                    No sessions recorded yet.
+                    {t("common.noSessionsYet")}
                   </td>
                 </tr>
               ) : (
                 recentSessions.map((s) => {
                   const chip = SESSION_STATUS_CHIP[s.status] ?? SESSION_STATUS_CHIP.planned;
+                  const chipLabel = enumLabel(t, "sessionStatus", SESSION_STATUS_CHIP[s.status] ? s.status : "planned");
                   return (
                     <tr key={s.id}>
                       <td className="mono" style={{ fontSize: 12 }}>
                         {s.scheduledDate
-                          ? new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                          ? new Date(s.scheduledDate).toLocaleDateString(intl, {
                               day: "numeric",
                               month: "short",
                               year: "numeric",
@@ -327,7 +338,7 @@ export default async function RepoSubjectDetailPage({
                         ) : null}
                       </td>
                       <td>
-                        <span className={`chip ${chip.cls}`.trim()}>{chip.label}</span>
+                        <span className={`chip ${chip.cls}`.trim()}>{chipLabel}</span>
                       </td>
                     </tr>
                   );
@@ -339,15 +350,15 @@ export default async function RepoSubjectDetailPage({
 
         {/* Two-column: Readings + Teachers */}
         <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-          <SectionCard title={`Reading material (${readingsTotal})`}>
+          <SectionCard title={t("subject.readingTitle", { count: readingsTotal })}>
             <table className="t">
               <thead>
                 <tr>
-                  <th>Title</th>
-                  <th>Kind</th>
-                  <th>Owner</th>
-                  <th>Pages</th>
-                  <th>Updated</th>
+                  <th>{t("common.title")}</th>
+                  <th>{t("common.kind")}</th>
+                  <th>{t("common.owner")}</th>
+                  <th>{t("common.pages")}</th>
+                  <th>{t("common.updated")}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -355,7 +366,7 @@ export default async function RepoSubjectDetailPage({
                 {readingRows.length === 0 ? (
                   <tr>
                     <td colSpan={6} style={{ textAlign: "center", color: "var(--ink-3)", padding: 24 }}>
-                      No readings linked.
+                      {t("subject.noReadings")}
                     </td>
                   </tr>
                 ) : (
@@ -370,14 +381,14 @@ export default async function RepoSubjectDetailPage({
                         </Link>
                       </td>
                       <td>
-                        <span className="chip">{r.kind}</span>
+                        <span className="chip">{kindLabel(r.kind)}</span>
                       </td>
                       <td style={{ fontSize: 12, color: "var(--ink-3)" }}>
                         {r.owner ?? "—"}
                       </td>
                       <td>{r.pages ?? "—"}</td>
                       <td className="mono" style={{ fontSize: 12 }}>
-                        {new Date(r.updatedAt).toLocaleDateString("en-IN", {
+                        {new Date(r.updatedAt).toLocaleDateString(intl, {
                           day: "numeric",
                           month: "short",
                         })}
@@ -395,12 +406,12 @@ export default async function RepoSubjectDetailPage({
           </SectionCard>
 
           <SectionCard
-            title={`Teachers (${teacherRows.length})`}
-            sub="Distinct teachers with sessions on this subject"
+            title={t("subject.teachersTitle", { count: teacherRows.length })}
+            sub={t("subject.teachersSub")}
           >
             {teacherRows.length === 0 ? (
               <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No teachers yet.
+                {t("subject.noTeachers")}
               </div>
             ) : (
               <ul
@@ -413,9 +424,9 @@ export default async function RepoSubjectDetailPage({
                   gap: 0,
                 }}
               >
-                {teacherRows.map((t) => (
+                {teacherRows.map((tc) => (
                   <li
-                    key={t.id}
+                    key={tc.id}
                     style={{
                       padding: "9px 14px",
                       borderBottom: "1px solid var(--line)",
@@ -427,8 +438,8 @@ export default async function RepoSubjectDetailPage({
                     }}
                   >
                     <span>
-                      <span style={{ fontWeight: 500 }}>{t.fullName}</span>
-                      {t.hindiName ? (
+                      <span style={{ fontWeight: 500 }}>{tc.fullName}</span>
+                      {tc.hindiName ? (
                         <span
                           style={{
                             fontFamily: "var(--deva)",
@@ -437,12 +448,12 @@ export default async function RepoSubjectDetailPage({
                             fontSize: 12,
                           }}
                         >
-                          {t.hindiName}
+                          {tc.hindiName}
                         </span>
                       ) : null}
-                      {t.schoolCode ? (
+                      {tc.schoolCode ? (
                         <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: 8 }}>
-                          · {t.schoolCode}
+                          · {tc.schoolCode}
                         </span>
                       ) : null}
                     </span>
@@ -453,7 +464,7 @@ export default async function RepoSubjectDetailPage({
                         color: "var(--ink-3)",
                       }}
                     >
-                      {t.sessionsCount} session{t.sessionsCount === 1 ? "" : "s"}
+                      {t("subject.teacherSessions", { count: tc.sessionsCount })}
                     </span>
                   </li>
                 ))}

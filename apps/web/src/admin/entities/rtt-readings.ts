@@ -18,15 +18,14 @@ import type { AdminEntity } from "../types";
 // Test: tests/behaviour/admin-entities.test.ts.
 export const rttReadingsEntity: AdminEntity = {
   slug: "rtt-readings",
-  label: "RTT Readings",
   table: rttReadings,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "rttSubjectId", label: "RTT subject" },
-    { key: "sequence", label: "Seq" },
-    { key: "title", label: "Title" },
-    { key: "externalUrl", label: "Link" },
+    { key: "rttSubjectId" },
+    { key: "sequence" },
+    { key: "title" },
+    { key: "externalUrl" },
   ],
   formSchema: z.object({
     rttSubjectId: z.string().uuid(),
@@ -39,7 +38,7 @@ export const rttReadingsEntity: AdminEntity = {
       .trim()
       .max(2000)
       .url()
-      .regex(/^https?:\/\//i, "Must be an http:// or https:// link"),
+      .regex(/^https?:\/\//i, "validation.httpLink"),
   }),
   formFields: ["rttSubjectId", "sequence", "title", "externalUrl"],
   describeRow: (r) => `rtt-reading:${r.title ?? r.id}`,

@@ -12,14 +12,19 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { and, asc, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { resources, rttSubjects, videoSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import { rttScope } from "@/lib/rtt/scope";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Self-paced units" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("async.metaTitle") };
+}
 
 // Resource kinds suitable for the async hub (everything that reads like
 // "microlearning material" — excludes Policy / Calendar / Routine / Rubric).
@@ -32,6 +37,16 @@ const ASYNC_RESOURCE_KINDS = [
   "Other",
 ] as const;
 
+/** A resource kind above -> its label's key under rtt.async.kind. */
+const KIND_KEYS: Record<string, string> = {
+  Guide: "guide",
+  Handbook: "handbook",
+  Worksheet: "worksheet",
+  Template: "template",
+  "Lab-guide": "labGuide",
+  Other: "other",
+};
+
 type CardItem = {
   cardKey: string;
   href: string;
@@ -43,6 +58,8 @@ type CardItem = {
   badgeInk: string;
   durationLabel: string | null;
   createdAt: Date | null;
+  /** createdAt as the viewer reads a date. */
+  dateLabel: string | null;
 };
 
 export default async function RttOnlineAsynchronousPage({
@@ -52,6 +69,8 @@ export default async function RttOnlineAsynchronousPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const t = await getTranslations("rtt");
+  const intl = INTL_LOCALE[(await getLocale()) as Locale];
 
   const sp = await searchParams;
   const selectedSubjectId = sp.subject?.trim() || null;
@@ -137,32 +156,35 @@ export default async function RttOnlineAsynchronousPage({
       href: r.externalUrl ?? "#",
       hrefExternal: true,
       title: r.name,
-      subtitle: r.owner ?? "external resource",
-      badge: r.kind,
+      subtitle: r.owner ?? t("async.externalResource"),
+      badge: KIND_KEYS[r.kind] ? t(`async.kind.${KIND_KEYS[r.kind]}`) : r.kind,
       badgeBg: "var(--paper-2)",
       badgeInk: "var(--ink-2)",
       durationLabel: null,
       createdAt: r.updatedAt ?? r.createdAt ?? null,
+      dateLabel: null,
     })),
     ...filteredVideos.map<CardItem>((v) => {
       const minutes = v.durationSec ? Math.max(1, Math.round(v.durationSec / 60)) : null;
-      const sourceLabel = v.source === "google_drive" ? "Drive" : "External link";
+      const sourceLabel = v.source === "google_drive" ? t("async.drive") : t("common.externalLink");
       return {
         cardKey: `v:${v.id}`,
         href: `/videos/${v.id}`,
         hrefExternal: false,
-        title: v.captionRaw?.slice(0, 80) || `${v.contextType.replace(/_/g, " ")} video`,
+        title: v.captionRaw?.slice(0, 80) || t("async.videoTitle", { context: v.contextType }),
         subtitle: sourceLabel,
-        badge: "Video",
+        badge: t("async.video"),
         badgeBg: "var(--indigo-soft)",
         badgeInk: "var(--indigo)",
-        durationLabel: minutes ? `${minutes} min` : null,
+        durationLabel: minutes ? t("common.minutes", { minutes }) : null,
         createdAt: v.createdAt ?? null,
+        dateLabel: null,
       };
     }),
   ]
     .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0))
-    .slice(0, 60);
+    .slice(0, 60)
+    .map((c) => ({ ...c, dateLabel: c.createdAt ? c.createdAt.toLocaleDateString(intl, { day: "numeric", month: "short" }) : null }));
 
   const totalAvailable = resourceRowsAll.length + videoRowsAll.length;
 
@@ -177,17 +199,16 @@ export default async function RttOnlineAsynchronousPage({
             color: "var(--ink-3)",
           }}
         >
-          RTT · Online · Asynchronous
+          {t("async.eyebrow")}
         </div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Watch &amp; read at your own pace
+          {t("async.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4, maxWidth: 600 }}>
-          Pre-recorded lectures, microlearning videos, and reading guides linked from
-          YouTube, Google Drive and Facebook. Filter by RTT subject to narrow the grid.
+          {t("async.intro")}
           {totalAvailable > 0 ? (
             <span style={{ marginLeft: 6, color: "var(--ink-4)", fontFamily: "var(--mono)", fontSize: 11 }}>
-              {totalAvailable} items indexed
+              {t("async.indexed", { count: totalAvailable })}
             </span>
           ) : null}
         </p>
@@ -195,7 +216,7 @@ export default async function RttOnlineAsynchronousPage({
 
       {/* Subject tab strip */}
       <nav
-        aria-label="Filter by RTT subject"
+        aria-label={t("async.filterLabel")}
         style={{
           display: "flex",
           flexWrap: "wrap",
@@ -207,7 +228,7 @@ export default async function RttOnlineAsynchronousPage({
       >
         <SubjectPill
           href="/rtt/online/asynchronous"
-          label="All"
+          label={t("common.all")}
           active={selectedSubject == null}
         />
         {subjectRows.map((s) => (
@@ -246,15 +267,21 @@ export default async function RttOnlineAsynchronousPage({
             }}
           >
             <div style={{ marginBottom: 6 }}>
-              No async content yet
-              {selectedSubject ? <> for <strong style={{ color: "var(--ink-2)" }}>{selectedSubject.name}</strong></> : ""}.
+              {selectedSubject
+                ? t.rich("async.emptyFor", {
+                    subject: selectedSubject.name,
+                    strong: (chunks) => <strong style={{ color: "var(--ink-2)" }}>{chunks}</strong>,
+                  })
+                : t("async.empty")}
             </div>
             <div style={{ fontSize: 11, color: "var(--ink-4)" }}>
-              Programme admins can attach external videos or PDFs from{" "}
-              <Link href="/admin/data/resources" style={{ color: "var(--indigo)" }}>
-                /admin/data/resources
-              </Link>
-              .
+              {t.rich("async.emptyHint", {
+                link: (chunks) => (
+                  <Link href="/admin/data/resources" style={{ color: "var(--indigo)" }}>
+                    {chunks}
+                  </Link>
+                ),
+              })}
             </div>
           </div>
         ) : (
@@ -395,11 +422,11 @@ function Card({ item }: { item: CardItem }) {
         </div>
         <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
           {item.subtitle}
-          {item.createdAt ? (
+          {item.dateLabel ? (
             <>
               {" · "}
               <span style={{ fontFamily: "var(--mono)" }}>
-                {item.createdAt.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                {item.dateLabel}
               </span>
             </>
           ) : null}

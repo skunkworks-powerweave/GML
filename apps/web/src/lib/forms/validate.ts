@@ -89,7 +89,42 @@ export function optionValues(options: readonly unknown[]): Set<string> {
   return out;
 }
 
-export type ValidationError = { field: string; message: string };
+/**
+ * What is wrong with one answer, as a code and the values its message needs.
+ * No sentence: this module runs in the browser and on the server alike, and
+ * the words are in the reader's language -- mentorship.client.validation.<code>
+ * in the translation bundles, formatted by validationMessage() below.
+ */
+export type ValidationCode =
+  | "required"
+  | "tooManySelections"
+  | "tooLong"
+  | "notAChoice"
+  | "notANumber"
+  | "notWhole"
+  | "belowMin"
+  | "aboveMax"
+  | "tooShortText"
+  | "tooLongText";
+
+export type ValidationError = {
+  field: string;
+  code: ValidationCode;
+  /** `label` (the question) plus whatever the message quotes: min, max, value. */
+  values: Record<string, string | number>;
+};
+
+/**
+ * A translator over the mentorship.client namespace: useTranslations(
+ * "mentorship.client") in a runner, or a server action's getTranslations
+ * scoped the same way.
+ */
+export type ValidationTranslator = (key: string, values: Record<string, string | number>) => string;
+
+/** One error, in the reader's language. */
+export function validationMessage(error: ValidationError, t: ValidationTranslator): string {
+  return t(`validation.${error.code}`, error.values);
+}
 
 /**
  * Upper bound on any single free-text answer.
@@ -153,23 +188,20 @@ export function validateResponses(
 
     if (values.length === 0) {
       if (field.required) {
-        errors.push({ field: field.name, message: `${label} is required.` });
+        errors.push({ field: field.name, code: "required", values: { label } });
       }
       // Nothing further to check on an empty optional field.
       continue;
     }
 
     if (values.length > MAX_SELECTIONS) {
-      errors.push({ field: field.name, message: `${label} has too many selections.` });
+      errors.push({ field: field.name, code: "tooManySelections", values: { label } });
       continue;
     }
 
     for (const raw of values) {
       if (normaliseLineBreaks(raw).length > MAX_TEXT_LENGTH) {
-        errors.push({
-          field: field.name,
-          message: `${label} is too long (max ${MAX_TEXT_LENGTH} characters).`,
-        });
+        errors.push({ field: field.name, code: "tooLong", values: { label, max: MAX_TEXT_LENGTH } });
         break;
       }
     }
@@ -192,10 +224,7 @@ export function validateResponses(
       const allowed = optionValues(field.options);
       for (const v of values) {
         if (!allowed.has(v)) {
-          errors.push({
-            field: field.name,
-            message: `${label}: "${v.slice(0, 40)}" is not one of the available choices.`,
-          });
+          errors.push({ field: field.name, code: "notAChoice", values: { label, value: v.slice(0, 40) } });
           break;
         }
       }
@@ -208,19 +237,19 @@ export function validateResponses(
       for (const v of values) {
         const n = Number(v);
         if (!Number.isFinite(n)) {
-          errors.push({ field: field.name, message: `${label} must be a number.` });
+          errors.push({ field: field.name, code: "notANumber", values: { label } });
           break;
         }
         if (integer && !Number.isInteger(n)) {
-          errors.push({ field: field.name, message: `${label} must be a whole number.` });
+          errors.push({ field: field.name, code: "notWhole", values: { label } });
           break;
         }
         if (min !== undefined && n < min) {
-          errors.push({ field: field.name, message: `${label} must be at least ${min}.` });
+          errors.push({ field: field.name, code: "belowMin", values: { label, min } });
           break;
         }
         if (max !== undefined && n > max) {
-          errors.push({ field: field.name, message: `${label} must be at most ${max}.` });
+          errors.push({ field: field.name, code: "aboveMax", values: { label, max } });
           break;
         }
       }
@@ -233,17 +262,11 @@ export function validateResponses(
       for (const raw of values) {
         const v = normaliseLineBreaks(raw);
         if (field.min !== undefined && v.length < field.min) {
-          errors.push({
-            field: field.name,
-            message: `${label} must be at least ${field.min} characters.`,
-          });
+          errors.push({ field: field.name, code: "tooShortText", values: { label, min: field.min } });
           break;
         }
         if (field.max !== undefined && v.length > field.max) {
-          errors.push({
-            field: field.name,
-            message: `${label} must be at most ${field.max} characters.`,
-          });
+          errors.push({ field: field.name, code: "tooLongText", values: { label, max: field.max } });
           break;
         }
       }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -29,8 +30,11 @@ test("spec 064: page is auth-gated via @/auth and redirects to /login", () => {
 
 test("spec 064: page renders the Crimson Pro h1 'Online · Synchronous' with the RTT eyebrow", () => {
   const src = read(PAGE);
-  assert.match(src, /RTT online hub/);
-  assert.match(src, /Online\s*·\s*Synchronous/);
+  // The copy is in the rtt namespace (locales/en/rtt.json), read by key.
+  assert.ok(readsKey(src, "sync.eyebrow"), "the page reads the RTT eyebrow (rtt.sync.eyebrow)");
+  assert.match(message("rtt.sync.eyebrow"), /RTT online hub/);
+  assert.ok(readsKey(src, "sync.title"), "the page reads its h1 (rtt.sync.title)");
+  assert.match(message("rtt.sync.title"), /Online\s*·\s*Synchronous/);
   // Crimson Pro is sourced from var(--serif) per globals.css; h1 should use it.
   assert.match(src, /fontFamily:\s*["']var\(--serif\)["']/);
 });
@@ -61,14 +65,18 @@ test("spec 064: schedule filter drops null scheduledAt and bounds to week-start 
 
 test("spec 064: renders a Mon-Fri grid across 3 weeks", () => {
   const src = read(PAGE);
-  assert.match(src, /WEEKDAYS\s*=\s*\[\s*"Mon"\s*,\s*"Tue"\s*,\s*"Wed"\s*,\s*"Thu"\s*,\s*"Fri"\s*\]/);
+  // Monday to Friday: the five days after the week's Monday, named in the
+  // viewer's language by Intl ("Mon" in English) rather than an English list.
+  assert.match(src, /WEEKDAYS\s*=\s*\[\s*0\s*,\s*1\s*,\s*2\s*,\s*3\s*,\s*4\s*\]/);
+  assert.match(src, /weekday:\s*"short"/);
   // Exactly 3 weeks rendered.
   assert.match(src, /length:\s*3\s*\}/);
 });
 
 test("spec 064: upcoming-5 side panel header + slice", () => {
   const src = read(PAGE);
-  assert.match(src, /Upcoming webinars/);
+  assert.ok(readsKey(src, "sync.upcoming"), "the side panel reads its header (rtt.sync.upcoming)");
+  assert.match(message("rtt.sync.upcoming"), /Upcoming webinars/);
   assert.match(src, /\.slice\(0,\s*5\)/);
 });
 
@@ -82,7 +90,8 @@ test("spec 064: type pills map webinar→indigo, quiz→saffron, synchronous→l
 
 test("spec 064: empty state directs operator to /admin/data/sessions with muted ink-3 styling", () => {
   const src = read(PAGE);
-  assert.match(src, /No webinars scheduled/);
+  assert.match(src, /t\.rich\(\s*"sync\.empty"/, "the empty state reads rtt.sync.empty");
+  assert.match(message("rtt.sync.empty"), /No webinars scheduled/);
   assert.match(src, /\/admin\/data\/sessions/);
   assert.match(src, /var\(--ink-3\)/);
 });

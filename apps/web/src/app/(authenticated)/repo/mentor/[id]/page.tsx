@@ -15,6 +15,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors } from "@gml/db/schema";
@@ -23,20 +24,25 @@ import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { mentorRoster } from "@/lib/gated-reads";
 import { mentorshipAccess } from "@/lib/visibility";
+import { repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Mentor" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("mentor.metaTitle") };
+}
 
 const STATUS_ORDER = ["active", "review", "paused", "complete", "ended"] as const;
 type Status = (typeof STATUS_ORDER)[number];
 
-const STATUS_CHIP: Record<Status, { kind: string; label: string }> = {
-  active: { kind: "chip-lichen", label: "Active" },
-  review: { kind: "chip-saffron", label: "In review" },
-  paused: { kind: "", label: "Paused" },
-  complete: { kind: "chip-indigo", label: "Complete" },
-  ended: { kind: "", label: "Ended" },
+// The label is repo.mentor.status.<status>, in the viewer's language.
+const STATUS_CHIP: Record<Status, { kind: string }> = {
+  active: { kind: "chip-lichen" },
+  review: { kind: "chip-saffron" },
+  paused: { kind: "" },
+  complete: { kind: "chip-indigo" },
+  ended: { kind: "" },
 };
 
 const BASE_CHIP: Record<string, string> = {
@@ -52,6 +58,8 @@ export default async function RepoMentorDetailPage({
   const session = await auth();
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  const t = await getTranslations("repo");
+  const intl = await repoIntlLocale();
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
@@ -102,9 +110,9 @@ export default async function RepoMentorDetailPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, display: "inline-flex" }}
         >
-          ← Mentors
+          {t("mentor.back")}
         </Link>
-        <div className="label">Repository · Mentor</div>
+        <div className="label">{t("mentor.label")}</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
           {mentor.name}
           {mentor.hindiName ? (
@@ -122,7 +130,7 @@ export default async function RepoMentorDetailPage({
           ) : null}
           {locked ? null : (
             <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-              {activeCount} active mentee{activeCount === 1 ? "" : "s"} · {totalMeetings} meeting{totalMeetings === 1 ? "" : "s"} lifetime
+              {t("mentor.summary", { active: activeCount, meetings: totalMeetings })}
             </span>
           )}
         </div>
@@ -140,14 +148,14 @@ export default async function RepoMentorDetailPage({
             gap: 14,
           }}
         >
-          <KV label="Name" value={mentor.name} />
+          <KV label={t("common.name")} value={mentor.name} />
           {mentor.hindiName ? <KV label="नाम" value={mentor.hindiName} deva /> : null}
-          <KV label="Based in" value={mentor.baseLocation ?? "—"} />
+          <KV label={t("common.basedIn")} value={mentor.baseLocation ?? "—"} />
           <KV
-            label="Expertise"
+            label={t("common.expertise")}
             value={expertise.length ? expertise.join(", ") : "—"}
           />
-          {mentor.bio ? <KV label="Bio" value={mentor.bio} span /> : null}
+          {mentor.bio ? <KV label={t("mentor.bio")} value={mentor.bio} span /> : null}
         </section>
 
         {/* Pairings grouped by status */}
@@ -159,7 +167,7 @@ export default async function RepoMentorDetailPage({
               marginBottom: 12,
             }}
           >
-            Pairings{locked ? "" : ` (${pairings.length})`}
+            {locked ? t("mentor.pairings") : t("mentor.pairingsCount", { count: pairings.length })}
           </h2>
 
           {locked ? (
@@ -167,20 +175,23 @@ export default async function RepoMentorDetailPage({
               className="card card-hi"
               style={{ padding: 24, color: "var(--ink-3)", fontSize: 13 }}
             >
-              Mentorship details are behind the section password.{" "}
-              <Link
-                href={`/gate/mentorship?next=${encodeURIComponent(`/repo/mentor/${id}`)}`}
-                style={{ color: "var(--indigo)" }}
-              >
-                Unlock →
-              </Link>
+              {t.rich("mentor.locked", {
+                link: (chunks) => (
+                  <Link
+                    href={`/gate/mentorship?next=${encodeURIComponent(`/repo/mentor/${id}`)}`}
+                    style={{ color: "var(--indigo)" }}
+                  >
+                    {chunks}
+                  </Link>
+                ),
+              })}
             </div>
           ) : pairings.length === 0 ? (
             <div
               className="card card-hi"
               style={{ padding: 24, color: "var(--ink-3)", fontSize: 13 }}
             >
-              No pairings yet.
+              {t("mentor.noPairings")}
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -198,7 +209,7 @@ export default async function RepoMentorDetailPage({
                         marginBottom: 8,
                       }}
                     >
-                      <span className={`chip ${info.kind}`}>{info.label}</span>
+                      <span className={`chip ${info.kind}`}>{t(`mentor.status.${status}`)}</span>
                       <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
                         {items.length}
                       </span>
@@ -246,11 +257,12 @@ export default async function RepoMentorDetailPage({
                               className="label"
                               style={{ marginTop: 4 }}
                             >
-                              Started{" "}
-                              {new Date(p.startedAt).toLocaleDateString("en-IN", {
-                                day: "numeric",
-                                month: "short",
-                                year: "numeric",
+                              {t("mentor.started", {
+                                date: new Date(p.startedAt).toLocaleDateString(intl, {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                }),
                               })}
                             </div>
                           </div>
@@ -273,13 +285,14 @@ export default async function RepoMentorDetailPage({
                             >
                               Q{p.currentQuarter ?? 1}
                             </span>
-                            <span>{p.meetingsCount ?? 0} meetings</span>
+                            <span>{t("mentor.meetings", { count: p.meetingsCount ?? 0 })}</span>
                             {p.lastMeetingAt ? (
                               <span>
-                                · last{" "}
-                                {new Date(p.lastMeetingAt).toLocaleDateString("en-IN", {
-                                  day: "numeric",
-                                  month: "short",
+                                {t("mentor.lastMeeting", {
+                                  date: new Date(p.lastMeetingAt).toLocaleDateString(intl, {
+                                    day: "numeric",
+                                    month: "short",
+                                  }),
                                 })}
                               </span>
                             ) : null}

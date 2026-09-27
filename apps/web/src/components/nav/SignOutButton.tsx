@@ -28,6 +28,7 @@
 // in with their answers where they were.
 
 import type { CSSProperties, ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { clearAllQuickFindRecents } from "@/components/quickfind/QuickFind";
 import { clearAllDrafts } from "@/lib/observation/drafts";
 import { clearAllLocalCopies, hasLocalCopies } from "@/components/forms/draft-resilience";
@@ -40,13 +41,14 @@ type SignOutButtonProps = {
   children: ReactNode;
 };
 
-const DISCARD_UNSAVED =
-  "Some form answers on this device have not been saved yet. Signing out discards them. Sign out anyway?";
-
-/** Yes, unless the user declines; a dialog that cannot open never blocks sign-out. */
-function discardConfirmed(): boolean {
+/**
+ * Yes, unless the user declines; a dialog that cannot open never blocks
+ * sign-out. `question` is home.client.signOut.discardUnsaved, in the user's
+ * language.
+ */
+function discardConfirmed(question: string): boolean {
   try {
-    return typeof window.confirm !== "function" || window.confirm(DISCARD_UNSAVED);
+    return typeof window.confirm !== "function" || window.confirm(question);
   } catch {
     return true;
   }
@@ -61,13 +63,14 @@ function clearObservationDrafts(): void {
 }
 
 export function SignOutButton({ title, style, children }: SignOutButtonProps) {
+  const t = useTranslations("home.client.signOut");
   return (
     <button
       type="submit"
       title={title}
       data-testid="signout-button"
       onClick={(e) => {
-        if (hasLocalCopies() && !discardConfirmed()) {
+        if (hasLocalCopies() && !discardConfirmed(t("discardUnsaved"))) {
           e.preventDefault();
           return;
         }

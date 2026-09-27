@@ -6,10 +6,21 @@ import type { GateSlug } from "@/lib/gates";
 
 export type AdminDb = NodePgDatabase<Record<string, unknown>>;
 
+/**
+ * A sentence for the interface, as a key in the adminData translation
+ * namespace plus its ICU values. The rules in these definitions run on the
+ * server, in the CSV importer and in tests, none of which has the viewer's
+ * translator to hand, so a rule names its message and whoever shows it
+ * translates it (admin/labels.ts adminMessage).
+ */
+export type AdminMessage = { key: string; values?: Record<string, string | number> };
+
 export type AdminColumn = {
-  /** Drizzle column key on the table (same as the JS field name). */
+  /**
+   * Drizzle column key on the table (same as the JS field name). Its header
+   * is `adminData.entities.<slug>.columns.<key>` (admin/labels.ts).
+   */
   key: string;
-  label: string;
   /** Optional formatter; defaults to JSON.stringify for non-primitives. */
   format?: (v: unknown) => string;
 };
@@ -18,13 +29,11 @@ export type AdminColumn = {
  * Optional presentation for one form field. Everything here has a working
  * default: foreign keys are found from the table itself (admin/references.ts)
  * and enums from the zod schema, so an entity only says what cannot be
- * derived.
+ * derived. The words are in the translation bundles, not here: the form
+ * label is `adminData.entities.<slug>.fields.<field>` (else the grid column's
+ * header) and a line of guidance `.help.<field>` (admin/labels.ts).
  */
 export type AdminFieldMeta = {
-  /** Form label. Defaults to the grid column's label, then the key spelled out. */
-  label?: string;
-  /** One line of guidance shown under the input. */
-  help?: string;
   /** For a link to a login account: only accounts with these roles are offered. */
   userRoles?: RoleName[];
   /**
@@ -36,8 +45,11 @@ export type AdminFieldMeta = {
 };
 
 export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
+  /**
+   * The URL segment, and the name of the entity's words in the translation
+   * bundles: its title is `adminData.entities.<slug>.label` (admin/labels.ts).
+   */
   slug: string;
-  label: string;
   table: TTable;
   /** Roles that may read; mutate requires `mutateRoles` (defaults to read roles). */
   readRoles: RoleName[];
@@ -48,7 +60,7 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
   formSchema: z.ZodTypeAny;
   /** Field names included in the form (in this order). */
   formFields: string[];
-  /** Per-field labels and hints; see AdminFieldMeta. */
+  /** Per-field presentation (account roles, date pickers); see AdminFieldMeta. */
   fields?: Record<string, AdminFieldMeta>;
   /** Optional human-friendly identifier function for row labels in audit log. */
   describeRow?: (row: Record<string, unknown>) => string;
@@ -79,7 +91,7 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
     db: AdminDb,
     row: Record<string, unknown>,
     before?: Record<string, unknown>,
-  ) => Promise<Record<string, string> | null>;
+  ) => Promise<Record<string, AdminMessage> | null>;
   /**
    * State-dependent write rules. Called by the grid's update (with the row as
    * it is and as it would become) and delete (with the row as it is), inside
@@ -90,7 +102,7 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
     op: "update" | "delete",
     before: Record<string, unknown>,
     next?: Record<string, unknown>,
-  ) => string | null;
+  ) => AdminMessage | null;
   /**
    * CSV import only: the form fields that together say "this record is
    * already on the table", for a row added WITHOUT an id (a hand-made roster).

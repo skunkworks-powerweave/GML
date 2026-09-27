@@ -1,7 +1,7 @@
 // Mobile bottom tab bar. Ports `mobile-shell.jsx::MobBottomNav`.
 //
-// Spec 125 — tab labels translate via next-intl. Each tab id maps to a key
-// under `nav.*`; tabs without an entry fall back to their English literal.
+// Spec 125 — tab labels translate via next-intl: each tab names its `nav.*`
+// key (MobileTab.labelKey, config/nav.ts). There is no English fallback.
 //
 // Spec 128 — mobile bottom tabs also surface live counts when relevant. The
 // `inbox` tab gets a tiny red dot when unread > 0, the `observe` tab gets a
@@ -22,22 +22,6 @@ type BottomTabsProps = {
   counts?: NavCounts;
   /** Spec 128 — unread notifications count; drives the inbox dot. */
   unreadCount?: number;
-};
-
-/** Tab id → `nav.*` translation key. */
-const TAB_KEY: Record<string, string> = {
-  "home": "dashboard",
-  "learn": "rtt",
-  "observe": "observation",
-  "pairings": "mentorship",
-  "repo": "repo",
-  "inbox": "inbox",
-  "data": "data",
-  "audit": "audit",
-  // Without this entry the teacher's uploads tab fell through to its English
-  // literal while the rest of the bar rendered in hi / bo.
-  "uploads": "uploads",
-  "menu": "menu",
 };
 
 /**
@@ -171,7 +155,7 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
                 </span>
               ) : null}
             </span>
-            <span>{TAB_KEY[tab.id] ? tNav(TAB_KEY[tab.id]) : tab.label}</span>
+            <span>{tNav(tab.labelKey)}</span>
           </ActiveNavLink>
         );
       })}

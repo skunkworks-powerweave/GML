@@ -21,8 +21,13 @@
 // Hindi-name handling (SM-7): if the row has a `hindiName` or `nameHindi`
 // field with a non-empty value, render it under the title in var(--deva).
 // This is purely conditional — never shown when absent.
+//
+// The card's own words are in the viewer's language
+// (adminData.client.mobileCards); the entity and column names arrive
+// translated from the page, and the values are data.
 
 import type { CSSProperties } from "react";
+import { useTranslations } from "next-intl";
 
 export type MobileCardColumn = {
   key: string;
@@ -42,11 +47,11 @@ export type MobileEntityCardListProps = {
 
 const DEFAULT_KV_COUNT = 3;
 
-function formatCell(col: MobileCardColumn, value: unknown): string {
+function formatCell(col: MobileCardColumn, value: unknown, yesNo: (v: boolean) => string): string {
   if (col.format) return col.format(value);
   if (value === null || value === undefined || value === "") return "—";
   if (value instanceof Date) return value.toISOString().slice(0, 10);
-  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "boolean") return yesNo(value);
   if (typeof value === "object") {
     try {
       return JSON.stringify(value);
@@ -141,10 +146,12 @@ export function MobileEntityCardList({
   columns,
   maxKvFields = DEFAULT_KV_COUNT,
 }: MobileEntityCardListProps) {
+  const t = useTranslations("adminData.client");
+  const yesNo = (v: boolean) => (v ? t("mobileCards.yes") : t("mobileCards.no"));
   if (columns.length === 0) {
     return (
       <div style={{ padding: 24, color: "var(--ink-3)", fontSize: 13 }}>
-        No display columns configured for {entityLabel}.
+        {t("mobileCards.noColumns", { entity: entityLabel })}
       </div>
     );
   }
@@ -162,7 +169,7 @@ export function MobileEntityCardList({
           textAlign: "center",
         }}
       >
-        No {entityLabel.toLowerCase()} yet. Use the form above to add one.
+        {t("mobileCards.empty", { entity: entityLabel.toLowerCase() })}
       </div>
     );
   }
@@ -182,7 +189,7 @@ export function MobileEntityCardList({
     >
       {rows.map((row, idx) => {
         const rowId = pickRowId(row);
-        const titleValue = formatCell(titleCol, row[titleCol.key]);
+        const titleValue = formatCell(titleCol, row[titleCol.key], yesNo);
         const hindi = pickHindi(row);
         // `?edit=`, not `?row=`. The grid page reads `sp.edit` to open its
         // detail panel and has never read `row` at all, so on a phone this
@@ -197,7 +204,7 @@ export function MobileEntityCardList({
           <article
             key={rowId ?? `row-${idx}`}
             style={cardStyle}
-            aria-label={`${entityLabel} card ${titleValue}`}
+            aria-label={t("mobileCards.cardLabel", { entity: entityLabel, title: titleValue })}
           >
             <header
               style={{
@@ -237,7 +244,7 @@ export function MobileEntityCardList({
                     borderRadius: "var(--r-1)",
                     flexShrink: 0,
                   }}
-                  title={`Row id ${rowId}`}
+                  title={t("mobileCards.rowIdTitle", { id: rowId })}
                 >
                   #{rowId.slice(0, 6)}
                 </span>
@@ -248,7 +255,7 @@ export function MobileEntityCardList({
               {kvCols.map((col) => (
                 <div key={col.key}>
                   <dt style={labelStyle}>{col.label}</dt>
-                  <dd style={{ ...valueStyle, margin: 0 }}>{formatCell(col, row[col.key])}</dd>
+                  <dd style={{ ...valueStyle, margin: 0 }}>{formatCell(col, row[col.key], yesNo)}</dd>
                 </div>
               ))}
             </dl>
@@ -257,16 +264,16 @@ export function MobileEntityCardList({
               <a
                 href={csvHref}
                 style={buttonBaseStyle}
-                title={`Download ${entityLabel} as CSV`}
+                title={t("mobileCards.exportTitle", { entity: entityLabel })}
               >
-                Export CSV
+                {t("mobileCards.export")}
               </a>
               <a
                 href={viewHref}
                 style={buttonPrimaryStyle}
-                title={`View ${titleValue}`}
+                title={t("mobileCards.viewTitle", { title: titleValue })}
               >
-                View row
+                {t("mobileCards.view")}
               </a>
             </div>
           </article>

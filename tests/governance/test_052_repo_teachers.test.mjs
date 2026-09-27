@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -98,10 +99,16 @@ test("052: detail route fetches teacher + school/zone + phase + sessions + cycle
   assert.match(src, /mentorshipAccess\(\s*db\s*,\s*actor\s*\)/);
   // notFound on missing teacher
   assert.match(src, /notFound\(\)/);
-  // Section headings
-  assert.match(src, /Sessions taught/);
-  assert.match(src, /Mentor pairing/);
-  assert.match(src, /Recent observation cycles/);
+  // Section headings (repo namespace, read by key)
+  for (const [key, heading] of [
+    ["teacher.sessionsTitle", /^Sessions taught/],
+    ["teacher.pairingTitle", /^Mentor pairing$/],
+    ["teacher.cyclesTitle", /^Recent observation cycles$/],
+    ["teacher.cyclesTitleCount", /^Recent observation cycles \(/],
+  ]) {
+    assert.ok(readsKey(src, key), `heading repo.${key}`);
+    assert.match(message(`repo.${key}`), heading);
+  }
   // Cross-links to existing routes
   assert.match(src, /\/mentorship\/\$\{/);
   assert.match(src, /\/observation\/\$\{/);

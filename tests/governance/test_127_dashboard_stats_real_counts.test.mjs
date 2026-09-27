@@ -29,11 +29,22 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
 
 const PAGE_PATH = "apps/web/src/app/(authenticated)/dashboard/page.tsx";
+
+/**
+ * The card reads home.dashboard.stats.<key>, and its English is `label`. The
+ * labels were literals in the page (and English in every locale); matching
+ * them in the source now would only find the comments that mention them.
+ */
+function assertStat(src, key, label, what) {
+  assert.ok(readsKey(src, `stats.${key}`), `${what}: the card reads home.dashboard.stats.${key}`);
+  assert.equal(message(`home.dashboard.stats.${key}`), label, `${what}: '${label}'`);
+}
 const SPEC_DIR = "specs/127-dashboard-stats-real-counts";
 
 test("spec 127 — all five spec-kit files are present", () => {
@@ -128,10 +139,10 @@ test("spec 127 — every chrome helper fires its counts via Promise.all", () => 
 test("spec 127 — teacher variant scopes counts to session.user.id with the four prototype labels", () => {
   const src = read(PAGE_PATH);
   // The four labels the brief lists for the teacher variant.
-  assert.match(src, /My uploads this week/, "teacher variant must render the 'My uploads this week' stat card");
-  assert.match(src, /Cycles pending pre-form/, "teacher variant must render the 'Cycles pending pre-form' stat card");
-  assert.match(src, /Cycles awaiting video/, "teacher variant must render the 'Cycles awaiting video' stat card");
-  assert.match(src, /Open quizzes/, "teacher variant must render the 'Open quizzes' stat card");
+  assertStat(src, "myUploads", "My uploads this week", "teacher variant");
+  assertStat(src, "pendingPre", "Cycles pending pre-form", "teacher variant");
+  assertStat(src, "awaitingVideo", "Cycles awaiting video", "teacher variant");
+  assertStat(src, "openQuizzes", "Open quizzes", "teacher variant");
   // The teacher chrome helper must scope on the session userId.
   assert.match(
     src,
@@ -234,17 +245,17 @@ test("spec 127 — mentor variant joins through teachers → mentor_pairings (me
 
 test("spec 127 — mentor variant renders the four prototype labels", () => {
   const src = read(PAGE_PATH);
-  assert.match(src, /Active mentees/, "mentor variant must render 'Active mentees'");
-  assert.match(src, /Pending video reviews/, "mentor variant must render 'Pending video reviews'");
-  assert.match(src, /Scheduled meetings this week/, "mentor variant must render 'Scheduled meetings this week'");
-  assert.match(src, /Q-progress forms due/, "mentor variant must render 'Q-progress forms due'");
+  assertStat(src, "activeMentees", "Active mentees", "mentor variant");
+  assertStat(src, "pendingVideoReviews", "Pending video reviews", "mentor variant");
+  assertStat(src, "meetingsThisWeek", "Scheduled meetings this week", "mentor variant");
+  assertStat(src, "formsDue", "Q-progress forms due", "mentor variant");
 });
 
 test("spec 127 — observer variant scopes to observer_id with the three brief labels", () => {
   const src = read(PAGE_PATH);
-  assert.match(src, /Cycles I am leading \(active\)/, "observer variant must render 'Cycles I am leading (active)'");
-  assert.match(src, /Pending observer forms/, "observer variant must render 'Pending observer forms'");
-  assert.match(src, /Cycles awaiting sign-off/, "observer variant must render 'Cycles awaiting sign-off'");
+  assertStat(src, "leadingActive", "Cycles I am leading (active)", "observer variant");
+  assertStat(src, "pendingObserverForms", "Pending observer forms", "observer variant");
+  assertStat(src, "awaitingSignOff", "Cycles awaiting sign-off", "observer variant");
   // The observer filter must hit observation_cycles.observer_id.
   assert.match(
     src,
@@ -257,13 +268,13 @@ test("spec 127 — programme_admin + super_admin share base stats; super_admin a
   const src = read(PAGE_PATH);
   // Programme-wide base stats (active pairings, cycles in flight, recent
   // uploads, pending observer forms).
-  assert.match(src, /Active pairings/, "admin variants must render 'Active pairings'");
-  assert.match(src, /Cycles in flight/, "admin variants must render 'Cycles in flight'");
-  assert.match(src, /Recent uploads \(24h\)/, "admin variants must render 'Recent uploads (24h)'");
+  assertStat(src, "activePairings", "Active pairings", "admin variants");
+  assertStat(src, "cyclesInFlight", "Cycles in flight", "admin variants");
+  assertStat(src, "recentUploads", "Recent uploads (24h)", "admin variants");
   // Super-admin-only stats.
-  assert.match(src, /Total users/, "super_admin variant must add 'Total users'");
-  assert.match(src, /Audit events \(24h\)/, "super_admin variant must add 'Audit events (24h)'");
-  assert.match(src, /Storage used \(MB\)/, "super_admin variant must add 'Storage used (MB)'");
+  assertStat(src, "totalUsers", "Total users", "super_admin variant");
+  assertStat(src, "auditEvents", "Audit events (24h)", "super_admin variant");
+  assertStat(src, "storageUsed", "Storage used (MB)", "super_admin variant");
   // The super-admin add-ons are gated behind a role check.
   assert.match(
     src,

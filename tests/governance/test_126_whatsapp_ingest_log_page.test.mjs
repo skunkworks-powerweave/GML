@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -139,10 +140,15 @@ test("spec 126 — page renders the filter form with parsing + date range", () =
   const src = read(PAGE_PATH);
   // The filter form is a plain <form method="get"> — no client component.
   assert.match(src, /method="get"/, "filter form must use method=get so search params drive the filter");
-  // Parsing select with matched + unmatched options.
+  // Parsing select with matched + unmatched options. Their captions are in the
+  // admin bundle (whatsappLog.parsing.*); the page reads each key.
   assert.match(src, /name="parsing"/, "page must expose a parsing select named 'parsing'");
-  assert.match(src, />\s*matched\s*</, "parsing select must offer the 'matched' option");
-  assert.match(src, />\s*unmatched\s*</, "parsing select must offer the 'unmatched' option");
+  assert.match(src, /<option value="matched">/, "parsing select must offer the 'matched' option");
+  assert.match(src, /<option value="unmatched">/, "parsing select must offer the 'unmatched' option");
+  assert.ok(readsKey(src, "whatsappLog.parsing.matched"), "the 'matched' option reads admin.whatsappLog.parsing.matched");
+  assert.ok(readsKey(src, "whatsappLog.parsing.unmatched"), "the 'unmatched' option reads admin.whatsappLog.parsing.unmatched");
+  assert.equal(message("admin.whatsappLog.parsing.matched"), "matched");
+  assert.equal(message("admin.whatsappLog.parsing.unmatched"), "unmatched");
   // Date-range inputs (HTML5 type=date keeps it server-rendered).
   assert.match(src, /name="from"/, "page must expose a 'from' date input");
   assert.match(src, /name="to"/, "page must expose a 'to' date input");
@@ -171,11 +177,11 @@ test("spec 126 — page renders a Resend transcode CTA wired to the server actio
     /name="submissionId"/,
     "Resend form must POST a submissionId hidden input so the action knows which row to re-enqueue",
   );
-  assert.match(
-    src,
-    />\s*Resend transcode\s*</,
-    "the CTA label must read 'Resend transcode' — surfaces what the click does",
+  assert.ok(
+    readsKey(src, "whatsappLog.resendTranscode"),
+    "the CTA label must read 'Resend transcode' (admin.whatsappLog.resendTranscode) — surfaces what the click does",
   );
+  assert.equal(message("admin.whatsappLog.resendTranscode"), "Resend transcode");
 });
 
 test("spec 126 — page hides Resend for finalised rows", () => {
@@ -315,12 +321,14 @@ test("spec 126 — videos/page.tsx rewires the WhatsApp ingest log button to /ad
     /href="\/admin\/whatsapp-log"/,
     "videos page must link the 'WhatsApp ingest log' button to /admin/whatsapp-log",
   );
-  // The label must still say what it does.
+  // The label must still say what it does. It is video.library.whatsappLog,
+  // in the viewer's language, and the link's text.
   assert.match(
     src,
-    />\s*WhatsApp ingest log\s*</,
+    /href="\/admin\/whatsapp-log"[^>]*>\s*\{t\("library\.whatsappLog"\)\}\s*</,
     "videos page must keep the 'WhatsApp ingest log' label so the affordance reads the same as the prototype",
   );
+  assert.equal(message("video.library.whatsappLog"), "WhatsApp ingest log");
 });
 
 test("spec 126 — videos/page.tsx gates the button behind hasAnyRole(programme_admin, super_admin)", () => {

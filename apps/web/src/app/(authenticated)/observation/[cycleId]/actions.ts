@@ -539,6 +539,7 @@ export async function addNoteAction(formData: FormData): Promise<void> {
   // blank lines from the note, since a blank line is what separates entries:
   // otherwise a note could carry a line shaped like another author's header
   // and read as their entry (lib/observation/notes.ts).
+  // i18n-ignore: stored in the note as its author's name (data, one language for every reader); every account has an email, so it is never reached
   const author = session.user.name?.trim() || session.user.email || "Unknown user";
   const entry = formatNoteEntry(new Date(), author, actor.role, note);
 

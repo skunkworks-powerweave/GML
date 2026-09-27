@@ -12,14 +12,17 @@ import { and, asc, desc, eq, lte, ne } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorMeetings, mentorPairings, mentors, observationCycles, phases, rttSubjects, teachers, terms } from "@gml/db/schema";
 import { notFound } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { hasAnyRole } from "@gml/shared/auth/roles";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import { assertCanAccessCycle, assertCanAccessPairing, isUuid, pairingClosed, type Actor } from "@/lib/authz";
 import { rttScope } from "@/lib/rtt/scope";
 import { activeGrant, isAdmin, mentorshipAccess, observationAccess } from "@/lib/visibility";
 import type { UploadContextType } from "@/lib/video/upload";
 
-/** assertContextAllowed's refusal for a completed or ended pairing (FR-12). */
-const CLOSED_PAIRING = "This pairing is complete. Its record is closed, so no more videos can be added.";
+// Everything below that a person reads -- a refusal, what a target is, who
+// will see it -- is in the user's language (video.context.*): the page shows
+// it, and beginUploadAction returns a refusal straight to the upload screen.
 
 export const UPLOAD_CONTEXT_TYPES: ReadonlySet<string> = new Set<UploadContextType>([
   "observation_cycle",
@@ -77,13 +80,14 @@ export async function assertContextAllowed(
   actor: Actor,
   input: { contextType: string; contextId?: string | null; quarter?: number | null },
 ): Promise<ContextCheck> {
-  if (!UPLOAD_CONTEXT_TYPES.has(input.contextType)) return { ok: false, error: "Unknown upload context." };
+  const t = await getTranslations("video");
+  if (!UPLOAD_CONTEXT_TYPES.has(input.contextType)) return { ok: false, error: t("context.error.unknown") };
   const contextType = input.contextType as UploadContextType;
   const contextId = input.contextId?.trim() || null;
   const quarter = input.quarter ?? null;
 
   if (quarter !== null && contextType !== "mentee_quarterly") {
-    return { ok: false, error: "A quarter applies only to a mentee's quarterly video." };
+    return { ok: false, error: t("context.error.quarterOnly") };
   }
 
   switch (contextType) {
@@ -92,7 +96,7 @@ export async function assertContextAllowed(
       return { ok: true, target: { contextType, contextId: null, quarter: null } };
 
     case "observation_cycle": {
-      if (!contextId) return { ok: false, error: "Choose which observation cycle this video is for." };
+      if (!contextId) return { ok: false, error: t("context.error.chooseCycle") };
       const cycle = await assertCanAccessCycle(actor, contextId);
       // Sign-off is the locking transition: the cycle page stops offering an
       // upload, and this refuses one that arrives anyway, before anything is
@@ -100,13 +104,13 @@ export async function assertContextAllowed(
       // evidence row and is made generic again, for its uploader to re-file:
       // packages/db/src/uploads.ts, linkSubmissionToContext.)
       if (cycle.status === "complete") {
-        return { ok: false, error: "This cycle has been signed off. Its record is closed, so no more evidence can be added." };
+        return { ok: false, error: t("context.error.cycleSignedOff") };
       }
       return { ok: true, target: { contextType, contextId, quarter: null } };
     }
 
     case "mentor_meeting": {
-      if (!contextId) return { ok: false, error: "Choose which meeting this recording is for." };
+      if (!contextId) return { ok: false, error: t("context.error.chooseMeeting") };
       // A malformed id is never sent to a uuid column (Postgres would answer
       // 22P02, a 500); it names no meeting.
       if (!isUuid(contextId)) notFound();
@@ -117,29 +121,29 @@ export async function assertContextAllowed(
         .limit(1);
       if (!meeting) notFound();
       if (pairingClosed(await assertCanAccessPairing(actor, meeting.pairingId))) {
-        return { ok: false, error: CLOSED_PAIRING };
+        return { ok: false, error: t("context.error.closedPairing") };
       }
       return { ok: true, target: { contextType, contextId, quarter: null } };
     }
 
     case "mentee_quarterly": {
-      if (!contextId) return { ok: false, error: "Choose which mentorship pairing this video is for." };
+      if (!contextId) return { ok: false, error: t("context.error.choosePairing") };
       if (quarter !== 1 && quarter !== 4) {
-        return { ok: false, error: "Say whether this is the Q1 (baseline) or the Q4 (endline) video." };
+        return { ok: false, error: t("context.error.chooseQuarter") };
       }
       const pairing = await assertCanAccessPairing(actor, contextId);
-      if (pairingClosed(pairing)) return { ok: false, error: CLOSED_PAIRING };
+      if (pairingClosed(pairing)) return { ok: false, error: t("context.error.closedPairing") };
       // The endline video belongs to the pairing's last quarter. Q1 stays open:
       // a baseline sent late is still the baseline.
       const current = pairing.currentQuarter ?? 1;
       if (quarter === 4 && current < 4) {
-        return { ok: false, error: `The Q4 video is recorded in the pairing's last quarter; this pairing is in Q${current}.` };
+        return { ok: false, error: t("context.error.q4NotYet", { quarter: current }) };
       }
       return { ok: true, target: { contextType, contextId, quarter } };
     }
 
     case "teach_back": {
-      if (!contextId) return { ok: false, error: "Choose which RTT subject this teach-back is for." };
+      if (!contextId) return { ok: false, error: t("context.error.chooseSubject") };
       if (!isUuid(contextId)) notFound();
       // The subject page's own predicate: an active subject taught where the
       // teacher is (staff: the whole programme). A retired subject, another
@@ -208,10 +212,15 @@ export type TargetDescription = {
   whatsappText: string | null;
 };
 
-const QUARTER_NAME: Record<VideoQuarter, string> = { 1: "Q1 baseline", 4: "Q4 endline" };
+/** A meeting's date, in the user's language ("27 September 2026"). */
+async function dateFormatter(): Promise<(d: Date) => string> {
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
+  return (d) => d.toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
+}
 
-function dateIn(d: Date): string {
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
+/** "Lesson video for OBS-2026-009 · Fractions · Asha": the sentence, then the data. */
+function joined(first: string, ...rest: Array<string | null | undefined | false>): string {
+  return [first, ...rest.filter((p): p is string => Boolean(p))].join(" · ");
 }
 
 /** "OBS-2026-009", however the code was stored: the form the webhook reads. */
@@ -231,6 +240,7 @@ export async function describeUploadTarget(
   const locked = await lockedSection(actor, target.contextType);
   if (locked) return { locked };
 
+  const t = await getTranslations("video");
   const described = (description: TargetDescription) => ({ locked: null, description }) as const;
   const id = target.contextId;
   switch (target.contextType) {
@@ -242,8 +252,8 @@ export async function describeUploadTarget(
         .where(eq(observationCycles.id, id!))
         .limit(1);
       return described({
-        title: `Lesson video for ${c!.code}${c!.topic ? ` · ${c!.topic}` : ""}${actor.role === "teacher" ? "" : ` · ${c!.teacherName}`}`,
-        audience: "It goes on the cycle's Evidence, where the teacher, the observer and the mentor review it.",
+        title: joined(t("context.title.lesson", { code: c!.code }), c!.topic, actor.role !== "teacher" && c!.teacherName),
+        audience: t("context.audience.cycle"),
         whatsappText: cycleCaption(c!.code),
       });
     }
@@ -256,9 +266,10 @@ export async function describeUploadTarget(
         .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
         .where(eq(mentorMeetings.id, id!))
         .limit(1);
+      const date = await dateFormatter();
       return described({
-        title: `Recording of the meeting on ${dateIn(m!.scheduledAt)} · ${m!.mentorName} ↔ ${m!.teacherName}`,
-        audience: "It goes on that meeting in the pairing, for the mentor and the mentee.",
+        title: t("context.title.meeting", { date: date(m!.scheduledAt), mentor: m!.mentorName, teacher: m!.teacherName }),
+        audience: t("context.audience.meeting"),
         whatsappText: `MM-${id}`,
       });
     }
@@ -270,9 +281,10 @@ export async function describeUploadTarget(
         .innerJoin(teachers, eq(teachers.id, mentorPairings.teacherId))
         .where(eq(mentorPairings.id, id!))
         .limit(1);
+      const names = { mentor: p!.mentorName, teacher: p!.teacherName };
       return described({
-        title: `${QUARTER_NAME[target.quarter!]} video · ${p!.mentorName} ↔ ${p!.teacherName}`,
-        audience: "It goes on the pairing page, for the mentor and the mentee.",
+        title: target.quarter === 4 ? t("context.title.quarterlyQ4", names) : t("context.title.quarterlyQ1", names),
+        audience: t("context.audience.quarterly"),
         // Q1-<pairing> / Q4-<pairing> (packages/shared/src/whatsapp/caption.ts).
         whatsappText: `Q${target.quarter}-${id}`,
       });
@@ -280,19 +292,19 @@ export async function describeUploadTarget(
     case "teach_back": {
       const [s] = await db.select({ name: rttSubjects.name }).from(rttSubjects).where(eq(rttSubjects.id, id!)).limit(1);
       return described({
-        title: `Teach-back video for ${s!.name}`,
-        audience: "It goes to the teach-back queue, where mentors and observers review it.",
+        title: t("context.title.teachBack", { subject: s!.name }),
+        audience: t("context.audience.teachBack"),
         // TB-<subject> (packages/shared/src/whatsapp/caption.ts); the webhook
         // holds it to the same subject check as assertContextAllowed.
         whatsappText: `TB-${id}`,
       });
     }
     case "classroom_session":
-      return described({ title: "Classroom session video", audience: "Only you and programme administrators can see it.", whatsappText: null });
+      return described({ title: t("context.title.classroomSession"), audience: t("context.audience.private"), whatsappText: null });
     case "generic":
       return described({
-        title: "Not linked to a cycle, meeting or pairing",
-        audience: "Only you and programme administrators can see it.",
+        title: t("context.title.generic"),
+        audience: t("context.audience.private"),
         whatsappText: "OBS-",
       });
   }
@@ -341,6 +353,7 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
   const options: UploadOption[] = [];
   const locked: GatedSection[] = [];
   if (isAdmin(actor)) return { options, locked };
+  const t = await getTranslations("video");
 
   if (hasAnyRole(actor.role, ["teacher", "observer", "mentor"])) {
     const access = await observationAccess(db, actor);
@@ -358,8 +371,8 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         options.push({
           target,
           href: uploadHref(target),
-          title: `Lesson video for ${c.code}${c.topic ? ` · ${c.topic}` : ""}`,
-          detail: actor.role === "teacher" ? `Cycle ${c.status.replace(/_/g, " ")}` : c.teacherName,
+          title: joined(t("context.title.lesson", { code: c.code }), c.topic),
+          detail: actor.role === "teacher" ? t("context.option.cycleStatus", { status: c.status }) : c.teacherName,
         });
       }
     }
@@ -383,7 +396,7 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         options.push({
           target,
           href: uploadHref(target),
-          title: `${QUARTER_NAME[quarter]} video for your mentor`,
+          title: quarter === 4 ? t("context.option.quarterlyQ4") : t("context.option.quarterlyQ1"),
           detail: p.mentorName,
         });
       }
@@ -398,12 +411,13 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
         .where(and(eq(mentorPairings.status, "active"), lte(mentorMeetings.scheduledAt, new Date()), access.where))
         .orderBy(desc(mentorMeetings.scheduledAt))
         .limit(10);
+      const date = await dateFormatter();
       for (const m of meetings) {
         const target: UploadTarget = { contextType: "mentor_meeting", contextId: m.id, quarter: null };
         options.push({
           target,
           href: uploadHref(target),
-          title: `Recording of your meeting on ${dateIn(m.scheduledAt)}`,
+          title: t("context.option.meeting", { date: date(m.scheduledAt) }),
           detail: m.teacherName,
         });
       }
@@ -426,7 +440,7 @@ export async function openUploadContexts(actor: Actor): Promise<{ options: Uploa
       .limit(20);
     for (const s of subjects) {
       const target: UploadTarget = { contextType: "teach_back", contextId: s.id, quarter: null };
-      options.push({ target, href: uploadHref(target), title: `Teach-back for ${s.name}`, detail: `${s.phase} · ${s.term}` });
+      options.push({ target, href: uploadHref(target), title: t("context.option.teachBack", { subject: s.name }), detail: `${s.phase} · ${s.term}` });
     }
   }
   return { options, locked };

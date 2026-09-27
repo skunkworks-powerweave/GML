@@ -13,17 +13,24 @@
 // across the map, whatever the KARGIL | LEH halves drawn under it said. Now a
 // dot takes its district's colour and sits in its district's half; a district
 // the map does not draw takes neither colour and may sit anywhere.
+//
+// Its copy, the district names included, is home.dashboard.fieldMap.* in the
+// viewer's language. School names and codes are data, shown as stored.
+
+import { getTranslations } from "next-intl/server";
 
 export type FieldMapSchool = { id: string; code: string; name: string; districtCode: string | null };
 
 // x ranges either side of the divider at x = 280 (Kargil is west of Leh).
+// `label` is the district's name key under home.dashboard.fieldMap.
 const DISTRICTS: Record<string, { label: string; color: string; x0: number; span: number }> = {
-  KGL: { label: "Kargil", color: "var(--saffron)", x0: 60, span: 200 },
-  LEH: { label: "Leh", color: "var(--indigo)", x0: 300, span: 160 },
+  KGL: { label: "kargil", color: "var(--saffron)", x0: 60, span: 200 },
+  LEH: { label: "leh", color: "var(--indigo)", x0: 300, span: 160 },
 };
 const ELSEWHERE = { color: "var(--ink-3)", x0: 60, span: 400 };
 
-export function FieldMapSection({ schools }: { schools: FieldMapSchool[] }) {
+export async function FieldMapSection({ schools }: { schools: FieldMapSchool[] }) {
+  const t = await getTranslations("home.dashboard.fieldMap");
   // Stable hash → 0..1 mapping so dots stay put across renders.
   const placed = schools.map((s) => {
     let h = 0;
@@ -37,24 +44,24 @@ export function FieldMapSection({ schools }: { schools: FieldMapSchool[] }) {
     <article className="card card-hi">
       <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
         <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
-          Field operations
+          {t("title")}
         </h2>
         <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-          {schools.length} school{schools.length === 1 ? "" : "s"} — click a marker to open its repo page
+          {t("summary", { count: schools.length })}
         </div>
         {/* What the two colours mean. */}
         <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 11, color: "var(--ink-3)" }}>
           {Object.values(DISTRICTS).map((d) => (
             <span key={d.label} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               <span className="dot" style={{ background: d.color }} />
-              {d.label}
+              {t(d.label)}
             </span>
           ))}
         </div>
       </header>
       <div style={{ padding: 14 }}>
         {schools.length === 0 ? (
-          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>No active schools registered.</div>
+          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>{t("empty")}</div>
         ) : (
           <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", border: "1px solid var(--line)", background: "var(--paper-2)" }}>
             <svg viewBox="0 0 520 320" style={{ width: "100%", display: "block" }}>
@@ -69,10 +76,10 @@ export function FieldMapSection({ schools }: { schools: FieldMapSchool[] }) {
                 />
               ))}
               <text x="200" y="290" fill="var(--ink-3)" fontFamily="var(--mono)" fontSize="10" letterSpacing="2">
-                KARGIL
+                {t("kargilMap")}
               </text>
               <text x="400" y="290" fill="var(--ink-3)" fontFamily="var(--mono)" fontSize="10" letterSpacing="2">
-                LEH
+                {t("lehMap")}
               </text>
               <line x1="280" y1="60" x2="280" y2="270" stroke="var(--line-2)" strokeDasharray="3 4" />
               {placed.map((m) => (

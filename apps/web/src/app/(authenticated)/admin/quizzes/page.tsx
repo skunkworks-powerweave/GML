@@ -2,9 +2,13 @@
 // pattern: server component, role-gated to programme_admin + super_admin,
 // renders a sortable table with edit links. Revives spec 080 (quiz builder
 // framing) at the navigation layer.
+//
+// Words are in the user's language (adminData.quizzes); quiz titles, slugs
+// and subject names are data.
 
 import Link from "next/link";
 import { asc, eq, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { phases, quizzes, quizQuestions, rttSubjects, terms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -14,6 +18,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminQuizzesIndexPage() {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("adminData");
 
   // Question counts per quiz. A join, not a correlated subquery: in a
   // single-table select Drizzle leaves columns unqualified, and inside the
@@ -53,7 +58,7 @@ export default async function AdminQuizzesIndexPage() {
   return (
     <main>
       <div className="page-header">
-        <div className="label">Forms & Quizzes</div>
+        <div className="label">{t("common.formsAndQuizzes")}</div>
         <div
           style={{
             display: "flex",
@@ -65,12 +70,9 @@ export default async function AdminQuizzesIndexPage() {
         >
           <div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, margin: 0 }}>
-              Programme quizzes
+              {t("quizzes.title")}
             </h1>
-            <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
-              Quizzes are defined as JSON — admins compose questions; teachers and mentors
-              take them. Editing a quiz lands in the audit log.
-            </p>
+            <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>{t("quizzes.intro")}</p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
             <NewQuizForm subjects={subjects} />
@@ -78,9 +80,9 @@ export default async function AdminQuizzesIndexPage() {
               href="/admin/forms"
               className="chip"
               style={{ textDecoration: "none" }}
-              title="Switch to the feedback-form registry"
+              title={t("quizzes.toFormsTitle")}
             >
-              → Feedback forms
+              {t("quizzes.toForms")}
             </Link>
           </div>
         </div>
@@ -91,13 +93,13 @@ export default async function AdminQuizzesIndexPage() {
           <table className="t">
             <thead>
               <tr>
-                <th>Title</th>
-                <th>Slug</th>
-                <th>Scope</th>
-                <th>Questions</th>
-                <th>Pass</th>
-                <th>Active</th>
-                <th style={{ textAlign: "right" }}>&nbsp;</th>
+                <th>{t("quizzes.columns.title")}</th>
+                <th>{t("quizzes.columns.slug")}</th>
+                <th>{t("quizzes.columns.scope")}</th>
+                <th>{t("quizzes.columns.questions")}</th>
+                <th>{t("quizzes.columns.pass")}</th>
+                <th>{t("quizzes.columns.active")}</th>
+                <th style={{ textAlign: "right" }}>{"\u00a0"}</th>
               </tr>
             </thead>
             <tbody>
@@ -111,7 +113,7 @@ export default async function AdminQuizzesIndexPage() {
                         the detail page" -- neither was followable: there is no
                         quiz seed script, and the detail page needs an id that
                         could not be obtained. */}
-                    No quizzes yet. Create one above, then add its questions.
+                    {t("quizzes.empty")}
                   </td>
                 </tr>
               ) : (
@@ -142,9 +144,9 @@ export default async function AdminQuizzesIndexPage() {
                     <td>
                       <span className="chip">
                         {r.subjectId
-                          ? "subject"
+                          ? t("quizzes.scope.subject")
                           : r.rttSubjectId
-                            ? "rtt_subject"
+                            ? t("quizzes.scope.rttSubject")
                             : "—"}
                       </span>
                     </td>
@@ -168,7 +170,7 @@ export default async function AdminQuizzesIndexPage() {
                     </td>
                     <td>
                       <span className={r.active ? "chip chip-lichen" : "chip"}>
-                        {r.active ? "active" : "inactive"}
+                        {r.active ? t("common.active") : t("common.inactive")}
                       </span>
                     </td>
                     <td style={{ textAlign: "right" }}>
@@ -181,7 +183,7 @@ export default async function AdminQuizzesIndexPage() {
                           fontWeight: 500,
                         }}
                       >
-                        Edit →
+                        {t("quizzes.edit")}
                       </Link>
                     </td>
                   </tr>
@@ -203,7 +205,7 @@ export default async function AdminQuizzesIndexPage() {
             display: "inline-block",
           }}
         >
-          {rows.length} quiz{rows.length === 1 ? "" : "zes"} · ordered by title
+          {t("quizzes.footer", { count: rows.length })}
         </p>
       </div>
     </main>

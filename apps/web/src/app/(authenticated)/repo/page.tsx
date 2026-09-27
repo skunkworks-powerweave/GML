@@ -9,7 +9,9 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { QuickFindTrigger } from "@/components/quickfind/QuickFindTrigger";
+import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 import { and, asc, between, count, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -26,10 +28,13 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Repository" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("home.metaTitle") };
+}
 
 // ---------- date helpers (ISO week, Mon–Fri) ----------
-function currentWeekMonFri(today: Date = new Date()): { mon: string; fri: string; monLabel: string; friLabel: string } {
+function currentWeekMonFri(intl: string, today: Date = new Date()): { mon: string; fri: string; monLabel: string; friLabel: string } {
   // JS getDay(): Sun=0, Mon=1 ... Sat=6. We want Monday of the current week.
   const d = new Date(today);
   d.setHours(0, 0, 0, 0);
@@ -41,17 +46,18 @@ function currentWeekMonFri(today: Date = new Date()): { mon: string; fri: string
   fri.setDate(mon.getDate() + 4);
   const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
   const label = (x: Date) =>
-    x.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+    x.toLocaleDateString(intl, { weekday: "short", day: "numeric", month: "short" });
   return { mon: iso(mon), fri: iso(fri), monLabel: label(mon), friLabel: label(fri) + " " + fri.getFullYear() };
 }
 
 // ---------- session status pill (matches JSX SessionStatus) ----------
-// Maps to .chip + variant classes from globals.css (ported from app.css).
-const SESSION_STATUS: Record<string, { label: string; kind: string }> = {
-  planned: { label: "Planned", kind: "" },
-  in_progress: { label: "In progress", kind: "chip-saffron" },
-  complete: { label: "Complete", kind: "chip-lichen" },
-  cancelled: { label: "Cancelled", kind: "" },
+// Maps to .chip + variant classes from globals.css (ported from app.css). The
+// label is repo.sessionStatus.<status>, in the viewer's language.
+const SESSION_STATUS: Record<string, { kind: string }> = {
+  planned: { kind: "" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  cancelled: { kind: "" },
 };
 
 // ---------- inline glyphs (replace window-bound `<Icon name=…/>`) ----------
@@ -99,8 +105,9 @@ function Glyph({ name, size = 14 }: { name: string; size?: number }) {
 }
 
 export default async function RepoHomePage() {
+  const t = await getTranslations("repo");
   // ---------- 8 parallel count queries ----------
-  const { mon, fri, monLabel, friLabel } = currentWeekMonFri();
+  const { mon, fri, monLabel, friLabel } = currentWeekMonFri(await repoIntlLocale());
 
   const [
     schoolsCount,
@@ -157,17 +164,17 @@ export default async function RepoHomePage() {
     .limit(8);
 
   const browse: { id: string; href?: string; label: string; n: number; icon: string }[] = [
-    { id: "schools", label: "Schools", n: stats.schools, icon: "school" },
-    { id: "subjects", label: "Subjects", n: stats.subjects, icon: "book" },
-    { id: "outlines", label: "Course outlines", n: stats.outlines, icon: "filter" },
-    { id: "sessions", label: "Sessions", n: stats.sessions, icon: "cycle" },
-    { id: "teachers", label: "Teachers", n: stats.teachers, icon: "users" },
-    { id: "mentors", label: "Mentors", n: stats.mentors, icon: "users" },
+    { id: "schools", label: t("home.browseItems.schools"), n: stats.schools, icon: "school" },
+    { id: "subjects", label: t("home.browseItems.subjects"), n: stats.subjects, icon: "book" },
+    { id: "outlines", label: t("home.browseItems.outlines"), n: stats.outlines, icon: "filter" },
+    { id: "sessions", label: t("home.browseItems.sessions"), n: stats.sessions, icon: "cycle" },
+    { id: "teachers", label: t("home.browseItems.teachers"), n: stats.teachers, icon: "users" },
+    { id: "mentors", label: t("home.browseItems.mentors"), n: stats.mentors, icon: "users" },
     // href is explicit: the Browse card derives its link from `id`, and the
     // learners page is served at /repo/students, so this one row 404d while
     // every other entry in the list happened to match its route name.
-    { id: "learners", href: "/repo/students", label: "Learners", n: stats.learners, icon: "users" },
-    { id: "resources", label: "Reading material", n: stats.resources, icon: "file" },
+    { id: "learners", href: "/repo/students", label: t("home.browseItems.learners"), n: stats.learners, icon: "users" },
+    { id: "resources", label: t("home.browseItems.resources"), n: stats.resources, icon: "file" },
   ];
 
   return (
@@ -175,11 +182,10 @@ export default async function RepoHomePage() {
       <div className="page-header">
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
           <div>
-            <div className="label">Repository</div>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Programme records</h1>
+            <div className="label">{t("common.repository")}</div>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("home.title")}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
-              The complete organizational record: schools, classes, subjects taught, sessions held,
-              course outlines, learners and reading material. Every record links to the others.
+              {t("home.intro")}
             </p>
           </div>
           {/* Was a bare <button type="button"> with no handler, inside an async
@@ -187,7 +193,7 @@ export default async function RepoHomePage() {
               when clicked. QuickFindTrigger is the client island that reaches
               the QuickFind panel mounted in the authenticated layout. */}
           <QuickFindTrigger>
-            <Glyph name="search" /> Find a record
+            <Glyph name="search" /> {t("home.findRecord")}
           </QuickFindTrigger>
         </div>
       </div>
@@ -200,11 +206,11 @@ export default async function RepoHomePage() {
       <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         {/* 5-stat row */}
         <section className="grid grid-cols-2 gap-[14px] md:grid-cols-5">
-          <StatCard label="Schools" value={stats.schools} hint={stats.schools ? "2 districts" : undefined} />
-          <StatCard label="Classes" value={stats.classes} />
-          <StatCard label="Subjects" value={stats.subjects} hint="Grades 1–10" />
-          <StatCard label="Sessions logged" value={stats.sessions} hint="Term to date" />
-          <StatCard label="Resources" value={stats.resources} />
+          <StatCard label={t("home.stats.schools")} value={stats.schools} hint={stats.schools ? t("home.stats.schoolsHint") : undefined} />
+          <StatCard label={t("home.stats.classes")} value={stats.classes} />
+          <StatCard label={t("home.stats.subjects")} value={stats.subjects} hint={t("home.stats.subjectsHint")} />
+          <StatCard label={t("home.stats.sessions")} value={stats.sessions} hint={t("home.stats.sessionsHint")} />
+          <StatCard label={t("home.stats.resources")} value={stats.resources} />
         </section>
 
         {/* 2-column body grid */}
@@ -213,14 +219,14 @@ export default async function RepoHomePage() {
           <article className="card">
             <div style={{ display: "flex", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>This week&apos;s sessions</div>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{t("home.thisWeek")}</div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                   {monLabel} → {friLabel}
                 </div>
               </div>
               <div style={{ marginLeft: "auto" }}>
                 <Link href="/repo/sessions" className="btn btn-sm">
-                  All sessions →
+                  {t("common.allSessions")}
                 </Link>
               </div>
             </div>
@@ -228,25 +234,26 @@ export default async function RepoHomePage() {
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>School</th>
-                    <th>Grade</th>
-                    <th>Subject</th>
-                    <th>Topic</th>
-                    <th>Status</th>
+                    <th>{t("common.date")}</th>
+                    <th>{t("common.time")}</th>
+                    <th>{t("common.school")}</th>
+                    <th>{t("common.grade")}</th>
+                    <th>{t("common.subject")}</th>
+                    <th>{t("common.topic")}</th>
+                    <th>{t("common.status")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {thisWeek.length === 0 ? (
                     <tr>
                       <td colSpan={7} style={{ padding: 20, color: "var(--ink-3)", textAlign: "center" }}>
-                        No sessions scheduled this week.
+                        {t("home.noneThisWeek")}
                       </td>
                     </tr>
                   ) : (
                     thisWeek.map((s) => {
                       const st = SESSION_STATUS[s.status] ?? SESSION_STATUS.planned;
+                      const stLabel = enumLabel(t, "sessionStatus", SESSION_STATUS[s.status] ? s.status : "planned");
                       return (
                         <tr key={s.id}>
                           <td className="mono" style={{ fontSize: 12 }}>
@@ -262,7 +269,7 @@ export default async function RepoHomePage() {
                           <td>{s.subjectName ?? "—"}</td>
                           <td>{s.topic ?? "—"}</td>
                           <td>
-                            <span className={`chip ${st.kind}`.trim()}>{st.label}</span>
+                            <span className={`chip ${st.kind}`.trim()}>{stLabel}</span>
                           </td>
                         </tr>
                       );
@@ -276,7 +283,7 @@ export default async function RepoHomePage() {
           {/* Browse */}
           <article className="card">
             <div style={{ display: "flex", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Browse</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("home.browse")}</div>
             </div>
             <div style={{ padding: 4 }}>
               {browse.map((b, i) => (

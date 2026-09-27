@@ -22,15 +22,22 @@ export const CYCLE_PAGE_SIZE = 50;
 /**
  * The list's Video cell: minutes of ready video, the number of videos when
  * their duration is unknown, "processing" while one is still in the pipeline,
- * and "—" when there is none.
+ * and null ("—") when there is none. What it says, not the words: the page
+ * words it in the reader's language (observation list.video.*).
  */
-export function videoCell(v: { videosReady: number; videosReadySec: number; videosProcessing: number }): string {
+export type VideoCell =
+  | { kind: "minutes"; minutes: number }
+  | { kind: "videos"; count: number }
+  | { kind: "processing" }
+  | null;
+
+export function videoCell(v: { videosReady: number; videosReadySec: number; videosProcessing: number }): VideoCell {
   if (v.videosReady > 0) {
-    if (v.videosReadySec > 0) return `${Math.max(1, Math.round(v.videosReadySec / 60))}m`;
-    return `${v.videosReady} video${v.videosReady === 1 ? "" : "s"}`;
+    if (v.videosReadySec > 0) return { kind: "minutes", minutes: Math.max(1, Math.round(v.videosReadySec / 60)) };
+    return { kind: "videos", count: v.videosReady };
   }
-  if (v.videosProcessing > 0) return "processing";
-  return "—";
+  if (v.videosProcessing > 0) return { kind: "processing" };
+  return null;
 }
 
 /** ?page= as a page number: 1 for anything missing, malformed or absurd. */

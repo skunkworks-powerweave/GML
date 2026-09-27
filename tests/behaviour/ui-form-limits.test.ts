@@ -32,11 +32,15 @@ const LONG = "x".repeat(5001);
 
 test("the desktop runner refuses a 5001-character answer before it reaches the server", async () => {
   const { FormRenderer } = await import("../../apps/web/src/components/forms/FormRenderer.tsx");
-  const m = mount(FormRenderer as (p: unknown) => unknown, {
-    schema: { fields: [{ name: "reflection", label: "Reflection", kind: "textarea" }] },
-    initialResponses: { reflection: LONG },
-    action: async () => undefined,
-  });
+  const m = mount(
+    FormRenderer as (p: unknown) => unknown,
+    {
+      schema: { fields: [{ name: "reflection", label: "Reflection", kind: "textarea" }] },
+      initialResponses: { reflection: LONG },
+      action: async () => undefined,
+    },
+    { intl: "en" },
+  );
   let requested = 0;
   (hostElements(m.tree).find((el) => el.type === "form")!.props.ref as { current: unknown }).current = {
     requestSubmit() {
@@ -53,11 +57,15 @@ test("the desktop runner refuses a 5001-character answer before it reaches the s
 
 test("the mobile runner refuses an out-of-range scale answer the server would refuse", async () => {
   const { MobileFormRunner } = await import("../../apps/web/src/components/forms/MobileFormRunner.tsx");
-  const m = mount(MobileFormRunner as (p: unknown) => unknown, {
-    schema: { fields: [{ name: "confidence", label: "Confidence", kind: "likert", required: true }] },
-    initialResponses: { confidence: 9 },
-    action: async () => undefined,
-  });
+  const m = mount(
+    MobileFormRunner as (p: unknown) => unknown,
+    {
+      schema: { fields: [{ name: "confidence", label: "Confidence", kind: "likert", required: true }] },
+      initialResponses: { confidence: 9 },
+      action: async () => undefined,
+    },
+    { intl: "en" },
+  );
   let requested = 0;
   (hostElements(m.tree).find((el) => el.type === "form")!.props.ref as { current: unknown }).current = {
     requestSubmit: () => (requested += 1),
@@ -92,7 +100,7 @@ async function submitThenServerAnswers(component: (p: unknown) => unknown, findB
     initialResponses: { note: "answer" },
     action: async () => undefined,
   };
-  const m = mount(component, props);
+  const m = mount(component, props, { intl: "en" });
   // The mobile runner shows Submit on its review screen, one "Review →" away.
   const next = hostElements(m.tree).find((el) => el.props["data-testid"] === "mobile-form-next");
   if (next) {

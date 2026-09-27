@@ -35,8 +35,17 @@
 // coverage is preserved at the source.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 
 type ForbiddenReason = "rate_limited" | "email_unavailable" | "session_expired" | "default";
+
+/** Reason → its copy under home.forbidden, and where its button goes. */
+const COPY: Record<ForbiddenReason, { key: string; href: string; action: "own" | "signIn" }> = {
+  rate_limited: { key: "rateLimited", href: "/login", action: "own" },
+  email_unavailable: { key: "emailUnavailable", href: "/login", action: "signIn" },
+  session_expired: { key: "sessionExpired", href: "/login", action: "signIn" },
+  default: { key: "default", href: "/", action: "own" },
+};
 
 const KNOWN_REASONS: ForbiddenReason[] = [
   "rate_limited",
@@ -59,31 +68,15 @@ export default async function Forbidden({
   const sp = searchParams ? await searchParams : {};
   const reason = resolveReason(sp.reason);
 
-  let title = "Forbidden";
-  let message: string;
-  let primaryHref = "/";
-  let primaryLabel = "Go home";
-
-  if (reason === "rate_limited") {
-    title = "Too many attempts";
-    message =
-      "Too many sign-in attempts from this connection. Wait a few minutes and try again, or contact your administrator.";
-    primaryHref = "/login";
-    primaryLabel = "Back to sign in";
-  } else if (reason === "email_unavailable") {
-    title = "Email actions unavailable";
-    message =
-      "Email-based actions (magic-link sign-in, password reset) are not enabled on this deployment. Sign in with your password, or ask your administrator to set a new one.";
-    primaryHref = "/login";
-    primaryLabel = "Sign in";
-  } else if (reason === "session_expired") {
-    title = "Session expired";
-    message = "Your session has ended. Please sign in again.";
-    primaryHref = "/login";
-    primaryLabel = "Sign in";
-  } else {
-    message = "You don't have permission to view this page.";
-  }
+  // In the reader's language (home.forbidden.<reason>); "Sign in" is the
+  // chrome's own button label.
+  const t = await getTranslations("home.forbidden");
+  const tAction = await getTranslations("action");
+  const copy = COPY[reason];
+  const title = t(`${copy.key}.title`);
+  const message = t(`${copy.key}.message`);
+  const primaryHref = copy.href;
+  const primaryLabel = copy.action === "signIn" ? tAction("signIn") : t(`${copy.key}.action`);
 
   return (
     <main

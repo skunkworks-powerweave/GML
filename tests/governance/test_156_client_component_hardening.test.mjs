@@ -32,6 +32,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -115,20 +116,24 @@ test("spec 156 — HlsPlayer chains a .catch onto the import('hls.js') promise",
     /import\(\s*"hls\.js"\s*\)[\s\S]{0,1500}\.catch\(\s*\(\s*err\s*\)\s*=>/,
     "HlsPlayer must chain a .catch((err) => ...) onto the import('hls.js') promise so bundle-load failures surface a user-visible error",
   );
-  // The catch body MUST call setError with the literal prefix "Failed
-  // to load HLS player: " — the prefix is what an operator searches the
-  // page for when triaging a load failure.
+  // The catch body MUST record the failure with the original error detail,
+  // and the overlay shows it after the prefix "Failed to load HLS player: "
+  // -- the prefix is what an operator searches the page for when triaging a
+  // load failure. The words are in the bundle, in the viewer's language
+  // (video.client.player.loadFailed, with the detail as {error}).
   assert.match(
     src,
-    /setError\(\s*"Failed to load HLS player: "\s*\+\s*String\(\s*err\s*\)\s*\)/,
+    /setFailure\(\{\s*reason:\s*"load",\s*detail:\s*String\(\s*err\s*\)\s*\}\)/,
     'HlsPlayer .catch arm must call setError("Failed to load HLS player: " + String(err)) so the failure has both a discoverable prefix and the original error detail',
   );
-  // The setError call must be GUARDED on !cancelled so the unmount
+  assert.ok(readsKey(src, "player.loadFailed"), "the overlay says it with video.client.player.loadFailed");
+  assert.equal(message("video.client.player.loadFailed"), "Failed to load HLS player: {error}");
+  // The setFailure call must be GUARDED on !cancelled so the unmount
   // cleanup (which flips `cancelled = true`) doesn't fire a setState on
   // an unmounted component.
   assert.match(
     src,
-    /\.catch\(\s*\(\s*err\s*\)\s*=>\s*\{\s*if\s*\(\s*!\s*cancelled\s*\)\s*setError/,
+    /\.catch\(\s*\(\s*err\s*\)\s*=>\s*\{\s*if\s*\(\s*!\s*cancelled\s*\)\s*setFailure/,
     "HlsPlayer .catch arm must guard the setError call on !cancelled so a post-unmount rejection doesn't setState on a torn-down component",
   );
 });
@@ -174,19 +179,26 @@ test("spec 156 — the tus-load-failed path still tells the user to fall back to
   // duplicate a string to satisfy a test, which is the opposite of what the
   // original was protecting. So this pins the message where it now is, and
   // pins that UploadProgress surfaces it rather than swallowing it.
+  //
+  // The module reports a code; the words are in the bundle, in the user's
+  // language (video.client.upload.error.library_unavailable), in every one of
+  // which WhatsApp is named.
   const shared = read("apps/web/src/lib/video/tus-upload.ts");
-  assert.match(
-    shared,
-    /"Upload library unavailable\. Please send the video over WhatsApp instead\."/,
-    "the tus-import failure must still name WhatsApp as the fallback -- on a corrupted " +
-      "bundle or an offline-cached page a field mentor needs to be told what to do next, " +
-      "not shown a row that silently failed",
-  );
+  for (const locale of ["en", "hi", "bo"]) {
+    assert.match(
+      message("video.client.upload.error.library_unavailable", locale),
+      /WhatsApp/,
+      "the tus-import failure must still name WhatsApp as the fallback -- on a corrupted " +
+        "bundle or an offline-cached page a field mentor needs to be told what to do next, " +
+        "not shown a row that silently failed",
+    );
+  }
+  assert.equal(message("video.client.upload.error.library_unavailable"), "Upload library unavailable. Please send the video over WhatsApp instead.");
   // It must be routed out through onError, not logged and dropped. That is the
   // property the original's occurrence-count was really enforcing.
   assert.match(
     shared,
-    /catch\s*\{[\s\S]{0,400}?opts\.onError\("Upload library unavailable/,
+    /catch\s*\{[\s\S]{0,400}?opts\.onError\("library_unavailable"\)/,
     "the failed import must call back through onError so the caller can render it",
   );
   const src = read(UPLOAD_PATH);
@@ -197,10 +209,11 @@ test("spec 156 — the tus-load-failed path still tells the user to fall back to
   // so adding a second statement broke it while improving the component.
   //
   // What is pinned now is the property the original was after: the shared
-  // module's message lands on the failed row rather than being swallowed.
+  // module's failure lands on the failed row, as its message in the user's
+  // language, rather than being swallowed.
   assert.match(
     src,
-    /onError:\s*\(message\)\s*=>[\s\S]{0,200}?errorMessage:\s*message/,
+    /onError:\s*\(code\)\s*=>[\s\S]{0,200}?errorMessage:\s*t\(`upload\.error\.\$\{code\}`\)/,
     "UploadProgress must put the shared module's message onto the failed row -- the " +
       "assertions below then pin that the row actually renders it",
   );

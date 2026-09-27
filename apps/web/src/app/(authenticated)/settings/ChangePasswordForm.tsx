@@ -8,6 +8,8 @@
 
 import { useActionState, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 import { changePasswordAction, type ChangePasswordState } from "./actions";
 
 const field: React.CSSProperties = {
@@ -26,6 +28,8 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
   // render this page without the ?password=required it carries -- a new user
   // then saw Settings with no reason given and the form closed.
   const required = useSearchParams()?.get("password") === "required" || requiredBySession;
+  const t = useTranslations("home.client.changePassword");
+  const tAction = useTranslations("action");
   const [open, setOpen] = useState(required);
   const [state, formAction, pending] = useActionState<ChangePasswordState | undefined, FormData>(
     changePasswordAction,
@@ -56,7 +60,7 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
           textDecoration: "none",
         }}
       >
-        Change password →
+        {t("open")}
       </button>
     );
   }
@@ -65,7 +69,7 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
     <form action={formAction} style={{ display: "grid", gap: 6, width: "100%", maxWidth: 320 }}>
       {required ? (
         <p role="status" data-testid="password-change-required" style={{ fontSize: 12, margin: 0 }}>
-          Your password was set by an administrator. Choose your own to continue.
+          {t("required")}
         </p>
       ) : null}
       {/* autoComplete hints so a password manager offers to update the stored
@@ -75,25 +79,25 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
         type="password"
         required
         autoComplete="current-password"
-        placeholder="Current password"
+        placeholder={t("current")}
         style={field}
       />
       <input
         name="newPassword"
         type="password"
         required
-        minLength={8}
+        minLength={MIN_PASSWORD_LENGTH}
         autoComplete="new-password"
-        placeholder="New password (8+ characters)"
+        placeholder={t("new", { min: MIN_PASSWORD_LENGTH })}
         style={field}
       />
       <input
         name="confirmPassword"
         type="password"
         required
-        minLength={8}
+        minLength={MIN_PASSWORD_LENGTH}
         autoComplete="new-password"
-        placeholder="Confirm new password"
+        placeholder={t("confirm")}
         style={field}
       />
 
@@ -121,7 +125,7 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
             opacity: pending ? 0.6 : 1,
           }}
         >
-          {pending ? "Saving…" : "Change password"}
+          {pending ? tAction("saving") : t("submit")}
         </button>
         <button
           type="button"
@@ -135,12 +139,12 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
             cursor: "pointer",
           }}
         >
-          Cancel
+          {tAction("cancel")}
         </button>
       </div>
 
       <span style={{ fontSize: 10, color: "var(--ink-3)" }}>
-        This signs you out on other devices.
+        {t("note")}
       </span>
     </form>
   );

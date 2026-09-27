@@ -10,18 +10,25 @@
 // an updateRowAction. All three now emit dotted-notation audit actions
 // (`admin.row.create`, `admin.row.update`, `admin.row.delete`) per the
 // SM-1 + spec 021 convention.
+//
+// Every message returned to the form is in the user's language (adminData:
+// write.*, the zod and database wordings in admin/issues.ts and
+// admin/db-errors.ts, and each entity rule's own message).
 
 import { revalidatePath } from "next/cache";
-import type { z } from "zod";
+import type { z, ZodIssue } from "zod";
+import { getTranslations } from "next-intl/server";
 import { unwrapShape, coerceFormValues } from "@/admin/zod-shape";
 import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import { entityRowProblems } from "@/admin/access";
-import type { AdminDb } from "@/admin/types";
+import type { AdminDb, AdminMessage } from "@/admin/types";
 import { auditRowLabel, deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
 import { describeWriteError } from "@/admin/db-errors";
+import { issueLine, issueMessage } from "@/admin/issues";
+import { adminMessage, problemsText, type Translate } from "@/admin/labels";
 import { keepStoredPrecision } from "@/admin/dates";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
@@ -68,36 +75,46 @@ async function requireEntityGate(entity: ReturnType<typeof getEntityOrThrow>, us
  * to do for deletes.
  */
 function writeErrorState(
+  t: Translate,
   entity: ReturnType<typeof getEntityOrThrow>,
   fields: Record<string, string>,
   err: unknown,
 ): AdminActionState {
-  const message = describeWriteError(entity, err);
-  const field = message.split(":")[0]!;
+  const { text, field, fieldMessage } = describeWriteError(t, entity, err);
   return {
     ok: false,
-    error: message,
+    error: text,
     fields,
-    ...(entity.formFields.includes(field) ? { fieldErrors: { [field]: message.slice(field.length + 2) } } : {}),
+    ...(field && fieldMessage && entity.formFields.includes(field) ? { fieldErrors: { [field]: fieldMessage } } : {}),
   };
 }
 
 /** Field errors from the entity's database-backed rules, as an action state. */
-function problemsState(fields: Record<string, string>, problems: Record<string, string>): AdminActionState {
-  const [field, message] = Object.entries(problems)[0]!;
+function problemsState(
+  t: Translate,
+  fields: Record<string, string>,
+  problems: Record<string, AdminMessage>,
+): AdminActionState {
+  const { summary, fields: fieldErrors } = problemsText(t, problems);
   return {
     ok: false,
-    error: `${field}: ${message}`,
+    error: summary,
     fields,
-    fieldErrors: problems,
+    fieldErrors,
   };
 }
 
 /** Thrown inside the update's transaction when the entity's rules refuse the row. */
 class RowProblems extends Error {
-  constructor(readonly problems: Record<string, string>) {
-    super(Object.entries(problems).map(([field, message]) => `${field}: ${message}`).join("; "));
+  constructor(readonly problems: Record<string, AdminMessage>) {
+    // For the log only; the operator is shown problemsState's sentences.
+    super(Object.entries(problems).map(([field, message]) => `${field}: ${message.key}`).join("; "));
   }
+}
+
+/** The adminData translator for the user making the request. */
+async function translator(): Promise<Translate> {
+  return (await getTranslations("adminData")) as unknown as Translate;
 }
 
 /**
@@ -165,19 +182,16 @@ function submittedFields(formData: FormData, fields: readonly string[]): Record<
  * Build `fieldErrors` + summary `error` from a Zod safeParse failure.
  * Spec 114: surfaces per-field error messages for inline form display.
  */
-function shapeZodError(
-  fields: Record<string, string>,
-  issues: { path: (string | number)[]; message: string }[],
-): AdminActionState {
+function shapeZodError(t: Translate, fields: Record<string, string>, issues: ZodIssue[]): AdminActionState {
   const fieldErrors: Record<string, string> = {};
   for (const issue of issues) {
     const k = String(issue.path[0] ?? "_root");
-    if (!fieldErrors[k]) fieldErrors[k] = issue.message;
+    if (!fieldErrors[k]) fieldErrors[k] = issueMessage(t, issue);
   }
   const first = issues[0];
   return {
     ok: false,
-    error: first ? `${first.path.join(".")}: ${first.message}` : "Validation failed",
+    error: first ? issueLine(t, first) : t("write.validationFailed"),
     fields,
     fieldErrors,
   };
@@ -199,14 +213,15 @@ export async function createRowAction(
   const session = await requireRole(mutateRolesFor(entity));
   await requireEntityGate(entity, session.user.id);
 
+  const t = await translator();
   const raw = coerceFormData(formData, entity.formFields, unwrapShape(entity.formSchema));
   const echo = submittedFields(formData, entity.formFields);
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
-    return shapeZodError(echo, parse.error.issues);
+    return shapeZodError(t, echo, parse.error.issues);
   }
   const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
-  if (problems) return problemsState(echo, problems);
+  if (problems) return problemsState(t, echo, problems);
 
   const audited = withAudit(
     async () => {
@@ -229,7 +244,7 @@ export async function createRowAction(
     await audited();
   } catch (err) {
     console.error("[admin.row.create] failed", err);
-    return writeErrorState(entity, echo, err);
+    return writeErrorState(t, entity, echo, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
@@ -250,8 +265,9 @@ export async function updateRowAction(
 ): Promise<AdminActionState> {
   const slug = String(formData.get("entitySlug") ?? "");
   const rowId = String(formData.get("rowId") ?? "");
+  const t = await translator();
   if (!rowId) {
-    return { ok: false, error: "Missing rowId" };
+    return { ok: false, error: t("write.missingRowId") };
   }
   const entity = getEntityOrThrow(slug);
   const session = await requireRole(mutateRolesFor(entity));
@@ -263,7 +279,7 @@ export async function updateRowAction(
   const echo = submittedFields(formData, entity.formFields);
   const parse = entity.formSchema.safeParse(raw);
   if (!parse.success) {
-    return shapeZodError(echo, parse.error.issues);
+    return shapeZodError(t, echo, parse.error.issues);
   }
   // READ, GUARD, WRITE, in one transaction. This used to be a blind UPDATE by
   // id: it could not enforce a rule that depends on the row's current state
@@ -284,12 +300,12 @@ export async function updateRowAction(
           .from(entity.table as never)
           .where(eq(idCol as never, rowId))
           .for("update")) as Record<string, unknown>[];
-        if (!before) throw new MutationRefused("That row no longer exists.");
+        if (!before) throw new MutationRefused(t("write.rowGone"));
         // A timestamp the minute-precision form posted back unchanged keeps
         // its seconds (admin/dates.ts keepStoredPrecision).
         const write = keepStoredPrecision(before, next);
         const reason = entity.guardMutation?.("update", before, { ...before, ...write });
-        if (reason) throw new MutationRefused(reason);
+        if (reason) throw new MutationRefused(adminMessage(t, reason));
         const problems = await entityRowProblems(entity, next, before, tx as unknown as AdminDb);
         if (problems) throw new RowProblems(problems);
         await tx
@@ -315,9 +331,9 @@ export async function updateRowAction(
     await audited();
   } catch (err) {
     if (err instanceof MutationRefused) return { ok: false, error: err.message };
-    if (err instanceof RowProblems) return problemsState(echo, err.problems);
+    if (err instanceof RowProblems) return problemsState(t, echo, err.problems);
     console.error("[admin.row.update] failed", err);
-    return writeErrorState(entity, echo, err);
+    return writeErrorState(t, entity, echo, err);
   }
 
   revalidatePath(`/admin/data/${slug}`);
@@ -357,7 +373,7 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
           .for("update")) as Record<string, unknown>[];
         if (!before) return null;
         const reason = entity.guardMutation?.("delete", before);
-        if (reason) throw new MutationRefused(reason, rowId);
+        if (reason) throw new MutationRefused(reason.key, rowId); // the page asks the guard again for the sentence
         await tx.delete(entity.table as never).where(eq(idCol as never, rowId));
         return before;
       }),
@@ -481,7 +497,7 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
         .for("update")) as Record<string, unknown>[];
       for (const before of befores) {
         const reason = entity.guardMutation?.("delete", before);
-        if (reason) throw new MutationRefused(reason, String(before.id));
+        if (reason) throw new MutationRefused(reason.key, String(before.id));
       }
       // Single DELETE ... WHERE id IN (...) — atomic, one round-trip.
       // Drizzle's `inArray` builds the correct parameterised SQL list.

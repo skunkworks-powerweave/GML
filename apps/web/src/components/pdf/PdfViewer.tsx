@@ -18,6 +18,7 @@
 // by the parent server component states this plainly.
 
 import { useEffect, useRef } from "react";
+import { useTranslations } from "next-intl";
 
 type PdfViewerProps = {
   /** Signed media URL — `/api/media/<token>`. Server mints with 5-min TTL. */
@@ -30,6 +31,7 @@ type PdfViewerProps = {
 
 export function PdfViewer({ src, watermark, resourceId }: PdfViewerProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const t = useTranslations("repo.client.pdfViewer");
 
   // Best-effort audit ping for the *client* paint (the server already audits
   // on page load — this is a second signal that the viewer actually rendered).
@@ -64,7 +66,7 @@ export function PdfViewer({ src, watermark, resourceId }: PdfViewerProps) {
     >
       {/* Native browser PDF viewer. Toolbar / navpanes / scrollbar hidden via fragment. */}
       <iframe
-        title="PDF document viewer"
+        title={t("title")}
         src={`${src}#toolbar=0&navpanes=0&scrollbar=0`}
         style={{
           width: "100%",

@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import bcrypt from "bcryptjs";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { sectionGateGrants } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -24,22 +25,25 @@ export type GateState = { error?: string };
 
 // Spec 141: keep the generic outage copy in one place so we never leak the
 // distinction between "Redis is down" and "audit channel is down" to the
-// user. Both states map to the same response.
-const SERVICE_UNAVAILABLE = "Service temporarily unavailable.";
+// user. Both states map to the same response: this key, whose English is
+// "Service temporarily unavailable." (home.gate.serviceUnavailable).
+const SERVICE_UNAVAILABLE = "serviceUnavailable";
 
 
 export async function verifyGate(
   _prev: GateState | undefined,
   formData: FormData,
 ): Promise<GateState> {
+  // Every message goes straight back to the gate form: in the user's language.
+  const t = await getTranslations("home.gate");
   const session = await auth();
-  if (!session?.user?.id) return { error: "Sign in first." };
+  if (!session?.user?.id) return { error: t("signInFirst") };
 
   const slug = String(formData.get("slug") ?? "") as GateSlug;
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "/dashboard");
-  if (!VALID.includes(slug)) return { error: "Unknown section." };
-  if (!password) return { error: "Enter a password." };
+  if (!VALID.includes(slug)) return { error: t("unknownSection") };
+  if (!password) return { error: t("enterPassword") };
 
   // Rate limit. The ip part of the key comes from lib/request-ip, which trusts
   // only the hop Caddy adds. This used to read the FIRST X-Forwarded-For element
@@ -82,7 +86,7 @@ export async function verifyGate(
         },
       });
       const minutes = Math.ceil(rl.retryAfterMs / 60000);
-      return { error: `Too many attempts. Try again in ${minutes} minutes.` };
+      return { error: t("tooManyAttempts", { minutes }) };
     }
   } catch (err) {
     void recordAudit({
@@ -95,11 +99,11 @@ export async function verifyGate(
         error: String(err).slice(0, 200),
       },
     });
-    return { error: SERVICE_UNAVAILABLE };
+    return { error: t(SERVICE_UNAVAILABLE) };
   }
 
   const gate = await getCurrentGate(slug);
-  if (!gate) return { error: "Section not configured. Contact admin." };
+  if (!gate) return { error: t("notConfigured") };
 
   const ok = await bcrypt.compare(password, gate.passwordHash);
   if (!ok) {
@@ -116,7 +120,7 @@ export async function verifyGate(
         reason: "wrong_password",
       },
     });
-    return { error: "Wrong password." };
+    return { error: t("wrongPassword") };
   }
 
   // Write grant.

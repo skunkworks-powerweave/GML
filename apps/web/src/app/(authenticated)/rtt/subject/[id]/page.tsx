@@ -4,8 +4,10 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { and, desc, eq, getTableColumns, inArray, sql } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { auth } from "@/auth";
+import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import {
   rttSubjects,
   rttModules,
@@ -29,16 +31,18 @@ import { subjectPackages } from "@/lib/scorm/store";
 import { getDeviceType } from "@/lib/device";
 import { markProgressAction } from "./actions";
 
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
+
 /** A one-button form that marks a lesson or reading done, or undoes it. */
-function ProgressToggle({ kind, itemId, isDone }: { kind: "lesson" | "reading"; itemId: string; isDone: boolean }) {
+function ProgressToggle({ kind, itemId, isDone, t }: { kind: "lesson" | "reading"; itemId: string; isDone: boolean; t: Translate }) {
   return (
     <form action={markProgressAction} style={{ display: "flex", alignItems: "center", gap: 6 }}>
       <input type="hidden" name="kind" value={kind} />
       <input type="hidden" name="itemId" value={itemId} />
       <input type="hidden" name="done" value={isDone ? "false" : "true"} />
-      {isDone ? <span className="chip chip-lichen">Done</span> : null}
+      {isDone ? <span className="chip chip-lichen">{t("subject.done")}</span> : null}
       <button type="submit" className={isDone ? "btn btn-sm btn-ghost" : "btn btn-sm"}>
-        {isDone ? "Undo" : kind === "lesson" ? "Mark done" : "Mark read"}
+        {isDone ? t("subject.undo") : kind === "lesson" ? t("subject.markDone") : t("subject.markRead")}
       </button>
     </form>
   );
@@ -50,17 +54,26 @@ const ATTENDANCE_CHIP: Record<string, string> = {
   excused: "chip",
 };
 
+/** video_status values with a label under rtt.videoStatus. */
+const VIDEO_STATUSES = new Set(["received", "queued", "transcoding", "ready", "failed", "review_pending", "reviewed"]);
+
 /** A teach-back's state for the teacher who sent it: review first, then the pipeline. */
-function teachBackChip(v: { status: string; reviewedAt: Date | null }): { cls: string; label: string } {
-  if (v.reviewedAt) return { cls: "chip chip-lichen", label: "Reviewed" };
-  if (v.status === "ready") return { cls: "chip chip-saffron", label: "Awaiting review" };
-  if (v.status === "failed") return { cls: "chip chip-rust", label: "Failed" };
-  return { cls: "chip", label: v.status.replace(/_/g, " ") };
+function teachBackChip(v: { status: string; reviewedAt: Date | null }, t: Translate): { cls: string; label: string } {
+  if (v.reviewedAt) return { cls: "chip chip-lichen", label: t("subject.teachBackReviewed") };
+  if (v.status === "ready") return { cls: "chip chip-saffron", label: t("subject.teachBackAwaiting") };
+  if (v.status === "failed") return { cls: "chip chip-rust", label: t("subject.teachBackFailed") };
+  return { cls: "chip", label: VIDEO_STATUSES.has(v.status) ? t(`videoStatus.${v.status}`) : v.status.replace(/_/g, " ") };
 }
+
+/** rtt_sessions.type values with a label under rtt.sessionType. */
+const SESSION_TYPES = new Set(["synchronous", "asynchronous", "webinar", "quiz"]);
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "RTT subject" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("subject.metaTitle") };
+}
 
 export default async function RttSubjectPage({
   params,
@@ -77,6 +90,8 @@ export default async function RttSubjectPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   const viewer = { id: session.user.id, role: session.user.role };
+  const t = await getTranslations("rtt");
+  const intl = INTL_LOCALE[(await getLocale()) as Locale];
   // Only a subject the viewer is shown (lib/rtt/scope.ts): a retired subject
   // stayed reachable here for everyone, because this page never read `active`.
   const scope = await rttScope(db, viewer);
@@ -217,14 +232,14 @@ export default async function RttSubjectPage({
   const readingsCard = (
     <article id="readings" className="card card-hi">
       <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>Required readings ({readings.length})</div>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.readings", { count: readings.length })}</div>
       </div>
       {readings.length === 0 ? (
         <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-          No readings linked.
+          {t("subject.noReadings")}
           {viewerIsAdmin ? (
             <div style={{ fontSize: 12, marginTop: 6 }}>
-              Add them at <Link href="/admin/data/rtt-readings">Admin → RTT Readings</Link>.
+              {t.rich("subject.addReadings", { link: (chunks) => <Link href="/admin/data/rtt-readings">{chunks}</Link> })}
             </div>
           ) : null}
         </div>
@@ -275,10 +290,10 @@ export default async function RttSubjectPage({
                   )}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                  {r.externalUrl ? "External link" : "Reading"}
+                  {r.externalUrl ? t("common.externalLink") : t("subject.reading")}
                 </div>
                 <div style={{ marginTop: 6 }}>
-                  <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} />
+                  <ProgressToggle kind="reading" itemId={r.id} isDone={done.readings.has(r.id)} t={t} />
                 </div>
               </div>
               {r.externalUrl ? (
@@ -288,7 +303,7 @@ export default async function RttSubjectPage({
                   rel="noopener noreferrer"
                   className="btn btn-sm"
                 >
-                  Open
+                  {t("subject.open")}
                 </a>
               ) : (
                 // NO "View" BUTTON for a fileKey-only reading. It sent an
@@ -316,14 +331,14 @@ export default async function RttSubjectPage({
   const assessmentCard = (
     <article className="card card-hi">
       <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-        <div style={{ fontWeight: 600, fontSize: 13 }}>Assessment</div>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.assessment")}</div>
       </div>
       {assessments.length === 0 ? (
         <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-          No assessments published yet.
+          {t("subject.noAssessments")}
           {viewerIsAdmin ? (
             <div style={{ fontSize: 12, marginTop: 6 }}>
-              Create and activate one for this subject at <Link href="/admin/quizzes">Admin → Quizzes</Link>.
+              {t.rich("subject.addAssessment", { link: (chunks) => <Link href="/admin/quizzes">{chunks}</Link> })}
             </div>
           ) : null}
         </div>
@@ -345,19 +360,27 @@ export default async function RttSubjectPage({
                 <div>{q.title}</div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                   {q.attempts === 0
-                    ? `Pass mark ${q.passThreshold}%`
-                    : `Best ${q.bestScore}% · ${q.attempts} ${q.attempts === 1 ? "attempt" : "attempts"}`}
-                  {q.maxAttempts !== null ? ` · ${q.maxAttempts} allowed` : ""}
+                    ? t("subject.passMark", {
+                        threshold: q.passThreshold,
+                        capped: q.maxAttempts !== null ? "yes" : "no",
+                        max: q.maxAttempts ?? 0,
+                      })
+                    : t("subject.best", {
+                        best: q.bestScore ?? 0,
+                        attempts: q.attempts,
+                        capped: q.maxAttempts !== null ? "yes" : "no",
+                        max: q.maxAttempts ?? 0,
+                      })}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                {q.passed ? <span className="chip chip-lichen">Passed</span> : null}
+                {q.passed ? <span className="chip chip-lichen">{t("common.passed")}</span> : null}
                 <Link
                   href={q.href}
                   className={q.attempts === 0 ? "btn btn-sm btn-primary" : "btn btn-sm"}
                   style={{ textDecoration: "none" }}
                 >
-                  {q.spent ? "Results" : q.attempts === 0 ? "Start" : "Retake"}
+                  {q.spent ? t("subject.results") : q.attempts === 0 ? t("common.start") : t("common.retake")}
                 </Link>
               </div>
             </li>
@@ -374,7 +397,7 @@ export default async function RttSubjectPage({
     <div>
       <header style={{ marginBottom: 22 }}>
         <Link href="/rtt" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
-          ← All subjects
+          {t("subject.allSubjects")}
         </Link>
         <div
           style={{
@@ -386,14 +409,14 @@ export default async function RttSubjectPage({
         >
           <div>
             <div className="label" style={{ marginTop: 8 }}>
-              {phase?.label ?? "Phase ?"} · {term?.name ?? "Term ?"}
+              {phase?.label ?? t("subject.unknownPhase")} · {term?.name ?? t("subject.unknownTerm")}
               {subject.code ? ` · ${subject.code}` : ""}
-              {taughtIn ? ` · ${taughtIn.name} only` : ""}
+              {taughtIn ? ` · ${t("subject.onlyIn", { place: taughtIn.name })}` : ""}
             </div>
             {!subject.active ? (
               // Only an administrator reaches an inactive subject.
-              <span className="chip chip-rust" title="Hidden from teachers until re-activated at Admin → RTT Subjects">
-                Inactive
+              <span className="chip chip-rust" title={t("subject.inactiveTitle")}>
+                {t("common.inactive")}
               </span>
             ) : null}
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
@@ -406,7 +429,7 @@ export default async function RttSubjectPage({
               className="btn btn-primary"
               style={{ textDecoration: "none" }}
             >
-              Resume
+              {t("subject.resume")}
             </Link>
           </div>
         </div>
@@ -433,22 +456,22 @@ export default async function RttSubjectPage({
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14 }}>
           <article id="modules" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Modules ({modules.length})</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.modules", { count: modules.length })}</div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
                 {/* Only promise the expansion when there is something to
                     expand; this used to say it over rows that could not. */}
-                {lessons.length > 0
-                  ? "Click a module to expand its lessons."
-                  : "The units of this subject, in teaching order."}
+                {lessons.length > 0 ? t("subject.modulesExpand") : t("subject.modulesOrder")}
               </div>
             </div>
             {modules.length === 0 ? (
               <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No modules yet.
+                {t("subject.noModules")}
                 {viewerIsAdmin ? (
                   <div style={{ fontSize: 12, marginTop: 6 }}>
-                    Add them at <Link href="/admin/data/rtt-modules">Admin → RTT Modules</Link>, and
-                    their lessons at <Link href="/admin/data/rtt-lessons">Admin → RTT Lessons</Link>.
+                    {t.rich("subject.addModules", {
+                      modules: (chunks) => <Link href="/admin/data/rtt-modules">{chunks}</Link>,
+                      lessons: (chunks) => <Link href="/admin/data/rtt-lessons">{chunks}</Link>,
+                    })}
                   </div>
                 ) : null}
               </div>
@@ -499,9 +522,9 @@ export default async function RttSubjectPage({
                       {moduleLessons.length > 0 ? (
                         <span
                           className={moduleDone === moduleLessons.length ? "chip chip-lichen" : "chip"}
-                          title="Lessons you have marked done"
+                          title={t("subject.lessonsMarkedTitle")}
                         >
-                          {moduleDone}/{moduleLessons.length} {moduleLessons.length === 1 ? "lesson" : "lessons"}
+                          {t("subject.lessonCount", { done: moduleDone, total: moduleLessons.length })}
                         </span>
                       ) : (
                         <span />
@@ -534,7 +557,7 @@ export default async function RttSubjectPage({
                           <li key={l.id} style={{ fontSize: 13 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
                               <div style={{ fontWeight: 500 }}>{l.title}</div>
-                              <ProgressToggle kind="lesson" itemId={l.id} isDone={done.lessons.has(l.id)} />
+                              <ProgressToggle kind="lesson" itemId={l.id} isDone={done.lessons.has(l.id)} t={t} />
                             </div>
                             {l.bodyMd ? (
                               // Plain text with the author's line breaks kept.
@@ -574,17 +597,17 @@ export default async function RttSubjectPage({
           <article id="scorm" className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               {/* One text node, so the count reads as one string. */}
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{`SCORM modules (${scorm.length})`}</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.scormModules", { count: scorm.length })}</div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                Interactive modules. Leave one at any point and it opens where you stopped.
+                {t("subject.scormIntro")}
               </div>
             </div>
             {scorm.length === 0 ? (
               <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No SCORM modules for this subject.
+                {t("subject.noScorm")}
                 {viewerIsAdmin ? (
                   <div style={{ fontSize: 12, marginTop: 6 }}>
-                    Upload one at <Link href="/admin/scorm">Admin → SCORM packages</Link>.
+                    {t.rich("subject.addScorm", { link: (chunks) => <Link href="/admin/scorm">{chunks}</Link> })}
                   </div>
                 ) : null}
               </div>
@@ -608,13 +631,13 @@ export default async function RttSubjectPage({
                         {!p.active ? (
                           // Only an administrator is shown a withdrawn package.
                           <span className="chip chip-rust" style={{ marginLeft: 6 }}>
-                            Withdrawn
+                            {t("common.withdrawn")}
                           </span>
                         ) : null}
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, fontSize: 11 }}>
-                        <span className={statusChip(p.lessonStatus)}>{statusLabel(p.lessonStatus)}</span>
-                        {p.scoreRaw !== null ? <span className="mono">{`Score ${p.scoreRaw}`}</span> : null}
+                        <span className={statusChip(p.lessonStatus)}>{statusLabel(p.lessonStatus, t)}</span>
+                        {p.scoreRaw !== null ? <span className="mono">{t("subject.score", { score: p.scoreRaw })}</span> : null}
                       </div>
                     </div>
                     <Link
@@ -622,7 +645,7 @@ export default async function RttSubjectPage({
                       className={p.lessonStatus === "not attempted" ? "btn btn-sm btn-primary" : "btn btn-sm"}
                       style={{ textDecoration: "none" }}
                     >
-                      {launchLabel(p.lessonStatus)}
+                      {launchLabel(p.lessonStatus, t)}
                     </Link>
                   </li>
                 ))}
@@ -632,14 +655,14 @@ export default async function RttSubjectPage({
 
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Cohort sessions ({sessions.length})</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.cohortSessions", { count: sessions.length })}</div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                Live or hybrid touchpoints with mentor &amp; peers
+                {t("subject.cohortIntro")}
               </div>
             </div>
             {sessions.length === 0 ? (
               <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                No sessions scheduled.
+                {t("subject.noSessions")}
               </div>
             ) : (
               // Scrolls sideways inside the card: six columns are wider than a
@@ -648,11 +671,11 @@ export default async function RttSubjectPage({
                 <table className="t">
                   <thead>
                     <tr>
-                      <th>Date</th>
-                      <th>Session</th>
-                      <th>Type</th>
-                      <th>Duration</th>
-                      <th title="Your attendance, once it has been taken">You</th>
+                      <th>{t("subject.col.date")}</th>
+                      <th>{t("subject.col.session")}</th>
+                      <th>{t("subject.col.type")}</th>
+                      <th>{t("subject.col.duration")}</th>
+                      <th title={t("subject.col.youTitle")}>{t("subject.col.you")}</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -676,12 +699,12 @@ export default async function RttSubjectPage({
                         <tr key={s.id}>
                           <td className="mono" style={{ fontSize: 12 }}>
                             {s.scheduledAt ? (
-                              new Date(s.scheduledAt).toLocaleString("en-IN", {
+                              new Date(s.scheduledAt).toLocaleString(intl, {
                                 dateStyle: "medium",
                                 timeStyle: "short",
                               })
                             ) : (
-                              <span className="empty-dash">unscheduled</span>
+                              <span className="empty-dash">{t("common.unscheduled")}</span>
                             )}
                           </td>
                           <td>
@@ -689,18 +712,20 @@ export default async function RttSubjectPage({
                           </td>
                           <td>
                             {s.type ? (
-                              <span className="chip">{s.type}</span>
+                              <span className="chip">{SESSION_TYPES.has(s.type) ? t(`sessionType.${s.type}`) : s.type}</span>
                             ) : (
                               <em className="dash">—</em>
                             )}
                           </td>
                           <td className="mono" style={{ fontSize: 12 }}>
-                            {s.durationMin ? `${s.durationMin} min` : <em className="dash">—</em>}
+                            {s.durationMin ? t("common.minutes", { minutes: s.durationMin }) : <em className="dash">—</em>}
                           </td>
                           <td>
                             {attendance.has(s.id) ? (
                               <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
-                                {attendance.get(s.id)!.charAt(0).toUpperCase() + attendance.get(s.id)!.slice(1)}
+                                {ATTENDANCE_CHIP[attendance.get(s.id)!]
+                                  ? t(`attendance.${attendance.get(s.id)!}`)
+                                  : attendance.get(s.id)!}
                               </span>
                             ) : (
                               <em className="dash">—</em>
@@ -715,11 +740,11 @@ export default async function RttSubjectPage({
                                 rel="noopener noreferrer"
                                 style={{ textDecoration: "none" }}
                               >
-                                {isUpcoming ? "Join" : "Watch"}
+                                {isUpcoming ? t("subject.join") : t("subject.watch")}
                               </a>
                             ) : (
-                              <span className="chip" title="No meeting link or recording recorded for this session">
-                                {isUpcoming ? "No link yet" : "No recording"}
+                              <span className="chip" title={t("subject.noLinkTitle")}>
+                                {isUpcoming ? t("subject.noLinkYet") : t("subject.noRecording")}
                               </span>
                             )}
                           </td>
@@ -736,7 +761,7 @@ export default async function RttSubjectPage({
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 14, alignContent: "start" }}>
           <article className="card card-hi">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Your progress</div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.yourProgress")}</div>
             </div>
             <dl
               style={{
@@ -748,25 +773,25 @@ export default async function RttSubjectPage({
                 fontSize: 13,
               }}
             >
-              <dt>Lessons</dt>
+              <dt>{t("subject.lessons")}</dt>
               <dd className="mono" style={{ margin: 0 }}>
-                {done.lessons.size} of {lessons.length}
+                {t("subject.ofTotal", { done: done.lessons.size, total: lessons.length })}
               </dd>
-              <dt>Readings</dt>
+              <dt>{t("subject.readingsLabel")}</dt>
               <dd className="mono" style={{ margin: 0 }}>
-                {done.readings.size} of {readings.length}
+                {t("subject.ofTotal", { done: done.readings.size, total: readings.length })}
               </dd>
-              <dt>Assessments passed</dt>
+              <dt>{t("subject.assessmentsPassed")}</dt>
               <dd className="mono" style={{ margin: 0 }}>
-                {passedCount} of {assessments.length}
+                {t("subject.ofTotal", { done: passedCount, total: assessments.length })}
               </dd>
-              <dt>Sessions attended</dt>
+              <dt>{t("subject.sessionsAttended")}</dt>
               <dd className="mono" style={{ margin: 0 }}>
-                {attendance.size === 0 ? "not taken yet" : `${presentCount} of ${attendance.size}`}
+                {attendance.size === 0 ? t("subject.notTakenYet") : t("subject.ofTotal", { done: presentCount, total: attendance.size })}
               </dd>
             </dl>
             <div style={{ padding: "0 14px 12px", fontSize: 11 }}>
-              <Link href="/rtt/progress">All my RTT progress →</Link>
+              <Link href="/rtt/progress">{t("subject.allProgress")}</Link>
             </div>
           </article>
 
@@ -779,16 +804,15 @@ export default async function RttSubjectPage({
           {scope.isStaff ? null : (
             <article id="teach-back" className="card card-hi">
               <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>Teach-back</div>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{t("subject.teachBack")}</div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                  Record yourself teaching a lesson from this subject. Mentors and observers watch it and mark it
-                  reviewed.
+                  {t("subject.teachBackIntro")}
                 </div>
               </div>
               {teachBacks.length > 0 ? (
                 <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
                   {teachBacks.map((v, i) => {
-                    const chip = teachBackChip(v);
+                    const chip = teachBackChip(v, t);
                     return (
                       <li
                         key={v.id}
@@ -802,7 +826,9 @@ export default async function RttSubjectPage({
                         }}
                       >
                         <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
-                          {`Sent ${new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`}
+                          {t("subject.sent", {
+                            date: new Date(v.createdAt).toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" }),
+                          })}
                         </Link>
                         <span className={chip.cls}>{chip.label}</span>
                       </li>
@@ -819,7 +845,7 @@ export default async function RttSubjectPage({
                   className="btn btn-sm"
                   style={{ textDecoration: "none" }}
                 >
-                  {teachBacks.length === 0 ? "Upload a teach-back video →" : "Upload another teach-back →"}
+                  {teachBacks.length === 0 ? t("subject.uploadFirst") : t("subject.uploadAnother")}
                 </Link>
               </div>
             </article>

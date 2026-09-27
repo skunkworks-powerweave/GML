@@ -17,6 +17,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -36,7 +37,10 @@ import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Teachers" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("teachers.metaTitle") };
+}
 
 // Mirrors `subjectColor(...)` in the JSX prototype (repository.jsx line 854):
 // English/Science → blue → chip-indigo; Mathematics/EVS → green → chip-lichen;
@@ -81,6 +85,7 @@ export default async function RepoTeachersIndexPage({
   }
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
+  const tr = await getTranslations("repo");
 
   const sp = await searchParams;
   const schoolFilter = sp.school && UUID_RE.test(sp.school) ? sp.school : null;
@@ -151,13 +156,12 @@ export default async function RepoTeachersIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
+        <div className="label">{tr("common.repository")}</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Teachers
+          {tr("teachers.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          {rows.length} {rows.length === 1 ? "teacher" : "teachers"} across the
-          partner schools. Tap a teacher to see their sessions and pairing.
+          {tr("teachers.intro", { count: rows.length })}
         </p>
       </div>
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
@@ -171,27 +175,27 @@ export default async function RepoTeachersIndexPage({
               school/phase filters via the same GET form (all submit
               together) so the URL stays a single shareable bookmark. */}
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Name
+            {tr("common.name")}
             <input
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search teachers by name"
-              title="Search teachers by name"
+              aria-label={tr("teachers.searchLabel")}
+              title={tr("teachers.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
           </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            School
+            {tr("common.school")}
             <select
               name="school"
               defaultValue={schoolFilter ?? ""}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, maxWidth: 220 }}
             >
-              <option value="">All schools</option>
+              <option value="">{tr("teachers.allSchools")}</option>
               {schoolOptions.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.code} · {s.name}
@@ -200,14 +204,14 @@ export default async function RepoTeachersIndexPage({
             </select>
           </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Phase
+            {tr("common.phase")}
             <select
               name="phase"
               defaultValue={phaseFilter ?? ""}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
             >
-              <option value="">All phases</option>
+              <option value="">{tr("teachers.allPhases")}</option>
               {phaseOptions.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
@@ -216,7 +220,7 @@ export default async function RepoTeachersIndexPage({
             </select>
           </label>
           <button type="submit" className="btn btn-sm">
-            Apply
+            {tr("common.apply")}
           </button>
           {(schoolFilter || phaseFilter || qFilter) ? (
             <Link
@@ -224,18 +228,18 @@ export default async function RepoTeachersIndexPage({
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Clear
+              {tr("common.clear")}
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{rows.length} shown</span>
+            <span className="chip">{tr("common.shown", { count: rows.length })}</span>
           </div>
         </form>
         {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="teachers"
-            emptyMessage="No teachers match this filter."
+            emptyMessage={tr("teachers.empty")}
             items={rows.map((t) => {
               const chipKind =
                 (t.subjectSpecialism && SUBJECT_CHIP[t.subjectSpecialism]) || "";
@@ -248,10 +252,13 @@ export default async function RepoTeachersIndexPage({
                   ? { label: t.subjectSpecialism, kind: chipKind }
                   : null,
                 secondary: [
-                  { label: "School", value: t.schoolCode ?? "—", mono: true },
-                  { label: "Phase", value: t.phaseLabel ?? "—" },
+                  { label: tr("common.school"), value: t.schoolCode ?? "—", mono: true },
+                  { label: tr("common.phase"), value: t.phaseLabel ?? "—" },
                   {
-                    value: `${t.sessionsTotal ?? 0} sessions · ${cyclesLabel(t.cyclesTotal)} obs. cycles`,
+                    value: tr("teachers.cardCounts", {
+                      sessions: t.sessionsTotal ?? 0,
+                      cycles: cyclesLabel(t.cyclesTotal),
+                    }),
                   },
                 ],
               };
@@ -268,21 +275,21 @@ export default async function RepoTeachersIndexPage({
                 fontSize: 13,
               }}
             >
-              No teachers match this filter.
+              {tr("teachers.empty")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  <th>Name</th>
+                  <th>{tr("common.name")}</th>
                   <th className="deva" style={{ textTransform: "none", letterSpacing: 0 }}>
                     नाम
                   </th>
-                  <th>Subject</th>
-                  <th>School</th>
-                  <th>Phase</th>
-                  <th style={{ textAlign: "right" }}>Sessions</th>
-                  <th style={{ textAlign: "right" }}>Obs. cycles</th>
+                  <th>{tr("common.subject")}</th>
+                  <th>{tr("common.school")}</th>
+                  <th>{tr("common.phase")}</th>
+                  <th style={{ textAlign: "right" }}>{tr("common.sessions")}</th>
+                  <th style={{ textAlign: "right" }}>{tr("teachers.obsCycles")}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -341,7 +348,7 @@ export default async function RepoTeachersIndexPage({
                         <Link
                           href={`/repo/teacher/${t.id}`}
                           style={{ color: "var(--ink-4)", textDecoration: "none" }}
-                          aria-label={`Open ${t.fullName}`}
+                          aria-label={tr("common.openRecord", { name: t.fullName })}
                         >
                           ›
                         </Link>

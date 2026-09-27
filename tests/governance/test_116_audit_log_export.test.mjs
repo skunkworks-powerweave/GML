@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -130,6 +131,8 @@ test("spec 116 — /admin/audit page wires an Export CSV Link to the API route",
   assert.match(src, /\/api\/admin\/audit\/export/);
   // rendered as a Link with download attribute
   assert.match(src, /<Link[\s\S]*?download[\s\S]*?>/);
-  // the rendered button label keeps the JSX prototype's "Export" verb
-  assert.match(src, /Export\s+CSV/);
+  // the rendered button label keeps the JSX prototype's "Export" verb; the
+  // words are in the admin bundle (audit.exportCsv), the page reads the key
+  assert.ok(readsKey(src, "audit.exportCsv"), "the export link reads admin.audit.exportCsv");
+  assert.match(message("admin.audit.exportCsv"), /Export\s+CSV/);
 });

@@ -252,11 +252,16 @@ test("the grid's error banner never repeats free text from the URL", { skip }, a
 // -- which is exactly the harmful change. The rule now judges only a changed
 // observer, against the row the write replaces.
 
-test("once the observer has observed, the cycle's observer can no longer be changed", () => {
+test("once the observer has observed, the cycle's observer can no longer be changed", async () => {
   const guard = ADMIN_ENTITIES["observation-cycles"]!.guardMutation!;
+  // The guard names its message (adminData.guard.*); the sentence is what the grid shows.
+  const { adminMessage } = await import("../../apps/web/src/admin/labels.ts");
+  const { getTranslations } = await import("next-intl/server");
+  const t = (await getTranslations("adminData")) as never;
+  const said = (m: ReturnType<typeof guard>) => (m ? adminMessage(t, m) : "");
   for (const status of ["observed", "post_submitted", "complete"]) {
     const row = { status, teacherId: A, observerId: A, kind: "evaluative" };
-    assert.match(guard("update", row, { ...row, observerId: B }) ?? "", /observer/, `reassigning the observer at "${status}"`);
+    assert.match(said(guard("update", row, { ...row, observerId: B })), /observer/, `reassigning the observer at "${status}"`);
     assert.equal(guard("update", row, { ...row, topic: "Decimals" }), null, `other edits at "${status}"`);
   }
   for (const status of ["nominated", "pre_submitted"]) {

@@ -56,6 +56,10 @@ test("a super_admin gets the upload form; a programme_admin gets an explanation 
 test("submitting: an oversized file is refused before sending; refusals and failures are explained; success opens the package", async () => {
   const { sendScormUpload } = await import("../../apps/web/src/app/(authenticated)/admin/scorm/upload-form.tsx");
   const { SCORM_LIMITS } = await import("../../apps/web/src/lib/scorm/package.ts");
+  // The form hands sendScormUpload its words (adminData.client.scormUpload); English here.
+  const { getTranslations } = await import("next-intl/server");
+  const tUpload = (await getTranslations("adminData.client.scormUpload")) as unknown as (k: string, v: Record<string, unknown>) => string;
+  const text = (key: string, values: Record<string, string | number>) => tUpload(key, values);
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const fetchWith = (res: () => Promise<Response>) => (url: string, init: RequestInit) => (calls.push({ url, init }), res());
   const form = (bytes: number) => {
@@ -65,12 +69,12 @@ test("submitting: an oversized file is refused before sending; refusals and fail
     return fd;
   };
 
-  const big = await sendScormUpload(form(SCORM_LIMITS.maxPackageBytes + 1), { maxBytes: SCORM_LIMITS.maxPackageBytes, fetch: fetchWith(async () => new Response("{}")) });
+  const big = await sendScormUpload(form(SCORM_LIMITS.maxPackageBytes + 1), { maxBytes: SCORM_LIMITS.maxPackageBytes, text, fetch: fetchWith(async () => new Response("{}")) });
   assert.equal(big.ok, false);
   assert.match((big as { message: string }).message, /20 MB/);
   assert.equal(calls.length, 0, "nothing sent");
 
-  const ok = await sendScormUpload(form(10), { maxBytes: SCORM_LIMITS.maxPackageBytes, fetch: fetchWith(async () => Response.json({ id: "p-9" }, { status: 201 })) });
+  const ok = await sendScormUpload(form(10), { maxBytes: SCORM_LIMITS.maxPackageBytes, text, fetch: fetchWith(async () => Response.json({ id: "p-9" }, { status: 201 })) });
   assert.deepEqual(ok, { ok: true, id: "p-9" });
   assert.equal(calls[0]!.url, "/api/scorm/packages");
   assert.equal(calls[0]!.init.method, "POST");
@@ -78,13 +82,14 @@ test("submitting: an oversized file is refused before sending; refusals and fail
 
   const refused = await sendScormUpload(form(10), {
     maxBytes: SCORM_LIMITS.maxPackageBytes,
+    text,
     fetch: fetchWith(async () => Response.json({ error: { code: "unsafe_path", message: "Names point outside.", paths: ["../x.html"] } }, { status: 422 })),
   });
   assert.deepEqual(refused, { ok: false, message: "Names point outside.", paths: ["../x.html"] });
 
-  const forbidden = await sendScormUpload(form(10), { maxBytes: SCORM_LIMITS.maxPackageBytes, fetch: fetchWith(async () => Response.json({ error: "forbidden" }, { status: 403 })) });
+  const forbidden = await sendScormUpload(form(10), { maxBytes: SCORM_LIMITS.maxPackageBytes, text, fetch: fetchWith(async () => Response.json({ error: "forbidden" }, { status: 403 })) });
   assert.match((forbidden as { message: string }).message, /403/);
 
-  const offline = await sendScormUpload(form(10), { maxBytes: SCORM_LIMITS.maxPackageBytes, fetch: fetchWith(() => Promise.reject(new TypeError("Failed to fetch"))) });
+  const offline = await sendScormUpload(form(10), { maxBytes: SCORM_LIMITS.maxPackageBytes, text, fetch: fetchWith(() => Promise.reject(new TypeError("Failed to fetch"))) });
   assert.match((offline as { message: string }).message, /did not reach the server/);
 });

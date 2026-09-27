@@ -144,12 +144,16 @@ test("D10: the desktop server-action submit holds the POST until the final draft
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
   try {
-    const m = mount(FormRenderer as (p: unknown) => unknown, {
-      schema: { fields: [{ name: "note", label: "Note", kind: "text" }] },
-      initialResponses: { note: "last keystrokes" },
-      draftKey: { templateId: "tpl-1" },
-      action: async () => undefined,
-    });
+    const m = mount(
+      FormRenderer as (p: unknown) => unknown,
+      {
+        schema: { fields: [{ name: "note", label: "Note", kind: "text" }] },
+        initialResponses: { note: "last keystrokes" },
+        draftKey: { templateId: "tpl-1" },
+        action: async () => undefined,
+      },
+      { intl: "en" },
+    );
     const form = hostElements(m.tree).find((el) => el.type === "form")!;
     // The browser's form: requestSubmit() re-dispatches submit through the
     // SAME onSubmit handler, which is what makes a naive port loop forever.
@@ -202,12 +206,16 @@ test("D10: a failed final PUT still submits — the answers are in the POST eith
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response("boom", { status: 503 })) as typeof fetch;
   try {
-    const m = mount(FormRenderer as (p: unknown) => unknown, {
-      schema: { fields: [{ name: "note", label: "Note", kind: "text" }] },
-      initialResponses: { note: "x" },
-      draftKey: { templateId: "tpl-1" },
-      action: async () => undefined,
-    });
+    const m = mount(
+      FormRenderer as (p: unknown) => unknown,
+      {
+        schema: { fields: [{ name: "note", label: "Note", kind: "text" }] },
+        initialResponses: { note: "x" },
+        draftKey: { templateId: "tpl-1" },
+        action: async () => undefined,
+      },
+      { intl: "en" },
+    );
     const onSubmit = () => (hostElements(m.tree).find((el) => el.type === "form")!.props.onSubmit as (e: FakeEvent) => unknown);
     let posted = 0;
     (hostElements(m.tree).find((el) => el.type === "form")!.props.ref as { current: unknown }).current = {
@@ -226,11 +234,15 @@ test("D10: a failed final PUT still submits — the answers are in the POST eith
 
 test("D10: a submit that fails client validation never reaches the server, and is not left half-armed", async () => {
   const { FormRenderer } = await import("../../apps/web/src/components/forms/FormRenderer.tsx");
-  const m = mount(FormRenderer as (p: unknown) => unknown, {
-    schema: { fields: [{ name: "note", label: "Note", kind: "text", required: true }] },
-    initialResponses: {},
-    action: async () => undefined,
-  });
+  const m = mount(
+    FormRenderer as (p: unknown) => unknown,
+    {
+      schema: { fields: [{ name: "note", label: "Note", kind: "text", required: true }] },
+      initialResponses: {},
+      action: async () => undefined,
+    },
+    { intl: "en" },
+  );
   let requested = 0;
   (hostElements(m.tree).find((el) => el.type === "form")!.props.ref as { current: unknown }).current = {
     requestSubmit() {

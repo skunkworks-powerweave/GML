@@ -10,6 +10,7 @@
 // and without it the roster and the account list drift apart silently.
 
 import { desc, eq, isNull, and } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { users, teachers, mentors } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -21,16 +22,12 @@ import { UserRow } from "./user-row";
 
 export const dynamic = "force-dynamic";
 
-const ROLE_LABELS: Record<RoleName, string> = {
-  teacher: "Teacher",
-  observer: "Observer",
-  mentor: "Mentor",
-  programme_admin: "Programme admin",
-  super_admin: "Super admin",
-};
+// Copy is in the admin namespace (users.*). Role names are client.roles.*,
+// shared with the create form and the row's role picker (client components).
 
 export default async function AdminUsersPage() {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("admin");
   const session = await auth();
   const actorId = session?.user.id ?? "";
   const actorRole = (session?.user.role ?? "teacher") as RoleName;
@@ -78,12 +75,10 @@ export default async function AdminUsersPage() {
   return (
     <main style={{ padding: "24px 28px", maxWidth: 1100 }}>
       <header style={{ marginBottom: 20 }}>
-        <div className="label">Administration</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>Users</h1>
+        <div className="label">{t("users.eyebrow")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>{t("users.title")}</h1>
         <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
-          {activeCount} active {activeCount === 1 ? "account" : "accounts"} of {rows.length}.
-          Accounts are created with a password you set and hand over directly — this
-          deployment does not send email. The account holder changes it from Settings.
+          {t("users.summary", { active: activeCount, total: rows.length })}
         </p>
       </header>
 
@@ -96,7 +91,7 @@ export default async function AdminUsersPage() {
           background: "var(--card)",
         }}
       >
-        <h2 style={{ fontSize: 15, marginBottom: 12 }}>Create an account</h2>
+        <h2 style={{ fontSize: 15, marginBottom: 12 }}>{t("users.createHeading")}</h2>
         <CreateUserForm
           actorRole={actorRole}
           unlinkedTeachers={unlinkedTeachers}
@@ -105,7 +100,7 @@ export default async function AdminUsersPage() {
       </section>
 
       <section>
-        <h2 style={{ fontSize: 15, marginBottom: 12 }}>All accounts</h2>
+        <h2 style={{ fontSize: 15, marginBottom: 12 }}>{t("users.allHeading")}</h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {rows.map((u) => (
             <UserRow
@@ -120,7 +115,7 @@ export default async function AdminUsersPage() {
                 deleted: u.deletedAt !== null,
                 lastSeenAt: u.lastSeenAt ? u.lastSeenAt.toISOString() : null,
               }}
-              roleLabel={ROLE_LABELS[u.role as RoleName]}
+              roleLabel={t.has(`client.roles.${u.role}`) ? t(`client.roles.${u.role}`) : u.role}
               actorRole={actorRole}
               isSelf={u.id === actorId}
             />
@@ -130,15 +125,12 @@ export default async function AdminUsersPage() {
 
       {unlinkedTeachers.length + unlinkedMentors.length > 0 ? (
         <section style={{ marginTop: 28 }}>
-          <h2 style={{ fontSize: 15, marginBottom: 6 }}>Awaiting an account</h2>
+          <h2 style={{ fontSize: 15, marginBottom: 6 }}>{t("users.awaitingHeading")}</h2>
           <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 10, lineHeight: 1.5 }}>
-            These people have programme records but no login. Creating an account above and
-            selecting them from the &ldquo;Link to&rdquo; list attaches the two, so their
-            submissions and their sign-in are the same person.
+            {t("users.awaitingHelp")}
           </p>
           <p style={{ fontSize: 13 }}>
-            {unlinkedTeachers.length} {unlinkedTeachers.length === 1 ? "teacher" : "teachers"},{" "}
-            {unlinkedMentors.length} {unlinkedMentors.length === 1 ? "mentor" : "mentors"}.
+            {t("users.awaitingCount", { teachers: unlinkedTeachers.length, mentors: unlinkedMentors.length })}
           </p>
         </section>
       ) : null}

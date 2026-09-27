@@ -14,6 +14,7 @@
 // deleted; Supabase's recovery flow does this properly and is rate-limited
 // centrally.
 
+import { getTranslations } from "next-intl/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { authEmailEnabled, appOrigin } from "@/lib/auth-email";
 import { rateLimit } from "@/lib/rate-limit";
@@ -25,8 +26,14 @@ export type EmailActionState = { ok?: boolean; error?: string; message?: string 
 // Supabase end". The endpoint must not answer the question "does this address
 // have an account here?" -- for an organisation whose addresses follow a
 // predictable pattern, that is a staff roster.
-const NEUTRAL =
-  "If that address has an account, a message is on its way. Check your inbox, including spam.";
+/**
+ * The one answer every request gets, sent or not, account or not: anything
+ * else tells a caller which addresses have accounts. In the user's language.
+ */
+async function neutral(): Promise<EmailActionState> {
+  const t = await getTranslations("login");
+  return { ok: true, message: t("emailLink.sent") };
+}
 
 /**
  * Throttle by IP -- the peer Caddy saw, from lib/request-ip. A private copy of
@@ -60,12 +67,13 @@ export async function sendMagicLinkAction(
   _prev: EmailActionState | undefined,
   formData: FormData,
 ): Promise<EmailActionState> {
+  const t = await getTranslations("login");
   if (!authEmailEnabled()) {
-    return { error: "Email sign-in is not enabled on this deployment. Use your password." };
+    return { error: t("emailLink.disabled") };
   }
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  if (!email) return { error: "Enter your email address." };
-  if (!(await throttle("magic-link"))) return { ok: true, message: NEUTRAL };
+  if (!email) return { error: t("emailLink.enterEmail") };
+  if (!(await throttle("magic-link"))) return neutral();
 
   const supabase = await createSupabaseServerClient();
   await supabase.auth.signInWithOtp({
@@ -80,27 +88,25 @@ export async function sendMagicLinkAction(
       emailRedirectTo: `${await appOrigin()}/auth/callback?next=%2Fdashboard`,
     },
   });
-  // Result deliberately ignored: see NEUTRAL above.
-  return { ok: true, message: NEUTRAL };
+  // Result deliberately ignored: see neutral() above.
+  return neutral();
 }
 
 export async function requestPasswordResetAction(
   _prev: EmailActionState | undefined,
   formData: FormData,
 ): Promise<EmailActionState> {
+  const t = await getTranslations("login");
   if (!authEmailEnabled()) {
-    return {
-      error:
-        "Password resets are handled by your administrator on this deployment. Contact them to have your password set.",
-    };
+    return { error: t("forgot.disabled") };
   }
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  if (!email) return { error: "Enter your email address." };
-  if (!(await throttle("password-reset"))) return { ok: true, message: NEUTRAL };
+  if (!email) return { error: t("emailLink.enterEmail") };
+  if (!(await throttle("password-reset"))) return neutral();
 
   const supabase = await createSupabaseServerClient();
   await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${await appOrigin()}/auth/callback?next=%2Flogin%2Freset`,
   });
-  return { ok: true, message: NEUTRAL };
+  return neutral();
 }

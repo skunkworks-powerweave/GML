@@ -4,18 +4,17 @@ import type { AdminEntity } from "../types";
 
 export const classesEntity: AdminEntity = {
   slug: "classes",
-  label: "Classes",
   table: classes,
   readRoles: ["teacher", "observer", "mentor", "programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "schoolId", label: "School" },
-    { key: "grade", label: "Grade" },
-    { key: "stage", label: "Stage" },
-    { key: "studentsCount", label: "Students" },
-    { key: "sectionsCount", label: "Sections" },
-    { key: "classTeacherName", label: "Class teacher" },
-    { key: "active", label: "Active" },
+    { key: "schoolId" },
+    { key: "grade" },
+    { key: "stage" },
+    { key: "studentsCount" },
+    { key: "sectionsCount" },
+    { key: "classTeacherName" },
+    { key: "active" },
   ],
   formSchema: z.object({
     schoolId: z.string().uuid(),

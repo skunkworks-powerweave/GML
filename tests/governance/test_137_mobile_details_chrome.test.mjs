@@ -24,6 +24,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -87,7 +88,8 @@ test("spec 137 — MobileDetailFrame.tsx exists with the documented prop contrac
   // Named export so adopting pages can import { MobileDetailFrame }.
   assert.match(
     src,
-    /export function MobileDetailFrame\b/,
+    // async: it reads the back arrow's name with getTranslations().
+    /export (async )?function MobileDetailFrame\b/,
     "MobileDetailFrame must be a named exported function",
   );
   // Props type also exported so callers can compose with TypeScript.
@@ -119,11 +121,13 @@ test("spec 137 — MobileDetailFrame.tsx renders a 44x44 back-arrow Link", () =>
     /data-testid="mobile-detail-back"/,
     "back-arrow Link must carry a data-testid for e2e coverage",
   );
+  // Named in the user's language: action.back ("Back").
   assert.match(
     src,
-    /aria-label="Back"/,
-    "back-arrow Link must declare aria-label='Back' for screen readers",
+    /aria-label=\{tAction\("back"\)\}/,
+    "back-arrow Link must declare aria-label='Back' (action.back) for screen readers",
   );
+  assert.equal(message("action.back"), "Back");
   // The touch target must be 44x44 (Apple HIG / Material Design minimum).
   // We assert the width:44 / height:44 pattern appears in the back-arrow
   // styling block. The same dimensions also apply to the right slot, so

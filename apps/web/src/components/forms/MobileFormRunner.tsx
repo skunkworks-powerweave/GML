@@ -36,9 +36,11 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { useTranslations } from "next-intl";
 import type { DraftKey } from "@/lib/form-draft";
 import { useSwipe } from "@/lib/use-swipe";
 import {
+  DEFAULT_LIKERT_KEYS,
   HindiText,
   isGroupKind,
   isHindiNameField,
@@ -102,13 +104,9 @@ export type MobileFormRunnerProps = {
   context?: Record<string, string>;
 };
 
-const DEFAULT_LIKERT: [string, string, string, string, string] = [
-  "Strongly disagree",
-  "Disagree",
-  "Neutral",
-  "Agree",
-  "Strongly agree",
-];
+// The runner's own words are in the translation bundles: the parts it shares
+// with FormRenderer under mentorship.client.formRunner, its own (steps,
+// review) under mentorship.client.mobileFormRunner. The questions are data.
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 const TOUCH_TARGET = 44; // Apple HIG / Material Design minimum (px).
@@ -229,6 +227,7 @@ function BigSelect({
   value: unknown;
   onChange: (v: string) => void;
 }) {
+  const t = useTranslations("mentorship.client");
   return (
     <select
       id={field.name}
@@ -238,7 +237,7 @@ function BigSelect({
       onChange={(e) => onChange(e.target.value)}
       style={bigInputStyle}
     >
-      <option value="">Choose…</option>
+      <option value="">{t("formRunner.choose")}</option>
       {normalizeOptions(field.options).map((o) => (
         <option key={o.value} value={o.value}>
           {optionText(o)}
@@ -384,7 +383,9 @@ function BigLikert({
 }) {
   // Vertical stack of 5 large radio rows. Each row is 44px+ tall so a thumb
   // can hit it reliably; the matching scale-number lives in the rendered label.
-  const labels = field.likertLabels ?? DEFAULT_LIKERT;
+  // The schema's own captions are data; the default five are the runner's.
+  const t = useTranslations("mentorship.client");
+  const labels = field.likertLabels ?? DEFAULT_LIKERT_KEYS.map((k) => t(`formRunner.likert.${k}`));
   // Accept a STRING too. Prior answers come back as strings.
   //
   // A submitted response is read out of FormData and stored in
@@ -477,6 +478,7 @@ function BigRating({
   // a wrapping row of them read "3 stars, then 2", which hides the length and
   // order of the scale. The row still wraps, but only when the stars cannot
   // fit at 44 px: a longer scale (the schema allows 10) or a narrower screen.
+  const t = useTranslations("mentorship.client");
   const max = field.starsMax ?? 5;
   // Same string-vs-number problem as Likert above.
   const current = coerceScaleValue(value) ?? 0;
@@ -496,7 +498,7 @@ function BigRating({
             onClick={() => onChange(n)}
             // State in the name, once: `on` is cumulative, so aria-pressed
             // would announce every filled star as a separate answer.
-            aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
+            aria-label={t(current === n ? "formRunner.rateAriaSelected" : "formRunner.rateAria", { n, max })}
             data-testid={`mobile-star-${field.name}-${n}`}
             style={{
               flex: "1 1 0",
@@ -550,6 +552,8 @@ export function MobileFormRunner({
     );
   }
 
+  const t = useTranslations("mentorship.client");
+  const tAction = useTranslations("action");
   const fields = useMemo(() => schema.fields ?? [], [schema.fields]);
   // Step index — 0..fields.length-1 = field screens, fields.length = review.
   const [step, setStep] = useState(0);
@@ -640,13 +644,13 @@ export function MobileFormRunner({
   // stay on this step. Otherwise move forward. Previous: always allowed.
   const goNext = useCallback(() => {
     if (!currentField) return;
-    const err = validateField(currentField, values[currentField.name]);
+    const err = validateField(currentField, values[currentField.name], t);
     if (err) {
       setErrors((prev) => ({ ...prev, [currentField.name]: err }));
       return;
     }
     setStep((s) => Math.min(s + 1, fields.length));
-  }, [currentField, fields.length, values]);
+  }, [currentField, fields.length, t, values]);
 
   const goPrev = useCallback(() => {
     setStep((s) => Math.max(0, s - 1));
@@ -700,7 +704,7 @@ export function MobileFormRunner({
   const onSubmitClick = useCallback(async () => {
     if (submitting) return;
     setSubmitError(null);
-    const errs = validateAll(fields, values);
+    const errs = validateAll(fields, values, t);
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
       const firstBadIdx = fields.findIndex((f) => errs[f.name]);
@@ -736,7 +740,7 @@ export function MobileFormRunner({
     } finally {
       setSubmitting(false);
     }
-  }, [action, autosaveEnabled, cancelRetry, fields, flushSave, onSubmit, setSubmitting, submitting, values]);
+  }, [action, autosaveEnabled, cancelRetry, fields, flushSave, onSubmit, setSubmitting, submitting, t, values]);
 
   // ---- Progress dots ----
   // One pill per step (field screens + review). Active is a wide pill,
@@ -768,7 +772,7 @@ export function MobileFormRunner({
             type="button"
             disabled={!tappable}
             onClick={() => (tappable ? setStep(i) : undefined)}
-            aria-label={`Step ${i + 1} of ${totalSteps}`}
+            aria-label={t("mobileFormRunner.stepAria", { n: i + 1, total: totalSteps })}
             aria-current={isActive ? "step" : undefined}
             data-testid={`mobile-progress-dot-${i}`}
             style={{
@@ -818,11 +822,10 @@ export function MobileFormRunner({
             letterSpacing: "-0.01em",
           }}
         >
-          Review your answers
+          {t("mobileFormRunner.reviewTitle")}
         </h2>
         <p style={{ fontSize: 13, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
-          Tap &ldquo;Edit&rdquo; on any row to go back. Press Submit when ready — your
-          responses will be sealed into the record.
+          {t("mobileFormRunner.reviewHelp")}
         </p>
         {fields.map((f, i) => {
           const raw = values[f.name];
@@ -891,7 +894,7 @@ export function MobileFormRunner({
                     cursor: "pointer",
                   }}
                 >
-                  Edit
+                  {tAction("edit")}
                 </button>
               </div>
             </div>
@@ -935,7 +938,7 @@ export function MobileFormRunner({
             color: "var(--ink-3)",
           }}
         >
-          Question {step + 1} of {fields.length}
+          {t("mobileFormRunner.question", { n: step + 1, total: fields.length })}
         </div>
         {/* Group kinds (radio / checkbox / likert / rating) have no element
             with id={field.name}, so a <label for> over them named nothing;
@@ -1064,10 +1067,13 @@ export function MobileFormRunner({
             }}
           >
             {saveState === "pending"
-              ? "Saving…"
+              ? tAction("saving")
               : saveState === "saved"
-                ? "Saved"
-                : failureMessage(saveFailure ?? "error")}
+                ? tAction("saved")
+                : failureMessage(
+                    saveFailure ?? "error", // i18n-ignore: a SaveFailure code, worded by failureMessage
+                    t,
+                  )}
           </div>
         ) : null}
       </div>
@@ -1116,7 +1122,7 @@ export function MobileFormRunner({
             opacity: step === 0 ? 0.5 : 1,
           }}
         >
-          ← Previous
+          {t("mobileFormRunner.previous")}
         </button>
         {isReview ? (
           <button
@@ -1138,7 +1144,7 @@ export function MobileFormRunner({
               opacity: submitting ? 0.7 : 1,
             }}
           >
-            {submitting ? "Submitting…" : (submitLabel ?? "Submit")}
+            {submitting ? t("formRunner.submitting") : (submitLabel ?? tAction("submit"))}
           </button>
         ) : (
           <button
@@ -1158,7 +1164,7 @@ export function MobileFormRunner({
               cursor: "pointer",
             }}
           >
-            {step === fields.length - 1 ? "Review →" : "Next →"}
+            {step === fields.length - 1 ? t("mobileFormRunner.review") : t("mobileFormRunner.next")}
           </button>
         )}
       </div>

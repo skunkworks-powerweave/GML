@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -230,24 +231,18 @@ test("spec 124 — /admin/system-settings page renders all five sections + serve
     /async function updateSystemSettings/,
     "page must define updateSystemSettings server action",
   );
-  // Five section headers — match against the JSX prototype labels
-  assert.match(src, />\s*Programme\s*</, "page must render the Programme section heading");
-  assert.match(
-    src,
-    />\s*Video pipeline\s*</,
-    "page must render the Video pipeline section heading",
-  );
-  assert.match(src, />\s*Notifications\s*</, "page must render the Notifications section heading");
-  assert.match(
-    src,
-    />\s*Backups & retention\s*</,
-    "page must render the Backups & retention section heading",
-  );
-  assert.match(
-    src,
-    />\s*Backup & restore status\s*</,
-    "page must render the read-only Backup & restore status section",
-  );
+  // Five section headers — match against the JSX prototype labels. The words
+  // are in the admin bundle (systemSettings.*); the page reads each key.
+  for (const [key, words] of [
+    ["systemSettings.programme.heading", "Programme"],
+    ["systemSettings.video.heading", "Video pipeline"],
+    ["systemSettings.notifications.heading", "Notifications"],
+    ["systemSettings.backups.heading", "Backups & retention"],
+    ["systemSettings.status.heading", "Backup & restore status"],
+  ]) {
+    assert.ok(readsKey(src, key), `page must render the ${words} section heading (admin.${key})`);
+    assert.equal(message(`admin.${key}`), words);
+  }
 });
 
 test("spec 124 — page disables 720p and 1080p quality options with tooltips", () => {

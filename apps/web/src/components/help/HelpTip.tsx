@@ -5,7 +5,8 @@
 //
 // Ports the prototype's HelpTip (LMS GML Frontend/help.jsx lines 302-347):
 //   • hover (desktop) and tap (mobile) show the tooltip;
-//   • tooltip title + short come straight from the HELP dictionary;
+//   • tooltip title + short come from the help dictionary, in the reader's
+//     language (help.entries.<slug>, fetched on first use: useHelpEntries);
 //   • "Tell me more →" button fires the global `gml:open-help` event and
 //     HelpPanel handles the rest;
 //   • close-on-outside-click for tap-to-open users (mobile).
@@ -15,8 +16,10 @@
 // have to null-check the dictionary.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { helpFor } from "@/lib/help";
 import { openHelp } from "./HelpPanel";
+import { useHelpEntries } from "./useHelpEntries";
 
 type HelpTipProps = {
   /** Dictionary slug. If unknown, children render as plain text. */
@@ -25,6 +28,8 @@ type HelpTipProps = {
 };
 
 export function HelpTip({ k, children }: HelpTipProps) {
+  const t = useTranslations("help.client");
+  const words = useHelpEntries()?.[k];
   const entry = helpFor(k);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -107,10 +112,10 @@ export function HelpTip({ k, children }: HelpTipProps) {
               marginBottom: 4,
             }}
           >
-            {entry.title}
+            {words?.title ?? k}
           </span>
-          <span style={{ display: "block", color: "var(--ink-2)" }}>{entry.short}</span>
-          {entry.long || (entry.related && entry.related.length > 0) ? (
+          <span style={{ display: "block", color: "var(--ink-2)" }}>{words?.short}</span>
+          {Boolean(words?.long) || (entry.related && entry.related.length > 0) ? (
             <button
               type="button"
               data-help-more
@@ -130,7 +135,7 @@ export function HelpTip({ k, children }: HelpTipProps) {
                 cursor: "pointer",
               }}
             >
-              Tell me more →
+              {t("tooltip.more")}
             </button>
           ) : null}
         </span>

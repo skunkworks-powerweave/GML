@@ -31,6 +31,7 @@ import { LADDER } from "../../apps/worker/src/encode.ts";
 import { renderSync, render, h, withAppRouter, decodeEntities, openingTags, attr } from "./_ui.js";
 import { signIn, closeAppDb } from "./_server-actions.js";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const skip = needsDatabase();
 // Only a run with a database opened the app's pool; the other tests here run anywhere.
@@ -54,21 +55,36 @@ function encodedHeights(): Set<string> {
 }
 
 test("help describes the rendition the worker actually produces, and what the watermark actually is", async () => {
-  const { HELP } = await import("../../apps/web/src/lib/help.ts");
+  // The help articles are in the help bundle (help.entries.<slug>), in
+  // every language: none of them may promise a rendition the worker does not
+  // encode, and the English is held to the wording checks below.
+  type Entries = Record<string, { short: string; long?: string }>;
+  const entries = (locale: "en" | "hi" | "bo") =>
+    (loadMessages(locale).help as unknown as { entries: Entries }).entries;
+  const HELP = entries("en");
   const heights = encodedHeights();
+  for (const locale of ["en", "hi", "bo"] as const) {
+    for (const key of ["hls", "transcoding", "watermark"]) {
+      const entry = entries(locale)[key]!;
+      const said = `${entry.short} ${entry.long ?? ""}`;
+      for (const m of said.matchAll(/(\d{3,4})p\b/g)) {
+        assert.ok(heights.has(m[1]!), `${locale} help "${key}" promises ${m[1]}p; the worker encodes ${[...heights].join(", ")}p only`);
+      }
+    }
+  }
   for (const key of ["hls", "transcoding", "watermark"]) {
     const entry = HELP[key]!;
     const said = `${entry.short} ${entry.long ?? ""}`;
-    for (const m of said.matchAll(/(\d{3,4})p\b/g)) {
-      assert.ok(heights.has(m[1]!), `help "${key}" promises ${m[1]}p; the worker encodes ${[...heights].join(", ")}p only`);
-    }
     assert.doesNotMatch(said, /audio-only|four versions|several sizes/i, `help "${key}" promises renditions that do not exist`);
   }
   const watermark = `${HELP.watermark!.short} ${HELP.watermark!.long ?? ""}`;
   assert.doesNotMatch(watermark, /every frame|whose account it came from/i, "the watermark is an overlay on the player, not in the video");
   // The ladder's bottom rung is ~250 kbps all in: better odds on a weak link,
   // still not a promise that a lesson plays on 2G.
-  assert.doesNotMatch(`${HELP.hls!.short} ${HELP.hls!.long ?? ""}`, /\b2G\b/, "the help panel must not promise 2G playback");
+  for (const locale of ["en", "hi", "bo"] as const) {
+    const hls = entries(locale).hls!;
+    assert.doesNotMatch(`${hls.short} ${hls.long ?? ""}`, /\b2G\b/, `${locale}: the help panel must not promise 2G playback`);
+  }
 });
 
 test("the quality menu shows no internal spec reference, and says truly why 720p is not offered", async () => {

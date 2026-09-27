@@ -65,6 +65,7 @@ export const FormSchemaSchema = z
     const seen = new Set<string>();
     s.fields.forEach((f, i) => {
       if (seen.has(f.name)) {
+        // i18n-ignore: a zod issue, like zod's own built-in ones -- the admin forms API (api/admin/forms, JSON) quotes them
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["fields", i, "name"], message: `duplicate field name "${f.name}"` });
       }
       seen.add(f.name);

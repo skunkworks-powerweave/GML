@@ -4,7 +4,6 @@ import type { AdminEntity } from "../types";
 
 export const mentorPairingsEntity: AdminEntity = {
   slug: "mentor-pairings",
-  label: "Mentor ↔ Mentee Pairings",
   table: mentorPairings,
   readRoles: ["programme_admin", "super_admin", "mentor"],
   mutateRoles: ["programme_admin", "super_admin"],
@@ -13,11 +12,11 @@ export const mentorPairingsEntity: AdminEntity = {
   // same way. Test: tests/behaviour/admin-section-gate.test.ts.
   gate: "mentorship",
   displayColumns: [
-    { key: "mentorId", label: "Mentor" },
-    { key: "teacherId", label: "Mentee teacher" },
-    { key: "startedAt", label: "Started" },
-    { key: "endedAt", label: "Ended" },
-    { key: "status", label: "Status" },
+    { key: "mentorId" },
+    { key: "teacherId" },
+    { key: "startedAt" },
+    { key: "endedAt" },
+    { key: "status" },
   ],
   formSchema: z.object({
     mentorId: z.string().uuid(),

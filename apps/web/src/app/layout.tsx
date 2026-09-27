@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Noto_Sans_Devanagari, Noto_Serif_Tibetan } from "next/font/google";
-import { LOCALE_HTML_LANG, type Locale } from "@/i18n/config";
+import { NextIntlClientProvider } from "next-intl";
+import { clientMessages, LOCALE_HTML_LANG, type Locale } from "@/i18n/config";
 import { resolveUiLocale, viewerPrefs } from "@/i18n/resolve";
 import type { UserPrefs } from "@gml/db/schema";
 import "./globals.css";
@@ -78,8 +79,13 @@ export const metadata: Metadata = {
     default: "Goldenmile RTT LMS",
     template: "%s · Goldenmile RTT LMS",
   },
-  description:
-    "Refresher Teacher Training programme platform for Goldenmile Learning, Ladakh-UT.",
+  // English on purpose, not from a bundle: only link-preview and search
+  // crawlers read it, and they arrive with no session and no locale cookie, so
+  // a translated description would be the English one every time -- while
+  // generateMetadata() here would take away the static `metadata` export the
+  // page titles' template lives in.
+  // i18n-ignore: read by crawlers only (no session, no locale), never on a page
+  description: "Refresher Teacher Training programme platform for Goldenmile Learning, Ladakh-UT.",
   // Internal tool holding classroom recordings of identifiable children and
   // their guardians' details. It should not be indexed anywhere, ever.
   robots: { index: false, follow: false, nocache: true },
@@ -95,12 +101,23 @@ export default async function RootLayout({
   // Tibetan, which does not break on spaces.
   const locale = await documentLocale();
   const display = displayClasses((await viewerPrefs()).prefs);
+  // The strings app/error.tsx reads, and nothing else. That boundary renders
+  // inside this layout but outside every other one, so no provider was above
+  // it and it could only be English. The (authenticated) and login layouts and
+  // the gate page each provide their own full client bundle further down,
+  // which replaces this one for everything they render.
+  const routeError = (clientMessages(locale).home as { client?: { routeError?: unknown } } | undefined)?.client?.routeError;
+  const messages = { home: { client: { routeError } } } as Record<string, Record<string, unknown>>;
   return (
     <html
       lang={LOCALE_HTML_LANG[locale]}
       className={`${geistSans.variable} ${geistMono.variable} ${notoDevanagari.variable} ${notoTibetan.variable} h-full antialiased`}
     >
-      <body className={display ? `min-h-full flex flex-col ${display}` : "min-h-full flex flex-col"}>{children}</body>
+      <body className={display ? `min-h-full flex flex-col ${display}` : "min-h-full flex flex-col"}>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          {children}
+        </NextIntlClientProvider>
+      </body>
     </html>
   );
 }

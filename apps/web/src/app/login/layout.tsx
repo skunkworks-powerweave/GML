@@ -13,12 +13,13 @@
 
 import type { ReactNode } from "react";
 import { NextIntlClientProvider } from "next-intl";
-import { loadMessages, LOCALE_FONT_FAMILY, LOCALE_HTML_LANG } from "@/i18n/config";
+import { clientMessages, LOCALE_FONT_FAMILY, LOCALE_HTML_LANG } from "@/i18n/config";
 import { resolveUiLocale } from "@/i18n/resolve";
 
 export default async function LoginLayout({ children }: { children: ReactNode }) {
   const locale = await resolveUiLocale();
-  const messages = loadMessages(locale);
+  // Only what client components read (see clientMessages in i18n/config).
+  const messages = clientMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];
 
   return (

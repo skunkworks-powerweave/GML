@@ -9,15 +9,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentorPairings, mentors, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom, pairingVisibilityFilter } from "@/lib/authz";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Pairings" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("mentorship");
+  return { title: t("list.metaTitle") };
+}
 
 const STATUS_CHIP: Record<string, string> = {
   active: "chip-lichen",
@@ -29,14 +34,8 @@ const STATUS_CHIP: Record<string, string> = {
 
 const STATUS_VALUES = new Set(["active", "review", "paused", "ended", "complete"]);
 
-const STATUS_TABS = [
-  { v: "all", l: "All" },
-  { v: "active", l: "Active" },
-  { v: "review", l: "In review" },
-  { v: "paused", l: "Paused" },
-  { v: "complete", l: "Complete" },
-  { v: "ended", l: "Ended" },
-];
+// The chip strip, in order. Each chip's words are mentorship.list.tabs.<v>.
+const STATUS_TABS = ["all", "active", "review", "paused", "complete", "ended"] as const;
 
 type PairingStatus = "active" | "review" | "paused" | "ended" | "complete";
 
@@ -65,6 +64,8 @@ export default async function MentorshipListPage({
   searchParams: SearchParams;
 }) {
   const sp = await searchParams;
+  const t = await getTranslations("mentorship");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
   let page = Math.min(1000, Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1));
 
@@ -147,10 +148,10 @@ export default async function MentorshipListPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Mentorship</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Pairings</h1>
+        <div className="label">{t("list.eyebrow")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("list.title")}</h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          Quarterly feedback cycle (Q1 → Q2 → Q3 → Q4 → final). Meetings count cached per pairing.
+          {t("list.intro")}
         </p>
       </div>
 
@@ -159,14 +160,14 @@ export default async function MentorshipListPage({
           className="card"
           style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
         >
-          <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>Status</span>
-          {STATUS_TABS.map((f) => {
-            const active = statusFilter === f.v;
+          <span className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>{t("list.statusLabel")}</span>
+          {STATUS_TABS.map((v) => {
+            const active = statusFilter === v;
             // A chip starts its filter at page 1.
-            const href = listHref(f.v, 1);
+            const href = listHref(v, 1);
             return (
               <Link
-                key={f.v}
+                key={v}
                 href={href}
                 // The chip that is on was marked by its fill alone; a screen
                 // reader could not tell which status the list was showing.
@@ -180,8 +181,8 @@ export default async function MentorshipListPage({
                   textDecoration: "none",
                 }}
               >
-                {f.l}
-                <span style={{ opacity: 0.6, marginLeft: 4 }}>{statusCount(f.v)}</span>
+                {t(`list.tabs.${v}`)}
+                <span style={{ opacity: 0.6, marginLeft: 4 }}>{statusCount(v)}</span>
               </Link>
             );
           })}
@@ -196,7 +197,7 @@ export default async function MentorshipListPage({
           }}
         >
           {rows.length === 0 ? (
-            <div style={{ padding: 32, color: "var(--ink-3)" }}>No pairings match this filter.</div>
+            <div style={{ padding: 32, color: "var(--ink-3)" }}>{t("list.empty")}</div>
           ) : (
             rows.map((p) => {
               const chipKind = STATUS_CHIP[p.status] ?? "";
@@ -228,14 +229,18 @@ export default async function MentorshipListPage({
                         ) : null}
                       </div>
                     </div>
-                    <span className={`chip ${chipKind}`.trim()}>{p.status}</span>
+                    <span className={`chip ${chipKind}`.trim()}>{t("pairingStatus", { status: p.status })}</span>
                   </header>
 
                   <div className="mono" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--ink-3)" }}>
                     <span className="chip">Q{p.currentQuarter ?? 1}</span>
-                    <span>{p.meetingsCount ?? 0} meetings</span>
+                    <span>{t("list.meetings", { count: p.meetingsCount ?? 0 })}</span>
                     {p.lastMeetingAt ? (
-                      <span>· last {new Date(p.lastMeetingAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</span>
+                      <span>
+                        {t("list.lastMeeting", {
+                          date: new Date(p.lastMeetingAt).toLocaleDateString(intl, { day: "numeric", month: "short" }),
+                        })}
+                      </span>
                     ) : null}
                   </div>
                 </Link>
@@ -246,20 +251,20 @@ export default async function MentorshipListPage({
 
         {filteredTotal > 0 ? (
           <nav
-            aria-label="Pairing pages"
+            aria-label={t("list.pagesLabel")}
             style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "var(--ink-3)" }}
           >
             <span data-testid="pairings-range">
-              Showing {firstShown}–{lastShown} of {filteredTotal}
+              {t("list.range", { first: firstShown, last: lastShown, total: filteredTotal })}
             </span>
             {page > 1 ? (
               <Link href={listHref(statusFilter, page - 1)} className="btn btn-sm" style={{ textDecoration: "none" }}>
-                ← Previous
+                {t("list.previous")}
               </Link>
             ) : null}
             {hasNext ? (
               <Link href={listHref(statusFilter, page + 1)} className="btn btn-sm" style={{ textDecoration: "none" }}>
-                Next →
+                {t("list.next")}
               </Link>
             ) : null}
           </nav>

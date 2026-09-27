@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -61,7 +62,8 @@ test("072 — FormRenderer wires autosave (1 s debounce) + saved-indicator ticke
   assert.match(src, /useDraftAutosave\(/, "must autosave through the shared hook");
   assert.match(read("apps/web/src/components/forms/draft-resilience.ts"), /saveDraft\(/, "the hook must call saveDraft");
   assert.match(src, /clearDraft\(/, "must call clearDraft on submit success");
-  assert.match(src, /Saved\s.*ago/, "must render 'Saved Ns ago' indicator copy");
+  assert.ok(readsKey(src, "formRunner.savedAgo"), "must render 'Saved Ns ago' indicator copy");
+  assert.match(message("mentorship.client.formRunner.savedAgo"), /^Saved\s.*ago$/);
 });
 
 test("072 — FormRenderer honours SM-7 Hindi-name font and required marker styling", () => {

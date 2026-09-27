@@ -20,9 +20,15 @@
 // 720p and 1080p render as disabled options with a tooltip saying why (the
 // worker's ladder tops out at 480p; spec 041 deferred 720p). Hardcoding the disable here means a future drive-by edit
 // can't quietly enable them without also touching the zod allow-list.
+//
+// Copy is in the admin namespace (systemSettings.*), including each
+// notification category's name and hint (systemSettings.notifications.kinds,
+// keyed by NOTIFICATION_KIND_KEYS below). The values an administrator typed
+// (programme name, academic year) are data.
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@gml/db";
@@ -30,12 +36,39 @@ import { systemSettings, SYSTEM_SETTINGS_ID } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit } from "@/lib/audit";
 import { lastAuditAt } from "@/admin/audit-lookups";
-import { NOTIFICATION_CATEGORIES, NOTIFICATION_KEYS } from "@/lib/notification-kinds";
+import { NOTIFICATION_CATEGORIES, NOTIFICATION_KEYS, type NotificationKind } from "@/lib/notification-kinds";
 
 export const dynamic = "force-dynamic";
 
 // Same enums the route enforces — duplicated here for the zod parse on the action side.
 const VIDEO_QUALITIES = ["480p"] as const;
+
+// Each notification kind's message key (a kind has a dot in it, which a
+// message key cannot). Typed on every kind, so a kind added to the catalogue
+// without a name here fails the typecheck instead of rendering a raw key.
+const NOTIFICATION_KIND_KEYS: Record<NotificationKind, string> = {
+  "helpdesk.ticket": "helpdeskTicket",
+  "cycle.assigned": "cycleAssigned",
+  "cycle.complete": "cycleComplete",
+  "video.transcoded": "videoTranscoded",
+  "video.review_pending": "videoReviewPending",
+  "meeting.scheduled": "meetingScheduled",
+  "meeting.cancelled": "meetingCancelled",
+  "pairing.final_submitted": "pairingFinalSubmitted",
+  "digest.weekly": "digestWeekly",
+};
+
+// The fields a rejected save names in ?error= (comma-separated). Each has its
+// own message, systemSettings.errors.<field>; the page used to echo zod's
+// English issue text through the URL, which no translation could reach.
+const SETTINGS_FIELDS = [
+  "programmeName",
+  "academicYear",
+  "videoDefaultQuality",
+  "videoMaxUploadMb",
+  "notificationsEnabled",
+  "backupRetentionDays",
+] as const;
 
 const ServerActionSchema = z.object({
   programmeName: z.string().min(1).max(200),
@@ -43,6 +76,7 @@ const ServerActionSchema = z.object({
     .string()
     .min(1)
     .max(16)
+    // i18n-ignore: zod issue text, kept in the audit row only; the page shows admin systemSettings.errors.academicYear
     .regex(/^\d{4}-\d{2}$/, "academicYear must be YYYY-YY"),
   videoDefaultQuality: z.enum(VIDEO_QUALITIES),
   videoMaxUploadMb: z.number().int().min(10).max(2000),
@@ -77,18 +111,21 @@ async function updateSystemSettings(formData: FormData) {
     // Anyone would conclude the setting had saved.
     //
     // A redirect back with a code is the error channel a plain <form action>
-    // does have, and it is what the rest of this codebase already uses.
-    const detail = parsed.error.issues
-      .map((i) => `${i.path.join(".") || "field"}: ${i.message}`)
-      .join("; ")
-      .slice(0, 300);
+    // does have, and it is what the rest of this codebase already uses. The
+    // code is the list of fields that were refused; the page says what each
+    // one needs, in the operator's language. (It used to carry zod's English
+    // issue text, which stayed English whatever language was chosen.) The
+    // issues themselves go to the audit row.
+    const fields = [...new Set(parsed.error.issues.map((i) => String(i.path[0] ?? "")))]
+      .filter((f) => (SETTINGS_FIELDS as readonly string[]).includes(f))
+      .join(",");
     void recordAudit({
       action: "system_settings.update",
       entityType: "system_settings",
       entityId: SYSTEM_SETTINGS_ID,
       metadata: { error: "validation_failed", issues: parsed.error.issues },
     });
-    redirect(`/admin/system-settings?error=${encodeURIComponent(detail)}`);
+    redirect(`/admin/system-settings?error=${encodeURIComponent(fields || "invalid")}`);
   }
 
   await db
@@ -115,8 +152,19 @@ export default async function SystemSettingsPage({
   // The reason a save was rejected, echoed back by updateSystemSettings. It
   // used to return silently and the page redisplayed the old value, so a
   // refused save was indistinguishable from an accepted one.
-  const settingsError = ((await searchParams) ?? {}).error?.slice(0, 300) ?? null;
+  const rawError = ((await searchParams) ?? {}).error;
   await requireRole(["super_admin"]);
+  const t = await getTranslations("admin");
+  let settingsError: string | null = null;
+  if (typeof rawError === "string" && rawError !== "") {
+    const named = rawError
+      .split(",")
+      .filter((f): f is (typeof SETTINGS_FIELDS)[number] => (SETTINGS_FIELDS as readonly string[]).includes(f));
+    settingsError =
+      named.length > 0
+        ? [...new Set(named)].map((f) => t(`systemSettings.errors.${f}`)).join(" ")
+        : t("systemSettings.errors.invalid");
+  }
 
   // SM-1 view-side audit — record that an admin opened this surface. The query
   // below is plain SELECTs only, no PII.
@@ -172,26 +220,26 @@ export default async function SystemSettingsPage({
           data-testid="settings-error"
           className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
         >
-          <strong className="font-semibold">Nothing was saved.</strong> {settingsError}
+          <strong className="font-semibold">{t("systemSettings.notSaved")}</strong> {settingsError}
         </div>
       ) : null}
       <header>
         <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          System
+          {t("systemSettings.eyebrow")}
         </div>
-        <h1 className="mt-1 font-serif text-2xl">System settings</h1>
+        <h1 className="mt-1 font-serif text-2xl">{t("systemSettings.title")}</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Platform-wide configuration. Super admin only. Changes are audited.
+          {t("systemSettings.intro")}
         </p>
       </header>
 
       <form action={updateSystemSettings} className="flex flex-col gap-8">
         {/* Section 1 — Programme */}
         <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
-          <h2 className="font-serif text-lg">Programme</h2>
+          <h2 className="font-serif text-lg">{t("systemSettings.programme.heading")}</h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-xs text-neutral-500">Programme name</span>
+              <span className="text-xs text-neutral-500">{t("systemSettings.programme.name")}</span>
               <input
                 type="text"
                 name="programmeName"
@@ -202,13 +250,13 @@ export default async function SystemSettingsPage({
               />
             </label>
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-xs text-neutral-500">Academic year</span>
+              <span className="text-xs text-neutral-500">{t("systemSettings.programme.academicYear")}</span>
               <input
                 type="text"
                 name="academicYear"
                 defaultValue={settings.academicYear}
                 pattern="\d{4}-\d{2}"
-                title="Use YYYY-YY format, e.g. 2026-27"
+                title={t("systemSettings.programme.academicYearHint")}
                 required
                 className="rounded border border-neutral-300 px-2 py-1 font-mono"
               />
@@ -218,26 +266,26 @@ export default async function SystemSettingsPage({
 
         {/* Section 2 — Video pipeline */}
         <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
-          <h2 className="font-serif text-lg">Video pipeline</h2>
+          <h2 className="font-serif text-lg">{t("systemSettings.video.heading")}</h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-xs text-neutral-500">Default quality</span>
+              <span className="text-xs text-neutral-500">{t("systemSettings.video.defaultQuality")}</span>
               <select
                 name="videoDefaultQuality"
                 defaultValue={settings.videoDefaultQuality}
                 className="rounded border border-neutral-300 px-2 py-1"
               >
-                <option value="480p">480p (current)</option>
-                <option value="720p" disabled title="Not available: videos are encoded up to 480p">
-                  720p (not available: videos are encoded up to 480p)
+                <option value="480p">{t("systemSettings.video.q480")}</option>
+                <option value="720p" disabled title={t("systemSettings.video.q720Title")}>
+                  {t("systemSettings.video.q720")}
                 </option>
-                <option value="1080p" disabled title="Not a goal — bandwidth-tight Ladakh deployments">
-                  1080p (out of scope)
+                <option value="1080p" disabled title={t("systemSettings.video.q1080Title")}>
+                  {t("systemSettings.video.q1080")}
                 </option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-xs text-neutral-500">Max upload (MB)</span>
+              <span className="text-xs text-neutral-500">{t("systemSettings.video.maxUpload")}</span>
               <input
                 type="number"
                 name="videoMaxUploadMb"
@@ -254,10 +302,9 @@ export default async function SystemSettingsPage({
 
         {/* Section 3 — Notifications */}
         <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
-          <h2 className="font-serif text-lg">Notifications</h2>
+          <h2 className="font-serif text-lg">{t("systemSettings.notifications.heading")}</h2>
           <p className="text-xs text-neutral-500">
-            Per-category enable/disable. Disabling a category stops the worker from
-            emitting rows in the notifications inbox for that event class.
+            {t("systemSettings.notifications.intro")}
           </p>
           <ul className="grid grid-cols-1 gap-2">
             {NOTIFICATION_CATEGORIES.map((cat) => (
@@ -271,8 +318,12 @@ export default async function SystemSettingsPage({
                   className="mt-1"
                 />
                 <label htmlFor={`notif-${cat.key}`} className="flex flex-col text-sm">
-                  <span className="font-medium">{cat.label}</span>
-                  <span className="text-xs text-neutral-500">{cat.hint}</span>
+                  <span className="font-medium">
+                    {t(`systemSettings.notifications.kinds.${NOTIFICATION_KIND_KEYS[cat.key]}.label`)}
+                  </span>
+                  <span className="text-xs text-neutral-500">
+                    {t(`systemSettings.notifications.kinds.${NOTIFICATION_KIND_KEYS[cat.key]}.hint`)}
+                  </span>
                   <code className="font-mono text-[10px] text-neutral-400">{cat.key}</code>
                 </label>
               </li>
@@ -282,9 +333,9 @@ export default async function SystemSettingsPage({
 
         {/* Section 4 — Backups & retention */}
         <section className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
-          <h2 className="font-serif text-lg">Backups & retention</h2>
+          <h2 className="font-serif text-lg">{t("systemSettings.backups.heading")}</h2>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-xs text-neutral-500">Retention window (days)</span>
+            <span className="text-xs text-neutral-500">{t("systemSettings.backups.retention")}</span>
             <input
               type="number"
               name="backupRetentionDays"
@@ -297,13 +348,10 @@ export default async function SystemSettingsPage({
             />
           </label>
           <p className="text-xs text-neutral-500">
-            <strong>Recorded here, enforced on the host.</strong> scripts/backup.sh
-            runs as a cron job outside the application and reads{" "}
-            <code>KEEP_DAILY</code> from <code>.env</code>; it cannot query this
-            database at the time it prunes. Changing this value records the
-            programme&rsquo;s intent — ask IT to set <code>KEEP_DAILY</code> to
-            match. Said plainly because this field previously implied it
-            controlled the retention directly, and it never has.
+            {t.rich("systemSettings.backups.retentionHelp", {
+              strong: (chunks) => <strong>{chunks}</strong>,
+              code: (chunks) => <code>{chunks}</code>,
+            })}
           </p>
         </section>
 
@@ -312,15 +360,15 @@ export default async function SystemSettingsPage({
             type="submit"
             className="rounded bg-neutral-900 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-700"
           >
-            Save changes
+            {t("systemSettings.save")}
           </button>
           <span className="text-xs text-neutral-500">
-            Last updated:{" "}
-            <span className="font-mono">
-              {settings.updatedAt
+            {t.rich("systemSettings.lastUpdated", {
+              when: settings.updatedAt
                 ? new Date(settings.updatedAt).toISOString().slice(0, 16).replace("T", " ")
-                : "—"}
-            </span>
+                : "—",
+              mono: (chunks) => <span className="font-mono">{chunks}</span>,
+            })}
           </span>
         </div>
       </form>
@@ -330,38 +378,33 @@ export default async function SystemSettingsPage({
         data-system-status
         className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4"
       >
-        <h2 className="font-serif text-lg">Backup & restore status</h2>
+        <h2 className="font-serif text-lg">{t("systemSettings.status.heading")}</h2>
         <dl className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-              Last successful backup
+              {t("systemSettings.status.lastBackup")}
             </dt>
             <dd className="font-mono">
               {lastBackupAt
                 ? lastBackupAt.toISOString().slice(0, 16).replace("T", " ")
-                : "not reported to the app — see last-backup.txt on the host"}
+                : t("systemSettings.status.backupNotReported")}
             </dd>
           </div>
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-              Last restore drill
+              {t("systemSettings.status.lastRestoreDrill")}
             </dt>
             <dd className="font-mono">
               {lastRestoreAt
                 ? lastRestoreAt.toISOString().slice(0, 16).replace("T", " ")
-                : "not reported to the app — see last_restore_drill.json on the host"}
+                : t("systemSettings.status.restoreNotReported")}
             </dd>
           </div>
         </dl>
         <p className="text-xs text-neutral-500">
-          Sources: the latest <code className="font-mono">backup.complete</code> and{" "}
-          <code className="font-mono">restore.complete</code> rows in audit_log,
-          which scripts/backup.sh and scripts/restore.sh write after each
-          successful run. Each also records its last run on the host, in{" "}
-          <code className="font-mono">/var/lib/gml/backups/last-backup.txt</code> and{" "}
-          <code className="font-mono">workspace/last_restore_drill.json</code> (the
-          stamp deploy.sh&rsquo;s restore-drill gate reads); look there when a
-          time is not reported here.
+          {t.rich("systemSettings.status.sources", {
+            code: (chunks) => <code className="font-mono">{chunks}</code>,
+          })}
         </p>
       </section>
     </main>

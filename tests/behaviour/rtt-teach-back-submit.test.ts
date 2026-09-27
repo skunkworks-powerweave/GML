@@ -277,7 +277,7 @@ test("FR-02: a teach-back names a subject its uploader is shown; anything else i
 // the id. It now says what the code names and where she gets it.
 test("FR-02: the /videos upload dialog says what a TB- code names and where a teacher finds it", async () => {
   const { UploadModal } = await import("../../apps/web/src/components/video/UploadModal.tsx");
-  const m = mount(UploadModal as (p: unknown) => unknown, { whatsappPhone: "+919999999999", videoDefaultQuality: "480p" });
+  const m = mount(UploadModal as (p: unknown) => unknown, { whatsappPhone: "+919999999999", videoDefaultQuality: "480p" }, { intl: "en" });
   const trigger = hostElements(m.rerender()).find((el) => el.props["data-testid"] === "upload-trigger")!;
   (trigger.props.onClick as () => void)();
   const dialog = textOf(hostElements(m.rerender()).find((el) => el.props["data-testid"] === "upload-modal") ?? null);

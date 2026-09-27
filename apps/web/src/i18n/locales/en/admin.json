@@ -1,0 +1,453 @@
+{
+  "index": {
+    "eyebrow": "Admin · {year}",
+    "intro": "No-code data management. Every change is logged to the audit trail.",
+    "data": "Data",
+    "entityMeta": "Slug: {slug} · roles: {roles}",
+    "system": "System",
+    "links": {
+      "users": {
+        "title": "Users",
+        "hint": "Create accounts, set roles, deactivate · programme_admin and above"
+      },
+      "audit": {
+        "title": "Audit log",
+        "hint": "Search every recorded action across the platform"
+      },
+      "gates": {
+        "title": "Section gates",
+        "hint": "Rotate gate passwords · super_admin only"
+      },
+      "forms": {
+        "title": "Feedback forms",
+        "hint": "Form templates and their schemas"
+      },
+      "quizzes": {
+        "title": "Quizzes",
+        "hint": "Create a quiz and write its questions"
+      },
+      "scorm": {
+        "title": "SCORM packages",
+        "hint": "SCORM 1.2 modules for RTT subjects · learners' completion and scores"
+      },
+      "whatsappLog": {
+        "title": "WhatsApp ingest log",
+        "hint": "Incoming videos · unmatched submissions"
+      },
+      "systemSettings": {
+        "title": "System settings",
+        "hint": "Programme · video pipeline · notifications · backups — super_admin only"
+      },
+      "transcodeJobs": {
+        "title": "Transcode jobs",
+        "hint": "Inspect the dead-letter queue · retry or drop failed transcodes"
+      }
+    }
+  },
+  "users": {
+    "eyebrow": "Administration",
+    "title": "Users",
+    "summary": "{active, plural, one {# active account} other {# active accounts}} of {total}. Accounts are created with a password you set and hand over directly — this deployment does not send email. The account holder changes it from Settings.",
+    "createHeading": "Create an account",
+    "allHeading": "All accounts",
+    "awaitingHeading": "Awaiting an account",
+    "awaitingHelp": "These people have programme records but no login. Creating an account above and selecting them from the “Link to” list attaches the two, so their submissions and their sign-in are the same person.",
+    "awaitingCount": "{teachers, plural, one {# teacher} other {# teachers}}, {mentors, plural, one {# mentor} other {# mentors}}.",
+    "actions": {
+      "notSignedIn": "Not signed in.",
+      "noPermission": "You do not have permission to manage users.",
+      "notYourself": "You cannot change your own role or status. Ask another administrator.",
+      "noSuchUser": "No such user.",
+      "adminOnly": "Only a super admin can manage administrator accounts.",
+      "invalidEmail": "Enter a valid email address.",
+      "chooseRole": "Choose a role.",
+      "cannotAssign": "You cannot assign that role.",
+      "unknownRole": "Unknown role.",
+      "initialPassword": "Initial password: {problem}",
+      "createFailed": "Could not create the account.",
+      "alreadyLinked": "That {kind, select, teacher {teacher} other {mentor}} record is already linked to another login. {outcome}",
+      "nothingCreatedReload": "Nothing was created; reload the page for the current list.",
+      "profileFailed": "Could not set up the profile: {detail}. {outcome}",
+      "nothingCreated": "Nothing was created.",
+      "created": "Created {email}. Give them the password you set; they will be asked to choose their own when they first sign in.",
+      "profileLeftBehind": "The account for {email} could not be removed and is still listed here; deactivate it if it is active.",
+      "loginLeftBehind": "The login for {email} could not be removed; delete it in the Supabase dashboard (Authentication → Users) before creating it again.",
+      "lastSuperAdmin": "This is the last active super admin. Promote someone else first.",
+      "roleUpdated": "Role updated to {role}.",
+      "roleUpdatedSessionsKept": "Role updated to {role}. Their administrator access has ended, but their existing sessions could not be ended: they stay signed in as {role} until they sign out. To end those sessions, deactivate and reactivate the account.",
+      "reactivated": "Account reactivated.",
+      "reactivatedStillBanned": "Account reactivated, but Supabase still blocks their sign-in ({error}). Deactivate and reactivate them to retry.",
+      "deactivated": "Account deactivated. Existing sessions ended; their current page may work for up to one token lifetime.",
+      "deactivatedSessionsKept": "Account deactivated, but their existing sessions could not be ended. They cannot be renewed while the account is inactive and stop working within one token lifetime.",
+      "banNotApplied": "{outcome} Supabase did not block their sign-in ({error}); the inactive account is still refused a session.",
+      "invalidPhone": "Enter a mobile number, e.g. 98765 43210 or +91 98765 43210.",
+      "phoneSaved": "WhatsApp number saved ({phone}).",
+      "phoneRemoved": "WhatsApp number removed.",
+      "passwordSet": "Password set. Their other sessions have been signed out.",
+      "passwordSetSessionsKept": "Password set, but their existing sessions could not be ended. Try again, or ask them to sign out."
+    }
+  },
+  "gates": {
+    "eyebrow": "System",
+    "title": "Section gates",
+    "intro": "Rotating codes restrict access to sensitive sections even after login. Rotate every 30 days; share over a secure channel only. Each rotation invalidates every active grant for the slug — every authorised user must re-enter the new password.",
+    "cards": {
+      "observation": {
+        "label": "Classroom Observation",
+        "description": "Gates /observation/* — observer + mentor + admin only."
+      },
+      "mentorship": {
+        "label": "Mentorship",
+        "description": "Gates /mentorship/* — mentor + admin only."
+      },
+      "admin": {
+        "label": "Audit log",
+        "description": "Gates /admin/audit — the append-only record of every mutation."
+      }
+    },
+    "recipient": "{name} · {role}",
+    "lastRotated": "Last rotated",
+    "never": "never",
+    "version": "Version",
+    "activeGrants": "Active grants",
+    "attempts30d": "Attempts (30d)",
+    "failuresRotatedBy": "Failures (30d) · rotated by"
+  },
+  "audit": {
+    "title": "Audit log",
+    "intro": "Append-only record of every protected view, edit, upload, and gate event.",
+    "userFilterRejected": "The user filter was ignored — no account matches <code>{value}</code>. Enter the address shown in the User column, or click a name there.",
+    "filters": {
+      "action": "Action",
+      "any": "any",
+      "user": "User (email or id)",
+      "from": "From",
+      "to": "To",
+      "submit": "Filter"
+    },
+    "exportTooLarge": "More than {cap} events match — narrow From/To to export.",
+    "exportCsv": "Export CSV",
+    "columns": {
+      "when": "When",
+      "user": "User",
+      "action": "Action",
+      "entity": "Entity",
+      "ip": "IP",
+      "metadata": "Metadata"
+    },
+    "empty": "No events.",
+    "page": "Page {page}",
+    "prev": "← Prev",
+    "next": "Next →"
+  },
+  "systemSettings": {
+    "notSaved": "Nothing was saved.",
+    "errors": {
+      "programmeName": "Programme name must be 1 to 200 characters.",
+      "academicYear": "Academic year must be in YYYY-YY format, e.g. 2026-27.",
+      "videoDefaultQuality": "Default quality can only be 480p.",
+      "videoMaxUploadMb": "Max upload must be a whole number of MB from 10 to 2000.",
+      "notificationsEnabled": "A notification category that does not exist was sent.",
+      "backupRetentionDays": "Retention window must be a whole number of days from 7 to 365.",
+      "invalid": "The form could not be read. Reload the page and try again."
+    },
+    "eyebrow": "System",
+    "title": "System settings",
+    "intro": "Platform-wide configuration. Super admin only. Changes are audited.",
+    "programme": {
+      "heading": "Programme",
+      "name": "Programme name",
+      "academicYear": "Academic year",
+      "academicYearHint": "Use YYYY-YY format, e.g. 2026-27"
+    },
+    "video": {
+      "heading": "Video pipeline",
+      "defaultQuality": "Default quality",
+      "q480": "480p (current)",
+      "q720": "720p (not available: videos are encoded up to 480p)",
+      "q720Title": "Not available: videos are encoded up to 480p",
+      "q1080": "1080p (out of scope)",
+      "q1080Title": "Not a goal — bandwidth-tight Ladakh deployments",
+      "maxUpload": "Max upload (MB)"
+    },
+    "notifications": {
+      "heading": "Notifications",
+      "intro": "Per-category enable/disable. Disabling a category stops the worker from emitting rows in the notifications inbox for that event class.",
+      "kinds": {
+        "helpdeskTicket": {
+          "label": "Help request",
+          "hint": "Programme admin notified when a user submits the help form"
+        },
+        "cycleAssigned": {
+          "label": "Cycle assigned",
+          "hint": "Observer/mentor notified when a new cycle is created"
+        },
+        "cycleComplete": {
+          "label": "Cycle complete",
+          "hint": "All parties notified when a cycle closes"
+        },
+        "videoTranscoded": {
+          "label": "Video transcoded",
+          "hint": "Uploader notified when ffmpeg pipeline finishes"
+        },
+        "videoReviewPending": {
+          "label": "Video review pending",
+          "hint": "Programme admin alerted on quality flags"
+        },
+        "meetingScheduled": {
+          "label": "Meeting scheduled",
+          "hint": "Mentor + teacher receive calendar entry"
+        },
+        "meetingCancelled": {
+          "label": "Meeting cancelled",
+          "hint": "Both parties notified of cancellations"
+        },
+        "pairingFinalSubmitted": {
+          "label": "Final feedback in",
+          "hint": "Programme admin and the other party notified when a pairing's final (Q4) form is submitted"
+        },
+        "digestWeekly": {
+          "label": "Weekly digest",
+          "hint": "Friday roll-up across all activities"
+        }
+      }
+    },
+    "backups": {
+      "heading": "Backups & retention",
+      "retention": "Retention window (days)",
+      "retentionHelp": "<strong>Recorded here, enforced on the host.</strong> scripts/backup.sh runs as a cron job outside the application and reads <code>KEEP_DAILY</code> from <code>.env</code>; it cannot query this database at the time it prunes. Changing this value records the programme’s intent — ask IT to set <code>KEEP_DAILY</code> to match. Said plainly because this field previously implied it controlled the retention directly, and it never has."
+    },
+    "save": "Save changes",
+    "lastUpdated": "Last updated: <mono>{when}</mono>",
+    "status": {
+      "heading": "Backup & restore status",
+      "lastBackup": "Last successful backup",
+      "lastRestoreDrill": "Last restore drill",
+      "backupNotReported": "not reported to the app — see last-backup.txt on the host",
+      "restoreNotReported": "not reported to the app — see last_restore_drill.json on the host",
+      "sources": "Sources: the latest <code>backup.complete</code> and <code>restore.complete</code> rows in audit_log, which scripts/backup.sh and scripts/restore.sh write after each successful run. Each also records its last run on the host, in <code>/var/lib/gml/backups/last-backup.txt</code> and <code>workspace/last_restore_drill.json</code> (the stamp deploy.sh’s restore-drill gate reads); look there when a time is not reported here."
+    }
+  },
+  "transcodeJobs": {
+    "title": "Transcode jobs",
+    "intro": "Inspect and operate the ffmpeg → HLS 480p pipeline. Failed rows are listed first; click Retry to re-enqueue a job onto the queue, or Drop to bury it without retry. Each attempt is its own row; only a video's latest attempt, while the video is failed, can be retried or dropped. Every action is logged to the audit trail.",
+    "errors": {
+      "missing_job_id": "That action arrived without a job id. Try again from the table.",
+      "job_not_found": "That job no longer exists — it may have been pruned.",
+      "not_retriable_status": "Only a failed job can be retried. This one has since changed state; reload to see its current status.",
+      "not_droppable_status": "Only a failed job can be dropped. Reload to see its current status.",
+      "not_failed_attempt": "Only a failed attempt can be retried or dropped. Reload to see its current status.",
+      "not_latest_attempt": "That was an older attempt of this video. Only its latest attempt can be retried or dropped.",
+      "job_live": "That video already has a transcode queued or running. Reload to see its current status.",
+      "submission_not_failed": "That video is no longer failed — it has been retried or has become ready since. Reload to see it.",
+      "unknown": "That action could not be completed."
+    },
+    "dbDown": "<strong>Live queue depth unavailable (the database is unreachable).</strong> The historical job table below is still accurate.",
+    "depth": {
+      "label": "transcode queue depth",
+      "unavailable": "Live queue depth unavailable (Redis unreachable).",
+      "waiting": "Waiting",
+      "active": "Active",
+      "delayed": "Delayed",
+      "failed": "Failed (DLQ)"
+    },
+    "dead": {
+      "label": "dead jobs",
+      "heading": "Dead jobs, every queue ({count})",
+      "intro": "Jobs whose attempts are exhausted, with the error the queue recorded. To retry a dead transcode, use Retry on the video's latest failed attempt below. A dead retention sweep runs again the next day by itself.",
+      "none": "None.",
+      "columns": {
+        "queue": "Queue",
+        "job": "Job",
+        "attempts": "Attempts",
+        "died": "Died",
+        "lastError": "Last error"
+      }
+    },
+    "filters": {
+      "label": "Filter transcode jobs",
+      "all": "All",
+      "failed": "Failed",
+      "in_progress": "In progress",
+      "queued": "Queued",
+      "recent": "Recent (24h)"
+    },
+    "columns": {
+      "status": "Status",
+      "submission": "Submission",
+      "source": "Source",
+      "videoNow": "Video now",
+      "error": "Error",
+      "attempts": "Attempts",
+      "updated": "Updated",
+      "actions": "Actions"
+    },
+    "empty": "No transcode jobs match the current filter.",
+    "jobStatus": {
+      "queued": "queued",
+      "running": "running",
+      "succeeded": "succeeded",
+      "failed": "failed",
+      "cancelled": "cancelled",
+      "dropped": "dropped"
+    },
+    "source": {
+      "direct": "direct",
+      "whatsapp": "whatsapp",
+      "external_link": "external_link",
+      "google_drive": "google_drive"
+    },
+    "videoStatus": {
+      "received": "received",
+      "queued": "queued",
+      "transcoding": "transcoding",
+      "ready": "ready",
+      "failed": "failed",
+      "review_pending": "review_pending",
+      "reviewed": "reviewed"
+    },
+    "retry": "Retry",
+    "drop": "Drop",
+    "superseded": "superseded by a later attempt",
+    "footer": "Showing the most recent {limit} transcode jobs. Errors are truncated to 60 characters; hover to see the full text. For the full audit history (retries, drops, worker errors) see <link>/admin/audit</link>."
+  },
+  "whatsappLog": {
+    "title": "WhatsApp ingest log",
+    "intro": "Every video sent to the GML WhatsApp number. A caption carrying OBS- / TB- / MM- and a code the sender may use links the upload to that observation cycle, teach-back, or mentor meeting; everything else is kept as a generic submission, visible to admins and the sender, with its caption and sender shown here. The app has no control yet for attaching a generic video to a cycle afterwards: ask the teacher to send it again with the cycle code as the caption.",
+    "errors": {
+      "missing_submission_id": "No submission was given. Use the button on the row.",
+      "submission_not_found": "That submission no longer exists.",
+      "not_whatsapp_source": "That submission did not arrive through WhatsApp.",
+      "cannot_resend_finalised": "That video has already been processed or reviewed, so it is not transcoded again.",
+      "media_not_fetched": "That video's media was never fetched from WhatsApp, so there is nothing to transcode. Use Retry fetch.",
+      "no_media_id": "That video arrived before the WhatsApp media id was recorded, so it cannot be fetched again. Ask the sender to send it again.",
+      "already_fetched": "That video's media is already stored. Use Resend transcode instead.",
+      "cannot_refetch_status": "That video is already being processed or has been, so its media is not fetched again.",
+      "unknown": "That action could not be completed."
+    },
+    "config": {
+      "off": "WhatsApp ingest is off: WHATSAPP_APP_SECRET is not set, so the webhook refuses all traffic. Direct upload is unaffected.",
+      "partial": "WhatsApp ingest is only partly configured.",
+      "missing": {
+        "WHATSAPP_VERIFY_TOKEN": "<mono>{name}</mono> is not set: Meta's webhook verification is refused.",
+        "WHATSAPP_ACCESS_TOKEN": "<mono>{name}</mono> is not set: videos are recorded but cannot be fetched from Meta.",
+        "WHATSAPP_PHONE_NUMBER_ID": "<mono>{name}</mono> is not set: senders get no reply.",
+        "other": "<mono>{name}</mono> is not set: see README-IT.md."
+      }
+    },
+    "deadFetches": "{count} WhatsApp video fetch(es) gave up in the last 24 hours; each row below shows why, with Retry fetch.",
+    "filters": {
+      "parsing": "Parsing",
+      "any": "any",
+      "from": "From",
+      "to": "To",
+      "submit": "Filter",
+      "reset": "Reset"
+    },
+    "columns": {
+      "when": "When",
+      "from": "From",
+      "caption": "Caption",
+      "parsedContext": "Parsed context",
+      "submission": "Submission",
+      "status": "Status",
+      "resend": "Resend"
+    },
+    "empty": "No WhatsApp ingest events match the current filter.",
+    "parsing": {
+      "matched": "matched",
+      "unmatched": "unmatched"
+    },
+    "context": {
+      "observation_cycle": "observation cycle",
+      "teach_back": "teach back",
+      "mentor_meeting": "mentor meeting",
+      "mentee_quarterly": "mentee quarterly",
+      "classroom_session": "classroom session",
+      "generic": "generic"
+    },
+    "parsedContext": "{parsing} · {context}",
+    "status": {
+      "received": "received",
+      "queued": "queued",
+      "transcoding": "transcoding",
+      "ready": "ready",
+      "failed": "failed",
+      "review_pending": "review_pending",
+      "reviewed": "reviewed"
+    },
+    "awaitingMedia": "awaiting media",
+    "retryFetch": "Retry fetch",
+    "resendTranscode": "Resend transcode",
+    "footer": "Showing the most recent {limit} WhatsApp submissions. For full WhatsApp audit-trail history (parse failures, signature rejections, media-fetch errors) see <link>/admin/audit</link>."
+  },
+  "client": {
+    "roles": {
+      "teacher": "Teacher",
+      "observer": "Observer",
+      "mentor": "Mentor",
+      "programme_admin": "Programme admin",
+      "super_admin": "Super admin"
+    },
+    "createUser": {
+      "email": "Email",
+      "fullName": "Full name",
+      "role": "Role",
+      "choose": "Choose…",
+      "initialPassword": "Initial password",
+      "generate": "Generate",
+      "passwordHint": "Shown so you can pass it on. Ask them to change it in Settings.",
+      "linkTo": "Link to",
+      "linkNobody": "Nobody yet",
+      "linkTeacher": "A teacher record",
+      "linkMentor": "A mentor record",
+      "creating": "Creating…",
+      "submit": "Create account"
+    },
+    "userRow": {
+      "deleted": "deleted",
+      "deactivated": "deactivated",
+      "you": "(you)",
+      "lastSeen": "last seen {date}",
+      "neverSignedIn": "never signed in",
+      "saving": "Saving…",
+      "setRole": "Set role",
+      "deactivate": "Deactivate",
+      "reactivate": "Reactivate",
+      "cancel": "Cancel",
+      "setPassword": "Set password",
+      "selfHint": "Change your own password in Settings. Another administrator must change your role.",
+      "adminOnlyHint": "Only a super admin can manage administrator accounts.",
+      "newPassword": "New password ({min}+ characters)",
+      "savePassword": "Save password",
+      "signsOut": "Signs them out everywhere.",
+      "phonePlaceholder": "WhatsApp number",
+      "saveNumber": "Save number",
+      "phoneHint": "Gate passwords are shared to it, and videos sent from it on WhatsApp are filed under this person."
+    },
+    "rotateControls": {
+      "confirmRotate": "Rotate the {gate} gate password? Every active grant will be invalidated and every user will need to re-unlock with the new password.",
+      "rotationFailedHttp": "Rotation failed (HTTP {status}).",
+      "rotationFailed": "Rotation failed: {error}",
+      "confirmShare": "Share the {gate} password with {recipient} via WhatsApp? The plaintext will appear in both your WhatsApp history.",
+      "shareFailedHttp": "Share failed (HTTP {status}).",
+      "shareFailed": "Share failed: {error}",
+      "rotating": "Rotating…",
+      "rotate": "Rotate password",
+      "newPassword": "New password (v{version}) — shown ONCE",
+      "copy": "Copy",
+      "shareWith": "Share with:",
+      "shareViaWhatsApp": "Share via WhatsApp",
+      "noRecipients": "No staff with a phone number on file — share manually. WhatsApp numbers are added per account at /admin/users.",
+      "notStored": "The password is not stored anywhere we can show it again. Capture it now, then close this panel.",
+      "errors": {
+        "unauthenticated": "Your session has ended. Sign in again.",
+        "forbidden": "Only a super admin can do this.",
+        "invalid_slug": "That section gate does not exist.",
+        "validation_failed": "The request was not valid. Reload the page and try again.",
+        "recipient_not_found": "That person's account was not found.",
+        "recipient_no_phone": "That person has no WhatsApp number on their account."
+      }
+    }
+  }
+}

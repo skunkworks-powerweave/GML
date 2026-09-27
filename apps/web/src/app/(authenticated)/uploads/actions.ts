@@ -9,6 +9,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { attachSubmissionToContext } from "@gml/db/uploads";
 import { auth } from "@/auth";
@@ -49,19 +50,18 @@ export async function beginUploadAction(input: {
   /** 1 or 4, for a mentee's quarterly video; nothing else takes one. */
   quarter?: number | null;
 }): Promise<BeginUploadState> {
+  // Every message returned here is shown to the uploader as it is: in their language.
+  const t = await getTranslations("video");
   const session = await auth();
   const actor = actorFrom(session);
-  if (!actor || !session) return { ok: false, error: "Please sign in again." };
+  if (!actor || !session) return { ok: false, error: t("actions.signIn") };
 
   // Checked BEFORE any row is reserved. A misconfigured deployment should say
   // so on the first click rather than leaving a trail of `uploading` rows that
   // the reconciler has to fail 30 minutes later.
   const supabaseConfig = browserSupabaseConfig();
   if (!supabaseConfig) {
-    return {
-      ok: false,
-      error: "Uploads are not configured on this deployment. Please contact your administrator.",
-    };
+    return { ok: false, error: t("actions.notConfigured") };
   }
 
   // Who may attach to what, and what each context id means: ./context.ts.
@@ -72,7 +72,7 @@ export async function beginUploadAction(input: {
   // gated again: the reservation passed here, and the reconciler finishes a
   // stored upload whether or not its tab comes back.
   if (await lockedSection(actor, input.contextType)) {
-    return { ok: false, error: "Unlock that section first: enter its password, then send the video again." };
+    return { ok: false, error: t("actions.locked") };
   }
   const allowed = await assertContextAllowed(actor, {
     contextType: input.contextType,
@@ -135,8 +135,9 @@ export async function completeUploadAction(
   // observation_evidence row the observer reads on the cycle page.
   caption?: string,
 ): Promise<CompleteUploadState> {
+  const t = await getTranslations("video");
   const session = await auth();
-  if (!session) return { ok: false, error: "Please sign in again." };
+  if (!session) return { ok: false, error: t("actions.signIn") };
 
   const result = await completeUpload({
     submissionId,
@@ -147,16 +148,16 @@ export async function completeUploadAction(
 
   if (!result.ok) {
     if (result.error === "storage_unavailable") {
-      return { ok: false, error: "Storage did not answer. Your video is uploaded; try confirming it again.", retryable: true };
+      return { ok: false, error: t("actions.complete.storage_unavailable"), retryable: true };
     }
     const message =
       result.error === "object_missing"
-        ? "We could not find the uploaded file. Please try again."
+        ? t("actions.complete.object_missing")
         : result.error === "object_truncated"
-          ? "The upload finished early and is incomplete. Please try again."
+          ? t("actions.complete.object_truncated")
           : result.error === "object_too_large"
-            ? "That file is larger than it was declared and was refused."
-            : "That upload could not be found.";
+            ? t("actions.complete.object_too_large")
+            : t("actions.complete.not_found");
     return { ok: false, error: message };
   }
 

@@ -19,6 +19,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { learners, classes, schools } from "@gml/db/schema";
@@ -29,7 +30,10 @@ import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Learners" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("students.metaTitle") };
+}
 
 const PAGE_SIZE = 100;
 
@@ -49,6 +53,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
   const session = await requireRole(["programme_admin", "super_admin"]);
   const isSuperAdmin = session.user.role === "super_admin";
   const userId = session.user.id;
+  const t = await getTranslations("repo");
 
   const sp = await searchParams;
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
@@ -124,12 +129,12 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
+        <div className="label">{t("common.repository")}</div>
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
           <div>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Learners</h1>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("students.title")}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-              Per-class learner records. Sample shown below; full database is restricted.
+              {t("students.intro")}
             </p>
           </div>
           {isSuperAdmin ? (
@@ -137,9 +142,9 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
               href={`/api/admin/learners/export${schoolFilter ? `?school=${encodeURIComponent(schoolFilter)}` : ""}`}
               className="btn btn-primary btn-sm"
               style={{ textDecoration: "none", whiteSpace: "nowrap" }}
-              title="Bulk export learner PII as CSV — super admin only, audited"
+              title={t("students.exportTitle")}
             >
-              Export CSV
+              {t("students.export")}
             </a>
           ) : null}
         </div>
@@ -160,8 +165,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
         >
           <LockGlyph />
           <span style={{ fontSize: 12 }}>
-            Learner records contain PII (name, age, guardian). Access is restricted to school staff and programme
-            leads. Bulk export is audited and requires Super Admin approval.
+            {t("students.piiWarning")}
           </span>
         </div>
 
@@ -187,14 +191,14 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search learners by name"
-              title="Search learners by name"
+              aria-label={t("students.searchLabel")}
+              title={t("students.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
             <button type="submit" className="btn btn-sm">
-              Search
+              {t("common.search")}
             </button>
             {qFilter ? (
               <Link
@@ -206,7 +210,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
                 className="btn btn-sm"
                 style={{ textDecoration: "none" }}
               >
-                Clear
+                {t("common.clear")}
               </Link>
             ) : null}
           </form>
@@ -218,19 +222,19 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
           <table className="t">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Class</th>
-                <th>School</th>
-                <th>Age</th>
-                <th>Guardian</th>
-                <th>Attendance</th>
+                <th>{t("common.name")}</th>
+                <th>{t("common.class")}</th>
+                <th>{t("common.school")}</th>
+                <th>{t("common.age")}</th>
+                <th>{t("common.guardian")}</th>
+                <th>{t("common.attendance")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={6} style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-                    No learners match.
+                    {t("students.empty")}
                   </td>
                 </tr>
               ) : (
@@ -251,7 +255,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
                           st.name
                         )}
                       </td>
-                      <td>Grade {st.grade}</td>
+                      <td>{t("common.gradeN", { grade: st.grade })}</td>
                       <td>
                         <span className="mono" style={{ fontSize: 11 }}>{st.schoolCode ?? "—"}</span>
                         {st.schoolName ? (
@@ -296,14 +300,14 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
                   href={buildHref({ page: pageNum - 1, school: schoolFilter, q: qFilter })}
                   style={{ color: "var(--ink-2)", textDecoration: "none" }}
                 >
-                  ← Prev
+                  {t("students.prev")}
                 </Link>
               ) : (
-                <span style={{ color: "var(--ink-4)" }}>← Prev</span>
+                <span style={{ color: "var(--ink-4)" }}>{t("students.prev")}</span>
               )}
             </div>
             <div>
-              Page {pageNum} · {rows.length} row{rows.length === 1 ? "" : "s"}
+              {t("students.pageInfo", { page: pageNum, count: rows.length })}
             </div>
             <div>
               {rows.length === PAGE_SIZE ? (
@@ -311,10 +315,10 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
                   href={buildHref({ page: pageNum + 1, school: schoolFilter, q: qFilter })}
                   style={{ color: "var(--ink-2)", textDecoration: "none" }}
                 >
-                  Next →
+                  {t("students.next")}
                 </Link>
               ) : (
-                <span style={{ color: "var(--ink-4)" }}>Next →</span>
+                <span style={{ color: "var(--ink-4)" }}>{t("students.next")}</span>
               )}
             </div>
           </nav>

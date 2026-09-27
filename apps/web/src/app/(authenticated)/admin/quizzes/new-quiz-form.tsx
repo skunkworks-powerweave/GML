@@ -5,9 +5,12 @@
 // Collapsed by default so the index still reads as a list of quizzes rather
 // than a form, but one click from the empty state, which is where somebody with
 // no quizzes actually is.
+//
+// Words: adminData.client.newQuiz, in the viewer's language.
 
 import Link from "next/link";
 import { useActionState, useState } from "react";
+import { useTranslations } from "next-intl";
 import { createQuizAction, type CreateQuizState } from "./actions";
 
 const field: React.CSSProperties = {
@@ -34,11 +37,13 @@ export function NewQuizForm({
     createQuizAction,
     undefined,
   );
+  const t = useTranslations("adminData.client");
+  const tAction = useTranslations("action");
 
   if (!open) {
     return (
       <button type="button" className="chip" onClick={() => setOpen(true)} data-testid="new-quiz-open">
-        + New quiz
+        {t("newQuiz.open")}
       </button>
     );
   }
@@ -50,21 +55,28 @@ export function NewQuizForm({
       data-testid="new-quiz-form"
     >
       <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
-        Title
-        <input name="title" required minLength={2} maxLength={200} style={field} placeholder="Mid-unit check" />
+        {t("newQuiz.title")}
+        <input
+          name="title"
+          required
+          minLength={2}
+          maxLength={200}
+          style={field}
+          placeholder={t("newQuiz.titlePlaceholder")}
+        />
       </label>
 
       <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
-        Address (optional)
+        {t("newQuiz.address")}
+        {/* i18n-ignore: the example is an address itself, lowercase ASCII as the pattern requires */}
         <input name="slug" maxLength={60} style={field} placeholder="mid-unit" pattern="[a-z0-9]+(-[a-z0-9]+)*" />
         <span style={{ fontSize: 10, color: "var(--ink-3)" }}>
-          Appears in the link learners open: /quizzes/&lt;address&gt;. Left blank, it is taken
-          from the title. The chosen RTT subject&apos;s page lists the quiz once it is active.
+          {t.rich("newQuiz.addressHelp", { ph: (chunks) => <>{"<"}{chunks}{">"}</> })}
         </span>
       </label>
 
       <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
-        Pass mark (%)
+        {t("newQuiz.passMark")}
         <input name="passThreshold" type="number" min={1} max={100} defaultValue={60} style={field} />
       </label>
 
@@ -72,10 +84,10 @@ export function NewQuizForm({
           a quiz bound to no subject, and without this field every create
           failed with a generic "try again". */}
       <label style={{ display: "grid", gap: 3, fontSize: 11, color: "var(--ink-2)" }}>
-        RTT subject
+        {t("newQuiz.subject")}
         <select name="rttSubjectId" required defaultValue="" style={field} disabled={subjects.length === 0}>
           <option value="" disabled>
-            Choose the subject this quiz assesses
+            {t("newQuiz.chooseSubject")}
           </option>
           {subjects.map((s) => (
             <option key={s.id} value={s.id}>
@@ -85,8 +97,9 @@ export function NewQuizForm({
         </select>
         {subjects.length === 0 ? (
           <span style={{ fontSize: 10, color: "var(--rust)" }}>
-            A quiz belongs to an RTT subject, and there are none yet. Create one in{" "}
-            <Link href="/admin/data/rtt-subjects">RTT subjects</Link> first.
+            {t.rich("newQuiz.noSubjects", {
+              link: (chunks) => <Link href="/admin/data/rtt-subjects">{chunks}</Link>,
+            })}
           </span>
         ) : null}
       </label>
@@ -99,17 +112,14 @@ export function NewQuizForm({
 
       <div style={{ display: "flex", gap: 6 }}>
         <button type="submit" className="btn btn-sm" disabled={pending || subjects.length === 0}>
-          {pending ? "Creating…" : "Create quiz"}
+          {pending ? t("newQuiz.creating") : t("newQuiz.create")}
         </button>
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>
-          Cancel
+          {tAction("cancel")}
         </button>
       </div>
 
-      <span style={{ fontSize: 10, color: "var(--ink-3)" }}>
-        Created inactive and empty. You add questions on the next screen, then switch it on —
-        so a half-built quiz is never served to a learner.
-      </span>
+      <span style={{ fontSize: 10, color: "var(--ink-3)" }}>{t("newQuiz.note")}</span>
     </form>
   );
 }

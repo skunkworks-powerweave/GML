@@ -22,9 +22,21 @@
 //
 // The panel itself is a 'use client' island; the layout that mounts it stays
 // a server component (see app/(authenticated)/layout.tsx).
+//
+// Every word is the reader's language: the articles are help.entries.<slug>,
+// fetched when the panel first opens (useHelpEntries: they are most of the
+// namespace and most visits never open the panel, so they are not sent with
+// every page), the panel's own copy help.client.panel and
+// help.client.human (lib/help.ts holds only the dictionary's structure). The
+// text a user sends from here -- the WhatsApp and email prefill -- is theirs,
+// so it is in their language too. The helpdesk ticket carries no sentence at
+// all: its reader is an administrator, and /api/helpdesk/tickets writes it in
+// each administrator's language.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HELP, HELP_GROUPS, helpFor, searchHelp } from "@/lib/help";
+import { useTranslations } from "next-intl";
+import { HELP, HELP_GROUPS, helpFor, searchHelp, type HelpText } from "@/lib/help";
+import { useHelpEntries } from "./useHelpEntries";
 
 /**
  * Custom DOM event the rest of the app can dispatch to open the panel on a
@@ -69,7 +81,11 @@ function isUsableWhatsappContact(phone: string | null | undefined): boolean {
 }
 
 export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
+  const t = useTranslations("help.client");
+  const tAction = useTranslations("action");
   const [open, setOpen] = useState(false);
+  // Fetched the first time the panel opens; null until then.
+  const entries = useHelpEntries(open);
   const [topic, setTopic] = useState<string | null>(initialTopic);
   const [query, setQuery] = useState("");
   const [ticketState, setTicketState] = useState<"idle" | "sending" | "sent" | "error">("idle");
@@ -134,8 +150,20 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  /** A topic's words in the reader's language. */
+  const textOf = useCallback(
+    (k: string): HelpText => {
+      const e = entries?.[k];
+      return { title: e?.title ?? "", short: e?.short ?? "", long: e?.long || undefined };
+    },
+    [entries],
+  );
   const entry = topic ? helpFor(topic) : null;
-  const results = useMemo(() => (query.trim().length > 0 ? searchHelp(query) : []), [query]);
+  const words = topic && entry && entries ? textOf(topic) : null;
+  const results = useMemo(
+    () => (entries && query.trim().length > 0 ? searchHelp(query, textOf) : []),
+    [entries, query, textOf],
+  );
 
   const handleJump = useCallback((k: string | null) => {
     setTopic(k);
@@ -150,26 +178,25 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
       const res = await fetch("/api/helpdesk/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // No `message`: the route writes the ticket in each administrator's
+        // language from the topic and the page (it used to be an English
+        // sentence built here, whatever language either side used).
         body: JSON.stringify({
           topic: topic ?? null,
           pageSlug,
-          message:
-            entry?.title != null
-              ? `Help requested on "${entry.title}" from ${pageSlug}`
-              : `Help requested from ${pageSlug}`,
         }),
       });
       setTicketState(res.ok ? "sent" : "error");
     } catch {
       setTicketState("error");
     }
-  }, [entry, pageSlug, topic]);
+  }, [pageSlug, topic]);
 
   if (!open) return null;
 
-  const contextHint = entry
-    ? `Hi! I have a question about ${entry.title} (page ${pageSlug}).`
-    : `Hi! I need help with the LMS on page ${pageSlug}.`;
+  const contextHint = words
+    ? t("panel.contactTopic", { title: words.title, page: pageSlug })
+    : t("panel.contactPage", { page: pageSlug });
   // Spec 169 — only build the wa.me href when assertEnv() certified
   // the phone format. Invalid / unset → null → HumanHelpCard hides the
   // row entirely (no "(number not configured)" stub).
@@ -179,7 +206,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
       )}`
     : null;
   const mailHref = contact.email
-    ? `mailto:${contact.email}?subject=${encodeURIComponent(`Help: ${pageSlug}`)}&body=${encodeURIComponent(contextHint)}`
+    ? `mailto:${contact.email}?subject=${encodeURIComponent(t("panel.mailSubject", { page: pageSlug }))}&body=${encodeURIComponent(contextHint)}`
     : null;
 
   return (
@@ -196,7 +223,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
       />
       <aside
         role="dialog"
-        aria-label="Help"
+        aria-label={tAction("help")}
         data-help-panel
         style={{
           position: "fixed",
@@ -232,7 +259,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                 letterSpacing: "0.08em",
               }}
             >
-              Help
+              {tAction("help")}
             </div>
             <h2
               style={{
@@ -242,13 +269,13 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                 margin: "2px 0 0",
               }}
             >
-              {entry ? entry.title : "Browse help"}
+              {words ? words.title : t("panel.browse")}
             </h2>
           </div>
           <button
             type="button"
             onClick={() => setOpen(false)}
-            aria-label="Close help"
+            aria-label={t("panel.closeLabel")}
             style={{
               border: "1px solid var(--line)",
               background: "var(--card-hi)",
@@ -259,7 +286,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
               color: "var(--ink-2)",
             }}
           >
-            Close
+            {t("panel.close")}
           </button>
         </header>
 
@@ -267,10 +294,10 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
           <input
             ref={searchInputRef}
             type="search"
-            placeholder="Search help topics…"
+            placeholder={t("panel.search")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search help topics"
+            aria-label={t("panel.searchLabel")}
             data-help-search
             style={{
               width: "100%",
@@ -285,7 +312,11 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px 16px", minHeight: 0 }}>
-          {query.trim().length > 0 ? (
+          {!entries ? (
+            <p role="status" style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 4 }}>
+              {t("panel.loading")}
+            </p>
+          ) : query.trim().length > 0 ? (
             <div>
               <div
                 style={{
@@ -296,9 +327,9 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                   marginBottom: 6,
                 }}
               >
-                {results.length} result{results.length === 1 ? "" : "s"}
+                {t("panel.results", { count: results.length })}
               </div>
-              {results.map(({ key, entry: e }) => (
+              {results.map(({ key, text: e }) => (
                 <button
                   key={key}
                   type="button"
@@ -322,15 +353,15 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
               ))}
               {results.length === 0 && (
                 <div style={{ fontSize: 12, color: "var(--ink-3)", padding: 8 }}>
-                  No topics matched. Try a different word.
+                  {t("panel.noResults")}
                 </div>
               )}
             </div>
-          ) : entry ? (
+          ) : entry && words ? (
             <>
-              <p style={{ fontSize: 13, color: "var(--ink-2)", margin: 0, lineHeight: 1.55 }}>{entry.short}</p>
-              {entry.long ? (
-                <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 10, lineHeight: 1.6 }}>{entry.long}</p>
+              <p style={{ fontSize: 13, color: "var(--ink-2)", margin: 0, lineHeight: 1.55 }}>{words.short}</p>
+              {words.long ? (
+                <p style={{ fontSize: 13, color: "var(--ink-2)", marginTop: 10, lineHeight: 1.6 }}>{words.long}</p>
               ) : null}
 
               {entry.related && entry.related.length > 0 ? (
@@ -345,7 +376,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                       marginBottom: 6,
                     }}
                   >
-                    Related
+                    {t("panel.related")}
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {entry.related.map((rk) =>
@@ -365,7 +396,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                             cursor: "pointer",
                           }}
                         >
-                          {helpFor(rk)!.title}
+                          {textOf(rk).title}
                         </button>
                       ) : null,
                     )}
@@ -387,7 +418,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                   cursor: "pointer",
                 }}
               >
-                ← Back to all topics
+                {t("panel.back")}
               </button>
 
               <HumanHelpCard
@@ -402,8 +433,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
               <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 4 }}>
                 {/* This promised "dotted-underline words anywhere on the page";
                     no page renders one (HelpTip has no call sites). */}
-                Tap any topic to read its explanation, or search above. The ? button opens this panel from any
-                page; on a computer, so does the ? key.
+                {t("panel.intro")}
               </p>
               <HumanHelpCard
                 waHref={waHref}
@@ -422,7 +452,7 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                       marginBottom: 4,
                     }}
                   >
-                    {g.title}
+                    {t(`groups.${g.id}`)}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     {g.keys.map((k) =>
@@ -444,9 +474,9 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
                             color: "var(--ink)",
                           }}
                         >
-                          <div style={{ fontSize: 12.5, fontWeight: 500 }}>{HELP[k]!.title}</div>
+                          <div style={{ fontSize: 12.5, fontWeight: 500 }}>{textOf(k).title}</div>
                           <div style={{ fontSize: 11.5, color: "var(--ink-3)", lineHeight: 1.4 }}>
-                            {HELP[k]!.short}
+                            {textOf(k).short}
                           </div>
                         </button>
                       ) : null,
@@ -470,20 +500,22 @@ export function HelpPanel({ contact, initialTopic = null }: HelpPanelProps) {
           }}
         >
           <span>
-            Press{" "}
-            <kbd
-              style={{
-                padding: "1px 6px",
-                border: "1px solid var(--line)",
-                borderRadius: 4,
-                background: "var(--card-hi)",
-                fontFamily: "var(--mono, monospace)",
-                fontSize: 10,
-              }}
-            >
-              ?
-            </kbd>{" "}
-            anywhere to open this panel.
+            {t.rich("panel.shortcut", {
+              kbd: (chunks) => (
+                <kbd
+                  style={{
+                    padding: "1px 6px",
+                    border: "1px solid var(--line)",
+                    borderRadius: 4,
+                    background: "var(--card-hi)",
+                    fontFamily: "var(--mono, monospace)",
+                    fontSize: 10,
+                  }}
+                >
+                  {chunks}
+                </kbd>
+              ),
+            })}
           </span>
         </footer>
       </aside>
@@ -508,6 +540,7 @@ function HumanHelpCard({
   onSendTicket: () => void | Promise<void>;
   ticketState: "idle" | "sending" | "sent" | "error";
 }) {
+  const t = useTranslations("help.client.human");
   return (
     <div
       data-help-human
@@ -521,9 +554,9 @@ function HumanHelpCard({
         gap: 8,
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: 13 }}>Stuck? Talk to a person.</div>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>{t("title")}</div>
       <div style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
-        We&rsquo;re in your time-zone, Mon–Sat. Pick whichever is easiest right now.
+        {t("body")}
       </div>
       <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
         {/* Spec 169 — when assertEnv() rejected GML_HELPDESK_PHONE the
@@ -539,16 +572,16 @@ function HumanHelpCard({
             data-help-action="whatsapp"
             style={btnStyle}
           >
-            WhatsApp programme team
+            {t("whatsapp")}
           </a>
         ) : null}
         {mailHref ? (
           <a href={mailHref} data-help-action="email" style={btnStyle}>
-            Email admin
+            {t("email")}
           </a>
         ) : (
           <button type="button" disabled style={{ ...btnStyle, opacity: 0.6 }} data-help-action="email-disabled">
-            Email admin (address not configured)
+            {t("emailMissing")}
           </button>
         )}
         <button
@@ -559,12 +592,12 @@ function HumanHelpCard({
           style={{ ...btnStyle, opacity: ticketState === "sending" ? 0.6 : 1 }}
         >
           {ticketState === "sent"
-            ? "Helpdesk ticket sent ✓"
+            ? t("ticketSent")
             : ticketState === "sending"
-              ? "Sending…"
+              ? t("ticketSending")
               : ticketState === "error"
-                ? "Retry helpdesk ticket"
-                : "Open helpdesk ticket"}
+                ? t("ticketRetry")
+                : t("ticketOpen")}
         </button>
       </div>
     </div>

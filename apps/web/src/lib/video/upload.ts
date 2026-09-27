@@ -35,6 +35,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { files, videoSubmissions } from "@gml/db/schema";
 import { finalizeUpload, isCompleteSize, isOversize, UPLOAD_ABANDON_AFTER_HOURS } from "@gml/db/uploads";
@@ -113,6 +114,9 @@ export type BeginUploadResult = {
  * The object key is built from the caller's OWN uuid, server-side. A client
  * cannot choose it, and even if this code were bypassed the RLS policy on
  * storage.objects would refuse a key under anyone else's prefix.
+ *
+ * A refusal's `error` is for the uploader, in their language: beginUploadAction
+ * hands it straight to the upload screen.
  */
 export async function beginUpload(opts: {
   userId: string;
@@ -127,15 +131,15 @@ export async function beginUpload(opts: {
   const contentType = storableVideoType(opts.contentType);
 
   if (!Number.isFinite(opts.sizeBytes) || opts.sizeBytes <= 0) {
-    return { error: "That file looks empty." };
+    const t = await getTranslations("video");
+    return { error: t("actions.empty") };
   }
   const effectiveMax = await uploadLimitBytes();
 
   if (opts.sizeBytes > effectiveMax) {
     const mb = Math.floor(effectiveMax / (1024 * 1024));
-    return {
-      error: `That file is larger than the ${mb} MB limit. Send it over WhatsApp instead.`,
-    };
+    const t = await getTranslations("video");
+    return { error: t("actions.tooLarge", { mb }) };
   }
 
   // CONTINUE AN UNFINISHED RESERVATION FOR THE SAME FILE.

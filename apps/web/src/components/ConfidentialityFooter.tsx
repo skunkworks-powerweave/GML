@@ -2,14 +2,24 @@
 // Frontend prototype declares the policy on multiple pages — we centralize it.
 // The watermark variant (user · timestamp) is added by HlsPlayer + PDFViewer
 // when they ship; this footer is the document-level disclosure.
+//
+// In the user's language (home.chrome.footer.*): the notice and the "Viewed by"
+// stamp are one message each, so a language that puts the name elsewhere can.
+
+import { getTranslations } from "next-intl/server";
 
 type FooterProps = {
   user?: { name?: string | null; email?: string | null } | null;
   compact?: boolean;
 };
 
-export function ConfidentialityFooter({ user, compact = false }: FooterProps) {
-  const stamp = user?.name ?? user?.email ?? "anonymous";
+export async function ConfidentialityFooter({ user, compact = false }: FooterProps) {
+  const t = await getTranslations("home.chrome.footer");
+  const stamp = user?.name ?? user?.email ?? t("anonymous");
+  const tags = {
+    strong: (chunks: React.ReactNode) => <strong style={{ color: "var(--ink-2)", fontWeight: 600 }}>{chunks}</strong>,
+    code: (chunks: React.ReactNode) => <code style={{ fontFamily: "var(--mono)" }}>{chunks}</code>,
+  };
   return (
     <footer
       style={{
@@ -21,9 +31,7 @@ export function ConfidentialityFooter({ user, compact = false }: FooterProps) {
         lineHeight: 1.5,
       }}
     >
-      <strong style={{ color: "var(--ink-2)", fontWeight: 600 }}>Confidential.</strong>{" "}
-      All materials on this platform are for internal programme use only. Unauthorized sharing, copying, or distribution is not permitted.
-      {!compact ? <> Viewed by <code style={{ fontFamily: "var(--mono)" }}>{stamp}</code>.</> : null}
+      {compact ? t.rich("compact", tags) : t.rich("full", { ...tags, stamp })}
     </footer>
   );
 }

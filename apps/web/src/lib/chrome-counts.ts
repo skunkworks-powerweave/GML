@@ -126,17 +126,22 @@ export const loadQueueDepth = cache(async function loadQueueDepth(role: RoleName
   }
 });
 
+/** One part of the queue chip, in the user's language ("3 processing"). */
+export type QueuePartLabel = (part: "processing" | "waiting" | "failed", count: number) => string;
+
 /**
  * Format the the job queue counts into the topbar chip label. Returns null when
- * every count is zero — the renderer hides the chip in that case.
+ * every count is zero — the renderer hides the chip in that case. Each part
+ * comes from `label` (home.chrome.queue.* in the caller's language); the parts
+ * are separate figures, so they are listed with a " · " between them.
  */
-export function formatQueueLabel(counts: QueueDepth): string | null {
+export function formatQueueLabel(counts: QueueDepth, label: QueuePartLabel): string | null {
   const { active, waiting, failed } = counts;
   if (active === 0 && waiting === 0 && failed === 0) return null;
   const parts: string[] = [];
-  if (active > 0) parts.push(`${active} processing`);
-  if (waiting > 0) parts.push(`${waiting} waiting`);
-  if (failed > 0) parts.push(`${failed} failed`);
+  if (active > 0) parts.push(label("processing", active));
+  if (waiting > 0) parts.push(label("waiting", waiting));
+  if (failed > 0) parts.push(label("failed", failed));
   return parts.join(" · ");
 }
 

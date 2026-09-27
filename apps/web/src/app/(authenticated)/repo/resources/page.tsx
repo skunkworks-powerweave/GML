@@ -13,6 +13,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, desc, eq, ilike, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources, resourceSubjects, subjects } from "@gml/db/schema";
@@ -21,14 +22,20 @@ import { auth } from "@/auth";
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
+import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Reading material" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("resources.metaTitle") };
+}
 
 // Kept aligned with `resources_kind_check` CHECK constraint in
 // packages/db/src/schema/resources.ts. "Rubric" and "Other" intentionally omitted
-// from the filter strip — same pills the JSX prototype shows.
+// from the filter strip — same pills the JSX prototype shows. These are the
+// stored values (and the ?kind= the URL carries); what a pill shows is the
+// kind's label, repo.resourceKind.<kind>, in the viewer's language.
 const KIND_FILTERS = [
   "Policy",
   "Guide",
@@ -54,6 +61,9 @@ export default async function RepoResourcesIndexPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const t = await getTranslations("repo");
+  const intl = await repoIntlLocale();
+  const kindLabel = (kind: string) => enumLabel(t, "resourceKind", kind);
 
   const sp = await searchParams;
   const kindFilter: KindFilter | undefined = (KIND_FILTERS as readonly string[]).includes(
@@ -118,12 +128,12 @@ export default async function RepoResourcesIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
+        <div className="label">{t("common.repository")}</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-          Reading material
+          {t("resources.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          Handbooks, policy documents, lesson templates, routines and worksheets.
+          {t("resources.intro")}
         </p>
       </div>
       <div className="page-body">
@@ -138,20 +148,20 @@ export default async function RepoResourcesIndexPage({
         >
           {kindFilter ? <input type="hidden" name="kind" value={kindFilter} /> : null}
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Name
+            {t("common.name")}
             <input
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search resources by name"
-              title="Search resources by name"
+              aria-label={t("resources.searchLabel")}
+              title={t("resources.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
           </label>
           <button type="submit" className="btn btn-sm">
-            Search
+            {t("common.search")}
           </button>
           {qFilter ? (
             <Link
@@ -159,18 +169,18 @@ export default async function RepoResourcesIndexPage({
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Clear
+              {t("common.clear")}
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{rows.length} shown</span>
+            <span className="chip">{t("common.shown", { count: rows.length })}</span>
           </div>
         </form>
         <section style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
           <FilterPill
             href={qFilter ? `/repo/resources?q=${encodeURIComponent(qFilter)}` : "/repo/resources"}
             active={!kindFilter}
-            label="All"
+            label={t("common.all")}
             count={totalActive}
           />
           {KIND_FILTERS.map((k) => {
@@ -183,7 +193,7 @@ export default async function RepoResourcesIndexPage({
                 key={k}
                 href={`/repo/resources?${qs.toString()}`}
                 active={kindFilter === k}
-                label={k}
+                label={kindLabel(k)}
                 count={countMap.get(k) ?? 0}
               />
             );
@@ -194,7 +204,7 @@ export default async function RepoResourcesIndexPage({
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="resources"
-            emptyMessage="No reading material matches this filter."
+            emptyMessage={t("resources.empty")}
             items={rows.map((r) => {
               const subs = r.subjectsAgg ?? [];
               const subjectLabel =
@@ -205,7 +215,7 @@ export default async function RepoResourcesIndexPage({
                       .map((s) => s.name)
                       .join(", ") + (subs.length > 2 ? ` +${subs.length - 2}` : "");
               const updatedLabel = r.updatedAt
-                ? new Date(r.updatedAt).toLocaleDateString("en-IN", {
+                ? new Date(r.updatedAt).toLocaleDateString(intl, {
                     day: "numeric",
                     month: "short",
                     year: "numeric",
@@ -215,13 +225,13 @@ export default async function RepoResourcesIndexPage({
                 id: r.id,
                 primary: r.name,
                 href: `/repo/resource/${r.id}`,
-                chip: { label: r.kind, kind: "" },
+                chip: { label: kindLabel(r.kind), kind: "" },
                 secondary: [
-                  { label: "Subjects", value: subjectLabel },
+                  { label: t("common.subjects"), value: subjectLabel },
                   {
-                    value: `${r.owner ?? "—"} · ${r.pages ?? "—"} pages`,
+                    value: t("resources.cardMeta", { owner: r.owner ?? "—", pages: r.pages ?? "—" }),
                   },
-                  { label: "Updated", value: updatedLabel, mono: true },
+                  { label: t("common.updated"), value: updatedLabel, mono: true },
                 ],
               };
             })}
@@ -230,13 +240,21 @@ export default async function RepoResourcesIndexPage({
         <div className="card" style={device === "mobile" ? { display: "none", overflow: "hidden" } : { overflow: "hidden" }} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, color: "var(--ink-3)", fontSize: 13 }}>
-              No reading material matches this filter.
+              {t("resources.empty")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  {["Title", "Kind", "Subjects", "Owner", "Pages", "Updated", ""].map((h, i) => (
+                  {[
+                    t("common.title"),
+                    t("common.kind"),
+                    t("common.subjects"),
+                    t("common.owner"),
+                    t("common.pages"),
+                    t("common.updated"),
+                    "",
+                  ].map((h, i) => (
                     <th key={i}>{h}</th>
                   ))}
                 </tr>
@@ -257,7 +275,7 @@ export default async function RepoResourcesIndexPage({
                         </Link>
                       </td>
                       <td>
-                        <span className="chip">{r.kind}</span>
+                        <span className="chip">{kindLabel(r.kind)}</span>
                       </td>
                       <td style={{ fontSize: 12 }}>
                         {head.length === 0 ? (
@@ -282,7 +300,7 @@ export default async function RepoResourcesIndexPage({
                       <td>{r.pages ?? <span style={{ color: "var(--ink-4)" }}>—</span>}</td>
                       <td className="mono" style={{ fontSize: 12 }}>
                         {r.updatedAt
-                          ? new Date(r.updatedAt).toLocaleDateString("en-IN", {
+                          ? new Date(r.updatedAt).toLocaleDateString(intl, {
                               day: "numeric",
                               month: "short",
                               year: "numeric",

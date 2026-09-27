@@ -49,8 +49,13 @@
 // the pairing UUID, without ever entering a section password (no /api prefix
 // is gated by proxy.ts). The other six branches mirror /repo, which is
 // programme-wide directory data by design, and stay unscoped.
+//
+// The words a result adds around its data ("Grade 3", "Mentor pairing",
+// "Observation · baseline") are home.quickFind.* in the caller's language;
+// names, codes and topics are data and come back as stored.
 
 import { NextResponse } from "next/server";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -171,6 +176,8 @@ export async function GET(req: Request) {
   // eight tables on each keystroke did not.
   const pattern = `%${escapeIlike(rawQ)}%`;
   const results: QuickFindResult[] = [];
+  const t = await getTranslations("home.quickFind");
+  const tKind = await getTranslations("home.client.quickFind.kind");
 
   // Resolved ONCE, before the fan-out, and in parallel: each is a grant lookup
   // plus (when granted) the actor's teacher/mentor id round-trip, and QuickFind
@@ -199,7 +206,7 @@ export async function GET(req: Request) {
       kind: "teacher",
       id: r.id,
       label: r.fullName,
-      sublabel: r.schoolCode ? `${r.schoolCode} · ${r.schoolName ?? ""}`.trim() : "Teacher",
+      sublabel: r.schoolCode ? `${r.schoolCode} · ${r.schoolName ?? ""}`.trim() : tKind("teacher"),
       href: `/repo/teacher/${r.id}`,
     });
   }
@@ -257,8 +264,8 @@ export async function GET(req: Request) {
     results.push({
       kind: "class",
       id: r.id,
-      label: `Grade ${r.grade}${r.schoolCode ? ` · ${r.schoolCode}` : ""}`,
-      sublabel: r.classTeacherName ?? "Class",
+      label: r.schoolCode ? t("gradeAtSchool", { grade: r.grade, school: r.schoolCode }) : t("grade", { grade: r.grade }),
+      sublabel: r.classTeacherName ?? tKind("class"),
       href: `/repo/class/${r.id}`,
     });
   }
@@ -297,7 +304,7 @@ export async function GET(req: Request) {
       kind: "observation_cycle",
       id: r.id,
       label: r.code,
-      sublabel: r.topic ?? `Observation · ${r.kind}`,
+      sublabel: r.topic ?? t("observationKind", { kind: r.kind }),
       href: `/observation/${r.id}`,
     });
   }
@@ -312,7 +319,7 @@ export async function GET(req: Request) {
       kind: "mentor_pairing",
       id: r.id,
       label,
-      sublabel: "Mentor pairing",
+      sublabel: tKind("mentorPairing"),
       href: `/mentorship/${r.id}`,
     });
   }
@@ -336,7 +343,7 @@ export async function GET(req: Request) {
       kind: "outline",
       id: r.id,
       label: r.name,
-      sublabel: `${r.subjectName ?? ""} · Grade ${r.grade} · Term ${r.term}`.trim(),
+      sublabel: t("outline", { subject: r.subjectName ?? "", grade: r.grade, term: r.term }).trim(),
       href: `/repo/outline/${r.id}`,
     });
   }
@@ -359,7 +366,7 @@ export async function GET(req: Request) {
     results.push({
       kind: "session",
       id: r.id,
-      label: r.topic ?? "Session",
+      label: r.topic ?? tKind("session"),
       sublabel: `${r.subjectName ?? ""} · ${r.scheduledDate ?? ""}`.trim(),
       href: `/repo/session/${r.id}`,
     });

@@ -13,9 +13,11 @@
 // rest were already translated in all three bundles. "All tables", "Users" and
 // the "Your account" heading had no key at all.
 //
-// The assertion is independent of how the component chooses a key: for every
-// item of every role, the English bundle must hold its (role-specific) label,
-// and the rendered label must be that key's value in the locale shown.
+// Every item and section in config/nav.ts now names its own key (NavItem.
+// labelKey, NavSection.section) and carries no English literal at all. So for
+// every item of every role: its key must exist in the English bundle, and the
+// rendered label must be that key's value in the locale shown -- the role-
+// specific wording is pinned in English by the second test below.
 
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -25,11 +27,6 @@ import { loadMessages, SUPPORTED_LOCALES } from "../../apps/web/src/i18n/config.
 beforeEach(() => resetRequest());
 
 type Strings = Record<string, string>;
-
-/** The nav.* (or navSection.*) keys whose English value is `label`. */
-function keysFor(bundle: Strings, label: string): string[] {
-  return Object.keys(bundle).filter((k) => bundle[k] === label);
-}
 
 /** data-help-anchor id -> visible label, from a rendered Sidebar. */
 function sidebarLabels(html: string): Map<string, string> {
@@ -56,21 +53,23 @@ test("F126: every sidebar item and heading, for every role, renders its own labe
       const items = sidebarLabels(html);
       const headings = openingTags(html, "nav").map((t) => attr(t, "aria-label"));
       for (const section of NAV_BY_ROLE[role]) {
-        const sectionKeys = keysFor(en.navSection as Strings, section.section);
-        if (sectionKeys.length === 0) wrong.add(`${role}: no navSection key holds "${section.section}"`);
-        else if (!sectionKeys.some((k) => headings.includes((bundle.navSection as Strings)[k]))) {
-          wrong.add(`${role}/${locale}: heading "${section.section}" is not rendered as navSection.${sectionKeys[0]}`);
+        if (typeof (en.navSection as Strings)[section.section] !== "string") {
+          wrong.add(`${role}: no navSection key "${section.section}"`);
+        } else if (!headings.includes((bundle.navSection as Strings)[section.section])) {
+          wrong.add(`${role}/${locale}: heading navSection.${section.section} is not rendered in ${locale}`);
         }
         for (const item of section.items) {
-          const keys = keysFor(en.nav as Strings, item.label);
           const shown = items.get(item.id);
-          if (keys.length === 0) {
-            wrong.add(`${role}: no nav key holds "${item.label}" (${item.id})`);
+          if (typeof (en.nav as Strings)[item.labelKey] !== "string") {
+            wrong.add(`${role}: no nav key "${item.labelKey}" (${item.id})`);
             continue;
           }
-          const expected = keys.map((k) => (bundle.nav as Strings)[k]);
-          if (!shown || !expected.includes(shown)) {
-            wrong.add(`${role}/${locale}: ${item.id} shows "${shown}", expected ${JSON.stringify(expected)}`);
+          const expected = (bundle.nav as Strings)[item.labelKey];
+          if (shown !== expected) {
+            wrong.add(`${role}/${locale}: ${item.id} shows "${shown}", expected "${expected}"`);
+          }
+          if (locale !== "en" && shown === (en.nav as Strings)[item.labelKey]) {
+            wrong.add(`${role}/${locale}: ${item.id} is still English ("${shown}")`);
           }
         }
       }

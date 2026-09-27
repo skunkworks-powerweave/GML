@@ -10,7 +10,18 @@
 // Namespaces are not resolved: SCORM tools spell the adlcp prefix
 // consistently, and callers match on an element's local name.
 
-export class XmlError extends Error {}
+import { scormMessage, scormText, type ScormMessage } from "./messages";
+
+/**
+ * Why the manifest is not XML this parser reads. `detail` is the reason as a
+ * message key (rtt.scorm.upload.*), so the administrator who uploaded the
+ * package reads it in her language; `message` is its English.
+ */
+export class XmlError extends Error {
+  constructor(readonly detail: ScormMessage) {
+    super(scormText(detail));
+  }
+}
 
 export type XmlElement = {
   /** The qualified name as written, e.g. "adlcp:masteryscore". */
@@ -27,10 +38,10 @@ const PREDEFINED: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '
 
 function decodeEntities(s: string): string {
   return s.replace(/&([^;&\s]*);?/g, (whole, body: string) => {
-    if (!whole.endsWith(";")) throw new XmlError("A bare & is not allowed in XML.");
+    if (!whole.endsWith(";")) throw new XmlError(scormMessage("bareAmp"));
     if (body in PREDEFINED) return PREDEFINED[body]!;
     const code = /^#x[0-9a-f]+$/i.test(body) ? parseInt(body.slice(2), 16) : /^#[0-9]+$/.test(body) ? parseInt(body.slice(1), 10) : NaN;
-    if (!Number.isFinite(code) || code < 1 || code > 0x10ffff) throw new XmlError(`Unknown entity &${body};`);
+    if (!Number.isFinite(code) || code < 1 || code > 0x10ffff) throw new XmlError(scormMessage("unknownEntity", { entity: `&${body};` }));
     return String.fromCodePoint(code);
   });
 }
@@ -46,7 +57,7 @@ export function parseXml(src: string, opts: { maxDepth?: number } = {}): XmlElem
 
   const expect = (token: string, from: number): number => {
     const at = src.indexOf(token, from);
-    if (at < 0) throw new XmlError(`Unterminated markup: expected ${token}.`);
+    if (at < 0) throw new XmlError(scormMessage("unterminated", { token }));
     return at;
   };
 
@@ -58,20 +69,20 @@ export function parseXml(src: string, opts: { maxDepth?: number } = {}): XmlElem
     } else if (src.startsWith("<![CDATA[", i)) {
       const end = expect("]]>", i + 9);
       const top = stack.at(-1);
-      if (!top) throw new XmlError("Character data outside the root element.");
+      if (!top) throw new XmlError(scormMessage("charOutsideRoot"));
       top.text += src.slice(i + 9, end);
       i = end + 3;
     } else if (src.startsWith("<!", i)) {
-      throw new XmlError("A DOCTYPE or other declaration is not accepted in a manifest.");
+      throw new XmlError(scormMessage("doctype"));
     } else if (src.startsWith("</", i)) {
       const end = expect(">", i + 2);
       const name = src.slice(i + 2, end).trim();
       const top = stack.pop();
-      if (!top || top.name !== name) throw new XmlError(`Mismatched closing tag </${name}>.`);
+      if (!top || top.name !== name) throw new XmlError(scormMessage("mismatchedClose", { tag: `</${name}>` }));
       i = end + 1;
     } else if (src[i] === "<") {
       const m = NAME.exec(src.slice(i + 1, i + 257));
-      if (!m) throw new XmlError("A tag with no valid name.");
+      if (!m) throw new XmlError(scormMessage("badTagName"));
       const el: XmlElement = { name: m[0], local: localOf(m[0]), attrs: new Map(), children: [], text: "" };
       i += 1 + m[0].length;
       let selfClosing = false;
@@ -87,25 +98,25 @@ export function parseXml(src: string, opts: { maxDepth?: number } = {}): XmlElem
           break;
         }
         const a = NAME.exec(src.slice(i, i + 257));
-        if (!a) throw new XmlError(`A malformed attribute on <${el.name}>.`);
+        if (!a) throw new XmlError(scormMessage("malformedAttr", { element: `<${el.name}>` }));
         i += a[0].length;
         while (/\s/.test(src[i] ?? "")) i++;
-        if (src[i] !== "=") throw new XmlError(`Attribute ${a[0]} has no value.`);
+        if (src[i] !== "=") throw new XmlError(scormMessage("attrNoValue", { name: a[0] }));
         i++;
         while (/\s/.test(src[i] ?? "")) i++;
         const quote = src[i];
-        if (quote !== '"' && quote !== "'") throw new XmlError(`Attribute ${a[0]} is not quoted.`);
+        if (quote !== '"' && quote !== "'") throw new XmlError(scormMessage("attrUnquoted", { name: a[0] }));
         const end = expect(quote, i + 1);
-        if (el.attrs.has(a[0])) throw new XmlError(`Attribute ${a[0]} appears twice on <${el.name}>.`);
+        if (el.attrs.has(a[0])) throw new XmlError(scormMessage("attrTwice", { name: a[0], element: `<${el.name}>` }));
         el.attrs.set(a[0], decodeEntities(src.slice(i + 1, end)));
         i = end + 1;
       }
       const parent = stack.at(-1);
       if (parent) parent.children.push(el);
-      else if (root) throw new XmlError("More than one root element.");
+      else if (root) throw new XmlError(scormMessage("multipleRoots"));
       else root = el;
       if (!selfClosing) {
-        if (stack.length >= maxDepth) throw new XmlError("The manifest is nested too deeply.");
+        if (stack.length >= maxDepth) throw new XmlError(scormMessage("tooDeep"));
         stack.push(el);
       }
     } else {
@@ -114,12 +125,12 @@ export function parseXml(src: string, opts: { maxDepth?: number } = {}): XmlElem
       const text = src.slice(i, end);
       const top = stack.at(-1);
       if (top) top.text += decodeEntities(text);
-      else if (text.trim()) throw new XmlError("Text outside the root element.");
+      else if (text.trim()) throw new XmlError(scormMessage("textOutsideRoot"));
       i = end;
     }
   }
-  if (stack.length) throw new XmlError(`<${stack.at(-1)!.name}> is never closed.`);
-  if (!root) throw new XmlError("No root element.");
+  if (stack.length) throw new XmlError(scormMessage("neverClosed", { element: `<${stack.at(-1)!.name}>` }));
+  if (!root) throw new XmlError(scormMessage("noRoot"));
   return root;
 }
 

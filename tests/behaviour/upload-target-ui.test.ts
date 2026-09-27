@@ -102,10 +102,14 @@ test("F18: the phone flow reserves against the cycle's id, and pre-fills its cod
   await withClientEnv(async () => {
     const begun = recordBegins();
     const { MobileUploadRunner } = await import("../../apps/web/src/components/video/MobileUploadRunner.tsx");
-    const m = mount(MobileUploadRunner as (p: unknown) => unknown, {
-      whatsappPhone: "+919999999999",
-      target: { contextType: "observation_cycle", contextId: CYCLE_ID, quarter: null, whatsappText: "OBS-2026-004" },
-    });
+    const m = mount(
+      MobileUploadRunner as (p: unknown) => unknown,
+      {
+        whatsappPhone: "+919999999999",
+        target: { contextType: "observation_cycle", contextId: CYCLE_ID, quarter: null, whatsappText: "OBS-2026-004" },
+      },
+      { intl: "en" },
+    );
     const els = () => hostElements(m.rerender());
     const wa = els().find((el) => el.props["data-testid"] === "whatsapp-fallback-link");
     assert.equal(new URL(String(wa!.props.href)).searchParams.get("text"), "OBS-2026-004", "the exact code, no '#' and no second OBS-");
@@ -128,7 +132,7 @@ test("F18: with no target the phone flow is generic, and says nothing about rout
   await withClientEnv(async () => {
     const begun = recordBegins();
     const { MobileUploadRunner } = await import("../../apps/web/src/components/video/MobileUploadRunner.tsx");
-    const m = mount(MobileUploadRunner as (p: unknown) => unknown, { whatsappPhone: null });
+    const m = mount(MobileUploadRunner as (p: unknown) => unknown, { whatsappPhone: null }, { intl: "en" });
     const els = () => hostElements(m.rerender());
     const input = els().find((el) => el.props["data-testid"] === "gallery-input")!;
     await (input.props.onChange as (e: unknown) => Promise<void>)({ target: { files: [FILE], value: "x" } });
@@ -147,7 +151,7 @@ test("F50: the desktop tray reserves a quarterly video with its quarter", async 
   await withClientEnv(async () => {
     const begun = recordBegins();
     const { UploadProgress } = await import("../../apps/web/src/components/video/UploadProgress.tsx");
-    const m = mount(UploadProgress as (p: unknown) => unknown, { contextType: "mentee_quarterly", contextId: PAIRING_ID, quarter: 1 });
+    const m = mount(UploadProgress as (p: unknown) => unknown, { contextType: "mentee_quarterly", contextId: PAIRING_ID, quarter: 1 }, { intl: "en" });
     const input = hostElements(m.rerender()).find((el) => el.type === "input")!;
     await (input.props.onChange as (e: unknown) => Promise<void>)({ target: { files: [FILE], value: "x" } });
     await drain();

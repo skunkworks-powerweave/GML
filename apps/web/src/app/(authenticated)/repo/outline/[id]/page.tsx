@@ -5,9 +5,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { asc, eq, inArray, desc } from "drizzle-orm";
 import { db } from "@gml/db";
 import { uuidOrNotFound } from "@/lib/ids";
+import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 import {
   courseOutlines,
   outlineLessons,
@@ -21,13 +23,17 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Course outline" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("outline.metaTitle") };
+}
 
-const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
-  planned: { kind: "", label: "Planned" },
-  in_progress: { kind: "chip-saffron", label: "In progress" },
-  complete: { kind: "chip-lichen", label: "Complete" },
-  archived: { kind: "", label: "Archived" },
+// The label is repo.outlineStatus.<status>, in the viewer's language.
+const STATUS_CHIP: Record<string, { kind: string }> = {
+  planned: { kind: "" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  archived: { kind: "" },
 };
 
 const SESSION_STATUS_CHIP: Record<string, string> = {
@@ -94,8 +100,12 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
     .orderBy(asc(resources.name))
     .limit(5);
 
+  const t = await getTranslations("repo");
+  const intl = await repoIntlLocale();
   const status = STATUS_CHIP[outline.status] ?? STATUS_CHIP.planned;
+  const statusLabel = enumLabel(t, "outlineStatus", STATUS_CHIP[outline.status] ? outline.status : "planned");
   const outcomes: string[] = Array.isArray(outline.learningOutcomes) ? outline.learningOutcomes : [];
+  const kindLabel = (kind: string) => enumLabel(t, "resourceKind", kind);
 
   return (
     <div>
@@ -105,15 +115,22 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
-          ← Course outlines
+          {t("outline.back")}
         </Link>
         <div>
-          <div className="label">Course outline{subject ? ` · ${subject.name}` : ""}</div>
+          <div className="label">
+            {subject ? t("outline.labelSubject", { subject: subject.name }) : t("outline.label")}
+          </div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{outline.name}</h1>
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            {outline.weeks ? `${outline.weeks}-week unit · ` : ""}
-            {outline.sessionsCount} session{outline.sessionsCount === 1 ? "" : "s"} ·{" "}
-            Grade {outline.grade}, Term {outline.term}.
+            {outline.weeks
+              ? t("outline.summaryWeeks", {
+                  weeks: outline.weeks,
+                  sessions: outline.sessionsCount,
+                  grade: outline.grade,
+                  term: outline.term,
+                })
+              : t("outline.summary", { sessions: outline.sessionsCount, grade: outline.grade, term: outline.term })}
           </p>
         </div>
       </div>
@@ -126,13 +143,13 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
         <div style={{ display: "grid", gap: 16 }}>
           {/* Learning outcomes */}
           <SectionCard
-            title="Learning outcomes"
-            sub="What students should demonstrate by the end of this unit"
+            title={t("outline.outcomesTitle")}
+            sub={t("outline.outcomesSub")}
           >
             <div style={{ padding: "8px 16px 14px" }}>
               {outcomes.length === 0 ? (
                 <div style={{ color: "var(--ink-3)", fontSize: 13, padding: "6px 0" }}>
-                  No outcomes recorded.
+                  {t("outline.noOutcomes")}
                 </div>
               ) : (
                 outcomes.map((lo, i) => (
@@ -158,19 +175,19 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
           </SectionCard>
 
           {/* Lessons */}
-          <SectionCard title={`Lessons (${lessons.length})`}>
+          <SectionCard title={t("outline.lessonsTitle", { count: lessons.length })}>
             {lessons.length === 0 ? (
               <div style={{ padding: 20, color: "var(--ink-3)", fontSize: 13 }}>
-                No lessons yet.
+                {t("outline.noLessons")}
               </div>
             ) : (
               <table className="t">
                 <thead>
                   <tr>
                     <th style={{ width: 48 }}>#</th>
-                    <th>Lesson</th>
-                    <th style={{ width: 80 }}>Week</th>
-                    <th style={{ width: 220 }}>Lesson ID</th>
+                    <th>{t("outline.lesson")}</th>
+                    <th style={{ width: 80 }}>{t("outline.week")}</th>
+                    <th style={{ width: 220 }}>{t("outline.lessonId")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -192,31 +209,32 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
           </SectionCard>
 
           {/* Sessions delivered */}
-          <SectionCard title={`Sessions delivered against this outline (${sessionsRows.length})`}>
+          <SectionCard title={t("outline.sessionsTitle", { count: sessionsRows.length })}>
             {sessionsRows.length === 0 ? (
               <div style={{ padding: 20, color: "var(--ink-3)", fontSize: 13 }}>
-                No sessions delivered yet.
+                {t("outline.noSessions")}
               </div>
             ) : (
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>School</th>
-                    <th>Topic</th>
-                    <th>Teacher</th>
-                    <th>Attendance</th>
-                    <th>Status</th>
+                    <th>{t("common.date")}</th>
+                    <th>{t("common.school")}</th>
+                    <th>{t("common.topic")}</th>
+                    <th>{t("common.teacher")}</th>
+                    <th>{t("common.attendance")}</th>
+                    <th>{t("common.status")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sessionsRows.map((s) => {
                     const chipKind = SESSION_STATUS_CHIP[s.status] ?? "";
+                    const statusText = enumLabel(t, "sessionStatusPlain", s.status);
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>
                           {s.scheduledDate
-                            ? new Date(s.scheduledDate).toLocaleDateString("en-IN", {
+                            ? new Date(s.scheduledDate).toLocaleDateString(intl, {
                                 day: "numeric",
                                 month: "short",
                               })
@@ -237,7 +255,7 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                         </td>
                         <td>
                           <span className={`chip ${chipKind}`.trim()}>
-                            {s.status.replace("_", " ")}
+                            {statusText}
                           </span>
                         </td>
                       </tr>
@@ -251,17 +269,17 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
 
         {/* Sidebar */}
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <SectionCard title="Details">
+          <SectionCard title={t("common.details")}>
             <div style={{ padding: "0 14px 8px" }}>
-              <KVRow label="Subject">{subject?.name ?? "—"}</KVRow>
-              <KVRow label="Grade">{outline.grade}</KVRow>
-              <KVRow label="Term">{outline.term}</KVRow>
-              <KVRow label="Sessions">{outline.sessionsCount}</KVRow>
-              <KVRow label="Weeks">{outline.weeks ?? "—"}</KVRow>
-              <KVRow label="Status">
-                <span className={`chip ${status.kind}`.trim()}>{status.label}</span>
+              <KVRow label={t("common.subject")}>{subject?.name ?? "—"}</KVRow>
+              <KVRow label={t("common.grade")}>{outline.grade}</KVRow>
+              <KVRow label={t("common.term")}>{outline.term}</KVRow>
+              <KVRow label={t("common.sessions")}>{outline.sessionsCount}</KVRow>
+              <KVRow label={t("common.weeks")}>{outline.weeks ?? "—"}</KVRow>
+              <KVRow label={t("common.status")}>
+                <span className={`chip ${status.kind}`.trim()}>{statusLabel}</span>
               </KVRow>
-              <KVRow label="Owner">
+              <KVRow label={t("common.owner")}>
                 {owner ? (
                   <>
                     {owner.fullName}
@@ -278,11 +296,11 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
             </div>
           </SectionCard>
 
-          <SectionCard title="Reading material" sub="Subject-tagged readings">
+          <SectionCard title={t("common.readingMaterial")} sub={t("outline.readingSub")}>
             <div style={{ padding: 4 }}>
               {readings.length === 0 ? (
                 <div style={{ padding: 16, color: "var(--ink-3)", fontSize: 13 }}>
-                  No readings tagged for this subject.
+                  {t("outline.noReadings")}
                 </div>
               ) : (
                 readings.map((r, i) => (
@@ -317,8 +335,9 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 500 }}>{r.name}</div>
                       <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                        {r.kind}
-                        {r.pages ? ` · ${r.pages} pages` : ""}
+                        {r.pages
+                          ? t("outline.readingPages", { kind: kindLabel(r.kind), pages: r.pages })
+                          : kindLabel(r.kind)}
                       </div>
                     </div>
                   </div>

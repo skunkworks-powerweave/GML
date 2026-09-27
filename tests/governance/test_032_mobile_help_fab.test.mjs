@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -33,13 +34,16 @@ test("MobileHelpFAB opens the shared HelpPanel rather than a private sheet", () 
 });
 
 test("the orientation the mobile sheet carried is in the help dictionary, in a browse group", () => {
+  // The articles' words are in the help bundle (help.entries.<slug>),
+  // in the reader's language; lib/help.ts keeps the slugs and the groups.
   const src = read("apps/web/src/lib/help.ts");
-  assert.match(src, /bottom tabs/i);
-  assert.match(src, /WhatsApp/);
-  assert.match(src, /confidential/i);
-  assert.match(src, /stable wifi/i, "direct browser upload guidance must survive");
-  assert.match(src, /sign-in link/i, "the forgotten-password instruction must survive");
-  assert.match(src, /id:\s*"start"/, "a Getting started group must list these first");
+  const text = (slug) => ["title", "short", "long"].map((f) => message(`help.entries.${slug}.${f}`) ?? "").join(" ");
+  assert.match(text("navigation"), /bottom tabs/i);
+  assert.match(text("whatsapp_ingest"), /WhatsApp/);
+  assert.match(text("confidentiality"), /confidential/i);
+  assert.match(text("upload"), /stable wifi/i, "direct browser upload guidance must survive");
+  assert.match(text("password"), /sign-in link/i, "the forgotten-password instruction must survive");
+  assert.match(src, /id:\s*"start",\s*keys:\s*\["navigation", "whatsapp_ingest", "upload", "confidentiality", "password"\]/, "a Getting started group must list these first");
 });
 
 test("the panel the FAB opens is keyboard-dismissable (role=dialog, Close button, Escape)", () => {
@@ -47,7 +51,9 @@ test("the panel the FAB opens is keyboard-dismissable (role=dialog, Close button
   // whatever the ? button opens.
   const src = read("apps/web/src/components/help/HelpPanel.tsx");
   assert.match(src, /role="dialog"/);
-  assert.match(src, /Close\s*<\/button>/m);
+  // The Close button's word comes from the help bundle (help.client.panel.close).
+  assert.match(src, /\{t\("panel\.close"\)\}\s*<\/button>/m);
+  assert.equal(message("help.client.panel.close"), "Close");
   assert.match(src, /e\.key === "Escape"/);
 });
 

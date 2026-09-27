@@ -6,18 +6,23 @@
 // mode: `mode="edit"` accepts an `initialValues` object and dispatches to
 // `updateRowAction` instead of `createRowAction`. The Zod schema, field list,
 // and input inference are shared — only the action + submit label differ.
+//
+// Words: the form's own are adminData.client.rowForm; each field's label,
+// hint and enum choices are the entity's (admin/labels.ts), resolved by the
+// page and passed as `text`, so only this entity's reach the browser.
 
 import { useActionState } from "react";
+import { useTranslations } from "next-intl";
 import {
   unwrapShape,
   fieldKind,
   toInputValue,
   enumOptions,
-  fieldLabel,
   isLongText,
   isOptionalField,
   dateInputType,
 } from "@/admin/zod-shape";
+import type { RowFormText } from "@/admin/labels";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import {
   createRowAction,
@@ -40,6 +45,8 @@ type Props = {
    * UUID box. A field absent here is not a foreign key.
    */
   options?: Record<string, Option[] | null>;
+  /** The entity's words in the viewer's language: rowFormText() on the server. */
+  text: RowFormText;
 };
 
 /**
@@ -54,6 +61,7 @@ function fieldDefault(zodType: Parameters<typeof isOptionalField>[0]): string {
 }
 
 const inputClass = (invalid: boolean) =>
+  // i18n-ignore: CSS class list
   `rounded-md border ${
     invalid ? "border-red-400" : "border-neutral-300"
   } px-2 py-1.5 text-sm focus:border-neutral-900 focus:outline-none`;
@@ -64,6 +72,7 @@ export function RowForm({
   rowId,
   initialValues,
   options = {},
+  text,
 }: Props) {
   const entity = ADMIN_ENTITIES[entitySlug];
   const isEdit = mode === "edit";
@@ -71,16 +80,14 @@ export function RowForm({
     AdminActionState | undefined,
     FormData
   >(isEdit ? updateRowAction : createRowAction, undefined);
+  const t = useTranslations("adminData.client");
+  const tAction = useTranslations("action");
 
   if (!entity) {
-    return <p className="text-sm text-red-700">Unknown entity: {entitySlug}</p>;
+    return <p className="text-sm text-red-700">{t("rowForm.unknownEntity", { slug: entitySlug })}</p>;
   }
   if (isEdit && !rowId) {
-    return (
-      <p className="text-sm text-red-700">
-        Edit mode requires a rowId — none was supplied.
-      </p>
-    );
+    return <p className="text-sm text-red-700">{t("rowForm.noRowId")}</p>;
   }
 
   // unwrapShape, not a bare `_def.shape`: three entities wrap their schema in
@@ -89,9 +96,10 @@ export function RowForm({
   // sessions instead of a true/false control.
   const shape = unwrapShape(entity.formSchema);
 
-  const submitLabel = isEdit ? "Save changes" : "Add row";
-  const pendingLabel = isEdit ? "Saving…" : "Adding…";
-  const successLabel = isEdit ? "Row updated." : "Row added.";
+  const submitLabel = isEdit ? t("rowForm.saveChanges") : t("rowForm.addRow");
+  const pendingLabel = isEdit ? tAction("saving") : t("rowForm.adding");
+  const successLabel = isEdit ? t("rowForm.updated") : t("rowForm.added");
+  const blank = (optional: boolean) => (optional ? t("rowForm.none") : t("rowForm.choose"));
 
   return (
     <form
@@ -118,17 +126,16 @@ export function RowForm({
         const optional = isOptionalField(shape[field]);
         const refs = options[field];
         const choices = enumOptions(shape[field]);
-        const help = entity.fields?.[field]?.help;
+        const choiceLabel = (v: string) => text.choices[field]?.[v] ?? v.replace(/_/g, " ");
+        const help = text.fields[field]?.help;
         return (
           <label key={field} className="flex flex-col gap-1 text-xs">
             <span className="font-medium text-neutral-700">
-              {fieldLabel(entity, field)}
+              {text.fields[field]?.label ?? field}
               {optional ? null : <span className="text-red-700"> *</span>}
             </span>
             {kind === "array" ? (
-              <span className="text-[10px] text-neutral-500">
-                Separate items with commas.
-              </span>
+              <span className="text-[10px] text-neutral-500">{t("rowForm.commaList")}</span>
             ) : null}
             {help ? <span className="text-[10px] text-neutral-500">{help}</span> : null}
             {Array.isArray(refs) ? (
@@ -140,7 +147,7 @@ export function RowForm({
                 aria-invalid={fieldError ? "true" : undefined}
                 className={inputClass(Boolean(fieldError))}
               >
-                <option value="">{optional ? "— none —" : "Choose…"}</option>
+                <option value="">{blank(optional)}</option>
                 {refs.map((o) => (
                   <option key={o.id} value={o.id}>
                     {o.label}
@@ -155,12 +162,10 @@ export function RowForm({
                 className={inputClass(Boolean(fieldError))}
               >
                 {/* A defaulted enum starts on its default and needs no blank. */}
-                {fieldDefault(shape[field]) ? null : (
-                  <option value="">{optional ? "— none —" : "Choose…"}</option>
-                )}
+                {fieldDefault(shape[field]) ? null : <option value="">{blank(optional)}</option>}
                 {choices.map((c) => (
                   <option key={c} value={c}>
-                    {c.replace(/_/g, " ")}
+                    {choiceLabel(c)}
                   </option>
                 ))}
                 {/* A stored value the choices lack stays selected, as itself:
@@ -178,11 +183,9 @@ export function RowForm({
                 className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
               >
                 {/* With no default, the operator must choose: no silent "yes". */}
-                {fieldDefault(shape[field]) ? null : (
-                  <option value="">{optional ? "— none —" : "Choose…"}</option>
-                )}
-                <option value="true">yes</option>
-                <option value="false">no</option>
+                {fieldDefault(shape[field]) ? null : <option value="">{blank(optional)}</option>}
+                <option value="true">{t("rowForm.yes")}</option>
+                <option value="false">{t("rowForm.no")}</option>
               </select>
             ) : isLongText(shape[field]) ? (
               <textarea
@@ -208,9 +211,7 @@ export function RowForm({
                     {/* The grid shows links by name, never an id, so "paste the id
                         from that table's grid" pointed at nothing (page.tsx now
                         shows it in the Edit panel). */}
-                    Too many rows to list here: paste the row&apos;s id: it is shown at the top of that
-                    row&apos;s Edit panel in its own table, and is the first column of that table&apos;s
-                    Export CSV.
+                    {t("rowForm.tooMany")}
                   </span>
                 ) : null}
               </>
@@ -241,7 +242,7 @@ export function RowForm({
             href={`/admin/data/${entitySlug}`}
             className="text-xs text-neutral-600 hover:underline"
           >
-            Cancel
+            {tAction("cancel")}
           </a>
         ) : null}
       </div>

@@ -1,0 +1,201 @@
+{
+  "sectionLabel": "Classroom observation",
+  "allCycles": "← All cycles",
+  "kind": {
+    "baseline": "Baseline",
+    "developmental": "Developmental",
+    "evaluative": "Evaluative"
+  },
+  "kindChip": {
+    "baseline": "baseline",
+    "developmental": "developmental",
+    "evaluative": "evaluative"
+  },
+  "statusChip": {
+    "nominated": "nominated",
+    "pre_submitted": "pre submitted",
+    "observed": "observed",
+    "post_submitted": "post submitted",
+    "complete": "complete"
+  },
+  "list": {
+    "metaTitle": "Observation cycles",
+    "title": "Observation cycles",
+    "intro": "A cycle has three steps: <b>Pre-form</b> from teacher → <b>Observation</b> (live or video) → <b>Post-debrief</b> with mentor. Every step is time-stamped and signed.",
+    "nominate": "Nominate cycle",
+    "statusTabs": {
+      "all": "All",
+      "nominated": "Nominated",
+      "pre_submitted": "Pre-form in",
+      "observed": "Observed",
+      "post_submitted": "Post-form in",
+      "complete": "Complete"
+    },
+    "kindTabs": {
+      "all": "All kinds",
+      "baseline": "Baseline",
+      "developmental": "Developmental",
+      "evaluative": "Evaluative"
+    },
+    "empty": "No observation cycles match this filter.",
+    "emptyNominate": "<link>Nominate a cycle</link> to start one.",
+    "columns": {
+      "cycle": "Cycle",
+      "teacher": "Teacher",
+      "subjectTopic": "Subject / Topic",
+      "kind": "Kind",
+      "stage": "Stage",
+      "date": "Date",
+      "video": "Video"
+    },
+    "stage": {
+      "nominated": "Nominated",
+      "pre_submitted": "Pre submitted",
+      "observed": "Observed",
+      "post_submitted": "Post submitted",
+      "complete": "Complete"
+    },
+    "video": {
+      "minutes": "{minutes}m",
+      "count": "{count, plural, one {# video} other {# videos}}",
+      "processing": "processing"
+    },
+    "showing": "Showing {from}–{to} of {total}",
+    "previous": "← Previous",
+    "next": "Next →"
+  },
+  "nominate": {
+    "metaTitle": "Nominate a cycle",
+    "title": "Nominate a cycle",
+    "intro": "The cycle starts at <b>Nominated</b>; the teacher’s pre-form moves it on. It is visible to the observer you choose, the teacher, and the teacher’s mentor.",
+    "errors": {
+      "invalid": "Some of the details are missing or not valid.",
+      "invalidField": "Some of the details are missing or not valid. Check: {field}.",
+      "observer": "That observer account is not an active observer. Pick one from the list.",
+      "duplicate": "Another cycle took that code at the same moment. Please submit again.",
+      "failed": "The cycle could not be saved. Please try again."
+    },
+    "fields": {
+      "teacherId": "Teacher",
+      "observerId": "Observer",
+      "kind": "Kind",
+      "scheduledAt": "Date",
+      "subjectId": "Subject",
+      "topic": "Topic",
+      "code": "Code"
+    },
+    "missingTeachers": "There are no active teachers yet, so a cycle cannot be nominated. Add them at <link>Admin → Teachers</link> first.",
+    "missingObservers": "There are no active observer accounts yet, so a cycle cannot be nominated. Add them at <link>Admin → Users (role: Observer)</link> first.",
+    "code": "Code: <mono>{code}</mono> (assigned when you save)",
+    "teacher": "Teacher being observed",
+    "chooseTeacher": "Choose a teacher…",
+    "observer": "Observer",
+    "chooseObserver": "Choose an observer…",
+    "kind": "Kind",
+    "choose": "Choose…",
+    "date": "Date",
+    "subject": "Subject (optional)",
+    "topic": "Topic (optional)",
+    "submit": "Nominate cycle",
+    "csv": "Loading many at once? Use CSV import at <link>Admin → Observation Cycles</link>."
+  },
+  "cycle": {
+    "metaTitle": "Observation cycle",
+    "mobileTitle": "Cycle",
+    "stages": {
+      "nominated": "Nominated",
+      "pre_submitted": "Pre-form",
+      "observed": "Observed",
+      "post_submitted": "Post-form",
+      "complete": "Complete"
+    },
+    "errors": {
+      "invalidForm": "An answer was blank or longer than {max} characters, so nothing was recorded and the cycle has not moved on. Please correct it and submit again.",
+      "invalidFormField": "\"{field}\" was blank or longer than {max} characters, so nothing was recorded and the cycle has not moved on. Please correct it and submit again.",
+      "invalid_transition": "That action can't be performed in the cycle's current status. The page has been refreshed.",
+      "empty_note": "Note text can't be empty.",
+      "note_too_long": "A note can be at most {max} characters, so this one was not added. Please shorten it and add it again.",
+      "submit_failed": "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
+      "cycle_locked": "This cycle has been signed off. Its record is closed, so nothing more can be added to it.",
+      "invalid_cycle": "That cycle reference was not valid.",
+      "cycle_not_found": "That cycle no longer exists.",
+      "unknown": "That action could not be completed. Please try again."
+    },
+    "signOff": "Sign off cycle",
+    "formsLabel": "Forms · {count}",
+    "formsTitle": "Pre & post-observation",
+    "submitPre": "Submit pre-form",
+    "submitObserver": "Submit observer-form",
+    "submitPost": "Submit post-form",
+    "evidenceLabel": "Evidence · {count}",
+    "evidenceTitle": "Lesson video",
+    "evidenceNoneLocked": "No video evidence was linked to this cycle.",
+    "evidenceNoneWhatsapp": "No video evidence linked yet. The teacher uploads it below, or sends it by WhatsApp with the caption <kbd>{caption}</kbd>.",
+    "evidenceNone": "No video evidence linked yet. The teacher uploads it below.",
+    "openVideo": "Open video →",
+    "noVideoYet": "(no video yet)",
+    "lockedEvidence": "Signed off — this record is closed and accepts no further evidence.",
+    "recordOrWhatsapp": "Record on a phone, or send by WhatsApp →",
+    "record": "Record on a phone →",
+    "remarkLabel": "Remark",
+    "notesTitle": "Notes",
+    "noteAuthor": "<author>{name}</author> ({role})",
+    "noteRole": {
+      "teacher": "teacher",
+      "mentor": "mentor",
+      "observer": "observer",
+      "programme_admin": "programme_admin",
+      "super_admin": "super_admin"
+    },
+    "earlierNote": "Earlier note",
+    "noNotes": "No notes yet.",
+    "newNoteLabel": "New note",
+    "newNotePlaceholder": "Add a note. Existing notes are kept above.",
+    "addNote": "Add note"
+  },
+  "stages": {
+    "pre": {
+      "title": "Pre-observation form",
+      "chip": "pre"
+    },
+    "observer": {
+      "title": "Observer rubric",
+      "chip": "observer"
+    },
+    "post": {
+      "title": "Post-observation reflection",
+      "chip": "post"
+    }
+  },
+  "fields": {
+    "lessonPlanSummary": {
+      "label": "Lesson plan summary",
+      "placeholder": "What will you teach today?"
+    },
+    "narrativeComments": {
+      "label": "Observer rubric notes",
+      "placeholder": "Rubric narrative…"
+    },
+    "whatWorked": {
+      "label": "What worked / What didn't",
+      "placeholder": "Reflect on the lesson…"
+    }
+  },
+  "submitted": {
+    "none": "No forms submitted yet.",
+    "by": "Submitted by {name}",
+    "byOnBehalf": "Submitted by {name} on behalf of the teacher",
+    "byRemoved": "Submitted by a removed account",
+    "byRemovedOnBehalf": "Submitted by a removed account on behalf of the teacher"
+  },
+  "notify": {
+    "assigned": {
+      "subject": "You have been added to an observation cycle",
+      "body": "Open it to see which cycle and when; the Observation section asks for its password first."
+    },
+    "complete": {
+      "subject": "An observation cycle you are part of has been signed off",
+      "body": "Its forms and notes stay on the cycle page in the Observation section."
+    }
+  }
+}

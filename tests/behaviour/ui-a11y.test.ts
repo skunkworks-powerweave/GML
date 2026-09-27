@@ -48,7 +48,7 @@ test("D3: picking a quiz option flips exactly that option to aria-pressed=true (
   const { QuizRunner } = await import("../../apps/web/src/components/quiz/QuizRunner.tsx");
   const { MobileQuizRunner } = await import("../../apps/web/src/components/quiz/MobileQuizRunner.tsx");
   for (const [name, Runner] of [["QuizRunner", QuizRunner], ["MobileQuizRunner", MobileQuizRunner]] as const) {
-    const m = mount(Runner as (p: unknown) => unknown, { slug: "s", title: "T", questions: QUESTIONS, submitAction: noop });
+    const m = mount(Runner as (p: unknown) => unknown, { slug: "s", title: "T", questions: QUESTIONS, submitAction: noop }, { intl: "en" });
     const options = () =>
       hostElements(m.tree).filter((el) => el.type === "button" && /^[A-D](Apple|Bat|Cat|Dog)$/.test(textOf(el)));
     assert.equal(options().length, 4, `${name}: four options`);

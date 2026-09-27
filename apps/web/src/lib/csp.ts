@@ -21,10 +21,10 @@ export function buildCsp(nonce: string): string {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data: blob: ${supabase}`,
-    `media-src 'self' blob: ${supabase}`,
-    `connect-src 'self' ${supabase} wss://*.supabase.co${isDev ? " ws:" : ""}`,
-    "font-src 'self' data:",
+    `img-src 'self' data: blob: ${supabase}`, // i18n-ignore: a CSP directive, sent to browsers, never shown
+    `media-src 'self' blob: ${supabase}`, // i18n-ignore: a CSP directive, sent to browsers, never shown
+    `connect-src 'self' ${supabase} wss://*.supabase.co${isDev ? " ws:" : ""}`, // i18n-ignore: a CSP directive, sent to browsers, never shown
+    "font-src 'self' data:", // i18n-ignore: a CSP directive, sent to browsers, never shown
     "frame-ancestors 'self'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -50,11 +50,11 @@ export function buildScormContentCsp(): string {
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
-    "media-src 'self' data: blob:",
-    "font-src 'self' data:",
+    "img-src 'self' data: blob:", // i18n-ignore: a CSP directive, sent to browsers, never shown
+    "media-src 'self' data: blob:", // i18n-ignore: a CSP directive, sent to browsers, never shown
+    "font-src 'self' data:", // i18n-ignore: a CSP directive, sent to browsers, never shown
     "connect-src 'self'",
-    "worker-src 'self' blob:",
+    "worker-src 'self' blob:", // i18n-ignore: a CSP directive, sent to browsers, never shown
     "frame-src 'self'",
     "frame-ancestors 'self'",
     "base-uri 'self'",
