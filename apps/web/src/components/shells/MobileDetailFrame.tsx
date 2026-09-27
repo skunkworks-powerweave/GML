@@ -38,6 +38,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { MobileDetailSwipeRegion } from "./MobileDetailSwipeRegion";
 
 export type MobileDetailFrameProps = {
@@ -57,13 +58,15 @@ export type MobileDetailFrameProps = {
   children: ReactNode;
 };
 
-export function MobileDetailFrame({
+export async function MobileDetailFrame({
   title,
   backHref,
   rightAction,
   stickyAction,
   children,
 }: MobileDetailFrameProps) {
+  // The back arrow's name, in the user's language (action.back).
+  const tAction = await getTranslations("action");
   // Spec 139 — wrap the frame in a swipe-region client component so a
   // rightward swipe anywhere on the detail body triggers router.back(). The
   // gesture is ADDITIVE — the back-arrow Link below remains the canonical
@@ -104,7 +107,7 @@ export function MobileDetailFrame({
             reliably. */}
         <Link
           href={backHref}
-          aria-label="Back"
+          aria-label={tAction("back")}
           data-testid="mobile-detail-back"
           style={{
             display: "inline-flex",

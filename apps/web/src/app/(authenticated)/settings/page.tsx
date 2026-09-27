@@ -9,6 +9,7 @@
 // `var(--deva)`. The user does not edit a Hindi name here.
 
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { userPrefs } from "@gml/db/schema";
@@ -28,13 +29,14 @@ const DEFAULT_PREFS: SettingsFormValues = {
 };
 
 // Role chip color tokens mirror the topbar palette (spec 027). Keeps the
-// account row visually consistent with the rest of the chrome.
-const ROLE_COLORS: Record<string, { chipKind: string; label: string }> = {
-  super_admin: { chipKind: "chip-saffron", label: "Super admin" },
-  programme_admin: { chipKind: "chip-saffron", label: "Programme admin" },
-  mentor: { chipKind: "chip-indigo", label: "Mentor" },
-  teacher: { chipKind: "chip-lichen", label: "Teacher" },
-  observer: { chipKind: "chip-rust", label: "Observer" },
+// account row visually consistent with the rest of the chrome. The role's
+// name is role.* in the user's language, as in the topbar.
+const ROLE_COLORS: Record<string, string> = {
+  super_admin: "chip-saffron",
+  programme_admin: "chip-saffron",
+  mentor: "chip-indigo",
+  teacher: "chip-lichen",
+  observer: "chip-rust",
 };
 
 export default async function SettingsPage() {
@@ -44,7 +46,10 @@ export default async function SettingsPage() {
   const userId = session.user.id;
   const email = session.user.email ?? "—";
   const role = session.user.role ?? "teacher";
-  const roleStyle = ROLE_COLORS[role] ?? { chipKind: "", label: role.replace(/_/g, " ") };
+  const t = await getTranslations("home.settings");
+  const tNav = await getTranslations("nav");
+  const tRole = await getTranslations("role");
+  const roleLabel = tRole.has(role) ? tRole(role) : role.replace(/_/g, " ");
 
   const [row] = await db
     .select()
@@ -71,13 +76,12 @@ export default async function SettingsPage() {
   return (
     <div>
       <div className="page-header">
-        <div className="label">Settings</div>
+        <div className="label">{tNav("settings")}</div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>
-          Your preferences
+          {t("title")}
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13, maxWidth: 640 }}>
-          Saved to your account as you change them, and applied straight away on every device you
-          sign in on.
+          {t("intro")}
         </p>
       </div>
 
@@ -95,8 +99,8 @@ export default async function SettingsPage() {
           <SettingsForm
             initial={initial}
             email={email}
-            roleLabel={roleStyle.label}
-            roleChipKind={roleStyle.chipKind}
+            roleLabel={roleLabel}
+            roleChipKind={ROLE_COLORS[role] ?? ""}
             passwordRequired={session.user.mustChangePassword === true}
           />
         </section>
@@ -110,11 +114,13 @@ export default async function SettingsPage() {
             marginTop: 8,
           }}
         >
-          Programme-wide settings (video pipeline, notifications, backups) live under{" "}
-          <a href="/admin" style={{ color: "var(--indigo)", textDecoration: "none" }}>
-            Admin
-          </a>{" "}
-          and require a programme admin role.
+          {t.rich("footer", {
+            link: (chunks) => (
+              <a href="/admin" style={{ color: "var(--indigo)", textDecoration: "none" }}>
+                {chunks}
+              </a>
+            ),
+          })}
         </footer>
       </div>
     </div>

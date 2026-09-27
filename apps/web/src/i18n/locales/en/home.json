@@ -1,1 +1,378 @@
-{}
+{
+  "root": {
+    "tagline": "Refresher Teacher Training — Ladakh-UT.",
+    "greeting": "Hi <b>{name}</b>.",
+    "role": "Role: {role}",
+    "goToDashboard": "Go to dashboard",
+    "signInPrompt": "Please sign in to continue.",
+    "footer": "Confidential — internal programme use only. © Goldenmile Learning."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "body": "This page doesn’t exist, or you don’t have access to it. If you followed a link from somewhere in the programme, it may be out of date.",
+    "goToDashboard": "Go to dashboard"
+  },
+  "forbidden": {
+    "default": {
+      "title": "Forbidden",
+      "message": "You don't have permission to view this page.",
+      "action": "Go home"
+    },
+    "rateLimited": {
+      "title": "Too many attempts",
+      "message": "Too many sign-in attempts from this connection. Wait a few minutes and try again, or contact your administrator.",
+      "action": "Back to sign in"
+    },
+    "emailUnavailable": {
+      "title": "Email actions unavailable",
+      "message": "Email-based actions (magic-link sign-in, password reset) are not enabled on this deployment. Sign in with your password, or ask your administrator to set a new one."
+    },
+    "sessionExpired": {
+      "title": "Session expired",
+      "message": "Your session has ended. Please sign in again."
+    }
+  },
+  "gate": {
+    "signInFirst": "Sign in first.",
+    "unknownSection": "Unknown section.",
+    "enterPassword": "Enter a password.",
+    "tooManyAttempts": "Too many attempts. Try again in {minutes} minutes.",
+    "serviceUnavailable": "Service temporarily unavailable.",
+    "notConfigured": "Section not configured. Contact admin.",
+    "wrongPassword": "Wrong password."
+  },
+  "dashboard": {
+    "roleDashboard": "{role} dashboard",
+    "headline": "{greeting}, {name}.",
+    "nameFallback": "there",
+    "subtitle": "{date}{hasPhase, select, yes { · RTT {phase}} other {}}{showRole, select, yes { · {role} view} other {}}",
+    "queueTeacher": "Your training queue + observation prep.",
+    "queueOthers": "Things waiting on you.",
+    "nothingPending": "Nothing pending — your queue is clear.",
+    "confidentialityNote": "All resources here are confidential. Your name and the time are shown over every video you watch, and every view is logged; please do not download, share or re-record them. Section passwords rotate periodically — ask your programme admin if a section appears locked.",
+    "notificationsLink": "Notifications →",
+    "stats": {
+      "activePairings": "Active pairings",
+      "mentorsHint": "{count} mentors",
+      "cyclesInFlight": "Cycles in flight",
+      "thisTerm": "this term",
+      "recentUploads": "Recent uploads (24h)",
+      "acrossAllSources": "across all sources",
+      "pendingObserverForms": "Pending observer forms",
+      "waitingOnObserver": "waiting on observer",
+      "totalUsers": "Total users",
+      "activeAccounts": "active accounts",
+      "auditEvents": "Audit events (24h)",
+      "rollingWindow": "rolling window",
+      "storageUsed": "Storage used (MB)",
+      "allStoredFiles": "all stored files",
+      "activeMentees": "Active mentees",
+      "paired": "paired",
+      "pendingVideoReviews": "Pending video reviews",
+      "reviewTarget": "target: < 48 h",
+      "meetingsThisWeek": "Scheduled meetings this week",
+      "monSun": "Mon-Sun",
+      "formsDue": "Q-progress forms due",
+      "metSinceLastForm": "met since the last form",
+      "leadingActive": "Cycles I am leading (active)",
+      "assignedToMe": "assigned to me",
+      "iOwe": "I owe",
+      "awaitingSignOff": "Cycles awaiting sign-off",
+      "postFormIn": "post-form in · mentor signs off",
+      "myUploads": "My uploads this week",
+      "last7Days": "last 7 days",
+      "pendingPre": "Cycles pending pre-form",
+      "needsReflection": "needs my reflection",
+      "awaitingVideo": "Cycles awaiting video",
+      "readyToUpload": "ready to upload",
+      "openQuizzes": "Open quizzes",
+      "notYetTaken": "active · not yet taken",
+      "observationLocked": "Observation locked",
+      "mentorshipLocked": "Mentorship locked"
+    },
+    "todos": {
+      "unlockObservation": "Unlock Observation to see what is waiting on you",
+      "unlockMentorship": "Unlock Mentorship to see what is waiting on you",
+      "signOffCycle": "Sign off cycle {code}",
+      "reviewTeachBack": "Review pending teach-back video",
+      "meetingToday": "Mentor meeting scheduled today",
+      "submitQuarterlyForms": "Submit {count, plural, one {# quarterly form} other {# quarterly forms}} for your mentees",
+      "reviewUploads": "Review {count, plural, one {# recent upload} other {# recent uploads}} (24h)",
+      "cyclesWaitingObserver": "{count, plural, one {# cycle} other {# cycles}} waiting on observer form",
+      "cyclesInFlight": "{count, plural, one {# observation cycle} other {# observation cycles}} in flight",
+      "submitPreForm": "Submit pre-form for {count, plural, one {# cycle} other {# cycles}}",
+      "uploadLessonVideo": "Upload lesson video for {count, plural, one {# cycle} other {# cycles}}",
+      "submitPostForm": "Submit post-form for {count, plural, one {# cycle} other {# cycles}}",
+      "openQuizzes": "{count, plural, one {# open quiz} other {# open quizzes}}",
+      "fillObserverForm": "Fill observer form for {count, plural, one {# cycle} other {# cycles}}"
+    },
+    "fieldMap": {
+      "title": "Field operations",
+      "summary": "{count, plural, one {# school} other {# schools}} — click a marker to open its repo page",
+      "empty": "No active schools registered.",
+      "kargil": "Kargil",
+      "leh": "Leh",
+      "kargilMap": "KARGIL",
+      "lehMap": "LEH"
+    }
+  },
+  "inbox": {
+    "counts": "{unread} unread · {total} total · last 90 days",
+    "markAllRead": "Mark all read",
+    "filterAll": "All",
+    "filterUnread": "Unread",
+    "empty": {
+      "unread": "No unread notifications.",
+      "all": "Nothing in your inbox yet.",
+      "body": "Operational events — assigned cycles, transcoded videos, scheduled meetings, due quizzes — will show up here. Notifications are kept for 90 days. <link>Back to dashboard →</link>"
+    },
+    "bucket": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "week": "This week",
+      "older": "Older"
+    },
+    "time": {
+      "now": "now",
+      "minutes": "{count}m",
+      "hours": "{count}h",
+      "yesterday": "Yesterday"
+    },
+    "rowUnread": "{subject} (unread)",
+    "rowUnreadMarkRead": "{subject} (unread, mark read)",
+    "entity": {
+      "cycle": "Observation cycle",
+      "observation_cycle": "Observation cycle",
+      "video": "Video",
+      "video_submission": "Video",
+      "meeting": "Meeting",
+      "mentor_pairing": "Pairing",
+      "pairing": "Pairing",
+      "quiz": "Quiz",
+      "session": "Session"
+    },
+    "kind": {
+      "helpdeskTicket": "Help request",
+      "cycleAssigned": "Cycle assigned",
+      "cycleComplete": "Cycle complete",
+      "videoTranscoded": "Video transcoded",
+      "videoReviewPending": "Video review pending",
+      "meetingScheduled": "Meeting scheduled",
+      "meetingCancelled": "Meeting cancelled",
+      "pairingFinalSubmitted": "Final feedback in",
+      "digestWeekly": "Weekly digest",
+      "quizDue": "Quiz due"
+    }
+  },
+  "quickFind": {
+    "grade": "Grade {grade}",
+    "gradeAtSchool": "Grade {grade} · {school}",
+    "observationKind": "Observation · {kind, select, baseline {baseline} developmental {developmental} evaluative {evaluative} other {{kind}}}",
+    "outline": "{subject} · Grade {grade} · Term {term}"
+  },
+  "settings": {
+    "title": "Your preferences",
+    "intro": "Saved to your account as you change them, and applied straight away on every device you sign in on.",
+    "footer": "Programme-wide settings (video pipeline, notifications, backups) live under <link>Admin</link> and require a programme admin role.",
+    "password": {
+      "sessionEnded": "Your session has ended. Sign in again.",
+      "enterCurrent": "Enter your current password.",
+      "mismatch": "The new passwords do not match.",
+      "sameAsCurrent": "That is your current password.",
+      "noEmail": "This account has no email address on file.",
+      "rateLimited": "Too many attempts. Wait a few minutes and try again.",
+      "unavailable": "Your current password cannot be checked right now. Try again in a few minutes.",
+      "wrongCurrent": "That is not your current password.",
+      "changedOthersFailed": "Password changed, but your other devices could not be signed out from here. Sign out on them yourself.",
+      "changed": "Password changed. You have been signed out on other devices."
+    }
+  },
+  "chrome": {
+    "signOutTitle": "Sign out {email}",
+    "gateBadge": "gate",
+    "queue": {
+      "processing": "{count} processing",
+      "waiting": "{count} waiting",
+      "failed": "{count} failed"
+    },
+    "footer": {
+      "full": "<strong>Confidential.</strong> All materials on this platform are for internal programme use only. Unauthorized sharing, copying, or distribution is not permitted. Viewed by <code>{stamp}</code>.",
+      "compact": "<strong>Confidential.</strong> All materials on this platform are for internal programme use only. Unauthorized sharing, copying, or distribution is not permitted.",
+      "anonymous": "anonymous"
+    }
+  },
+  "client": {
+    "signOut": {
+      "discardUnsaved": "Some form answers on this device have not been saved yet. Signing out discards them. Sign out anyway?"
+    },
+    "languagePicker": {
+      "saveFailed": "Couldn't save language preference. Try again.",
+      "networkError": "Network error — language not saved."
+    },
+    "antiDownload": {
+      "screenshotsLogged": "Screenshots are logged."
+    },
+    "routeError": {
+      "title": "Something went wrong",
+      "body": "This page couldn’t load. It may be a temporary connection problem — try again in a moment.",
+      "tryAgain": "Try again",
+      "goToDashboard": "Go to dashboard",
+      "reference": "Reference <code>{digest}</code> — quote this when reporting the problem."
+    },
+    "pageError": {
+      "title": "This page couldn’t load",
+      "body": "Something went wrong fetching this page. It may be a temporary connection problem. Other pages should still work.",
+      "tryAgain": "Try again",
+      "reference": "Reference <code>{digest}</code>"
+    },
+    "tour": {
+      "ariaLabel": "Product tour",
+      "progress": "Tour · step {step} of {total}",
+      "skip": "Skip tour",
+      "back": "← Back",
+      "done": "Got it",
+      "next": "Next →",
+      "steps": {
+        "mentees": {
+          "title": "Your mentees live here",
+          "body": "Up to five teachers you guide. Tap to see how each one is progressing through their four quarterly check-ins."
+        },
+        "observationCycles": {
+          "title": "Observation cycles",
+          "body": "Every time you watch a lesson — live or by video — it's a cycle. Five steps: pre-form, observe, video, post-form, sign-off."
+        },
+        "pendingReviews": {
+          "title": "Pending video reviews",
+          "body": "Teachers upload their lessons. Aim to give written feedback within 48 hours."
+        },
+        "repository": {
+          "title": "The repository",
+          "body": "Everything about every school, class, subject, lesson and reading material. Searchable. Browse it like a library."
+        },
+        "helpTap": {
+          "title": "Help is always here",
+          "body": "Tap the ? button to look up any term or message the programme team. It sits here on a computer and at the bottom right on a phone. On a keyboard, ? opens it too."
+        },
+        "teacherPhase": {
+          "title": "Your current phase",
+          "body": "You're in Phase 2 — Application. Modules, lessons, readings and your cohort sessions all live here."
+        },
+        "teacherObservations": {
+          "title": "Your observations",
+          "body": "Each cycle starts with a small Pre-form, then your lesson is watched (or you upload a video), then your mentor writes feedback."
+        },
+        "teacherVideo": {
+          "title": "Send a lesson video",
+          "body": "Forward it via WhatsApp (easiest on slow networks) or upload here. Resumes if your connection drops.",
+          "bodyWithoutWhatsApp": "Upload it here, from a phone or a computer. Resumes if your connection drops."
+        },
+        "teacherHelp": {
+          "title": "Help is always here",
+          "body": "Stuck on a word or a step? Tap the ? button — here on a computer, bottom right on your phone — to look it up or to message the programme team."
+        },
+        "adminRepository": {
+          "title": "Repository = your records",
+          "body": "Schools, classes, subjects, teachers, sessions, reading material. Everything cross-linked. Start here for any look-up."
+        },
+        "adminTables": {
+          "title": "Operational tables",
+          "body": "Add or update teachers, schools and pairings. Every change is logged."
+        },
+        "adminAudit": {
+          "title": "Audit log",
+          "body": "Every action — logins, uploads, gate attempts — is recorded here. Read-only, kept for seven years."
+        },
+        "adminHelp": {
+          "title": "Help is always here",
+          "body": "Press ? any time, or use this ? button, to open the help panel: every term explained, plus the helpdesk contacts."
+        },
+        "observerCycles": {
+          "title": "Your observation cycles",
+          "body": "The cycles you are assigned to. Read the teacher's pre-form, watch the lesson live or by video, then file your observer form."
+        },
+        "observerTeachBack": {
+          "title": "Teach-back reviews",
+          "body": "Teachers record themselves teaching an RTT lesson. Watch each one and mark it reviewed."
+        }
+      }
+    },
+    "quickFind": {
+      "ariaLabel": "Quick find",
+      "inputLabel": "Quick find search",
+      "placeholder": "Search teachers, schools, sessions…",
+      "recent": "Recently viewed",
+      "startTyping": "Start typing to search across the repository.",
+      "searching": "Searching…",
+      "query": "Query: \"{q}\"",
+      "noMatches": "No matches",
+      "typeMore": "Type at least {min} characters.",
+      "noResultsFor": "No results for \"{q}\"",
+      "results": "Results · {count}",
+      "kind": {
+        "teacher": "Teacher",
+        "school": "School",
+        "class": "Class",
+        "subject": "Subject",
+        "observationCycle": "Observation",
+        "mentorPairing": "Mentor pairing",
+        "outline": "Outline",
+        "session": "Session"
+      },
+      "refusal": {
+        "unavailable": {
+          "primary": "Search unavailable",
+          "secondary": "Search is not working right now. Try again in a moment."
+        },
+        "throttled": {
+          "primary": "Too many searches",
+          "secondaryIn": "Searching is paused for your account. Try again in {seconds} s.",
+          "secondary": "Searching is paused for your account. Try again in a minute."
+        },
+        "signedOut": {
+          "primary": "Signed out",
+          "secondary": "Your session has ended. Sign in again to search."
+        },
+        "tooLong": {
+          "primary": "Search too long",
+          "secondary": "Shorten the search and try again."
+        }
+      }
+    },
+    "settingsForm": {
+      "display": "Display",
+      "zoomHint": "For larger text, use your browser's zoom: Ctrl and + on a computer, or pinch on a phone.",
+      "highContrast": "High contrast",
+      "highContrastHint": "Deepens ink + line tokens; easier in bright light.",
+      "reducedMotion": "Reduced motion",
+      "reducedMotionHint": "Disables transitions + animated pills.",
+      "privacy": "Privacy",
+      "watermarkTitle": "Videos are watermarked with your name",
+      "watermarkBody": "Always on, for every viewer. It identifies who was watching if a recording of the screen is shared.",
+      "footageNote": "All session footage is confidential and downloads are disabled at the player level.",
+      "language": "Language",
+      "languageNote": "Used for UI labels and notifications. Content (lesson titles, observation notes) is not auto-translated.",
+      "account": "Account",
+      "email": "Email",
+      "role": "Role",
+      "password": "Password",
+      "replayTour": "Replay tour",
+      "signOut": "Sign out",
+      "endSession": "End this session →",
+      "couldNotSave": "Could not save",
+      "replay": {
+        "rearming": "Re-arming…",
+        "failed": "Failed — retry",
+        "idle": "Replay tour →"
+      }
+    },
+    "changePassword": {
+      "open": "Change password →",
+      "required": "Your password was set by an administrator. Choose your own to continue.",
+      "current": "Current password",
+      "new": "New password ({min}+ characters)",
+      "confirm": "Confirm new password",
+      "submit": "Change password",
+      "note": "This signs you out on other devices."
+    }
+  }
+}

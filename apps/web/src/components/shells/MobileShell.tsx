@@ -43,6 +43,8 @@ export async function MobileShell({
 }: MobileShellProps) {
   const tAction = await getTranslations("action");
   const tNav = await getTranslations("nav");
+  const tBrand = await getTranslations("brand");
+  const t = await getTranslations("home.chrome");
   return (
     <div style={{ minHeight: "100dvh", background: "var(--paper)", paddingBottom: 80 }}>
       {/* Skips the header's account controls. A phone with a keyboard or a
@@ -62,7 +64,7 @@ export async function MobileShell({
         }}
       >
         <div>
-          <div style={{ fontSize: 10, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>GML LMS</div>
+          <div style={{ fontSize: 10, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{tBrand("name")}</div>
           {title ? <h1 style={{ fontFamily: "var(--serif)", fontSize: 18, fontWeight: 600, marginTop: 2 }}>{title}</h1> : null}
           {/* The connection indicator, in the sticky header so it stays in
               view. It lived in the desktop sidebar only: on a phone on 2G --
@@ -112,7 +114,7 @@ export async function MobileShell({
             }}
           >
             <SignOutButton
-              title={`${tAction("signOut")} ${user.email ?? ""}`.trim()}
+              title={user.email ? t("signOutTitle", { email: user.email }) : tAction("signOut")}
               style={{
                 padding: "5px 10px",
                 border: "1px solid var(--line)",

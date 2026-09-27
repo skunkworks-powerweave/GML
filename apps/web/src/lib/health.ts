@@ -47,7 +47,7 @@ export type MigrationsResult = {
  * real dependency is down, and red when it is fine.
  */
 export async function pingDb(): Promise<PingResult> {
-  if (!process.env.DATABASE_URL) return { ok: false, detail: "DATABASE_URL not set" };
+  if (!process.env.DATABASE_URL) return { ok: false, detail: "DATABASE_URL not set" }; // i18n-ignore: /api/health JSON for the operator and monitoring, never shown
   try {
     // The pool's own connectionTimeoutMillis (5s) bounds a hung connect.
     const { getPool } = await import("@gml/db");
@@ -79,7 +79,7 @@ export async function pingDb(): Promise<PingResult> {
 export async function pingStorage(): Promise<PingResult> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SECRET_KEY;
-  if (!url || !key) return { ok: false, detail: "Supabase env not set" };
+  if (!url || !key) return { ok: false, detail: "Supabase env not set" }; // i18n-ignore: /api/health JSON for the operator and monitoring, never shown
   try {
     const res = await fetch(`${url}/storage/v1/bucket`, {
       headers: { apikey: key, authorization: `Bearer ${key}` },
@@ -94,7 +94,7 @@ export async function pingStorage(): Promise<PingResult> {
     const missing = Object.values(BUCKETS).filter((b) => !names.has(b));
     return missing.length === 0
       ? { ok: true }
-      : { ok: false, detail: `missing buckets: ${missing.join(", ")}` };
+      : { ok: false, detail: `missing buckets: ${missing.join(", ")}` }; // i18n-ignore: /api/health JSON for the operator and monitoring, never shown
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
@@ -150,6 +150,7 @@ export async function whatsappHealth(): Promise<WhatsAppHealth> {
   if (!process.env.DATABASE_URL) return out;
   try {
     const { getPool } = await import("@gml/db");
+    // i18n-ignore: SQL
     const q = await getPool().query<{ pending: string; dead: string; last: Date | null }>(`
       SELECT
         (SELECT count(*) FROM jobs WHERE queue = 'whatsapp' AND name = 'whatsapp_fetch'
@@ -193,13 +194,13 @@ export async function pingMigrations(): Promise<MigrationsResult> {
 
   // Applied: query the drizzle.__drizzle_migrations table, through the app's pool.
   if (!process.env.DATABASE_URL) {
-    return { ok: false, applied: 0, expected, error: "DATABASE_URL not set" };
+    return { ok: false, applied: 0, expected, error: "DATABASE_URL not set" }; // i18n-ignore: /api/health JSON for the operator and monitoring, never shown
   }
   try {
     const { getPool } = await import("@gml/db");
     try {
       const res = await getPool().query<{ count: string }>(
-        "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations",
+        "SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations", // i18n-ignore: SQL
       );
       const applied = Number(res.rows[0]?.count ?? 0);
       return { ok: applied >= expected, applied, expected };
@@ -213,7 +214,7 @@ export async function pingMigrations(): Promise<MigrationsResult> {
           ok: false,
           applied: 0,
           expected,
-          error: "drizzle migrations table not found",
+          error: "drizzle migrations table not found", // i18n-ignore: /api/health JSON for the operator and monitoring, never shown
         };
       }
       return { ok: false, applied: 0, expected, error: msg };

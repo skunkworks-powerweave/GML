@@ -3,18 +3,23 @@
 //
 // Adding a new route = adding a NavItem here. The Sidebar + BottomTabs
 // components render entirely from this config; no role-branching in JSX.
+//
+// NO LABEL IS WRITTEN HERE. Every item and tab names its `nav.*` key and every
+// section its `navSection.*` key; the chrome renders them in the user's
+// language. English literals used to sit beside the keys as fallbacks, and the
+// items without a key rendered them in Hindi and Bhoti sidebars too.
 
 import type { RoleName } from "@gml/shared/auth/roles";
 
 export type NavItem = {
   id: string;
-  label: string;
   /**
-   * The nav.* translation key for `label`, where the id alone cannot say it:
-   * observation, mentorship, rtt and videos carry different labels for
-   * different roles, so Sidebar's id-keyed ITEM_KEY cannot hold them.
+   * The item's `nav.*` translation key. Named per item, not derived from the
+   * id: observation, mentorship, rtt and videos carry different labels for
+   * different roles ("Video library" / "Pending review", "Mentorship" / "My
+   * mentees"), so an id-keyed map cannot hold them.
    */
-  labelKey?: string;
+  labelKey: string;
   icon: string;
   href: string;
   /** Section-gate slug. Visiting this route prompts for the gate password if not unlocked. */
@@ -24,6 +29,7 @@ export type NavItem = {
 };
 
 export type NavSection = {
+  /** The heading's `navSection.*` translation key. */
   section: string;
   items: NavItem[];
 };
@@ -34,181 +40,181 @@ export type NavSection = {
 export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
   super_admin: [
     {
-      section: "Programme",
+      section: "programme",
       items: [
-        { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Classroom Observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
-        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
+        { id: "dashboard", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+        { id: "observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "rtt", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
-      section: "Repository",
+      section: "repository",
       items: [
-        { id: "repo", label: "Home", icon: "book", href: "/repo" },
-        { id: "repo-schools", label: "Schools", icon: "school", href: "/repo/schools" },
-        { id: "repo-subjects", label: "Subjects", icon: "book", href: "/repo/subjects" },
-        { id: "repo-outlines", label: "Course outlines", icon: "file", href: "/repo/outlines" },
-        { id: "repo-sessions", label: "Sessions", icon: "cycle", href: "/repo/sessions" },
-        { id: "repo-resources", label: "Reading material", icon: "pdf", href: "/repo/resources" },
+        { id: "repo", labelKey: "repoHome", icon: "book", href: "/repo" },
+        { id: "repo-schools", labelKey: "schools", icon: "school", href: "/repo/schools" },
+        { id: "repo-subjects", labelKey: "subjects", icon: "book", href: "/repo/subjects" },
+        { id: "repo-outlines", labelKey: "outlines", icon: "file", href: "/repo/outlines" },
+        { id: "repo-sessions", labelKey: "sessions", icon: "cycle", href: "/repo/sessions" },
+        { id: "repo-resources", labelKey: "resources", icon: "pdf", href: "/repo/resources" },
       ],
     },
     {
-      section: "Data",
+      section: "data",
       items: [
-        { id: "tbl-teachers", label: "Teachers", icon: "users", href: "/admin/data/teachers" },
-        { id: "tbl-schools", label: "Schools", icon: "school", href: "/admin/data/schools" },
-        { id: "tbl-mentors", label: "Mentors", icon: "users", href: "/admin/data/mentors" },
-        { id: "tbl-pairings", label: "Pairings", icon: "users", href: "/admin/data/mentor-pairings" },
-        { id: "tbl-attendance", label: "Attendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        { id: "tbl-teachers", labelKey: "teachers", icon: "users", href: "/admin/data/teachers" },
+        { id: "tbl-schools", labelKey: "schools", icon: "school", href: "/admin/data/schools" },
+        { id: "tbl-mentors", labelKey: "mentors", icon: "users", href: "/admin/data/mentors" },
+        { id: "tbl-pairings", labelKey: "pairings", icon: "users", href: "/admin/data/mentor-pairings" },
+        { id: "tbl-attendance", labelKey: "attendance", icon: "table", href: "/admin/data/rtt-attendance" },
         // The index of ALL 20 tables. Without it the desktop sidebar reached 5
         // of them, and classes, learners, sessions, resources, RTT content and
         // observation cycles -- the tables a fresh deployment is empty in --
         // could only be found by typing /admin. README-deploy.md section 3.2.
-        { id: "tbl-all", label: "All tables", icon: "table", href: "/admin" },
+        { id: "tbl-all", labelKey: "allTables", icon: "table", href: "/admin" },
       ],
     },
     {
-      section: "System",
+      section: "system",
       items: [
-        { id: "users", label: "Users", icon: "users", href: "/admin/users" },
-        { id: "audit", label: "Audit log", icon: "shield", href: "/admin/audit", gate: "admin" },
-        { id: "gates", label: "Section gates", icon: "lock", href: "/admin/gates" },
-        { id: "forms", label: "Forms & quizzes", icon: "file", href: "/admin/forms" },
-        { id: "settings", label: "Settings", icon: "settings", href: "/settings" },
+        { id: "users", labelKey: "users", icon: "users", href: "/admin/users" },
+        { id: "audit", labelKey: "audit", icon: "shield", href: "/admin/audit", gate: "admin" },
+        { id: "gates", labelKey: "gates", icon: "lock", href: "/admin/gates" },
+        { id: "forms", labelKey: "forms", icon: "file", href: "/admin/forms" },
+        { id: "settings", labelKey: "settings", icon: "settings", href: "/settings" },
       ],
     },
   ],
 
   programme_admin: [
     {
-      section: "Programme",
+      section: "programme",
       items: [
-        { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Classroom Observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
-        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
-        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
+        { id: "dashboard", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+        { id: "observation", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "rtt", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
-      section: "Repository",
+      section: "repository",
       items: [
-        { id: "repo", label: "Home", icon: "book", href: "/repo" },
-        { id: "repo-schools", label: "Schools", icon: "school", href: "/repo/schools" },
-        { id: "repo-subjects", label: "Subjects", icon: "book", href: "/repo/subjects" },
-        { id: "repo-outlines", label: "Course outlines", icon: "file", href: "/repo/outlines" },
-        { id: "repo-sessions", label: "Sessions", icon: "cycle", href: "/repo/sessions" },
-        { id: "repo-resources", label: "Reading material", icon: "pdf", href: "/repo/resources" },
+        { id: "repo", labelKey: "repoHome", icon: "book", href: "/repo" },
+        { id: "repo-schools", labelKey: "schools", icon: "school", href: "/repo/schools" },
+        { id: "repo-subjects", labelKey: "subjects", icon: "book", href: "/repo/subjects" },
+        { id: "repo-outlines", labelKey: "outlines", icon: "file", href: "/repo/outlines" },
+        { id: "repo-sessions", labelKey: "sessions", icon: "cycle", href: "/repo/sessions" },
+        { id: "repo-resources", labelKey: "resources", icon: "pdf", href: "/repo/resources" },
       ],
     },
     {
-      section: "Data",
+      section: "data",
       items: [
-        { id: "tbl-teachers", label: "Teachers", icon: "users", href: "/admin/data/teachers" },
-        { id: "tbl-schools", label: "Schools", icon: "school", href: "/admin/data/schools" },
-        { id: "tbl-pairings", label: "Pairings", icon: "users", href: "/admin/data/mentor-pairings" },
+        { id: "tbl-teachers", labelKey: "teachers", icon: "users", href: "/admin/data/teachers" },
+        { id: "tbl-schools", labelKey: "schools", icon: "school", href: "/admin/data/schools" },
+        { id: "tbl-pairings", labelKey: "pairings", icon: "users", href: "/admin/data/mentor-pairings" },
         // See the super_admin Data section: the index of every table.
-        { id: "tbl-all", label: "All tables", icon: "table", href: "/admin" },
+        { id: "tbl-all", labelKey: "allTables", icon: "table", href: "/admin" },
       ],
     },
     {
-      section: "System",
+      section: "system",
       items: [
-        { id: "users", label: "Users", icon: "users", href: "/admin/users" },
-        { id: "audit", label: "Audit log", icon: "shield", href: "/admin/audit", gate: "admin" },
-        { id: "forms", label: "Forms & quizzes", icon: "file", href: "/admin/forms" },
+        { id: "users", labelKey: "users", icon: "users", href: "/admin/users" },
+        { id: "audit", labelKey: "audit", icon: "shield", href: "/admin/audit", gate: "admin" },
+        { id: "forms", labelKey: "forms", icon: "file", href: "/admin/forms" },
       ],
     },
   ],
 
   mentor: [
     {
-      section: "My work",
+      section: "myWork",
       items: [
-        { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "mentorship", label: "My mentees", labelKey: "myMentees", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "dashboard", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+        { id: "mentorship", labelKey: "myMentees", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "observation", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
         // The teach-back review queue. This item linked to /videos, which has
         // no review control, so the badge pointed at nothing a mentor could do.
-        { id: "teach-back", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
-        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
+        { id: "teach-back", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
-      section: "Programme",
+      section: "programme",
       items: [
-        { id: "rtt", label: "RTT Phases", labelKey: "rtt", icon: "mountain", href: "/rtt" },
-        { id: "forms", label: "Forms & quizzes", icon: "file", href: "/forms" },
+        { id: "rtt", labelKey: "rtt", icon: "mountain", href: "/rtt" },
+        { id: "forms", labelKey: "forms", icon: "file", href: "/forms" },
       ],
     },
     {
-      section: "Repository",
+      section: "repository",
       items: [
-        { id: "repo", label: "Home", icon: "book", href: "/repo" },
-        { id: "repo-schools", label: "Schools", icon: "school", href: "/repo/schools" },
-        { id: "repo-subjects", label: "Subjects", icon: "book", href: "/repo/subjects" },
-        { id: "repo-outlines", label: "Course outlines", icon: "file", href: "/repo/outlines" },
-        { id: "repo-sessions", label: "Sessions", icon: "cycle", href: "/repo/sessions" },
-        { id: "repo-resources", label: "Reading material", icon: "pdf", href: "/repo/resources" },
+        { id: "repo", labelKey: "repoHome", icon: "book", href: "/repo" },
+        { id: "repo-schools", labelKey: "schools", icon: "school", href: "/repo/schools" },
+        { id: "repo-subjects", labelKey: "subjects", icon: "book", href: "/repo/subjects" },
+        { id: "repo-outlines", labelKey: "outlines", icon: "file", href: "/repo/outlines" },
+        { id: "repo-sessions", labelKey: "sessions", icon: "cycle", href: "/repo/sessions" },
+        { id: "repo-resources", labelKey: "resources", icon: "pdf", href: "/repo/resources" },
       ],
     },
   ],
 
   observer: [
     {
-      section: "My work",
+      section: "myWork",
       items: [
-        { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "observation", label: "Observation cycles", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
+        { id: "dashboard", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+        { id: "observation", labelKey: "observationCycles", icon: "eye", href: "/observation", gate: "observation" },
         // Observers may review teach-backs (rtt/teach-back READ_ROLES) and had
         // no way to reach the queue.
-        { id: "teach-back", label: "Pending review", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
-        { id: "videos", label: "Video library", labelKey: "videos", icon: "video", href: "/videos" },
+        { id: "teach-back", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
     {
-      section: "Repository",
+      section: "repository",
       items: [
-        { id: "repo", label: "Home", icon: "book", href: "/repo" },
-        { id: "repo-schools", label: "Schools", icon: "school", href: "/repo/schools" },
-        { id: "repo-subjects", label: "Subjects", icon: "book", href: "/repo/subjects" },
-        { id: "repo-outlines", label: "Course outlines", icon: "file", href: "/repo/outlines" },
-        { id: "repo-sessions", label: "Sessions", icon: "cycle", href: "/repo/sessions" },
-        { id: "repo-resources", label: "Reading material", icon: "pdf", href: "/repo/resources" },
+        { id: "repo", labelKey: "repoHome", icon: "book", href: "/repo" },
+        { id: "repo-schools", labelKey: "schools", icon: "school", href: "/repo/schools" },
+        { id: "repo-subjects", labelKey: "subjects", icon: "book", href: "/repo/subjects" },
+        { id: "repo-outlines", labelKey: "outlines", icon: "file", href: "/repo/outlines" },
+        { id: "repo-sessions", labelKey: "sessions", icon: "cycle", href: "/repo/sessions" },
+        { id: "repo-resources", labelKey: "resources", icon: "pdf", href: "/repo/resources" },
       ],
     },
   ],
 
   teacher: [
     {
-      section: "My learning",
+      section: "myLearning",
       items: [
-        { id: "dashboard", label: "Dashboard", icon: "home", href: "/dashboard" },
-        { id: "rtt", label: "My phase", labelKey: "myPhase", icon: "mountain", href: "/rtt" },
-        { id: "observation", label: "My observations", labelKey: "myObservations", icon: "eye", href: "/observation" },
+        { id: "dashboard", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+        { id: "rtt", labelKey: "myPhase", icon: "mountain", href: "/rtt" },
+        { id: "observation", labelKey: "myObservations", icon: "eye", href: "/observation" },
         // Her pairing: its meetings, her Q1/Q4 videos and her reflections. A
         // teacher could reach it only from an inbox notification.
-        { id: "mentorship", label: "Mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
-        { id: "uploads", label: "My uploads", icon: "upload", href: "/uploads" },
+        { id: "mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+        { id: "uploads", labelKey: "uploads", icon: "upload", href: "/uploads" },
       ],
     },
     {
-      section: "Repository",
+      section: "repository",
       items: [
-        { id: "repo", label: "Home", icon: "book", href: "/repo" },
-        { id: "repo-schools", label: "Schools", icon: "school", href: "/repo/schools" },
-        { id: "repo-subjects", label: "Subjects", icon: "book", href: "/repo/subjects" },
-        { id: "repo-outlines", label: "Course outlines", icon: "file", href: "/repo/outlines" },
-        { id: "repo-sessions", label: "Sessions", icon: "cycle", href: "/repo/sessions" },
-        { id: "repo-resources", label: "Reading material", icon: "pdf", href: "/repo/resources" },
+        { id: "repo", labelKey: "repoHome", icon: "book", href: "/repo" },
+        { id: "repo-schools", labelKey: "schools", icon: "school", href: "/repo/schools" },
+        { id: "repo-subjects", labelKey: "subjects", icon: "book", href: "/repo/subjects" },
+        { id: "repo-outlines", labelKey: "outlines", icon: "file", href: "/repo/outlines" },
+        { id: "repo-sessions", labelKey: "sessions", icon: "cycle", href: "/repo/sessions" },
+        { id: "repo-resources", labelKey: "resources", icon: "pdf", href: "/repo/resources" },
       ],
     },
     {
-      section: "Resources",
+      section: "resources",
       items: [
-        { id: "forms", label: "Forms & quizzes", icon: "file", href: "/forms" },
+        { id: "forms", labelKey: "forms", icon: "file", href: "/forms" },
       ],
     },
   ],
@@ -232,14 +238,15 @@ for (const role of Object.keys(NAV_BY_ROLE) as RoleName[]) {
   const hasSettings = sections.some((sec) => sec.items.some((i) => i.href === "/settings"));
   if (hasSettings) continue;
   sections.push({
-    section: "Your account",
-    items: [{ id: "settings", label: "Settings", icon: "settings", href: "/settings" }],
+    section: "yourAccount",
+    items: [{ id: "settings", labelKey: "settings", icon: "settings", href: "/settings" }],
   });
 }
 
 export type MobileTab = {
   id: string;
-  label: string;
+  /** The tab's `nav.*` translation key. */
+  labelKey: string;
   icon: string;
   href: string;
   gate?: NavItem["gate"];
@@ -251,7 +258,7 @@ export type MobileTab = {
  * mentee's pairing and forms, the review queue, Forms & quizzes, the
  * repository pages -- had no mobile route at all.
  */
-const MENU_TAB: MobileTab = { id: "menu", label: "Menu", icon: "menu", href: "/menu" };
+const MENU_TAB: MobileTab = { id: "menu", labelKey: "menu", icon: "menu", href: "/menu" };
 
 /**
  * Mobile bottom tabs, after `mobile-shell.jsx::TABS_BY_ROLE`, each ending in
@@ -260,49 +267,48 @@ const MENU_TAB: MobileTab = { id: "menu", label: "Menu", icon: "menu", href: "/m
  */
 export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
   teacher: [
-    { id: "home", label: "Home", icon: "home", href: "/dashboard" },
-    { id: "learn", label: "Learn", icon: "book", href: "/rtt" },
-    { id: "observe", label: "Observe", icon: "eye", href: "/observation" },
-    { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    { id: "home", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+    { id: "learn", labelKey: "rtt", icon: "book", href: "/rtt" },
+    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation" },
+    { id: "inbox", labelKey: "inbox", icon: "chat", href: "/inbox" },
     // /uploads was in the DESKTOP sidebar only. A phone has no sidebar, so a
     // teacher could reach her uploads page -- the only mount of the mobile
     // camera/resumable-upload runner -- solely through a dashboard to-do row
     // that appears while a cycle is awaiting a video. Teachers are the most
     // phone-heavy group in the programme. The grid in BottomTabs sizes itself
-    // from tabs.length; the label renders via nav.uploads (TAB_KEY), this
-    // literal is only the fallback.
-    { id: "uploads", label: "Uploads", icon: "upload", href: "/uploads" },
+    // from tabs.length; the label is nav.uploads.
+    { id: "uploads", labelKey: "uploads", icon: "upload", href: "/uploads" },
     MENU_TAB,
   ],
   mentor: [
-    { id: "home", label: "Today", icon: "home", href: "/dashboard" },
-    { id: "pairings", label: "Mentees", icon: "users", href: "/mentorship", gate: "mentorship" },
-    { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
-    { id: "repo", label: "Repo", icon: "table", href: "/repo" },
-    { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    { id: "home", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+    { id: "pairings", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
+    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+    { id: "repo", labelKey: "repo", icon: "table", href: "/repo" },
+    { id: "inbox", labelKey: "inbox", icon: "chat", href: "/inbox" },
     MENU_TAB,
   ],
   observer: [
-    { id: "home", label: "Today", icon: "home", href: "/dashboard" },
-    { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
-    { id: "repo", label: "Repo", icon: "table", href: "/repo" },
-    { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    { id: "home", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+    { id: "repo", labelKey: "repo", icon: "table", href: "/repo" },
+    { id: "inbox", labelKey: "inbox", icon: "chat", href: "/inbox" },
     MENU_TAB,
   ],
   programme_admin: [
-    { id: "home", label: "Home", icon: "home", href: "/dashboard" },
-    { id: "data", label: "Data", icon: "table", href: "/admin" },
-    { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
-    { id: "repo", label: "Repo", icon: "book", href: "/repo" },
-    { id: "inbox", label: "Inbox", icon: "chat", href: "/inbox" },
+    { id: "home", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+    { id: "data", labelKey: "data", icon: "table", href: "/admin" },
+    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+    { id: "repo", labelKey: "repo", icon: "book", href: "/repo" },
+    { id: "inbox", labelKey: "inbox", icon: "chat", href: "/inbox" },
     MENU_TAB,
   ],
   super_admin: [
-    { id: "home", label: "Home", icon: "home", href: "/dashboard" },
-    { id: "data", label: "Data", icon: "table", href: "/admin" },
-    { id: "observe", label: "Observe", icon: "eye", href: "/observation", gate: "observation" },
-    { id: "repo", label: "Repo", icon: "book", href: "/repo" },
-    { id: "audit", label: "Audit", icon: "shield", href: "/admin/audit", gate: "admin" },
+    { id: "home", labelKey: "dashboard", icon: "home", href: "/dashboard" },
+    { id: "data", labelKey: "data", icon: "table", href: "/admin" },
+    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
+    { id: "repo", labelKey: "repo", icon: "book", href: "/repo" },
+    { id: "audit", labelKey: "audit", icon: "shield", href: "/admin/audit", gate: "admin" },
     MENU_TAB,
   ],
 };

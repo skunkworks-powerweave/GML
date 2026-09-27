@@ -22,6 +22,7 @@
 // components/error-boundary.js), so a failure that has cleared is picked up.
 
 import { useEffect } from "react";
+import { useTranslations } from "next-intl";
 
 export default function AuthenticatedError({
   error,
@@ -30,6 +31,9 @@ export default function AuthenticatedError({
   error: Error & { digest?: string };
   unstable_retry: () => void;
 }) {
+  // Inside the (authenticated) layout, so its provider is above: the copy is
+  // home.client.pageError, in the user's language.
+  const t = useTranslations("home.client.pageError");
   useEffect(() => {
     console.error("[page-error]", { digest: error.digest, message: error.message });
   }, [error]);
@@ -40,21 +44,18 @@ export default function AuthenticatedError({
       role="alert"
       data-testid="authenticated-error"
     >
-      <h1 className="text-base font-semibold">This page couldn&rsquo;t load</h1>
-      <p className="max-w-prose text-sm text-neutral-600">
-        Something went wrong fetching this page. It may be a temporary connection problem.
-        Other pages should still work.
-      </p>
+      <h1 className="text-base font-semibold">{t("title")}</h1>
+      <p className="max-w-prose text-sm text-neutral-600">{t("body")}</p>
       <button
         type="button"
         onClick={() => unstable_retry()}
         className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white"
       >
-        Try again
+        {t("tryAgain")}
       </button>
       {error.digest ? (
         <p className="text-xs text-neutral-400">
-          Reference <code>{error.digest}</code>
+          {t.rich("reference", { digest: error.digest, code: (chunks) => <code>{chunks}</code> })}
         </p>
       ) : null}
     </div>

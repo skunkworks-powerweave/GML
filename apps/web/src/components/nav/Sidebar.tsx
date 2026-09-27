@@ -2,10 +2,9 @@
 // grouped sections with optional gate badges and counts.
 //
 // Spec 125 — section headings and item labels translate via next-intl. Each
-// nav entry's `id` is mapped (via ITEM_KEY) to a translation key under
-// `nav.*`; section literals map (via SECTION_KEY) to `navSection.*`. Missing
-// keys fall through to the original English label so the chrome stays
-// readable while translation work catches up.
+// nav entry names its `nav.*` key (NavItem.labelKey) and each section its
+// `navSection.*` key, in config/nav.ts. There is no English fallback: an item
+// without a key used to render its English literal in every locale.
 //
 // Spec 128 — count badges (the `5` on "My mentees" etc) now come from the
 // authenticated layout's `loadNavCounts()` call and arrive as the `counts`
@@ -32,55 +31,6 @@ type SidebarProps = {
   counts?: NavCounts;
 };
 
-/** Section heading literal → `navSection.*` key. */
-export const SECTION_KEY: Record<string, string> = {
-  "Programme": "programme",
-  "My work": "myWork",
-  "My learning": "myLearning",
-  "Repository": "repository",
-  "Data": "data",
-  "System": "system",
-  "Resources": "resources",
-  // The section config/nav.ts appends for every role without /settings.
-  "Your account": "yourAccount",
-};
-
-/**
- * Nav item id → `nav.*` key, for ids whose label is the same for every role.
- *
- * FOUR IDS ARE DELIBERATELY ABSENT: observation, mentorship, rtt and videos.
- * NAV_BY_ROLE reuses them across roles with DIFFERENT labels -- `videos` is
- * "Video library" for an admin and "Pending review" for a mentor -- and a map
- * keyed by id alone once made a mentor's sidebar say "Video library" and
- * "Mentorship" instead of "Pending review" and "My mentees", in every locale.
- * Those items name their own key (NavItem.labelKey, next to the role-specific
- * label it translates). They used to fall back to the English literal
- * instead, so in Hindi and Bhoti the four most important items of every
- * sidebar stayed English although nav.myPhase, nav.pendingReview and the rest
- * were translated all along.
- */
-export const ITEM_KEY: Record<string, string> = {
-  "dashboard": "dashboard",
-  "repo": "repoHome",
-  "repo-schools": "schools",
-  "repo-subjects": "subjects",
-  "repo-outlines": "outlines",
-  "repo-sessions": "sessions",
-  "repo-resources": "resources",
-  "tbl-teachers": "teachers",
-  "tbl-schools": "schools",
-  "tbl-mentors": "mentors",
-  "tbl-pairings": "pairings",
-  "tbl-attendance": "attendance",
-  "audit": "audit",
-  "gates": "gates",
-  "forms": "forms",
-  "settings": "settings",
-  "uploads": "uploads",
-  "tbl-all": "allTables",
-  "users": "users",
-};
-
 export async function Sidebar({ role, activeId, counts }: SidebarProps) {
   // Static config + live counts merge. When `counts` is absent (layout opted
   // out, or the chrome is rendered outside the authenticated route group),
@@ -92,6 +42,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
   const tBrand = await getTranslations("brand");
   const tRole = await getTranslations("role");
   const tGate = await getTranslations("gate");
+  const t = await getTranslations("home");
 
   return (
     <aside
@@ -131,8 +82,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
       </div>
 
       {sections.map((section) => {
-        const sectionKey = SECTION_KEY[section.section];
-        const sectionLabel = sectionKey ? tSection(sectionKey) : section.section;
+        const sectionLabel = tSection(section.section);
         return (
         <div key={section.section}>
           <div
@@ -151,8 +101,11 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
               super_admin heard four identical "navigation" landmarks. */}
           <nav aria-label={sectionLabel} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
             {section.items.map((item) => {
-              const itemKey = item.labelKey ?? ITEM_KEY[item.id];
-              const itemLabel = itemKey ? tNav(itemKey) : item.label;
+              // Its own key, not one looked up by id: NAV_BY_ROLE reuses ids
+              // with different labels per role (`videos` is "Video library"
+              // for an admin, "Pending review" for a mentor), and an id-keyed
+              // map once gave a mentor the admin's wording.
+              const itemLabel = tNav(item.labelKey);
               return (
                 <ActiveNavLink
                   key={item.id}
@@ -199,7 +152,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                         letterSpacing: "0.05em",
                       }}
                     >
-                      gate
+                      {t("chrome.gateBadge")}
                     </span>
                   ) : null}
                   {/* `> 0`, not `!= null`. A count badge showing 0 is noise at

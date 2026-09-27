@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 
 type AttemptKind = "save" | "print" | "printscreen";
 
@@ -46,7 +47,10 @@ function emitAudit(action: string, metadata: Record<string, unknown> = {}): void
 }
 
 export default function AntiDownloadGuard(): React.ReactElement | null {
-  const [toast, setToast] = useState<string | null>(null);
+  const t = useTranslations("home.client.antiDownload");
+  // Whether the "Screenshots are logged." toast is up; its text is
+  // home.client.antiDownload.screenshotsLogged, in the user's language.
+  const [toast, setToast] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -76,8 +80,8 @@ export default function AntiDownloadGuard(): React.ReactElement | null {
           break;
         case "printscreen":
           emitAudit("anti_download.attempt.printscreen", { key: k });
-          setToast("Screenshots are logged.");
-          window.setTimeout(() => setToast(null), 2000);
+          setToast(true);
+          window.setTimeout(() => setToast(false), 2000);
           break;
       }
     }
@@ -178,7 +182,7 @@ export default function AntiDownloadGuard(): React.ReactElement | null {
         pointerEvents: "none",
       }}
     >
-      {toast}
+      {t("screenshotsLogged")}
     </div>,
     document.body,
   );

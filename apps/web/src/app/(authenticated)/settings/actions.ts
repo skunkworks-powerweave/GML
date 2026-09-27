@@ -14,6 +14,7 @@
 // page the same submit path the Topbar already uses, so there is exactly one
 // sign-out implementation to keep working.
 
+import { getTranslations } from "next-intl/server";
 import { auth, signOut, signInWithPassword } from "@/auth";
 import { passwordPolicyError } from "@/lib/password-policy-message";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -44,18 +45,20 @@ export async function changePasswordAction(
   _prev: ChangePasswordState | undefined,
   formData: FormData,
 ): Promise<ChangePasswordState> {
+  // Every message goes straight back to the form: in the user's language.
+  const t = await getTranslations("home.settings.password");
   const session = await auth();
-  if (!session) return { error: "Your session has ended. Sign in again." };
+  if (!session) return { error: t("sessionEnded") };
 
   const current = String(formData.get("currentPassword") ?? "");
   const next = String(formData.get("newPassword") ?? "");
   const confirm = String(formData.get("confirmPassword") ?? "");
 
-  if (!current) return { error: "Enter your current password." };
+  if (!current) return { error: t("enterCurrent") };
   const policy = await passwordPolicyError(next);
   if (policy) return { error: policy };
-  if (next !== confirm) return { error: "The new passwords do not match." };
-  if (next === current) return { error: "That is your current password." };
+  if (next !== confirm) return { error: t("mismatch") };
+  if (next === current) return { error: t("sameAsCurrent") };
 
   // RE-AUTHENTICATE FIRST. Supabase will change the password on the strength of
   // a valid session alone, and that is not good enough here: these are shared
@@ -65,19 +68,19 @@ export async function changePasswordAction(
   // Verified against the user's OWN email, so this cannot be used to probe
   // anyone else's credentials.
   const email = session.user.email;
-  if (!email) return { error: "This account has no email address on file." };
+  if (!email) return { error: t("noEmail") };
 
   const verify = await signInWithPassword(email, current);
   // Only a credential failure means the password was wrong. Telling someone
   // throttled, or caught by an outage, that they mistyped it is the misreport
   // the login page used to make.
   if (verify.error === "rate_limited") {
-    return { error: "Too many attempts. Wait a few minutes and try again." };
+    return { error: t("rateLimited") };
   }
   if (verify.error === "unavailable") {
-    return { error: "Your current password cannot be checked right now. Try again in a few minutes." };
+    return { error: t("unavailable") };
   }
-  if (verify.error) return { error: "That is not your current password." };
+  if (verify.error) return { error: t("wrongCurrent") };
 
   // current_password goes to GoTrue as well. With the project's "require
   // current password" setting on (README-deploy §2.2f), GoTrue refuses a
@@ -112,9 +115,5 @@ export async function changePasswordAction(
     metadata: { selfService: true, otherSessionsEnded: !signOutError },
   });
 
-  return {
-    ok: signOutError
-      ? "Password changed, but your other devices could not be signed out from here. Sign out on them yourself."
-      : "Password changed. You have been signed out on other devices.",
-  };
+  return { ok: signOutError ? t("changedOthersFailed") : t("changed") };
 }

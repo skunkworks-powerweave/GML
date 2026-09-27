@@ -101,7 +101,7 @@ export function useSwipe<T extends HTMLElement = HTMLDivElement>(
   // ---- prefers-reduced-motion subscription ----
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
-    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)"); // i18n-ignore: a CSS media query
     const apply = () => setReducedMotion(mql.matches);
     apply();
     mql.addEventListener?.("change", apply);

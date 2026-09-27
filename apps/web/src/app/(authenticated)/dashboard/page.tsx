@@ -1,9 +1,11 @@
 // Role-aware dashboard — 1:1 ports `LMS GML Frontend/dashboard.jsx`.
 //
 // Spec 125 — the time-of-day greeting and the two right-column card headings
-// (What's next / Today, Confidentiality) are now translated via next-intl.
-// The rest of the page body stays English per the prototype's intentional
-// "chrome translates, content doesn't" line.
+// (What's next / Today, Confidentiality) come from the chrome's dashboard
+// namespace; everything else on the page (stat cards, to-dos, the field map)
+// from home.dashboard. It used to stay English "per the prototype's
+// chrome-translates line", so a Hindi or Bhoti user got translated headings
+// over English cards.
 //
 // Spec 127 — every stat-card value is a real DB count, scoped by role.
 //   • teacher:         my uploads (7d), my cycles pending pre-form, my
@@ -38,7 +40,7 @@ import type { Metadata } from "next";
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@gml/db";
-import { getTranslations } from "next-intl/server";
+import { getLocale, getTranslations } from "next-intl/server";
 import { auth } from "@/auth";
 import {
   mentorPairings,
@@ -60,6 +62,7 @@ import {
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { recordAudit } from "@/lib/audit";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import { getActiveGrant } from "@/lib/gates";
 import { countOpenAssessments } from "@/lib/rtt/assessments";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
@@ -68,13 +71,17 @@ import { FieldMapSection } from "./FieldMap";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Dashboard" };
+export async function generateMetadata(): Promise<Metadata> {
+  return { title: (await getTranslations("nav"))("dashboard") };
+}
 
 type Stat = { label: string; value: string | number; hint?: string };
 
+/** The home.dashboard translator, in the viewer's language. */
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
+
 // ── section gates ────────────────────────────────────────────────────────────
 type GatedSection = "observation" | "mentorship";
-const SECTION_NAME: Record<GatedSection, string> = { observation: "Observation", mentorship: "Mentorship" };
 
 /** Whether the viewer holds a live grant for the section (one lookup per request). */
 const sectionOpen = cache(async (userId: string, section: GatedSection): Promise<boolean> =>
@@ -90,8 +97,8 @@ async function gatedCount(open: boolean, q: () => PromiseLike<Array<{ c: number 
   return (await q())[0]?.c ?? 0;
 }
 
-function gatedStat(label: string, value: Gated, hint: string, section: GatedSection): Stat {
-  return value === null ? { label, value: "—", hint: `${SECTION_NAME[section]} locked` } : { label, value, hint };
+function gatedStat(t: Translate, label: string, value: Gated, hint: string, section: GatedSection): Stat {
+  return value === null ? { label, value: "—", hint: t(`stats.${section}Locked`) } : { label, value, hint };
 }
 
 // ── time windows used in multiple counts ─────────────────────────────────────
@@ -461,14 +468,14 @@ type TodoRow = { text: string; href: string };
  * be waiting there, and this is how to look -- without a count, a code or any
  * other row escaping the gate. The gate sends the user back to the dashboard.
  */
-function unlockRow(section: GatedSection): TodoRow {
+function unlockRow(t: Translate, section: GatedSection): TodoRow {
   return {
-    text: `Unlock ${SECTION_NAME[section]} to see what is waiting on you`,
+    text: t(section === "observation" ? "todos.unlockObservation" : "todos.unlockMentorship"),
     href: `/gate/${section}?next=${encodeURIComponent("/dashboard")}`,
   };
 }
 
-async function getMentorTodos(userId: string): Promise<TodoRow[]> {
+async function getMentorTodos(t: Translate, userId: string): Promise<TodoRow[]> {
   const chrome = await getMentorChrome(userId);
   if (!chrome.mentorId) return [];
   const mentorId = chrome.mentorId;
@@ -537,19 +544,19 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
   const todos: TodoRow[] = [];
   if (awaitingSignOff.length > 0) {
     todos.push({
-      text: `Sign off cycle ${awaitingSignOff[0].code}`,
+      text: t("todos.signOffCycle", { code: awaitingSignOff[0].code }),
       href: `/observation/${awaitingSignOff[0].id}`,
     });
   }
   if (pendingVideo.length > 0) {
     todos.push({
-      text: `Review pending teach-back video`,
+      text: t("todos.reviewTeachBack"),
       href: `/rtt/teach-back`,
     });
   }
   if (meetingsToday.length > 0) {
     todos.push({
-      text: `Mentor meeting scheduled today`,
+      text: t("todos.meetingToday"),
       href: `/mentorship`,
     });
   }
@@ -558,81 +565,81 @@ async function getMentorTodos(userId: string): Promise<TodoRow[]> {
   const formsDue = chrome.qProgressFormsDue ?? 0;
   if (formsDue > 0) {
     todos.push({
-      text: `Submit ${formsDue} quarterly form${formsDue === 1 ? "" : "s"} for your mentees`,
+      text: t("todos.submitQuarterlyForms", { count: formsDue }),
       href: `/mentorship`,
     });
   }
-  if (!obsOpen) todos.push(unlockRow("observation"));
-  if (!mentorshipOpen) todos.push(unlockRow("mentorship"));
+  if (!obsOpen) todos.push(unlockRow(t, "observation"));
+  if (!mentorshipOpen) todos.push(unlockRow(t, "mentorship"));
   return todos;
 }
 
 // ── today-checklist rows (programme/super-admin variant) ─────────────────────
-async function getAdminTodos(userId: string): Promise<TodoRow[]> {
+async function getAdminTodos(t: Translate, userId: string): Promise<TodoRow[]> {
   const chrome = await getProgrammeChrome(userId);
   const todos: TodoRow[] = [];
   if (chrome.recentUploads > 0) {
     todos.push({
-      text: `Review ${chrome.recentUploads} recent upload${chrome.recentUploads === 1 ? "" : "s"} (24h)`,
+      text: t("todos.reviewUploads", { count: chrome.recentUploads }),
       href: "/videos",
     });
   }
   if (chrome.pendingObserverForms !== null && chrome.pendingObserverForms > 0) {
     todos.push({
-      text: `${chrome.pendingObserverForms} cycle${chrome.pendingObserverForms === 1 ? "" : "s"} waiting on observer form`,
+      text: t("todos.cyclesWaitingObserver", { count: chrome.pendingObserverForms }),
       href: "/observation",
     });
   }
   if (chrome.cyclesInFlight !== null && chrome.cyclesInFlight > 0) {
     todos.push({
-      text: `${chrome.cyclesInFlight} observation cycle${chrome.cyclesInFlight === 1 ? "" : "s"} in flight`,
+      text: t("todos.cyclesInFlight", { count: chrome.cyclesInFlight }),
       href: "/observation",
     });
   }
-  if (chrome.cyclesInFlight === null) todos.push(unlockRow("observation"));
+  if (chrome.cyclesInFlight === null) todos.push(unlockRow(t, "observation"));
   return todos;
 }
 
 // ── today-checklist rows (teacher variant) ───────────────────────────────────
-async function getTeacherTodos(userId: string): Promise<TodoRow[]> {
+async function getTeacherTodos(t: Translate, userId: string): Promise<TodoRow[]> {
   const chrome = await getTeacherChrome(userId);
   const todos: TodoRow[] = [];
   if (chrome.pendingPre !== null && chrome.pendingPre > 0) {
     todos.push({
-      text: `Submit pre-form for ${chrome.pendingPre} cycle${chrome.pendingPre === 1 ? "" : "s"}`,
+      text: t("todos.submitPreForm", { count: chrome.pendingPre }),
       href: "/observation",
     });
   }
   if (chrome.awaitingVideo !== null && chrome.awaitingVideo > 0) {
     todos.push({
-      text: `Upload lesson video for ${chrome.awaitingVideo} cycle${chrome.awaitingVideo === 1 ? "" : "s"}`,
+      text: t("todos.uploadLessonVideo", { count: chrome.awaitingVideo }),
       href: "/uploads",
     });
   }
   if (chrome.awaitingPost !== null && chrome.awaitingPost > 0) {
     todos.push({
-      text: `Submit post-form for ${chrome.awaitingPost} cycle${chrome.awaitingPost === 1 ? "" : "s"}`,
+      text: t("todos.submitPostForm", { count: chrome.awaitingPost }),
       href: "/observation",
     });
   }
   if (chrome.openQuizzes > 0) {
     todos.push({
-      text: `${chrome.openQuizzes} open quiz${chrome.openQuizzes === 1 ? "" : "zes"}`,
+      text: t("todos.openQuizzes", { count: chrome.openQuizzes }),
       href: "/rtt",
     });
   }
-  if (chrome.pendingPre === null) todos.push(unlockRow("observation"));
+  if (chrome.pendingPre === null) todos.push(unlockRow(t, "observation"));
   return todos;
 }
 
 // ── today-checklist rows (observer variant) ──────────────────────────────────
-async function getObserverTodos(userId: string): Promise<TodoRow[]> {
+async function getObserverTodos(t: Translate, userId: string): Promise<TodoRow[]> {
   const chrome = await getObserverChrome(userId);
   const todos: TodoRow[] = [];
-  if (chrome.pendingObserverForm === null) return [unlockRow("observation")];
+  if (chrome.pendingObserverForm === null) return [unlockRow(t, "observation")];
   if (chrome.pendingObserverForm > 0) {
     todos.push({
-      text: `Fill observer form for ${chrome.pendingObserverForm} cycle${chrome.pendingObserverForm === 1 ? "" : "s"}`,
+      text: t("todos.fillObserverForm", { count: chrome.pendingObserverForm }),
       href: "/observation",
     });
   }
@@ -668,8 +675,11 @@ export default async function DashboardPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   const role = session.user.role ?? "teacher";
-  const name = session.user.name ?? session.user.email ?? "there";
   const tDash = await getTranslations("dashboard");
+  const t = await getTranslations("home.dashboard");
+  const tRole = await getTranslations("role");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
+  const name = session.user.name ?? session.user.email ?? t("nameFallback");
 
   // Build the role-specific stat row + the today-checklist rows.
   let stats: Stat[] = [];
@@ -678,48 +688,48 @@ export default async function DashboardPage() {
   if (role === "super_admin" || role === "programme_admin") {
     const chrome = await getProgrammeChrome(session.user.id);
     const base: Stat[] = [
-      gatedStat("Active pairings", chrome.pairingsActive, `${chrome.mentorsTotal} mentors`, "mentorship"),
-      gatedStat("Cycles in flight", chrome.cyclesInFlight, "this term", "observation"),
-      { label: "Recent uploads (24h)", value: chrome.recentUploads, hint: "across all sources" },
-      gatedStat("Pending observer forms", chrome.pendingObserverForms, "waiting on observer", "observation"),
+      gatedStat(t, t("stats.activePairings"), chrome.pairingsActive, t("stats.mentorsHint", { count: chrome.mentorsTotal }), "mentorship"),
+      gatedStat(t, t("stats.cyclesInFlight"), chrome.cyclesInFlight, t("stats.thisTerm"), "observation"),
+      { label: t("stats.recentUploads"), value: chrome.recentUploads, hint: t("stats.acrossAllSources") },
+      gatedStat(t, t("stats.pendingObserverForms"), chrome.pendingObserverForms, t("stats.waitingOnObserver"), "observation"),
     ];
     if (role === "super_admin") {
       base.push(
-        { label: "Total users", value: chrome.totalUsers, hint: "active accounts" },
-        { label: "Audit events (24h)", value: chrome.auditEvents24h, hint: "rolling window" },
+        { label: t("stats.totalUsers"), value: chrome.totalUsers, hint: t("stats.activeAccounts") },
+        { label: t("stats.auditEvents"), value: chrome.auditEvents24h, hint: t("stats.rollingWindow") },
         // The hint was the SQL behind the number, "SUM(files.size_bytes)".
-        { label: "Storage used (MB)", value: chrome.storageMb, hint: "all stored files" },
+        { label: t("stats.storageUsed"), value: chrome.storageMb, hint: t("stats.allStoredFiles") },
       );
     }
     stats = base;
-    todos = await getAdminTodos(session.user.id);
+    todos = await getAdminTodos(t, session.user.id);
   } else if (role === "mentor") {
     const chrome = await getMentorChrome(session.user.id);
     stats = [
-      gatedStat("Active mentees", chrome.activeMentees, "paired", "mentorship"),
-      { label: "Pending video reviews", value: chrome.pendingVideoReviews, hint: "target: < 48 h" },
-      gatedStat("Scheduled meetings this week", chrome.scheduledMeetingsThisWeek, "Mon-Sun", "mentorship"),
-      gatedStat("Q-progress forms due", chrome.qProgressFormsDue, "met since the last form", "mentorship"),
+      gatedStat(t, t("stats.activeMentees"), chrome.activeMentees, t("stats.paired"), "mentorship"),
+      { label: t("stats.pendingVideoReviews"), value: chrome.pendingVideoReviews, hint: t("stats.reviewTarget") },
+      gatedStat(t, t("stats.meetingsThisWeek"), chrome.scheduledMeetingsThisWeek, t("stats.monSun"), "mentorship"),
+      gatedStat(t, t("stats.formsDue"), chrome.qProgressFormsDue, t("stats.metSinceLastForm"), "mentorship"),
     ];
-    todos = await getMentorTodos(session.user.id);
+    todos = await getMentorTodos(t, session.user.id);
   } else if (role === "observer") {
     const chrome = await getObserverChrome(session.user.id);
     stats = [
-      gatedStat("Cycles I am leading (active)", chrome.leadingActive, "assigned to me", "observation"),
-      gatedStat("Pending observer forms", chrome.pendingObserverForm, "I owe", "observation"),
-      gatedStat("Cycles awaiting sign-off", chrome.awaitingSignOff, "post-form in · mentor signs off", "observation"),
+      gatedStat(t, t("stats.leadingActive"), chrome.leadingActive, t("stats.assignedToMe"), "observation"),
+      gatedStat(t, t("stats.pendingObserverForms"), chrome.pendingObserverForm, t("stats.iOwe"), "observation"),
+      gatedStat(t, t("stats.awaitingSignOff"), chrome.awaitingSignOff, t("stats.postFormIn"), "observation"),
     ];
-    todos = await getObserverTodos(session.user.id);
+    todos = await getObserverTodos(t, session.user.id);
   } else {
     // teacher
     const chrome = await getTeacherChrome(session.user.id);
     stats = [
-      { label: "My uploads this week", value: chrome.myUploads7d, hint: "last 7 days" },
-      gatedStat("Cycles pending pre-form", chrome.pendingPre, "needs my reflection", "observation"),
-      gatedStat("Cycles awaiting video", chrome.awaitingVideo, "ready to upload", "observation"),
-      { label: "Open quizzes", value: chrome.openQuizzes, hint: "active · not yet taken" },
+      { label: t("stats.myUploads"), value: chrome.myUploads7d, hint: t("stats.last7Days") },
+      gatedStat(t, t("stats.pendingPre"), chrome.pendingPre, t("stats.needsReflection"), "observation"),
+      gatedStat(t, t("stats.awaitingVideo"), chrome.awaitingVideo, t("stats.readyToUpload"), "observation"),
+      { label: t("stats.openQuizzes"), value: chrome.openQuizzes, hint: t("stats.notYetTaken") },
     ];
-    todos = await getTeacherTodos(session.user.id);
+    todos = await getTeacherTodos(t, session.user.id);
   }
 
   // Best-effort dashboard view audit (does not block render on failure).
@@ -735,7 +745,9 @@ export default async function DashboardPage() {
 
   const firstName = name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Mohd\.)\s+/i, "").split(/\s+/)[0];
 
-  const roleLabel = role.replace("_", " ");
+  // The role by name, in the viewer's language (role.*): this printed the raw
+  // slug, "super admin", in every locale.
+  const roleLabel = tRole.has(role) ? tRole(role) : role.replace("_", " ");
 
   // The phase that contains today, by date. Falls back to null -- and the
   // subtitle then simply omits the phase -- rather than guessing, because a
@@ -760,9 +772,9 @@ export default async function DashboardPage() {
   return (
     <div>
       <div className="page-header">
-        <div className="label">{roleLabel} dashboard</div>
+        <div className="label">{t("roleDashboard", { role: roleLabel })}</div>
         <h1 className="serif" style={{ fontSize: 30, marginTop: 4 }}>
-          {greeting}, {firstName}.
+          {t("headline", { greeting, name: firstName })}
         </h1>
         {/* The phase comes from the phases table, by date.
             This line used to read "Term 2 Week 7 of 12 · RTT Phase 2" for every
@@ -777,16 +789,21 @@ export default async function DashboardPage() {
             number from. Rather than swap one invented number for another, that
             half is dropped. */}
         <p style={{ color: "var(--ink-3)", marginTop: 6 }}>
-          {new Date().toLocaleDateString("en-IN", {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-            year: "numeric",
-            // The programme's date, not the server process's (same clock as the greeting).
-            timeZone: PROGRAMME_TIME_ZONE,
+          {t("subtitle", {
+            date: new Date().toLocaleDateString(intl, {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+              // The programme's date, not the server process's (same clock as the greeting).
+              timeZone: PROGRAMME_TIME_ZONE,
+            }),
+            hasPhase: currentPhase ? "yes" : "no",
+            // The phase's label is data (the phases table), shown as stored.
+            phase: currentPhase?.label ?? "",
+            showRole: role === "teacher" ? "no" : "yes",
+            role: roleLabel,
           })}
-          {currentPhase ? ` · RTT ${currentPhase.label}` : ""}
-          {role === "teacher" ? "" : ` · ${roleLabel} view`}
         </p>
       </div>
 
@@ -819,16 +836,16 @@ export default async function DashboardPage() {
                 {role === "teacher" ? tDash("whatsNext") : tDash("today")}
               </h2>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                {role === "teacher" ? "Your training queue + observation prep." : "Things waiting on you."}
+                {role === "teacher" ? t("queueTeacher") : t("queueOthers")}
               </div>
             </header>
             <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
               {todos.length === 0 ? (
                 <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                  Nothing pending — your queue is clear.
+                  {t("nothingPending")}
                 </div>
               ) : (
-                todos.map((t) => <TodoRow key={t.href + t.text} text={t.text} href={t.href} />)
+                todos.map((todo) => <TodoRow key={todo.href + todo.text} text={todo.text} href={todo.href} />)
               )}
             </div>
           </article>
@@ -847,15 +864,13 @@ export default async function DashboardPage() {
                   links are bearer URLs that work until they expire, and the
                   anti-download guard deters rather than prevents. */}
               <p style={{ fontSize: 12, color: "var(--ink-2)", lineHeight: 1.5 }}>
-                All resources here are confidential. Your name and the time are shown over every video you watch, and
-                every view is logged; please do not download, share or re-record them. Section passwords rotate
-                periodically — ask your programme admin if a section appears locked.
+                {t("confidentialityNote")}
               </p>
               <Link
                 href="/inbox"
                 style={{ fontSize: 12, color: "var(--indigo)", display: "inline-block", marginTop: 10 }}
               >
-                Notifications →
+                {t("notificationsLink")}
               </Link>
             </div>
           </article>

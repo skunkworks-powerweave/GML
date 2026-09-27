@@ -8,17 +8,19 @@
 
 import type { ButtonHTMLAttributes } from "react";
 import { useFormStatus } from "react-dom";
+import { useTranslations } from "next-intl";
 
 type Props = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> & {
-  /** What the button says while the form is being sent. */
+  /** What the button says while the form is being sent. Default: action.saving ("Saving…"). */
   pendingLabel?: string;
 };
 
-export function SubmitButton({ children, pendingLabel = "Saving…", disabled, ...rest }: Props) {
+export function SubmitButton({ children, pendingLabel, disabled, ...rest }: Props) {
   const { pending } = useFormStatus();
+  const tAction = useTranslations("action");
   return (
     <button {...rest} type="submit" disabled={pending || disabled} aria-busy={pending || undefined}>
-      {pending ? pendingLabel : children}
+      {pending ? (pendingLabel ?? tAction("saving")) : children}
     </button>
   );
 }
