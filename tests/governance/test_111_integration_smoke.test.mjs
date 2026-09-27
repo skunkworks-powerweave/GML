@@ -157,6 +157,12 @@ test("spec 111: default 'test' script does NOT run the smoke folder", () => {
   const commands = [];
   const REF =
     /(?:^|[;&|]|\s)(?:(?:pnpm|npm|yarn)(?:\s+-{1,2}[\w-]+(?:[= ]\S+)?)*\s+(?:run\s+)?|run-[sp]\s+)([\w:-]+)/g;
+  // scripts/test-gate.mjs takes SUITE NAMES and runs `pnpm run test:<name>`
+  // for each. Without following that, `test` resolves to one opaque command
+  // and this guard reports the governance suite missing — which is how it first
+  // went red when the gate was introduced. Its own mapping lives in
+  // package.json for exactly this reason.
+  const GATE = /node\s+scripts\/test-gate\.mjs\s+([\w\s:-]+)/;
   const walk = (name) => {
     if (resolved.has(name)) return; // cycles and diamonds
     resolved.add(name);
@@ -164,6 +170,8 @@ test("spec 111: default 'test' script does NOT run the smoke folder", () => {
     if (typeof body !== "string") return;
     commands.push(body);
     for (const m of body.matchAll(REF)) walk(m[1]);
+    const gate = body.match(GATE);
+    if (gate) for (const suite of gate[1].trim().split(/\s+/)) walk(`test:${suite}`);
   };
   for (const entry of ["pretest", "test", "posttest"]) walk(entry);
   const closure = commands.join(" ; ");

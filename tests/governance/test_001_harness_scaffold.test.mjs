@@ -45,15 +45,58 @@ test("FR-005: apps/worker stub exists", () => {
   assert.equal(pkg.name, "@gml/worker");
 });
 
-test("FR-006: .claude/settings.json declares the 6 hooks", () => {
+test("FR-006: .claude/settings.json wires six hooks that can actually fire", () => {
   const cfg = readJson(".claude/settings.json");
   assert.ok(cfg.hooks, "hooks block must exist");
-  assert.ok(Array.isArray(cfg.hooks.SessionStart), "SessionStart hook required");
-  assert.ok(Array.isArray(cfg.hooks.PreToolUse), "PreToolUse hook(s) required");
-  assert.ok(Array.isArray(cfg.hooks.PostToolUse), "PostToolUse hook(s) required");
-  assert.ok(Array.isArray(cfg.hooks.Stop), "Stop hook required");
-  // PreToolUse should have at least 4 entries (Bash + schema + middleware ... PostToolUse migrations is separate)
-  assert.ok(cfg.hooks.PreToolUse.length >= 3, "expected ≥3 PreToolUse hooks");
+
+  // ── REWRITTEN, BECAUSE THE OLD SHAPE COUNTED HOOKS THAT DID NOTHING ───────
+  //
+  // This used to require `PreToolUse.length >= 3`. Three existed: Bash, plus
+  // two scoped with a `pathGlob` key. `pathGlob` is not a hook-config field --
+  // it appears ZERO times in the installed Claude Code binary -- so those two
+  // fired on every Edit/Write and, being `exit 0` reminders, changed nothing.
+  // The assertion was counting a design that had never worked.
+  //
+  // What matters is that each EVENT is wired, that the commands point at the
+  // shared hooks directory, and that no dead config field has crept back.
+  // Whether each hook enforces its rule is tested by executing it, in
+  // tests/hooks/ -- which is where behaviour belongs.
+  for (const event of ["SessionStart", "PreToolUse", "PostToolUse", "Stop"]) {
+    assert.ok(Array.isArray(cfg.hooks[event]), `${event} must be registered`);
+  }
+
+  const all = [];
+  for (const [event, groups] of Object.entries(cfg.hooks)) {
+    for (const g of groups) {
+      assert.ok(
+        !("pathGlob" in g),
+        `${event} uses \`pathGlob\`, which is not a real config field -- the hook would ` +
+          `fire for every matching tool call regardless. Filter on tool_input.file_path ` +
+          `inside the hook instead.`,
+      );
+      for (const h of g.hooks ?? []) all.push({ event, matcher: g.matcher ?? "", ...h });
+    }
+  }
+
+  assert.equal(all.length, 6, `expected six hooks, found ${all.length}`);
+  for (const h of all) {
+    assert.match(
+      h.command ?? "",
+      /\.claude\/hooks\/[a-z-]+\.mjs/,
+      `${h.event} must run a hook from .claude/hooks/. Command: ${h.command}`,
+    );
+  }
+
+  // Only exit code 2 blocks a PreToolUse; a hook that fails to load exits 1 and
+  // the call proceeds. See tests/hooks/fail-closed.test.mjs for the executed
+  // proof -- this is the structural half.
+  for (const h of all.filter((x) => x.event === "PreToolUse")) {
+    assert.match(
+      h.command,
+      /\|\|\s*exit\s+2\s*$/,
+      `${h.event} (${h.matcher}) must fail CLOSED. Command: ${h.command}`,
+    );
+  }
 });
 
 test("FR-007: workspace/state.json has a valid current spec pointer", (t) => {
@@ -76,18 +119,59 @@ test("FR-007: workspace/state.json has a valid current spec pointer", (t) => {
   assert.equal(typeof state.specsCompleted, "number", "specsCompleted must be a number");
 });
 
-test("FR-007: workspace/session_log.md and marathon_log.md exist", (t) => {
-  // Same reasoning as above: gitignored local harness state, not a build input.
-  if (!existsSync(resolve(root, "workspace"))) {
-    t.skip("workspace/ is gitignored runtime state — absent on a clean checkout");
-    return;
-  }
-  assert.ok(existsSync(resolve(root, "workspace/session_log.md")));
-  assert.ok(existsSync(resolve(root, "workspace/marathon_log.md")));
+test("FR-007: the session ledger is written by a hook, not asserted into existence", () => {
+  // ── INVERTED ──────────────────────────────────────────────────────────────
+  //
+  // This used to assert that workspace/session_log.md and marathon_log.md
+  // exist. Both did. Both were EMPTY -- session_log.md was 112 bytes of header
+  // across eleven sessions and 27 commits, and marathon_log.md never recorded
+  // one of the sixteen "workflow runs" it was created for.
+  //
+  // That is how we know the old Stop hook never ran: scripts/stop_session.mjs
+  // appended unconditionally, so a single execution would have left a line.
+  // A test asserting the file exists passed the whole time.
+  //
+  // So assert the thing that produces the ledger instead. `workspace/` is
+  // gitignored runtime state and is correctly absent from a clean checkout.
+  const cfg = readJson(".claude/settings.json");
+  const stop = (cfg.hooks?.Stop ?? []).flatMap((g) => g.hooks ?? []);
+  assert.equal(stop.length, 1, "exactly one Stop hook must be registered");
+  assert.match(stop[0].command ?? "", /stop\.mjs/, "the Stop hook must run .claude/hooks/stop.mjs");
+
+  const src = readFileSync(resolve(root, ".claude/hooks/stop.mjs"), "utf8");
+  assert.match(
+    src,
+    /session_log\.md/,
+    "the Stop hook must write workspace/session_log.md -- the ledger that stayed empty for the " +
+      "life of the project because its hook never fired",
+  );
 });
 
-test("FR-008: scripts/session_start.mjs exists and is executable", () => {
-  assert.ok(existsSync(resolve(root, "scripts/session_start.mjs")));
+test("FR-008: the session-start hook lives in .claude/hooks, and the dead ones are gone", () => {
+  assert.ok(
+    existsSync(resolve(root, ".claude/hooks/session-start.mjs")),
+    "the SessionStart hook moved to .claude/hooks/session-start.mjs alongside the others",
+  );
+
+  // The six scripts it replaces are deleted, and must stay deleted. They are
+  // not merely superseded: every one of them was inert. block_destructive.mjs
+  // read process.argv[2] for a payload that arrives on stdin, so the only
+  // blocking hook in the project never matched anything; three were `exit 0`
+  // reminders scoped by a config field that does not exist; and the Stop hook
+  // never fired at all.
+  for (const gone of [
+    "scripts/session_start.mjs",
+    "scripts/stop_session.mjs",
+    "scripts/block_destructive.mjs",
+    "scripts/warn_schema_change.mjs",
+    "scripts/warn_middleware_change.mjs",
+    "scripts/check_migration_reversible.mjs",
+  ]) {
+    assert.ok(
+      !existsSync(resolve(root, gone)),
+      `${gone} must not come back -- it enforced nothing and its presence implies otherwise`,
+    );
+  }
 });
 
 test("FR-009: CLAUDE.md exists with project context sections", () => {
