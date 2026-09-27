@@ -9,16 +9,18 @@
 // the 2004 spelling `scormType`) are refused too: their content looks for
 // API_1484_11, which this runtime does not provide.
 
+import { scormMessage, scormText, type ScormMessage } from "./messages";
 import { childNamed, childrenNamed, parseXml, XmlError, type XmlElement } from "./xml";
 
 export type ManifestErrorCode = "bad_manifest" | "unsupported_version" | "no_launch" | "multiple_scos" | "missing_launch_file";
 
+/** A manifest this LMS will not launch: `detail` is the reason's message key, `message` its English. */
 export class ManifestError extends Error {
   constructor(
     readonly code: ManifestErrorCode,
-    message: string,
+    readonly detail: ScormMessage,
   ) {
-    super(message);
+    super(scormText(detail));
   }
 }
 
@@ -87,9 +89,9 @@ export function readManifest(xml: string): ManifestInfo {
   try {
     root = parseXml(xml);
   } catch (err) {
-    throw new ManifestError("bad_manifest", `imsmanifest.xml is not valid XML: ${err instanceof XmlError ? err.message : String(err)}`);
+    throw new ManifestError("bad_manifest", scormMessage("badXml", { detail: err instanceof XmlError ? err.detail : String(err) }));
   }
-  if (root.local !== "manifest") throw new ManifestError("bad_manifest", "imsmanifest.xml does not contain a <manifest>.");
+  if (root.local !== "manifest") throw new ManifestError("bad_manifest", scormMessage("noManifestElement", { element: "<manifest>" }));
 
   const version = textOf(childNamed(childNamed(root, "metadata") ?? root, "schemaversion"));
   const resourcesEl = childNamed(root, "resources");
@@ -100,10 +102,7 @@ export function readManifest(xml: string): ManifestInfo {
     /adlcp_v1p3|imsss/i.test(namespaces) ||
     resources.some((r) => [...r.attrs.keys()].some((k) => k.endsWith(":scormType") || k === "scormType"));
   if (is2004) {
-    throw new ManifestError(
-      "unsupported_version",
-      `This is a SCORM 2004 package${version ? ` (${version})` : ""}. Only SCORM 1.2 packages are supported; re-export it as SCORM 1.2.`,
-    );
+    throw new ManifestError("unsupported_version", version ? scormMessage("scorm2004Version", { version }) : scormMessage("scorm2004"));
   }
 
   const byId = new Map<string, XmlElement>();
@@ -116,7 +115,7 @@ export function readManifest(xml: string): ManifestInfo {
   const orgs = orgsEl ? childrenNamed(orgsEl, "organization") : [];
   const wanted = orgsEl?.attrs.get("default");
   const org = orgs.find((o) => o.attrs.get("identifier") === wanted) ?? orgs[0];
-  if (!org) throw new ManifestError("no_launch", "The manifest has no organization, so there is nothing to launch.");
+  if (!org) throw new ManifestError("no_launch", scormMessage("noOrganization"));
 
   // Every item with a resource that has an href, depth-first.
   const launchable: Array<{ item: XmlElement; resource: XmlElement }> = [];
@@ -125,20 +124,15 @@ export function readManifest(xml: string): ManifestInfo {
       const ref = item.attrs.get("identifierref");
       if (ref) {
         const resource = byId.get(ref);
-        if (!resource) throw new ManifestError("bad_manifest", `Item ${item.attrs.get("identifier") ?? "?"} refers to a resource (${ref}) the manifest does not define.`);
+        if (!resource) throw new ManifestError("bad_manifest", scormMessage("missingResource", { item: item.attrs.get("identifier") ?? "?", ref }));
         if (resource.attrs.get("href")) launchable.push({ item, resource });
       }
       walk(item);
     }
   };
   walk(org);
-  if (launchable.length === 0) throw new ManifestError("no_launch", "The manifest's organization has no item that can be launched.");
-  if (launchable.length > 1) {
-    throw new ManifestError(
-      "multiple_scos",
-      `The package has ${launchable.length} launchable items; only single-SCO packages are supported. Export the course as one SCO.`,
-    );
-  }
+  if (launchable.length === 0) throw new ManifestError("no_launch", scormMessage("noLaunchable"));
+  if (launchable.length > 1) throw new ManifestError("multiple_scos", scormMessage("multipleScos", { count: launchable.length }));
 
   const { item, resource } = launchable[0]!;
   const href = (resourcesEl?.attrs.get("xml:base") ?? "") + (resource.attrs.get("xml:base") ?? "") + resource.attrs.get("href")!;
@@ -147,6 +141,7 @@ export function readManifest(xml: string): ManifestInfo {
   const mastery = Number(textOf(childNamed(item, "masteryscore")));
   const launchData = textOf(childNamed(item, "datafromlms"));
   const title =
+    // i18n-ignore: stored as the package's title (data, shown as stored), not rendered from here
     textOf(childNamed(org, "title")) || textOf(childNamed(item, "title")) || root.attrs.get("identifier") || "Untitled package";
 
   return {

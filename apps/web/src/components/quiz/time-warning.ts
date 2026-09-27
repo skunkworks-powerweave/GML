@@ -6,11 +6,17 @@
 // one after another over the question the learner was listening to. The time
 // is now spoken only as it crosses a threshold, from a separate polite region
 // whose text changes at those moments and at no others.
+//
+// These are the WHICH and WHEN; the words are the runners' translations
+// (rtt.client.quizRunner.timeWarning.<key>), in the learner's language.
+
+/** A warning due now, as its message key; "" when none is. */
+export type TimeWarning = "" | "fiveMinutes" | "oneMinute" | "timeUp" | "timeUpNothingSent";
 
 /** Seconds left at which the learner is told, largest first. */
-const THRESHOLDS: ReadonlyArray<readonly [number, string]> = [
-  [300, "5 minutes remaining."],
-  [60, "1 minute remaining."],
+const THRESHOLDS: ReadonlyArray<readonly [number, TimeWarning]> = [
+  [300, "fiveMinutes"],
+  [60, "oneMinute"],
 ];
 
 /**
@@ -19,10 +25,10 @@ const THRESHOLDS: ReadonlyArray<readonly [number, string]> = [
  * latest one crossed. A threshold the attempt opened below is never said --
  * one that opens with 3 minutes left is not told "5 minutes remaining".
  */
-export function timeWarning(remaining: number, limit: number): string {
-  if (remaining <= 0) return "Time is up. Your answers are being submitted.";
-  let said = "";
-  for (const [at, text] of THRESHOLDS) if (at < limit && remaining <= at) said = text;
+export function timeWarning(remaining: number, limit: number): TimeWarning {
+  if (remaining <= 0) return "timeUp";
+  let said: TimeWarning = "";
+  for (const [at, key] of THRESHOLDS) if (at < limit && remaining <= at) said = key;
   return said;
 }
 
@@ -31,4 +37,4 @@ export function timeWarning(remaining: number, limit: number): string {
  * runner that appeared with no time left and nothing chosen does not submit
  * blank answers (W3-17), so "being submitted" would not be true.
  */
-export const TIME_UP_NOTHING_SENT = "Time is up. Nothing was submitted.";
+export const TIME_UP_NOTHING_SENT: TimeWarning = "timeUpNothingSent";

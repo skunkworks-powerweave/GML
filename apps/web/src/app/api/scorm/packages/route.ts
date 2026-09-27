@@ -17,6 +17,7 @@ import { db } from "@gml/db";
 import { requireApiRole } from "@/lib/api-guards";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/ids";
+import { getTranslations } from "next-intl/server";
 import { ingestPackage } from "@/lib/scorm/ingest";
 import { SCORM_LIMITS } from "@/lib/scorm/package";
 
@@ -25,10 +26,17 @@ export const dynamic = "force-dynamic";
 /** The package plus the multipart framing and the two small fields. */
 const MAX_BODY_BYTES = SCORM_LIMITS.maxPackageBytes + 256 * 1024;
 
-const refuse = (status: number, code: string, message: string) =>
-  NextResponse.json({ error: { code, message } }, { status });
+/**
+ * A refusal the upload form shows as written, so its message is in the
+ * uploader's language (rtt.scorm.upload, where the package checks' own
+ * messages are too); the code is for anything else reading it.
+ */
+async function refuse(status: number, code: string, key: string, values?: Record<string, number>) {
+  const t = await getTranslations("rtt");
+  return NextResponse.json({ error: { code, message: t(`scorm.upload.${key}`, values) } }, { status });
+}
 
-const TOO_LARGE = () => refuse(413, "too_large", `A package can be at most ${SCORM_LIMITS.maxPackageBytes / 1024 / 1024} MB.`);
+const TOO_LARGE = () => refuse(413, "too_large", "atMost", { mb: SCORM_LIMITS.maxPackageBytes / 1024 / 1024 });
 
 /** The body, or null once it passes `max` bytes (reading stops there). */
 async function readCapped(req: Request, max: number): Promise<Uint8Array<ArrayBuffer> | null> {
@@ -74,7 +82,7 @@ function sameOrigin(req: Request): boolean {
 export async function POST(req: Request) {
   const gate = await requireApiRole(["super_admin"]);
   if (gate.response) return gate.response;
-  if (!sameOrigin(req)) return refuse(403, "cross_origin", "Uploads must come from this site.");
+  if (!sameOrigin(req)) return refuse(403, "cross_origin", "crossOrigin");
 
   const declared = Number(req.headers.get("content-length") ?? Number.NaN);
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return TOO_LARGE();
@@ -85,13 +93,13 @@ export async function POST(req: Request) {
   try {
     form = await new Response(body, { headers: { "content-type": req.headers.get("content-type") ?? "" } }).formData();
   } catch {
-    return refuse(400, "bad_form", "The upload was not a form submission.");
+    return refuse(400, "bad_form", "badForm");
   }
   const file = form.get("file");
-  if (!(file instanceof Blob) || file.size === 0) return refuse(400, "no_file", "Choose a SCORM .zip to upload.");
+  if (!(file instanceof Blob) || file.size === 0) return refuse(400, "no_file", "noFile");
   if (file.size > SCORM_LIMITS.maxPackageBytes) return TOO_LARGE();
   const rttSubjectId = String(form.get("rttSubjectId") ?? "");
-  if (!isUuid(rttSubjectId)) return refuse(400, "no_subject", "Choose the RTT subject this package belongs to.");
+  if (!isUuid(rttSubjectId)) return refuse(400, "no_subject", "noSubject");
   const title = String(form.get("title") ?? "").trim() || null;
 
   const result = await ingestPackage(db, {

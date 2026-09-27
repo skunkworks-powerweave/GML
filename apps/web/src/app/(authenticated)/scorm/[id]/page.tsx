@@ -13,6 +13,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { users } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -31,6 +32,7 @@ export default async function ScormLaunchPage({ params }: { params: Promise<{ id
 
   const pkg = await packageForViewer(db, viewer, id);
   if (!pkg) notFound();
+  const t = await getTranslations("rtt");
   const [state, [me]] = await Promise.all([
     launchState(db, viewer.id, pkg.id),
     db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, viewer.id)).limit(1),
@@ -51,8 +53,8 @@ export default async function ScormLaunchPage({ params }: { params: Promise<{ id
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 22, margin: 0 }}>{pkg.title}</h1>
           {!pkg.active ? (
             // Only an administrator reaches a withdrawn package.
-            <span className="chip chip-rust" title="Learners cannot open it until it is re-activated at Admin → SCORM">
-              Withdrawn
+            <span className="chip chip-rust" title={t("scorm.withdrawnTitle")}>
+              {t("common.withdrawn")}
             </span>
           ) : null}
         </div>

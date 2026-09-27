@@ -153,6 +153,7 @@ export async function launchState(db: Db, userId: string, packageId: string): Pr
     .where(and(eq(scormAttempts.packageId, packageId), eq(scormAttempts.userId, userId)))
     .limit(1);
   if (!a) {
+    // i18n-ignore: a SCORM 1.2 lesson_status value (protocol), not a label
     return { lessonStatus: "not attempted", lessonLocation: "", scoreRaw: null, scoreMin: null, scoreMax: null, suspendData: "", totalTimeCs: 0, entry: "ab-initio" };
   }
   const untouched = a.lessonStatus === "not attempted" && a.suspendData === "" && a.lessonLocation === "";
@@ -174,7 +175,7 @@ const excluded = (column: string) => sql.raw(`excluded."${column}"`);
 /** STATUS_RANK as SQL. The statuses are this module's own constants, never input. */
 const WHEN_RANK = sql.raw(
   Object.entries(STATUS_RANK)
-    .map(([status, rank]) => `WHEN '${status}' THEN ${rank}`)
+    .map(([status, rank]) => `WHEN '${status}' THEN ${rank}`) // i18n-ignore: SQL
     .join(" "),
 );
 const rankOf = (status: SQL | AnyColumn) => sql`(CASE ${status}::text ${WHEN_RANK} ELSE 0 END)`;

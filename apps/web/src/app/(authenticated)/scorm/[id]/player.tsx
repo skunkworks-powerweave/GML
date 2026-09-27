@@ -22,6 +22,7 @@
 // it finishes first (lib/scorm/store.ts).
 
 import { useCallback, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Scorm12Runtime, type RuntimeInit } from "@/lib/scorm/runtime";
 import { SCORM_SANDBOX } from "@/lib/scorm/sandbox";
 import type { CommitPayload } from "@/lib/scorm/cmi";
@@ -42,6 +43,7 @@ export function ScormPlayer({
   backHref: string;
   init: RuntimeInit;
 }) {
+  const t = useTranslations("rtt.client.scormPlayer");
   const [unsaved, setUnsaved] = useState(false);
   const [finished, setFinished] = useState(false);
 
@@ -121,16 +123,14 @@ export function ScormPlayer({
     <div style={{ display: "grid", gap: 10 }}>
       {unsaved ? (
         <div role="status" className="card" style={{ padding: "8px 12px", fontSize: 13, borderColor: "var(--rust)" }}>
-          Your progress is not saved yet. It will be sent again when you are back online, so keep this page open until
-          then.
+          {t("unsaved")}
         </div>
       ) : null}
       {finished ? (
         <div role="status" className="card" style={{ padding: "8px 12px", fontSize: 13 }}>
-          You have finished this session. Your progress is recorded.{" "}
-          {/* A full navigation, not a client transition: the module is done
-              and the next page should start clean. */}
-          <a href={backHref}>Back to the subject</a>
+          {/* The link is a full navigation, not a client transition: the
+              module is done and the next page should start clean. */}
+          {t.rich("finished", { link: (chunks) => <a href={backHref}>{chunks}</a> })}
         </div>
       ) : null}
       <iframe
@@ -140,7 +140,7 @@ export function ScormPlayer({
         allow="fullscreen"
         style={{ width: "100%", height: "calc(100dvh - 190px)", minHeight: 420, border: "1px solid var(--line)", borderRadius: 8, background: "#fff" }}
       />
-      <noscript>This module needs JavaScript to run and to record your progress.</noscript>
+      <noscript>{t("noscript")}</noscript>
     </div>
   );
 }

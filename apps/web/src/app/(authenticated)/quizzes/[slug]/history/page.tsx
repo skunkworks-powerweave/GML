@@ -23,6 +23,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, desc, eq } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { quizzes, quizSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
@@ -31,7 +32,10 @@ import { quizShownTo } from "../quiz-scope";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Quiz attempts" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("history.metaTitle") };
+}
 
 // Spec 159 — render a `submittedAt` Date as a deterministic ISO YYYY-MM-DD
 // HH:MM string in UTC. We deliberately avoid `toLocaleString` here because
@@ -67,20 +71,19 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
   // a time-out that let the still-mounted runner submit the same answers into
   // it. From here nothing starts until the learner presses "Take quiz again".
   const sp = searchParams ? await searchParams : {};
+  const t = await getTranslations("rtt");
+  // ?error= code -> its message under rtt.history.errors. time_up: the runner
+  // page sends a learner here when they come back to a timed attempt with no
+  // time left but inside the submit grace -- answers already sent may still
+  // arrive and be scored, so the attempt is not closed yet.
   const HISTORY_ERRORS: Record<string, string> = {
-    attempts_exhausted:
-      "You have used all your attempts at this quiz. Your previous scores are below.",
-    time_expired:
-      "Your time ran out before the answers reached us, so that attempt was not scored.",
-    // The runner page sends a learner here when they come back to a timed
-    // attempt with no time left but inside the submit grace: answers already
-    // sent may still arrive and be scored, so the attempt is not closed yet.
-    time_up:
-      "The time for that attempt is up. Answers already sent may still arrive and be scored; you can start a new attempt shortly.",
-    attempt_closed:
-      "That attempt had already been submitted or closed, so those answers were not recorded again. Your attempts are below.",
+    attempts_exhausted: "attemptsExhausted",
+    time_expired: "timeExpired",
+    time_up: "timeUp",
+    attempt_closed: "attemptClosed",
   };
-  const historyError = sp.error ? lookupOwn(HISTORY_ERRORS, sp.error) ?? null : null;
+  const errorKey = sp.error ? lookupOwn(HISTORY_ERRORS, sp.error) : undefined;
+  const historyError = errorKey ? t(`history.errors.${errorKey}`) : null;
 
   // Resolve the quiz first so we 404 cleanly for bad slugs (rather than
   // rendering an empty history page for a non-existent quiz).
@@ -151,10 +154,10 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 6, textDecoration: "none" }}
         >
-          ← Quiz
+          {t("quiz.backQuiz")}
         </Link>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, margin: 0 }}>
-          Your attempts
+          {t("history.title")}
         </h1>
         <p
           style={{
@@ -163,7 +166,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             fontSize: 13,
           }}
         >
-          {quiz.title} · pass threshold {quiz.passThreshold}%
+          {t("history.subtitle", { title: quiz.title, threshold: quiz.passThreshold })}
         </p>
       </div>
 
@@ -175,11 +178,10 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             style={{ padding: 32, textAlign: "center" }}
           >
             <h2 style={{ fontFamily: "var(--serif)", fontSize: 20, margin: 0 }}>
-              No attempts yet
+              {t("history.emptyTitle")}
             </h2>
             <p style={{ color: "var(--ink-3)", marginTop: 8, fontSize: 13 }}>
-              You haven&apos;t submitted this quiz yet. Start it to see your
-              first attempt here.
+              {t("history.emptyBody")}
             </p>
             {canRetake ? (
               <Link
@@ -187,11 +189,11 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                 className="btn btn-primary"
                 style={{ marginTop: 16, textDecoration: "none" }}
               >
-                Start the quiz
+                {t("history.startQuiz")}
               </Link>
             ) : (
               <p style={{ marginTop: 16, fontSize: 13, color: "var(--ink-3)" }}>
-                {open ? "You have no attempts left at this quiz." : "This quiz is not open."}
+                {open ? t("history.noAttemptsLeftBody") : t("history.notOpenBody")}
               </p>
             )}
           </div>
@@ -213,12 +215,12 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
             className="card card-hi"
             style={{ padding: 0, overflowX: "auto" }}
           >
-            <table className="t" aria-label="Your quiz attempts">
+            <table className="t" aria-label={t("history.tableLabel")}>
               <thead>
                 <tr>
-                  <th>Submitted</th>
-                  <th>Score</th>
-                  <th>Result</th>
+                  <th>{t("history.col.submitted")}</th>
+                  <th>{t("history.col.score")}</th>
+                  <th>{t("history.col.result")}</th>
                   <th />
                 </tr>
               </thead>
@@ -239,7 +241,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                     >
                       <Link
                         href={`/quizzes/${slug}/result/${r.id}`}
-                        aria-label={`Attempt of ${formatSubmittedAt(r.submittedAt)}: view result`}
+                        aria-label={t("history.attemptLabel", { date: formatSubmittedAt(r.submittedAt) })}
                         style={{ color: "inherit" }}
                       >
                         {formatSubmittedAt(r.submittedAt)}
@@ -285,7 +287,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                           color: r.passed ? "var(--lichen)" : "var(--saffron)",
                         }}
                       >
-                        {r.passed ? "Pass" : "Retry"}
+                        {r.passed ? t("history.pass") : t("history.retry")}
                       </span>
                     </td>
                     <td
@@ -308,7 +310,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                           fontSize: 12,
                         }}
                       >
-                        View result
+                        {t("history.viewResult")}
                       </Link>
                     </td>
                   </tr>
@@ -327,16 +329,15 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
         >
           {canRetake ? (
             <Link href={`/quizzes/${slug}`} className="btn">
-              Take quiz again
-              {attemptsLeft !== null ? ` (${attemptsLeft} left)` : ""}
+              {attemptsLeft !== null ? t("history.takeAgainLeft", { left: attemptsLeft }) : t("history.takeAgain")}
             </Link>
           ) : (
             <span className="btn" aria-disabled="true" style={{ opacity: 0.5, cursor: "default" }}>
-              {open ? "No attempts left" : "Quiz not open"}
+              {open ? t("history.noAttemptsLeft") : t("history.notOpen")}
             </span>
           )}
           <Link href="/dashboard" className="btn btn-ghost">
-            Back to dashboard
+            {t("history.backToDashboard")}
           </Link>
         </div>
       </div>

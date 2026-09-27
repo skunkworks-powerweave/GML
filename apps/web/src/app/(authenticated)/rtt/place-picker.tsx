@@ -6,9 +6,10 @@
 // ignores it for a teacher, who is always shown her own place.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import type { Place, PlaceOption } from "@/lib/rtt/scope";
 
-export function PlacePicker({
+export async function PlacePicker({
   basePath,
   options,
   place,
@@ -33,11 +34,12 @@ export function PlacePicker({
   const chip = (on: boolean) =>
     on ? { className: "chip chip-indigo", style: { fontWeight: 600 } } : { className: "chip" };
   const district = options.find((o) => o.districtId === place?.districtId);
+  const t = await getTranslations("rtt");
   return (
-    <nav aria-label="District and zone" style={{ display: "grid", gap: 6, marginTop: 12 }}>
+    <nav aria-label={t("placePicker.label")} style={{ display: "grid", gap: 6, marginTop: 12 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <Link href={href()} {...chip(!place)} aria-current={place ? undefined : "page"}>
-          Whole programme
+          {t("placePicker.whole")}
         </Link>
         {options.map((o) => (
           <Link
@@ -59,7 +61,7 @@ export function PlacePicker({
             {...chip(!place?.zoneId)}
             aria-current={place?.zoneId ? undefined : "page"}
           >
-            All of {district.districtName}
+            {t("placePicker.allOf", { district: district.districtName })}
           </Link>
           {district.zones.map((z) => (
             <Link

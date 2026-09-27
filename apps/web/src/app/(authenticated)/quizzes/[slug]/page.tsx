@@ -11,6 +11,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import {
   quizAttempts,
@@ -28,7 +29,10 @@ import { quizShownTo } from "./quiz-scope";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Quiz" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("quiz.metaTitle") };
+}
 
 // Seconds past the time limit a submission is still scored. It exists for the
 // time the learner did NOT see: the auto-submit at 00:00 still has to travel
@@ -289,6 +293,7 @@ export default async function QuizRunnerPage({
   if (!session?.user?.id) redirect("/login");
 
   const { slug } = await params;
+  const t = await getTranslations("rtt");
 
   const [quiz] = await db
     .select()
@@ -327,11 +332,11 @@ export default async function QuizRunnerPage({
               lineHeight: 1.5,
             }}
           >
-            That quiz is no longer available, so these answers could not be recorded.
+            {t("quiz.gone")}
           </p>
           <div className="page-header">
             <Link href="/dashboard" className="btn btn-sm" style={{ textDecoration: "none" }}>
-              ← Dashboard
+              {t("quiz.backDashboard")}
             </Link>
           </div>
         </main>
@@ -537,7 +542,7 @@ export default async function QuizRunnerPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 6, textDecoration: "none" }}
         >
-          ← Dashboard
+          {t("quiz.backDashboard")}
         </Link>
       </div>
       <QuizRunner

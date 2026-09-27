@@ -3,16 +3,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { phases, terms, rttSubjects } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import { listOpenAssessments } from "@/lib/rtt/assessments";
 import { placeLabel, placeOptions, rttScope } from "@/lib/rtt/scope";
 import { PlacePicker } from "./place-picker";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "RTT phases & subjects" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("hub.metaTitle") };
+}
 
 // Who /rtt/teach-back lets in: its READ_ROLES, repeated here because that page
 // does not export them. tests/behaviour/rtt-teach-back-link.test.ts asks the
@@ -36,6 +41,9 @@ export default async function RttIndexPage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   const viewer = { id: session.user.id, role: session.user.role };
+  const t = await getTranslations("rtt");
+  const intl = INTL_LOCALE[(await getLocale()) as Locale];
+  const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString(intl, { day: "numeric", month: "short", year: "numeric" });
 
   const phaseRows = await db.select().from(phases).orderBy(phases.sequence);
   const termRows = await db.select().from(terms);
@@ -47,13 +55,13 @@ export default async function RttIndexPage({
   const subjectRows = await db.select().from(rttSubjects).where(scope.subjectWhere);
   const placeChoices = scope.isStaff ? await placeOptions(db) : [];
   // Said from the data. This read "across Leh + Kargil" whatever the rows were.
+  // The place is data (district and zone names); the words around it are
+  // rtt.hub.summary's, chosen by `scope`.
   const where = scope.place
-    ? scope.isStaff
-      ? `in ${placeLabel(scope.place)}`
-      : `for ${placeLabel(scope.place)}`
+    ? { scope: scope.isStaff ? "in" : "for", place: placeLabel(scope.place) }
     : scope.isStaff && placeChoices.length > 0
-      ? `across ${placeChoices.map((d) => d.districtName).join(" + ")}`
-      : "taught across the programme";
+      ? { scope: "across", place: placeChoices.map((d) => d.districtName).join(" + ") }
+      : { scope: "programme", place: "" };
   // The dashboard's "N open quizzes" to-do links here and counts exactly this
   // list (lib/rtt/assessments.ts). /rtt used to list no quizzes at all, so the
   // to-do led nowhere. A learner's list: to staff it would be every quiz in
@@ -65,10 +73,10 @@ export default async function RttIndexPage({
       <div className="page-header">
         {/* The programme's name, as the metadata, sign-in page and help say;
             "Recruit, Train, Transform" was the design prototype's (W3-72). */}
-        <div className="label">RTT — Refresher Teacher Training</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>RTT phases &amp; subjects</h1>
+        <div className="label">{t("hub.programmeName")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("hub.title")}</h1>
         <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-          {phaseRows.length} phases · {termRows.length} terms · {subjectRows.length} subjects {where}.
+          {t("hub.summary", { phases: phaseRows.length, terms: termRows.length, subjects: subjectRows.length, ...where })}
         </p>
         {scope.isStaff ? <PlacePicker basePath="/rtt" options={placeChoices} place={scope.place} /> : null}
 
@@ -81,22 +89,22 @@ export default async function RttIndexPage({
             belong: it is the section root for everything RTT. */}
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
           <Link href="/rtt/online/synchronous" className="btn btn-sm">
-            Webinars &amp; live quizzes →
+            {t("hub.webinarsLink")}
           </Link>
           <Link href="/rtt/online/asynchronous" className="btn btn-sm btn-ghost">
-            Self-paced units →
+            {t("hub.selfPacedLink")}
           </Link>
           <Link href="/rtt/progress" className="btn btn-sm btn-ghost">
             {viewer.role === "programme_admin" || viewer.role === "super_admin" || viewer.role === "mentor"
-              ? "Progress & results →"
-              : "My progress →"}
+              ? t("hub.progressResultsLink")
+              : t("hub.myProgressLink")}
           </Link>
           {/* Only for the roles the queue admits (its READ_ROLES): shown to
               everyone, it sent teachers -- this hub's main audience -- to
               /forbidden. */}
           {TEACH_BACK_REVIEWERS.has(viewer.role) ? (
             <Link href="/rtt/teach-back" className="btn btn-sm btn-ghost">
-              Teach-back queue →
+              {t("hub.teachBackLink")}
             </Link>
           ) : null}
         </div>
@@ -107,10 +115,10 @@ export default async function RttIndexPage({
           <section className="card card-hi" aria-labelledby="open-assessments">
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
               <div id="open-assessments" style={{ fontWeight: 600, fontSize: 13 }}>
-                Open assessments ({openAssessments.length})
+                {t("hub.openAssessments", { count: openAssessments.length })}
               </div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                Published quizzes you have not taken yet.
+                {t("hub.openAssessmentsHint")}
               </div>
             </div>
             <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
@@ -133,7 +141,7 @@ export default async function RttIndexPage({
                     </Link>
                   </div>
                   <Link href={`/quizzes/${q.slug}`} className="btn btn-sm btn-primary" style={{ textDecoration: "none" }}>
-                    Start
+                    {t("common.start")}
                   </Link>
                 </li>
               ))}
@@ -142,7 +150,7 @@ export default async function RttIndexPage({
         ) : null}
 
         {phaseRows.length === 0 ? (
-          <p style={{ color: "var(--ink-3)" }}>No phases have been set up yet.</p>
+          <p style={{ color: "var(--ink-3)" }}>{t("hub.noPhases")}</p>
         ) : (
           <>
             {/* Phase strip. The card minimum is min(100%, 260px), as on the
@@ -157,11 +165,11 @@ export default async function RttIndexPage({
                 return (
                   <article key={p.id} className="card" style={{ padding: 18 }}>
                     <div className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                      PHASE {p.sequence} / {phaseRows.length}
+                      {t("hub.phaseOf", { sequence: p.sequence, total: phaseRows.length })}
                       {/* teachers.current_phase_id existed and nothing read it. */}
                       {p.id === scope.currentPhaseId ? (
                         <span className="chip chip-saffron" style={{ marginLeft: 8 }}>
-                          Your phase
+                          {t("hub.yourPhase")}
                         </span>
                       ) : null}
                     </div>
@@ -170,13 +178,13 @@ export default async function RttIndexPage({
                     </div>
                     {p.startDate ? (
                       <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>
-                        {new Date(p.startDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                        {p.endDate ? ` → ${new Date(p.endDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}
+                        {fmtDate(p.startDate)}
+                        {p.endDate ? ` → ${fmtDate(p.endDate)}` : ""}
                       </div>
                     ) : null}
                     <div className="mono" style={{ marginTop: 14, display: "flex", gap: 18, fontSize: 11, color: "var(--ink-3)" }}>
-                      <span>{phaseSubjectCount} subjects</span>
-                      <span>{phaseTerms.length} terms</span>
+                      <span>{t("hub.phaseSubjects", { count: phaseSubjectCount })}</span>
+                      <span>{t("hub.phaseTerms", { count: phaseTerms.length })}</span>
                     </div>
                   </article>
                 );
@@ -190,14 +198,14 @@ export default async function RttIndexPage({
               return (
                 <section key={`phase-${p.id}`} style={{ display: "grid", gap: 12 }}>
                   <div className="label">{p.label}</div>
-                  {phaseTerms.map((t) => {
-                    const termSubjects = subjectRows.filter((s) => s.termId === t.id);
+                  {phaseTerms.map((term) => {
+                    const termSubjects = subjectRows.filter((s) => s.termId === term.id);
                     return (
-                      <div key={t.id} style={{ display: "grid", gap: 10 }}>
+                      <div key={term.id} style={{ display: "grid", gap: 10 }}>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                          <span className="chip chip-indigo">{t.name}</span>
+                          <span className="chip chip-indigo">{term.name}</span>
                           {termSubjects.length === 0 ? (
-                            <span style={{ fontSize: 12, color: "var(--ink-3)" }}>no subjects yet</span>
+                            <span style={{ fontSize: 12, color: "var(--ink-3)" }}>{t("hub.noSubjects")}</span>
                           ) : null}
                         </div>
                         {termSubjects.length > 0 ? (
@@ -215,13 +223,13 @@ export default async function RttIndexPage({
                                   <div style={{ padding: 16 }}>
                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                                       <span className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                                        {s.code ?? `${p.label}/${t.name}`}
+                                        {s.code ?? `${p.label}/${term.name}`}
                                       </span>
                                       {s.active ? (
                                         <span className={`chip ${palette.chip}`}>EN</span>
                                       ) : (
                                         // Only an administrator is shown one.
-                                        <span className="chip chip-rust">Inactive</span>
+                                        <span className="chip chip-rust">{t("common.inactive")}</span>
                                       )}
                                     </div>
                                     <div style={{ fontFamily: "var(--serif)", fontSize: 20, marginTop: 8, letterSpacing: "-0.01em", lineHeight: 1.2 }}>

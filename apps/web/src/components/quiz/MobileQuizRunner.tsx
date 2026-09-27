@@ -38,6 +38,7 @@
 // via the explicit button; we never let a swipe finalise the quiz.
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { useTranslations } from "next-intl";
 import { useSwipe } from "@/lib/use-swipe";
 import { PickedMark } from "./PickedMark";
 import { useQuizAnswers } from "./answer-drafts";
@@ -101,6 +102,7 @@ export function MobileQuizRunner({
   serverNowMs,
   submitAction,
 }: MobileQuizRunnerProps) {
+  const t = useTranslations("rtt.client.quizRunner");
   const [idx, setIdx] = useState(0);
   // selected[questionId] = chosen option index (0-based).
   // Kept in this tab's sessionStorage as they are picked and restored for
@@ -225,10 +227,10 @@ export function MobileQuizRunner({
         }}
       >
         <h2 style={{ fontFamily: "var(--serif)", fontSize: 20, margin: 0 }}>
-          No questions yet
+          {t("noQuestions")}
         </h2>
         <p style={{ color: "var(--ink-3)", marginTop: 8, fontSize: 13 }}>
-          This quiz has no questions. Ask an admin to add some.
+          {t("noQuestionsBody")}
         </p>
       </div>
     );
@@ -238,6 +240,8 @@ export function MobileQuizRunner({
   const q = currentQ as MobileQuizRunnerQuestion;
 
   const onPick = (i: number) => pickAnswer(q.id, i);
+  // What the polite region says (time-warning.ts): a key, "" for nothing.
+  const warning = remaining === null ? "" : nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith);
 
   const onSubmit = () => {
     // Spec 146 — grading-bug fix. Send EVERY question, with
@@ -302,7 +306,7 @@ export function MobileQuizRunner({
             className="label"
             style={{ padding: 0, fontSize: 10, letterSpacing: "0.06em" }}
           >
-            Quiz
+            {t("quiz")}
           </div>
           <div
             style={{ display: "inline-flex", alignItems: "center", gap: 10 }}
@@ -332,13 +336,13 @@ export function MobileQuizRunner({
                     (remaining < 60 ? "var(--rust)" : "var(--line)"),
                 }}
               >
-                <span className="sr-only">Time remaining </span>
+                <span className="sr-only">{t("timeRemaining")} </span>
                 {formatRemaining(remaining)}
               </span>
             ) : null}
             {remaining !== null ? (
               <span role="status" className="sr-only" data-testid="mobile-quiz-time-warning">
-                {nothingSent ? TIME_UP_NOTHING_SENT : timeWarning(remaining, openedWith)}
+                {warning ? t(`timeWarning.${warning}`) : ""}
               </span>
             ) : null}
             <div
@@ -384,10 +388,10 @@ export function MobileQuizRunner({
                 aria-current={active ? "step" : undefined}
                 aria-label={
                   active
-                    ? `Current question ${i + 1}`
+                    ? t("dotCurrent", { number: i + 1 })
                     : answered
-                      ? `Answered question ${i + 1}`
-                      : `Unanswered question ${i + 1}`
+                      ? t("dotAnswered", { number: i + 1 })
+                      : t("dotUnanswered", { number: i + 1 })
                 }
                 style={{
                   flex: 1,
@@ -418,7 +422,7 @@ export function MobileQuizRunner({
           className="mono"
           style={{ fontSize: 11, color: "var(--ink-3)" }}
         >
-          Question {idx + 1}
+          {t("question", { number: idx + 1 })}
         </div>
         <h2
           style={{
@@ -493,7 +497,7 @@ export function MobileQuizRunner({
 
         {nothingSent ? (
           <p data-testid="mobile-quiz-time-up" style={{ marginTop: 14, fontSize: 13, color: "var(--rust)" }}>
-            The time for this attempt ran out before the page loaded, so nothing was submitted.
+            {t("ranOut")}
           </p>
         ) : null}
         {serverErr ? (
@@ -548,7 +552,7 @@ export function MobileQuizRunner({
             minHeight: 48,
           }}
         >
-          ← Previous
+          {t("previous")}
         </button>
         {!isLast ? (
           <button
@@ -562,7 +566,7 @@ export function MobileQuizRunner({
               minHeight: 48,
             }}
           >
-            Next →
+            {t("next")}
           </button>
         ) : (
           <button
@@ -576,7 +580,7 @@ export function MobileQuizRunner({
               minHeight: 48,
             }}
           >
-            {isPending ? "Submitting…" : "Submit"}
+            {isPending ? t("submitting") : t("submit")}
           </button>
         )}
       </div>

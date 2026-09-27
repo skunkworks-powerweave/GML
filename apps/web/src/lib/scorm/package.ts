@@ -13,6 +13,7 @@
 import { listZip, ZipError, type ZipEntry } from "./zip";
 import { decodeManifest, ManifestError, readManifest } from "./manifest";
 import { scormContentType } from "./files";
+import { scormMessage, scormText, type ScormMessage } from "./messages";
 
 export const SCORM_LIMITS = {
   /**
@@ -46,7 +47,12 @@ export type ScormErrorCode =
   | "multiple_scos"
   | "missing_launch_file";
 
-export type ScormPackageError = { code: ScormErrorCode; message: string; paths?: string[] };
+/**
+ * A refusal: its code, the sentence an administrator can act on (English in
+ * `message`; `detail` is it as a message key, for her own language -- see
+ * ingest.ts), and the offending paths.
+ */
+export type ScormPackageError = { code: ScormErrorCode; message: string; detail: ScormMessage; paths?: string[] };
 
 export type ScormFile = {
   /** Package-relative path, exactly as in the archive. */
@@ -92,45 +98,47 @@ export function isSafePackagePath(name: string): boolean {
   return path.split("/").every((s) => s !== "" && s !== "." && s !== "..");
 }
 
-const fail = (code: ScormErrorCode, message: string, paths?: string[]) =>
-  ({ ok: false, error: { code, message, ...(paths ? { paths } : {}) } }) as const;
+const fail = (code: ScormErrorCode, detail: ScormMessage, paths?: string[]) =>
+  ({ ok: false, error: { code, message: scormText(detail), detail, ...(paths ? { paths } : {}) } }) as const;
 
-const list = (paths: string[]) => (paths.length > 5 ? `${paths.slice(0, 5).join(", ")} and ${paths.length - 5} more` : paths.join(", "));
+/** The paths as a list, the first five and a count of the rest. The names are data. */
+const list = (paths: string[]): string | ScormMessage =>
+  paths.length > 5 ? scormMessage("listMore", { list: paths.slice(0, 5).join(", "), more: paths.length - 5 }) : paths.join(", ");
 
 export function validateScormPackage(
   bytes: Uint8Array,
 ): { ok: true; pkg: ValidScormPackage } | { ok: false; error: ScormPackageError } {
   if (bytes.length > SCORM_LIMITS.maxPackageBytes) {
-    return fail("too_large", `The package is larger than ${SCORM_LIMITS.maxPackageBytes / 1024 / 1024} MB.`);
+    return fail("too_large", scormMessage("tooLarge", { mb: SCORM_LIMITS.maxPackageBytes / 1024 / 1024 }));
   }
 
   let entries: ZipEntry[];
   try {
     entries = listZip(bytes, { maxFiles: SCORM_LIMITS.maxFiles });
   } catch (err) {
-    if (err instanceof ZipError) return fail(err.code, err.message, err.paths);
+    if (err instanceof ZipError) return fail(err.code, err.detail, err.paths);
     throw err;
   }
 
   const unsafe = entries.filter((e) => e.isSymlink || !isSafePackagePath(e.name)).map((e) => e.name);
-  if (unsafe.length) return fail("unsafe_path", `These names point outside the package or are links: ${list(unsafe)}.`, unsafe);
+  if (unsafe.length) return fail("unsafe_path", scormMessage("unsafePath", { paths: list(unsafe) }), unsafe);
 
   const content = entries.filter((e) => !e.isDirectory && !isLitter(e.name));
   const seen = new Set<string>();
   const dupes = content.filter((e) => (seen.has(e.name) ? true : (seen.add(e.name), false))).map((e) => e.name);
-  if (dupes.length) return fail("duplicate_path", `These files appear more than once: ${list(dupes)}.`, dupes);
+  if (dupes.length) return fail("duplicate_path", scormMessage("duplicatePath", { paths: list(dupes) }), dupes);
 
   const big = content.filter((e) => e.size > SCORM_LIMITS.maxEntryBytes).map((e) => e.name);
   if (big.length) {
-    return fail("too_large", `These files are larger than ${SCORM_LIMITS.maxEntryBytes / 1024 / 1024} MB: ${list(big)}.`, big);
+    return fail("too_large", scormMessage("entriesTooLarge", { mb: SCORM_LIMITS.maxEntryBytes / 1024 / 1024, paths: list(big) }), big);
   }
   const totalBytes = content.reduce((n, e) => n + e.size, 0);
   if (totalBytes > SCORM_LIMITS.maxTotalBytes) {
-    return fail("too_large", `The package unpacks to more than ${SCORM_LIMITS.maxTotalBytes / 1024 / 1024} MB.`);
+    return fail("too_large", scormMessage("unpacksTooLarge", { mb: SCORM_LIMITS.maxTotalBytes / 1024 / 1024 }));
   }
 
   const untyped = content.filter((e) => scormContentType(e.name) === null).map((e) => e.name);
-  if (untyped.length) return fail("disallowed_type", `These file types are not allowed in a package: ${list(untyped)}.`, untyped);
+  if (untyped.length) return fail("disallowed_type", scormMessage("disallowedType", { paths: list(untyped) }), untyped);
 
   let manifestBytes: Uint8Array | null = null;
   for (const e of content) {
@@ -138,22 +146,22 @@ export function validateScormPackage(
       const data = e.read();
       if (e.name === MANIFEST_PATH) manifestBytes = data;
     } catch (err) {
-      if (err instanceof ZipError) return fail(err.code, err.message, err.paths);
+      if (err instanceof ZipError) return fail(err.code, err.detail, err.paths);
       throw err;
     }
   }
-  if (!manifestBytes) return fail("no_manifest", "There is no imsmanifest.xml at the top level of the .zip, so this is not a SCORM package.");
-  if (manifestBytes.length > SCORM_LIMITS.maxManifestBytes) return fail("bad_manifest", "imsmanifest.xml is too large.");
+  if (!manifestBytes) return fail("no_manifest", scormMessage("noManifest"));
+  if (manifestBytes.length > SCORM_LIMITS.maxManifestBytes) return fail("bad_manifest", scormMessage("manifestTooLarge"));
 
   let manifest;
   try {
     manifest = readManifest(decodeManifest(manifestBytes));
   } catch (err) {
-    if (err instanceof ManifestError) return fail(err.code, err.message);
+    if (err instanceof ManifestError) return fail(err.code, err.detail);
     throw err;
   }
   if (!manifest.launchPath || !seen.has(manifest.launchPath)) {
-    return fail("missing_launch_file", `The manifest launches ${manifest.launchHref}, which is not a file in the package.`);
+    return fail("missing_launch_file", scormMessage("missingLaunchFile", { href: manifest.launchHref }));
   }
 
   return {

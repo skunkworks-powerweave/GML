@@ -9,6 +9,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, eq, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import {
   quizzes,
@@ -20,7 +21,10 @@ import { quizShownTo } from "../../quiz-scope";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Quiz results" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("result.metaTitle") };
+}
 
 export default async function QuizResultPage({
   params,
@@ -31,6 +35,7 @@ export default async function QuizResultPage({
   if (!session?.user?.id) redirect("/login");
 
   const { slug, submissionId } = await params;
+  const t = await getTranslations("rtt");
 
   const [quiz] = await db
     .select()
@@ -152,10 +157,10 @@ export default async function QuizResultPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 6, textDecoration: "none" }}
         >
-          ← Quiz
+          {t("quiz.backQuiz")}
         </Link>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, margin: 0 }}>
-          Quiz results
+          {t("result.title")}
         </h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13 }}>
           {quiz.title}
@@ -195,7 +200,7 @@ export default async function QuizResultPage({
               color: passed ? "var(--lichen)" : "var(--saffron)",
             }}
           >
-            {passed ? `Pass · ≥ ${threshold}%` : `Try again · need ${threshold}%`}
+            {passed ? t("result.passBadge", { threshold }) : t("result.failBadge", { threshold })}
           </div>
           <div
             style={{
@@ -206,13 +211,13 @@ export default async function QuizResultPage({
           >
             {passed
               ? subjectHref
-                ? "Well done — continue with the next module on the subject page."
-                : "Well done — you passed this quiz."
+                ? t("result.passedSubject")
+                : t("result.passed")
               : revealKey
-                ? "The correct answers and explanations are shown below."
+                ? t("result.revealed")
                 : attemptsLeft === null
-                  ? "Your wrong answers are marked below. Retake when you are ready; the correct answers are shown once you pass."
-                  : `Your wrong answers are marked below. You have ${attemptsLeft} attempt${attemptsLeft === 1 ? "" : "s"} left; the correct answers are shown once you pass or use your last attempt.`}
+                  ? t("result.wrongUnlimited")
+                  : t("result.wrongLimited", { left: attemptsLeft })}
           </div>
           {/* Spec 146 — answered vs total breakdown. Skipped questions
               are counted as wrong against the denominator (same
@@ -228,19 +233,14 @@ export default async function QuizResultPage({
               letterSpacing: "0.02em",
             }}
           >
-            {answeredCount} of {totalCount} answered ·{" "}
-            <span style={{ color: "var(--lichen)" }}>
-              {correctCount} correct
-            </span>{" "}
-            of {totalCount}
-            {skippedCount > 0 ? (
-              <>
-                {" "}·{" "}
-                <span style={{ color: "var(--saffron)" }}>
-                  {skippedCount} skipped
-                </span>
-              </>
-            ) : null}
+            {t.rich(skippedCount > 0 ? "result.breakdownSkipped" : "result.breakdown", {
+              answered: answeredCount,
+              total: totalCount,
+              correct: correctCount,
+              skipped: skippedCount,
+              good: (chunks) => <span style={{ color: "var(--lichen)" }}>{chunks}</span>,
+              skip: (chunks) => <span style={{ color: "var(--saffron)" }}>{chunks}</span>,
+            })}
           </div>
 
           <div
@@ -291,7 +291,7 @@ export default async function QuizResultPage({
                         fontWeight: 700,
                         fontFamily: "var(--mono)",
                       }}
-                      aria-label={isCorrect ? "Correct" : "Incorrect"}
+                      aria-label={isCorrect ? t("result.correct") : t("result.incorrect")}
                     >
                       {isCorrect ? "✓" : "×"}
                     </span>
@@ -307,15 +307,13 @@ export default async function QuizResultPage({
                         }}
                       >
                         {wasAnswered ? (
-                          <>
-                            Your answer:{" "}
-                            <span style={{ color: "var(--ink)" }}>
-                              {q.options[picked as number] ??
-                                `(option ${picked})`}
-                            </span>
-                          </>
+                          t.rich("result.yourAnswer", {
+                            // The option is the quiz's own text: shown as stored.
+                            answer: q.options[picked as number] ?? t("result.option", { index: picked as number }),
+                            value: (chunks) => <span style={{ color: "var(--ink)" }}>{chunks}</span>,
+                          })
                         ) : (
-                          <em>Skipped</em>
+                          <em>{t("result.skipped")}</em>
                         )}
                       </div>
                       {revealKey ? (
@@ -326,10 +324,10 @@ export default async function QuizResultPage({
                             marginTop: 2,
                           }}
                         >
-                          Correct:{" "}
-                          <span style={{ color: "var(--lichen)" }}>
-                            {q.options[q.correctIndex] ?? `(option ${q.correctIndex})`}
-                          </span>
+                          {t.rich("result.correctAnswer", {
+                            answer: q.options[q.correctIndex] ?? t("result.option", { index: q.correctIndex }),
+                            value: (chunks) => <span style={{ color: "var(--lichen)" }}>{chunks}</span>,
+                          })}
                         </div>
                       ) : null}
                       {revealKey && q.explanation ? (
@@ -366,7 +364,7 @@ export default async function QuizResultPage({
                 none left straight to their history. */}
             {offerRetake ? (
               <Link href={`/quizzes/${slug}`} className="btn">
-                Retake
+                {t("common.retake")}
               </Link>
             ) : null}
             {/* Spec 159 — link to the per-user attempts history. The
@@ -378,10 +376,10 @@ export default async function QuizResultPage({
               className="btn btn-ghost"
               data-testid="quiz-result-history-link"
             >
-              View history
+              {t("result.viewHistory")}
             </Link>
             <Link href={subjectHref ?? "/dashboard"} className="btn btn-primary">
-              {subjectHref ? "Back to the subject" : "Continue"}
+              {subjectHref ? t("result.backSubject") : t("result.continue")}
             </Link>
           </div>
         </div>

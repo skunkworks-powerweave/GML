@@ -24,16 +24,18 @@
 // whether a name is SAFE is the caller's policy (lib/scorm/package.ts).
 
 import { inflateRawSync } from "node:zlib";
+import { scormMessage, scormText, type ScormMessage } from "./messages";
 
 export type ZipErrorCode = "not_zip" | "unsupported_zip" | "too_many_files" | "corrupt_entry" | "unsafe_path";
 
+/** An archive refused: `detail` is the reason's message key (rtt.scorm.upload.*), `message` its English. */
 export class ZipError extends Error {
   constructor(
     readonly code: ZipErrorCode,
-    message: string,
+    readonly detail: ScormMessage,
     readonly paths?: string[],
   ) {
-    super(message);
+    super(scormText(detail));
   }
 }
 
@@ -95,10 +97,10 @@ export function listZip(buf: Uint8Array, opts: { maxFiles: number }): ZipEntry[]
       break;
     }
   }
-  if (eocd < 0) throw new ZipError("not_zip", "This is not a .zip archive, or it is incomplete.");
+  if (eocd < 0) throw new ZipError("not_zip", scormMessage("notZip"));
 
   if (eocd >= 20 && u32(buf, eocd - 20) === ZIP64_LOCATOR_SIG) {
-    throw new ZipError("unsupported_zip", "ZIP64 archives are not accepted; re-export the package as a standard .zip.");
+    throw new ZipError("unsupported_zip", scormMessage("zip64"));
   }
   const disk = u16(buf, eocd + 4);
   const cdDisk = u16(buf, eocd + 6);
@@ -107,15 +109,15 @@ export function listZip(buf: Uint8Array, opts: { maxFiles: number }): ZipEntry[]
   const cdSize = u32(buf, eocd + 12);
   const cdOffset = u32(buf, eocd + 16);
   if (total === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
-    throw new ZipError("unsupported_zip", "ZIP64 archives are not accepted; re-export the package as a standard .zip.");
+    throw new ZipError("unsupported_zip", scormMessage("zip64"));
   }
   if (disk !== 0 || cdDisk !== 0 || onThisDisk !== total) {
-    throw new ZipError("unsupported_zip", "Split (multi-part) archives are not accepted.");
+    throw new ZipError("unsupported_zip", scormMessage("split"));
   }
   if (total > opts.maxFiles) {
-    throw new ZipError("too_many_files", `The package has ${total} entries; at most ${opts.maxFiles} are accepted.`);
+    throw new ZipError("too_many_files", scormMessage("tooManyFiles", { total, max: opts.maxFiles }));
   }
-  if (cdOffset + cdSize !== eocd) throw new ZipError("not_zip", "The archive's file list is not where the archive says it is.");
+  if (cdOffset + cdSize !== eocd) throw new ZipError("not_zip", scormMessage("listMisplaced"));
 
   type Raw = {
     name: string;
@@ -134,7 +136,7 @@ export function listZip(buf: Uint8Array, opts: { maxFiles: number }): ZipEntry[]
   let p = cdOffset;
   for (let n = 0; n < total; n++) {
     if (p + CENTRAL_LEN > eocd || u32(buf, p) !== CENTRAL_SIG) {
-      throw new ZipError("not_zip", "The archive's file list is damaged.");
+      throw new ZipError("not_zip", scormMessage("listDamaged"));
     }
     const madeBy = u16(buf, p + 4);
     const flags = u16(buf, p + 8);
@@ -149,50 +151,50 @@ export function listZip(buf: Uint8Array, opts: { maxFiles: number }): ZipEntry[]
     const external = u32(buf, p + 38);
     const offset = u32(buf, p + 42);
     const next = p + CENTRAL_LEN + nameLen + extraLen + commentLen;
-    if (next > eocd) throw new ZipError("not_zip", "The archive's file list is damaged.");
+    if (next > eocd) throw new ZipError("not_zip", scormMessage("listDamaged"));
     const nameBytes = buf.subarray(p + CENTRAL_LEN, p + CENTRAL_LEN + nameLen);
     let name: string;
     try {
       name = utf8.decode(nameBytes);
     } catch {
       const lossy = new TextDecoder().decode(nameBytes);
-      throw new ZipError("unsafe_path", `A file name is not valid UTF-8: ${lossy}`, [lossy]);
+      throw new ZipError("unsafe_path", scormMessage("badUtf8", { name: lossy }), [lossy]);
     }
     // Bit 0: traditional encryption; bit 6: strong encryption.
-    if (flags & 0x0041) throw new ZipError("unsupported_zip", `Encrypted entries are not accepted: ${name}`, [name]);
+    if (flags & 0x0041) throw new ZipError("unsupported_zip", scormMessage("encrypted", { name }), [name]);
     if (method !== 0 && method !== 8) {
-      throw new ZipError("unsupported_zip", `Only stored and deflated entries are accepted: ${name}`, [name]);
+      throw new ZipError("unsupported_zip", scormMessage("method", { name }), [name]);
     }
     if (comp === 0xffffffff || size === 0xffffffff || offset === 0xffffffff || diskStart !== 0) {
-      throw new ZipError("unsupported_zip", `ZIP64 entries are not accepted: ${name}`, [name]);
+      throw new ZipError("unsupported_zip", scormMessage("zip64Entry", { name }), [name]);
     }
     // Unix "version made by" with S_IFLNK in the high half of the attributes.
     const isSymlink = madeBy >> 8 === 3 && ((external >>> 16) & 0o170000) === 0o120000;
     raws.push({ name, nameBytes, method, crc, comp, size, offset, isSymlink, dataStart: 0, dataEnd: 0 });
     p = next;
   }
-  if (p !== eocd) throw new ZipError("not_zip", "The archive's file list is damaged.");
+  if (p !== eocd) throw new ZipError("not_zip", scormMessage("listDamaged"));
 
   for (const r of raws) {
     const o = r.offset;
     if (o + LOCAL_LEN > cdOffset || u32(buf, o) !== LOCAL_SIG) {
-      throw new ZipError("corrupt_entry", `The archive is damaged at ${r.name}.`, [r.name]);
+      throw new ZipError("corrupt_entry", scormMessage("damagedAt", { name: r.name }), [r.name]);
     }
     const localNameLen = u16(buf, o + 26);
     const localExtraLen = u16(buf, o + 28);
     if (!sameBytes(buf.subarray(o + LOCAL_LEN, o + LOCAL_LEN + localNameLen), r.nameBytes) || u16(buf, o + 8) !== r.method) {
-      throw new ZipError("corrupt_entry", `The archive describes ${r.name} two different ways.`, [r.name]);
+      throw new ZipError("corrupt_entry", scormMessage("describedTwice", { name: r.name }), [r.name]);
     }
     r.dataStart = o + LOCAL_LEN + localNameLen + localExtraLen;
     r.dataEnd = r.dataStart + r.comp;
-    if (r.dataEnd > cdOffset) throw new ZipError("corrupt_entry", `The archive is damaged at ${r.name}.`, [r.name]);
+    if (r.dataEnd > cdOffset) throw new ZipError("corrupt_entry", scormMessage("damagedAt", { name: r.name }), [r.name]);
   }
 
   const byOffset = [...raws].sort((a, b) => a.offset - b.offset);
   for (let i = 1; i < byOffset.length; i++) {
     const [a, b] = [byOffset[i - 1]!, byOffset[i]!];
     if (a.dataEnd > b.offset) {
-      throw new ZipError("corrupt_entry", `${a.name} and ${b.name} overlap in the archive.`, [a.name, b.name]);
+      throw new ZipError("corrupt_entry", scormMessage("overlap", { a: a.name, b: b.name }), [a.name, b.name]);
     }
   }
 
@@ -212,13 +214,13 @@ export function listZip(buf: Uint8Array, opts: { maxFiles: number }): ZipEntry[]
           // inflater throws, instead of filling memory.
           out = inflateRawSync(data, { maxOutputLength: r.size + 1 });
         } catch {
-          throw new ZipError("corrupt_entry", `${r.name} does not decompress to the size the archive declares.`, [r.name]);
+          throw new ZipError("corrupt_entry", scormMessage("sizeMismatch", { name: r.name }), [r.name]);
         }
       }
       if (out.length !== r.size) {
-        throw new ZipError("corrupt_entry", `${r.name} does not decompress to the size the archive declares.`, [r.name]);
+        throw new ZipError("corrupt_entry", scormMessage("sizeMismatch", { name: r.name }), [r.name]);
       }
-      if (crc32(out) !== r.crc) throw new ZipError("corrupt_entry", `${r.name} fails its checksum.`, [r.name]);
+      if (crc32(out) !== r.crc) throw new ZipError("corrupt_entry", scormMessage("checksum", { name: r.name }), [r.name]);
       return out;
     },
   }));

@@ -9,16 +9,32 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { and, asc, count, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { rttSubjects, videoSubmissions, teachers, users } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import { isUuid } from "@/lib/authz";
 import { parsePage } from "@/lib/observation/list";
 import { isPendingTeachBackReview, pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Teach-back submissions" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("rtt");
+  return { title: t("teachBack.metaTitle") };
+}
+
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
+
+/** video_status values with a label under rtt.videoStatus. */
+const VIDEO_STATUSES = new Set(["received", "queued", "transcoding", "ready", "failed", "review_pending", "reviewed"]);
+/** video_source values with a label under rtt.videoSource. */
+const VIDEO_SOURCES = new Set(["direct", "whatsapp", "external_link", "google_drive"]);
+
+/** A pipeline status as a reviewer reads it. */
+const statusText = (status: string, t: Translate) =>
+  VIDEO_STATUSES.has(status) ? t(`videoStatus.${status}`) : status.replace("_", " ");
 
 const READ_ROLES = new Set(["super_admin", "programme_admin", "mentor", "observer"]);
 
@@ -37,26 +53,26 @@ const STATUS_CHIP: Record<"review_pending" | "reviewed", { bg: string; ink: stri
 const NEUTRAL_CHIP = { bg: "var(--paper-2)", ink: "var(--ink-3)" };
 
 /** Reviewed, owed a review (the shared definition), or its pipeline status. */
-function chipFor(r: { status: string; reviewedAt: Date | null }) {
-  if (r.reviewedAt !== null) return { ...STATUS_CHIP.reviewed, label: "reviewed" };
+function chipFor(r: { status: string; reviewedAt: Date | null }, t: Translate) {
+  if (r.reviewedAt !== null) return { ...STATUS_CHIP.reviewed, label: t("teachBack.chipReviewed") };
   if (isPendingTeachBackReview({ contextType: "teach_back", status: r.status, reviewedAt: r.reviewedAt })) {
-    return { ...STATUS_CHIP.review_pending, label: "pending review" };
+    return { ...STATUS_CHIP.review_pending, label: t("teachBack.chipPending") };
   }
-  return { ...NEUTRAL_CHIP, label: r.status.replace("_", " ") };
+  return { ...NEUTRAL_CHIP, label: statusText(r.status, t) };
 }
 
-function fmtDate(d: Date | null | undefined) {
+function fmtDate(d: Date | null | undefined, intl: string) {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-IN", {
+  return new Date(d).toLocaleDateString(intl, {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
 }
 
-function fmtDateTime(d: Date | null | undefined) {
+function fmtDateTime(d: Date | null | undefined, intl: string) {
   if (!d) return "—";
-  return new Date(d).toLocaleString("en-IN", {
+  return new Date(d).toLocaleString(intl, {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -65,11 +81,11 @@ function fmtDateTime(d: Date | null | undefined) {
   });
 }
 
-function fmtDuration(sec: number | null | undefined) {
+function fmtDuration(sec: number | null | undefined, t: Translate) {
   if (sec == null) return "—";
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return `${m}m ${s.toString().padStart(2, "0")}s`;
+  return t("teachBack.duration", { minutes: m, seconds: s.toString().padStart(2, "0") });
 }
 
 type Row = {
@@ -97,6 +113,8 @@ export default async function TeachBackQueuePage({
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   if (!READ_ROLES.has(session.user.role)) redirect("/forbidden");
+  const t = await getTranslations("rtt");
+  const intl = INTL_LOCALE[(await getLocale()) as Locale];
 
   const sp = await searchParams;
   const filter = sp.status === "review_pending" || sp.status === "reviewed" ? sp.status : undefined;
@@ -241,15 +259,13 @@ export default async function TeachBackQueuePage({
               color: "var(--ink-3)",
             }}
           >
-            Refresher Teacher Training
+            {t("teachBack.eyebrow")}
           </div>
           <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
-            Teach-back submissions
+            {t("teachBack.title")}
           </h1>
           <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4, maxWidth: 620 }}>
-            Expert-review queue for teacher self-recorded teach-back videos. Click a row to preview;
-            mark reviewed once you have scored it. Pending submissions are saffron, reviewed are
-            lichen.
+            {t("teachBack.intro")}
           </p>
         </div>
         {/* Points at THIS queue's pending filter, not /videos?status=review_pending.
@@ -271,25 +287,25 @@ export default async function TeachBackQueuePage({
             textDecoration: "none",
           }}
         >
-          All pending review
+          {t("teachBack.allPending")}
         </Link>
       </header>
 
       {/* Wraps: three tabs with their counts are wider than a phone. A named
           nav, like the other RTT filters, and the tab that is on says so
           (aria-current): it was shown by its fill alone (F135). */}
-      <nav aria-label="Filter by review state" style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 16 }}>
+      <nav aria-label={t("teachBack.filterLabel")} style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 16 }}>
         {(
           [
-            { v: undefined, l: "All", n: counts.all },
-            { v: "review_pending", l: "Pending review", n: counts.review_pending },
-            { v: "reviewed", l: "Reviewed", n: counts.reviewed },
+            { v: undefined, l: t("common.all"), n: counts.all },
+            { v: "review_pending", l: t("teachBack.tabPending"), n: counts.review_pending },
+            { v: "reviewed", l: t("teachBack.tabReviewed"), n: counts.reviewed },
           ] as const
         ).map((f) => {
           const isActive = filter === f.v || (!filter && !f.v);
           return (
             <Link
-              key={f.l}
+              key={f.v ?? "all"}
               href={filterHref(f.v)}
               aria-current={isActive ? "page" : undefined}
               style={{
@@ -330,12 +346,12 @@ export default async function TeachBackQueuePage({
         >
           {rows.length === 0 ? (
             <div style={{ padding: 32, color: "var(--ink-3)", textAlign: "center", fontSize: 13 }}>
-              No teach-back submissions {filter ? `with status ${filter.replace("_", " ")}` : "yet"}.
+              {filter ? t("teachBack.emptyWithStatus", { status: statusText(filter, t) }) : t("teachBack.empty")}
             </div>
           ) : (
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {rows.map((r) => {
-                const chip = chipFor(r);
+                const chip = chipFor(r, t);
                 const isSelected = selectedId === r.id;
                 return (
                   <li key={r.id}>
@@ -360,7 +376,7 @@ export default async function TeachBackQueuePage({
                     >
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ fontWeight: 500, fontSize: 13 }}>
-                          {r.teacherName ?? "(unknown teacher)"}
+                          {r.teacherName ?? t("teachBack.unknownTeacher")}
                           {r.teacherHindi ? (
                             <span
                               style={{
@@ -387,7 +403,7 @@ export default async function TeachBackQueuePage({
                           {/* What she taught back, then her own specialism. */}
                           {r.rttSubjectName ? <span>{r.rttSubjectName} ·</span> : null}
                           <span>{r.teacherSubject || "—"}</span>
-                          <span style={{ fontFamily: "var(--mono)" }}>· {fmtDate(r.createdAt)}</span>
+                          <span style={{ fontFamily: "var(--mono)" }}>· {fmtDate(r.createdAt, intl)}</span>
                         </div>
                       </div>
                       <span
@@ -423,16 +439,16 @@ export default async function TeachBackQueuePage({
                 color: "var(--ink-3)",
               }}
             >
-              <span>{`Showing ${from}–${to} of ${total}`}</span>
+              <span>{t("teachBack.showing", { from, to, total })}</span>
               <span style={{ display: "flex", gap: 8 }}>
                 {page > 1 ? (
                   <Link href={pageHref(page - 1)} className="btn btn-sm">
-                    ← Previous
+                    {t("common.previous")}
                   </Link>
                 ) : null}
                 {hasNext ? (
                   <Link href={pageHref(page + 1)} className="btn btn-sm">
-                    Next →
+                    {t("common.next")}
                   </Link>
                 ) : null}
               </span>
@@ -475,7 +491,7 @@ export default async function TeachBackQueuePage({
                     color: "var(--ink-3)",
                   }}
                 >
-                  Teach-back submission
+                  {t("teachBack.submission")}
                 </div>
                 <h2
                   style={{
@@ -484,7 +500,7 @@ export default async function TeachBackQueuePage({
                     marginTop: 4,
                   }}
                 >
-                  {selected.teacherName ?? "(unknown teacher)"}
+                  {selected.teacherName ?? t("teachBack.unknownTeacher")}
                   {selected.teacherHindi ? (
                     <span
                       style={{
@@ -507,8 +523,8 @@ export default async function TeachBackQueuePage({
               <span
                 style={{
                   padding: "3px 10px",
-                  background: chipFor(selected).bg,
-                  color: chipFor(selected).ink,
+                  background: chipFor(selected, t).bg,
+                  color: chipFor(selected, t).ink,
                   borderRadius: 999,
                   fontSize: 10,
                   textTransform: "uppercase",
@@ -517,7 +533,7 @@ export default async function TeachBackQueuePage({
                   whiteSpace: "nowrap",
                 }}
               >
-                {chipFor(selected).label}
+                {chipFor(selected, t).label}
               </span>
             </header>
 
@@ -532,9 +548,9 @@ export default async function TeachBackQueuePage({
                 fontSize: 12,
               }}
             >
-              <dt style={dtStyle}>RTT subject</dt>
+              <dt style={dtStyle}>{t("teachBack.rttSubject")}</dt>
               <dd style={ddStyle}>{selected.rttSubjectName ?? "—"}</dd>
-              <dt style={dtStyle}>Source</dt>
+              <dt style={dtStyle}>{t("teachBack.source")}</dt>
               <dd style={ddStyle}>
                 <span
                   style={{
@@ -546,19 +562,19 @@ export default async function TeachBackQueuePage({
                     fontSize: 11,
                   }}
                 >
-                  {selected.source}
+                  {VIDEO_SOURCES.has(selected.source) ? t(`videoSource.${selected.source}`) : selected.source}
                 </span>
               </dd>
-              <dt style={dtStyle}>Submitted</dt>
-              <dd style={{ ...ddStyle, fontFamily: "var(--mono)" }}>{fmtDateTime(selected.createdAt)}</dd>
-              <dt style={dtStyle}>Duration</dt>
-              <dd style={{ ...ddStyle, fontFamily: "var(--mono)" }}>{fmtDuration(selected.durationSec)}</dd>
+              <dt style={dtStyle}>{t("teachBack.submitted")}</dt>
+              <dd style={{ ...ddStyle, fontFamily: "var(--mono)" }}>{fmtDateTime(selected.createdAt, intl)}</dd>
+              <dt style={dtStyle}>{t("teachBack.durationLabel")}</dt>
+              <dd style={{ ...ddStyle, fontFamily: "var(--mono)" }}>{fmtDuration(selected.durationSec, t)}</dd>
               <dt style={dtStyle}>HLS</dt>
               <dd style={ddStyle}>
                 {selected.hlsKey ? (
-                  <span style={{ color: "var(--lichen)" }}>ready</span>
+                  <span style={{ color: "var(--lichen)" }}>{t("teachBack.hlsReady")}</span>
                 ) : (
-                  <span style={{ color: "var(--ink-3)" }}>waiting on transcode</span>
+                  <span style={{ color: "var(--ink-3)" }}>{t("teachBack.hlsWaiting")}</span>
                 )}
               </dd>
             </dl>
@@ -574,7 +590,7 @@ export default async function TeachBackQueuePage({
                     marginBottom: 6,
                   }}
                 >
-                  Caption
+                  {t("teachBack.caption")}
                 </div>
                 <div
                   style={{
@@ -607,7 +623,7 @@ export default async function TeachBackQueuePage({
                   fontWeight: 500,
                 }}
               >
-                View video
+                {t("teachBack.viewVideo")}
               </Link>
               {selected.reviewedAt !== null ? (
                 <span
@@ -620,7 +636,7 @@ export default async function TeachBackQueuePage({
                     fontWeight: 600,
                   }}
                 >
-                  Already reviewed
+                  {t("teachBack.alreadyReviewed")}
                 </span>
               ) : !isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) ? (
                 // Not playable yet (or failed). The button used to render for
@@ -631,8 +647,8 @@ export default async function TeachBackQueuePage({
                 // moves it, so it is not told to wait like the others.
                 <span style={{ padding: "8px 0", color: "var(--ink-3)", fontSize: 12 }}>
                   {selected.status === "failed"
-                    ? "This video failed to process. Ask a programme admin to retry it."
-                    : `Review opens once the video is ready (status: ${selected.status.replace("_", " ")}).`}
+                    ? t("teachBack.failed")
+                    : t("teachBack.waitReady", { status: statusText(selected.status, t) })}
                 </span>
               ) : (
                 <form
@@ -653,7 +669,7 @@ export default async function TeachBackQueuePage({
                       cursor: "pointer",
                     }}
                   >
-                    Mark reviewed
+                    {t("teachBack.markReviewed")}
                   </button>
                 </form>
               )}

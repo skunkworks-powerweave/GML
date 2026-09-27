@@ -9,6 +9,7 @@
 // References are to the SCORM 1.2 Run-Time Environment (ADL, 2001), section
 // 3.4 (data model) and 3.3 (data types).
 
+// i18n-ignore: the SCORM 1.2 cmi.core.lesson_status vocabulary (protocol values; format.ts labels them)
 export const LESSON_STATUSES = ["passed", "completed", "failed", "incomplete", "browsed", "not attempted"] as const;
 export type LessonStatus = (typeof LESSON_STATUSES)[number];
 
