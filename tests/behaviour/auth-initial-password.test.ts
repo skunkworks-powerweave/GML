@@ -22,7 +22,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
-import { request, resetRequest, form, outcome, closeAppDb, webRequire } from "./_auth-harness.ts";
+import { React, request, resetRequest, form, outcome, closeAppDb, renderSync, webRequire } from "./_auth-harness.ts";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
 import { fakeGoTrue, ensureAuthSessionsTable, type FakeGoTrue } from "./_fake_gotrue.ts";
 
@@ -116,6 +116,21 @@ test("an account an administrator creates must change its password before using 
   assert.equal(await proxyRedirect("/observation/123"), "/settings?password=required");
   assert.equal(await proxyRedirect("/settings?password=required"), null, "Settings itself stays reachable");
 
+  // Settings says why they are there, whatever the URL. Straight after sign-in
+  // the proxy's redirect happens inside a client navigation, which renders
+  // /settings under the /dashboard URL without ?password=required, so a new
+  // user saw a plain Settings page and no reason (UAT, 2026-09-27).
+  const { auth } = await authModule();
+  assert.equal((await auth())?.user.mustChangePassword, true, "the session says a change is required");
+  const { default: SettingsPage } = await import("../../apps/web/src/app/(authenticated)/settings/page.tsx");
+  const { AppRouterContext } = webRequire("next/dist/shared/lib/app-router-context.shared-runtime") as {
+    AppRouterContext: import("react").Context<unknown>;
+  };
+  const router = { back() {}, forward() {}, refresh() {}, push() {}, replace() {}, prefetch() {} };
+  const html = renderSync(React.createElement(AppRouterContext.Provider, { value: router }, await SettingsPage()));
+  assert.match(html, /data-testid="password-change-required"/, "the notice shows without ?password=required");
+  assert.match(html, /name="newPassword"/, "and the form is already open");
+
   // Choosing their own password lifts it, in the session they are already in.
   const { changePasswordAction } = await settingsActions();
   const changed = await changePasswordAction(
@@ -125,6 +140,7 @@ test("an account an administrator creates must change its password before using 
   assert.ok(changed.ok, JSON.stringify(changed));
   assert.equal(fakeUserByEmail(email)?.appMetadata.must_change_password, undefined, "the flag is cleared");
   assert.equal(await proxyRedirect("/dashboard"), null, "and this browser's session no longer carries it");
+  assert.equal((await auth())?.user.mustChangePassword, false);
 });
 
 test("an administrator setting someone's password requires them to change it again", { skip }, async () => {

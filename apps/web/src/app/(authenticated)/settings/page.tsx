@@ -92,7 +92,13 @@ export default async function SettingsPage() {
             marginBottom: 24,
           }}
         >
-          <SettingsForm initial={initial} email={email} roleLabel={roleStyle.label} roleChipKind={roleStyle.chipKind} />
+          <SettingsForm
+            initial={initial}
+            email={email}
+            roleLabel={roleStyle.label}
+            roleChipKind={roleStyle.chipKind}
+            passwordRequired={session.user.mustChangePassword === true}
+          />
         </section>
 
         <footer
