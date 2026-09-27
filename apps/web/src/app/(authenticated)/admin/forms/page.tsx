@@ -2,12 +2,18 @@
 // Ports `LMS GML Frontend/forms.jsx::FormsRegistry` (lines 3-49) into a real
 // Drizzle-backed admin surface gated to programme_admin + super_admin.
 // Cards link to /admin/forms/[id] (JSON schema editor with live preview).
+//
+// Words are in the user's language (adminData.forms); a form's title from its
+// schema is data, shown as the administrator wrote it.
 
 import Link from "next/link";
 import { asc, desc } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { feedbackForms } from "@gml/db/schema";
+import type { Translate } from "@/admin/labels";
 import { requireRole } from "@/lib/guards";
+import { formEnumLabel } from "./labels";
 
 export const dynamic = "force-dynamic";
 
@@ -20,13 +26,12 @@ const KIND_CHIP: Record<string, string> = {
   final: "chip chip-rust",
 };
 
-const AUDIENCE_LABEL: Record<string, string> = {
-  mentor: "Filled by mentor",
-  mentee: "Filled by mentee (teacher)",
-};
-
 export default async function AdminFormsIndexPage() {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("adminData");
+  const tl = t as unknown as Translate;
+  const audienceTitle = (value: string) => formEnumLabel(tl, "audienceTitle", value);
+  const label = (group: Parameters<typeof formEnumLabel>[1], value: string) => formEnumLabel(tl, group, value);
 
   const rows = await db
     .select({
@@ -41,19 +46,22 @@ export default async function AdminFormsIndexPage() {
     .orderBy(asc(feedbackForms.kind), asc(feedbackForms.audience), desc(feedbackForms.version));
 
   // Best-effort: try to extract a human title from the schema JSON (FormRunner reads
-  // `form.title` per the JSX prototype). Falls back to the derived `${kind} · ${audience}`.
+  // `form.title` per the JSX prototype). Falls back to the derived kind — audience.
   const titleFor = (kind: string, audience: string, schema: unknown): string => {
     if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-      const t = (schema as { title?: unknown }).title;
-      if (typeof t === "string" && t.trim().length > 0) return t;
+      const title = (schema as { title?: unknown }).title;
+      if (typeof title === "string" && title.trim().length > 0) return title;
     }
-    return `${prettyKind(kind)} — ${audience}`;
+    return t("forms.fallbackTitle", {
+      kind: label("kindTitle", kind),
+      audience: label("audience", audience),
+    });
   };
 
   return (
     <main>
       <div className="page-header">
-        <div className="label">Forms & Quizzes</div>
+        <div className="label">{t("common.formsAndQuizzes")}</div>
         <div
           style={{
             display: "flex",
@@ -65,12 +73,9 @@ export default async function AdminFormsIndexPage() {
         >
           <div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, margin: 0 }}>
-              Programme forms
+              {t("forms.title")}
             </h1>
-            <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
-              Forms are defined as JSON schemas — admins compose them; teachers and mentors fill
-              them. Editing a schema bumps the version and is recorded in the audit log.
-            </p>
+            <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>{t("forms.intro")}</p>
           </div>
           {/* Was a dead "New-form UI lands in spec 080" chip. The quiz
               registry had no link from anywhere in the product, so this is
@@ -79,9 +84,9 @@ export default async function AdminFormsIndexPage() {
             href="/admin/quizzes"
             className="chip"
             style={{ textDecoration: "none" }}
-            title="Switch to the quiz registry"
+            title={t("forms.toQuizzesTitle")}
           >
-            Quizzes →
+            {t("forms.toQuizzes")}
           </Link>
         </div>
       </div>
@@ -91,12 +96,12 @@ export default async function AdminFormsIndexPage() {
           <table className="t">
             <thead>
               <tr>
-                <th>Title</th>
-                <th>Kind</th>
-                <th>Audience</th>
-                <th>Version</th>
-                <th>Active</th>
-                <th style={{ textAlign: "right" }}>&nbsp;</th>
+                <th>{t("forms.columns.title")}</th>
+                <th>{t("forms.columns.kind")}</th>
+                <th>{t("forms.columns.audience")}</th>
+                <th>{t("forms.columns.version")}</th>
+                <th>{t("forms.columns.active")}</th>
+                <th style={{ textAlign: "right" }}>{"\u00a0"}</th>
               </tr>
             </thead>
             <tbody>
@@ -106,7 +111,7 @@ export default async function AdminFormsIndexPage() {
                     colSpan={6}
                     style={{ padding: 36, textAlign: "center", color: "var(--ink-3)" }}
                   >
-                    No feedback forms seeded yet. Run the migration seeder or insert via SQL.
+                    {t("forms.empty")}
                   </td>
                 </tr>
               ) : (
@@ -128,17 +133,19 @@ export default async function AdminFormsIndexPage() {
                         </Link>
                       </td>
                       <td>
-                        <span className={chipClass}>{r.kind}</span>
+                        <span className={chipClass}>{label("kind", r.kind)}</span>
                       </td>
                       <td style={{ color: "var(--ink-2)" }}>
-                        <span title={AUDIENCE_LABEL[r.audience] ?? r.audience}>{r.audience}</span>
+                        <span title={audienceTitle(r.audience)}>
+                          {label("audience", r.audience)}
+                        </span>
                       </td>
                       <td style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-2)" }}>
                         v{r.version}
                       </td>
                       <td>
                         <span className={r.active ? "chip chip-lichen" : "chip"}>
-                          {r.active ? "active" : "inactive"}
+                          {r.active ? t("common.active") : t("common.inactive")}
                         </span>
                       </td>
                       <td style={{ textAlign: "right" }}>
@@ -151,7 +158,7 @@ export default async function AdminFormsIndexPage() {
                             fontWeight: 500,
                           }}
                         >
-                          Edit schema →
+                          {t("forms.editSchema")}
                         </Link>
                       </td>
                     </tr>
@@ -174,24 +181,9 @@ export default async function AdminFormsIndexPage() {
             display: "inline-block",
           }}
         >
-          {rows.length} form{rows.length === 1 ? "" : "s"} · ordered by kind, audience, version desc
+          {t("forms.footer", { count: rows.length })}
         </p>
       </div>
     </main>
   );
-}
-
-function prettyKind(k: string): string {
-  switch (k) {
-    case "baseline":
-      return "Baseline";
-    case "progress_1":
-      return "Progress (Q1 → Q2)";
-    case "progress_2":
-      return "Progress (Q3 → Q4)";
-    case "final":
-      return "Final";
-    default:
-      return k;
-  }
 }

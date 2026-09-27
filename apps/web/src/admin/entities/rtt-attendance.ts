@@ -8,15 +8,14 @@ import type { AdminEntity } from "../types";
 // (spec 017) as `attended_count` / `total_count`.
 export const rttAttendanceEntity: AdminEntity = {
   slug: "rtt-attendance",
-  label: "RTT Attendance",
   table: rttAttendance,
   readRoles: ["programme_admin", "super_admin", "mentor"],
   mutateRoles: ["super_admin"], // v2 conservative cut: programme_admin has no attendance write
   displayColumns: [
-    { key: "rttSessionId", label: "Session" },
-    { key: "teacherId", label: "Teacher" },
-    { key: "status", label: "Status" },
-    { key: "markedAt", label: "Marked" },
+    { key: "rttSessionId" },
+    { key: "teacherId" },
+    { key: "status" },
+    { key: "markedAt" },
   ],
   formSchema: z.object({
     rttSessionId: z.string().uuid(),

@@ -4,16 +4,15 @@ import type { AdminEntity } from "../types";
 
 export const schoolsEntity: AdminEntity = {
   slug: "schools",
-  label: "Schools",
   table: schools,
   readRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "name", label: "Name" },
-    { key: "code", label: "Code" },
-    { key: "zoneId", label: "Zone" },
-    { key: "contactPhone", label: "Phone" },
-    { key: "headTeacherName", label: "Head" },
-    { key: "active", label: "Active" },
+    { key: "name" },
+    { key: "code" },
+    { key: "zoneId" },
+    { key: "contactPhone" },
+    { key: "headTeacherName" },
+    { key: "active" },
   ],
   formSchema: z.object({
     name: z.string().min(2).max(160),

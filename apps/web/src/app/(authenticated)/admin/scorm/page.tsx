@@ -2,11 +2,16 @@
 // record of it and how many finished. Administrators only; each row opens
 // that package's learner tracking. A super_admin also gets the upload form
 // (only a super_admin may upload: lib/scorm/ingest.ts).
+//
+// Words and dates are in the user's language (adminData.scorm, INTL_LOCALE);
+// package titles, subjects and uploaders' names are data.
 
 import Link from "next/link";
 import { asc, eq } from "drizzle-orm";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { phases, rttSubjects, terms } from "@gml/db/schema";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import { requireRole } from "@/lib/guards";
 import { formatBytes } from "@/lib/scorm/format";
 import { SCORM_LIMITS } from "@/lib/scorm/package";
@@ -18,6 +23,11 @@ export const dynamic = "force-dynamic";
 export default async function ScormAdminPage() {
   const session = await requireRole(["programme_admin", "super_admin"]);
   const canUpload = session.user.role === "super_admin";
+  const t = await getTranslations("adminData");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
+  const uploadedOn = (d: Date) =>
+    // i18n-ignore: an IANA time zone id
+    d.toLocaleDateString(intl, { dateStyle: "medium", timeZone: "Asia/Kolkata" });
   const packages = await packageSummaries(db);
   // Labelled with phase and term: subject names repeat across terms.
   const subjects = canUpload
@@ -35,39 +45,33 @@ export default async function ScormAdminPage() {
   return (
     <main>
       <div className="page-header">
-        <div className="label">RTT content</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, margin: "4px 0 0" }}>SCORM packages</h1>
-        <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
-          SCORM 1.2 modules, each launched from its RTT subject&apos;s page. Learners&apos; status, score and time are
-          recorded as the module reports them.
-        </p>
+        <div className="label">{t("scorm.section")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, margin: "4px 0 0" }}>{t("scorm.title")}</h1>
+        <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>{t("scorm.intro")}</p>
       </div>
 
       <div className="page-body" style={{ display: "grid", gap: 14 }}>
         {canUpload ? (
           <UploadScormForm subjects={subjects} maxBytes={SCORM_LIMITS.maxPackageBytes} />
         ) : (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, maxWidth: 640 }}>
-            Only a super_admin can upload a package: a package&apos;s scripts run with the permissions of whoever opens
-            it, including administrators.
-          </p>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, maxWidth: 640 }}>{t("scorm.uploadOnlySuper")}</p>
         )}
         <div className="card card-hi" style={{ overflowX: "auto" }}>
           <table className="t">
             <thead>
               <tr>
-                <th>Package</th>
-                <th>State</th>
-                <th>Files</th>
-                <th>Learners</th>
-                <th>Uploaded</th>
+                <th>{t("scorm.columns.package")}</th>
+                <th>{t("scorm.columns.state")}</th>
+                <th>{t("scorm.columns.files")}</th>
+                <th>{t("scorm.columns.learners")}</th>
+                <th>{t("scorm.columns.uploaded")}</th>
               </tr>
             </thead>
             <tbody>
               {packages.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ padding: 36, textAlign: "center", color: "var(--ink-3)" }}>
-                    No SCORM packages yet.
+                    {t("scorm.empty")}
                   </td>
                 </tr>
               ) : (
@@ -83,18 +87,20 @@ export default async function ScormAdminPage() {
                       <div style={{ fontSize: 11, color: "var(--ink-3)" }}>{p.subject}</div>
                     </td>
                     <td>
-                      <span className={p.active ? "chip chip-lichen" : "chip chip-rust"}>{p.active ? "Active" : "Withdrawn"}</span>
+                      <span className={p.active ? "chip chip-lichen" : "chip chip-rust"}>
+                        {p.active ? t("scorm.active") : t("scorm.withdrawn")}
+                      </span>
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>
-                      {`${p.fileCount} files · ${formatBytes(p.totalBytes)}`}
+                      {t("scorm.files", { count: String(p.fileCount), size: formatBytes(p.totalBytes) })}
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>
-                      {`${p.learners} ${p.learners === 1 ? "learner" : "learners"} · ${p.finished} finished`}
+                      {t("scorm.learners", { count: p.learners, finished: String(p.finished) })}
                     </td>
                     <td style={{ fontSize: 12 }}>
                       {p.uploadedBy ?? "—"}
                       <div className="mono" style={{ color: "var(--ink-3)" }}>
-                        {p.createdAt.toLocaleDateString("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" })}
+                        {uploadedOn(p.createdAt)}
                       </div>
                     </td>
                   </tr>

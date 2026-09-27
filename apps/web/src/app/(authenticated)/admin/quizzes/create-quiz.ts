@@ -6,9 +6,13 @@ import "server-only";
 // database handle. Taking the handle as an argument is what lets
 // tests/behaviour/quizzes.test.ts run it against a real Postgres, which is the
 // only thing that enforces quizzes_one_scope.
+//
+// Its refusals go straight back to the form, in the user's language
+// (adminData.quizzes.create).
 
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { getTranslations } from "next-intl/server";
 import { quizzes, rttSubjects } from "@gml/db/schema";
 import { isUuid } from "@/lib/ids";
 
@@ -29,30 +33,27 @@ export type CreateQuizOutcome =
   | { ok: true; id: string; slug: string; title: string; passThreshold: number; rttSubjectId: string }
   | { ok: false; error: string };
 
-const NO_SUBJECT = "Choose the RTT subject this quiz belongs to.";
-
 export async function createQuiz(db: AnyDb, fields: CreateQuizFields): Promise<CreateQuizOutcome> {
+  const t = await getTranslations("adminData");
+  const NO_SUBJECT = t("quizzes.create.noSubject");
   const title = fields.title.trim();
   const slugRaw = fields.slug.trim().toLowerCase();
   const thresholdRaw = fields.passThreshold.trim() || "60";
 
   if (title.length < 2 || title.length > 200) {
-    return { ok: false, error: "Give the quiz a title of at least 2 characters." };
+    return { ok: false, error: t("quizzes.create.title") };
   }
 
   // Derive a slug from the title when none is given -- the slug is a URL
   // detail most people should not have to think about.
   const slug = slugRaw || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   if (!SLUG_RE.test(slug) || slug.length > 60) {
-    return {
-      ok: false,
-      error: "The slug must be lowercase letters, numbers and single hyphens, 60 characters or fewer.",
-    };
+    return { ok: false, error: t("quizzes.create.slug") };
   }
 
   const passThreshold = Number(thresholdRaw);
   if (!Number.isInteger(passThreshold) || passThreshold < 1 || passThreshold > 100) {
-    return { ok: false, error: "The pass threshold must be a whole number between 1 and 100." };
+    return { ok: false, error: t("quizzes.create.threshold") };
   }
 
   // THE SCOPE IS PART OF CREATION.
@@ -79,7 +80,7 @@ export async function createQuiz(db: AnyDb, fields: CreateQuizFields): Promise<C
     .where(eq(quizzes.slug, slug))
     .limit(1);
   if (clash) {
-    return { ok: false, error: `A quiz already uses the address "${slug}". Choose another slug.` };
+    return { ok: false, error: t("quizzes.create.slugTaken", { slug }) };
   }
 
   let created: { id: string } | undefined;
@@ -102,12 +103,12 @@ export async function createQuiz(db: AnyDb, fields: CreateQuizFields): Promise<C
     // between the check above and this INSERT, and a subject deleted meanwhile.
     const code = (err as { code?: string } | null)?.code;
     if (code === "23505") {
-      return { ok: false, error: `A quiz already uses the address "${slug}". Choose another slug.` };
+      return { ok: false, error: t("quizzes.create.slugTaken", { slug }) };
     }
     if (code === "23503") return { ok: false, error: NO_SUBJECT };
-    return { ok: false, error: "That quiz could not be created. Please try again." };
+    return { ok: false, error: t("quizzes.create.failedRetry") };
   }
 
-  if (!created) return { ok: false, error: "That quiz could not be created." };
+  if (!created) return { ok: false, error: t("quizzes.create.failed") };
   return { ok: true, id: created.id, slug, title, passThreshold, rttSubjectId };
 }

@@ -3,9 +3,11 @@
 // Client-side editor for /admin/quizzes/[id].
 // JSON textarea + Save button. On Save, invokes the `saveQuizSchema` server
 // action and shows inline status. Mirrors the spec 073 form-schema editor.
+// Words: adminData.client.quizEditor; the JSON is data.
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { saveQuizSchema, type SaveQuizResult } from "./actions";
 
 type Props = {
@@ -24,6 +26,8 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
+  const t = useTranslations("adminData.client");
+  const tAction = useTranslations("action");
 
   const dirty = text !== initialJson;
 
@@ -38,7 +42,7 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
 
   const onSave = () => {
     if (parseError) {
-      setSave({ kind: "err", message: `JSON does not parse: ${parseError}` });
+      setSave({ kind: "err", message: t("quizEditor.invalidJson", { error: parseError }) });
       return;
     }
     setSave({ kind: "saving" });
@@ -84,7 +88,7 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
             color: "var(--ink-3)",
           }}
         >
-          Quiz JSON
+          {t("quizEditor.heading")}
         </div>
         <div
           style={{
@@ -93,7 +97,7 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
             color: parseError ? "var(--rust)" : "var(--ink-3)",
           }}
         >
-          {parseError ? `× invalid JSON` : `✓ parses${dirty ? " · unsaved" : ""}`}
+          {parseError ? t("quizEditor.badJson") : t("quizEditor.parses", { dirty: dirty ? "yes" : "no" })}
         </div>
       </div>
       <textarea
@@ -135,7 +139,7 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
             cursor: isPending || !dirty || !!parseError ? "not-allowed" : "pointer",
           }}
         >
-          {save.kind === "saving" || isPending ? "Saving…" : "Save quiz"}
+          {save.kind === "saving" || isPending ? tAction("saving") : t("quizEditor.save")}
         </button>
         <button
           type="button"
@@ -151,7 +155,7 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
             cursor: !dirty ? "not-allowed" : "pointer",
           }}
         >
-          Discard
+          {t("quizEditor.discard")}
         </button>
         <SaveStatus state={save} />
       </div>
@@ -160,6 +164,7 @@ export function QuizSchemaEditor({ quizId, initialJson }: Props) {
 }
 
 function SaveStatus({ state }: { state: SaveState }) {
+  const t = useTranslations("adminData.client");
   if (state.kind === "ok") {
     return (
       <span
@@ -170,7 +175,7 @@ function SaveStatus({ state }: { state: SaveState }) {
           marginLeft: "auto",
         }}
       >
-        Saved · {state.questionCount} questions
+        {t("quizEditor.saved", { count: state.questionCount })}
       </span>
     );
   }

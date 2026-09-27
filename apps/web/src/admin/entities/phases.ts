@@ -18,15 +18,14 @@ import type { AdminEntity } from "../types";
 // Test: tests/behaviour/admin-rtt-structure.test.ts.
 export const phasesEntity: AdminEntity = {
   slug: "phases",
-  label: "RTT Phases",
   table: phases,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "label", label: "Phase" },
-    { key: "sequence", label: "Seq" },
-    { key: "startDate", label: "Starts" },
-    { key: "endDate", label: "Ends" },
+    { key: "label" },
+    { key: "sequence" },
+    { key: "startDate" },
+    { key: "endDate" },
   ],
   formSchema: z
     .object({
@@ -45,7 +44,7 @@ export const phasesEntity: AdminEntity = {
     })
     // Also a CHECK in the database (0032); here so the form says which field.
     .refine((v) => !v.startDate || !v.endDate || v.endDate >= v.startDate, {
-      message: "A phase cannot end before it starts",
+      message: "validation.phaseEndsBeforeStart",
       path: ["endDate"],
     }),
   formFields: ["label", "sequence", "startDate", "endDate"],

@@ -13,14 +13,13 @@ import type { AdminEntity } from "../types";
 // Test: tests/behaviour/admin-rtt-structure.test.ts.
 export const districtsEntity: AdminEntity = {
   slug: "districts",
-  label: "Districts",
   table: districts,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "name", label: "District" },
-    { key: "code", label: "Code" },
-    { key: "createdAt", label: "Created" },
+    { key: "name" },
+    { key: "code" },
+    { key: "createdAt" },
   ],
   formSchema: z.object({
     // Both NOT NULL UNIQUE: varchar(80) and varchar(16).

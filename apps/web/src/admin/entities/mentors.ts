@@ -4,15 +4,14 @@ import type { AdminEntity } from "../types";
 
 export const mentorsEntity: AdminEntity = {
   slug: "mentors",
-  label: "Mentors",
   table: mentors,
   readRoles: ["programme_admin", "super_admin", "mentor"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "userId", label: "Login account" },
-    { key: "name", label: "Name" },
-    { key: "bio", label: "Bio" },
-    { key: "active", label: "Active" },
+    { key: "userId" },
+    { key: "name" },
+    { key: "bio" },
+    { key: "active" },
   ],
   formSchema: z.object({
     // LINK TO A LOGIN ACCOUNT -- REPAIRABLE, not just settable once.
@@ -42,9 +41,7 @@ export const mentorsEntity: AdminEntity = {
     active: z.boolean().default(true),
   }),
   fields: {
-    photoUrl: { label: "Photo URL" },
-    expertiseAreas: { label: "Expertise areas" },
-    userId: { label: "Login account", userRoles: ["mentor"] },
+    userId: { userRoles: ["mentor"] },
   },
   formFields: ["name", "bio", "photoUrl", "expertiseAreas", "active", "userId"],
   // A mentor list re-uploaded after a partial import (csv.ts).

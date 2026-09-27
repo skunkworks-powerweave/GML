@@ -14,14 +14,13 @@ import type { AdminEntity } from "../types";
 // Test: tests/behaviour/admin-rtt-structure.test.ts.
 export const termsEntity: AdminEntity = {
   slug: "terms",
-  label: "RTT Terms",
   table: terms,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "phaseId", label: "Phase" },
-    { key: "name", label: "Term" },
-    { key: "sequence", label: "Seq" },
+    { key: "phaseId" },
+    { key: "name" },
+    { key: "sequence" },
   ],
   formSchema: z.object({
     phaseId: z.string().uuid(),

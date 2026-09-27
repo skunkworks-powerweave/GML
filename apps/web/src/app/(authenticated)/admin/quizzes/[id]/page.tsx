@@ -2,10 +2,15 @@
 // Server component (role gate + initial fetch); the editor is a 'use client'
 // child that posts back through the `saveQuizSchema` server action defined in
 // ./actions.ts. Mirrors the spec 073 form-schema editor pattern.
+//
+// Words are in the user's language (adminData.quizzes.detail); the quiz JSON
+// and the payload's key names (title, questions, ...) are data and code.
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { asc, eq, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { quizzes, quizQuestions, quizSubmissions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -20,6 +25,10 @@ type Props = {
 export default async function AdminQuizDetailPage({ params }: Props) {
   await requireRole(["programme_admin", "super_admin"]);
   const { id } = await params;
+  const t = await getTranslations("adminData");
+  // <code>…</code> and <strong>…</strong> inside the page's sentences.
+  const code = (chunks: ReactNode) => <code>{chunks}</code>;
+  const strong = (chunks: ReactNode) => <strong>{chunks}</strong>;
 
   const [row] = await db
     .select()
@@ -80,7 +89,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
             display: "inline-block",
           }}
         >
-          ← Quizzes registry
+          {t("quizzes.detail.back")}
         </Link>
         <div
           style={{
@@ -90,7 +99,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
             color: "var(--ink-3)",
           }}
         >
-          Quiz · {row.slug}
+          {t("quizzes.detail.eyebrow", { slug: row.slug })}
         </div>
         <div
           style={{
@@ -106,10 +115,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
               {row.title}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 6 }}>
-              Edit the JSON below. <strong>Save</strong> validates the payload and
-              replaces this quiz&apos;s questions with the <code>questions</code> array
-              in a single transaction; leave the array out to change only the
-              settings. The change is recorded in the audit log.
+              {t.rich("quizzes.detail.intro", { strong, code })}
             </p>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -121,7 +127,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
                 color: "var(--ink-3)",
               }}
             >
-              Pass threshold
+              {t("quizzes.detail.passThreshold")}
             </div>
             <div
               style={{
@@ -148,12 +154,13 @@ export default async function AdminQuizDetailPage({ params }: Props) {
               }}
             >
               {row.timeLimitSeconds === null || row.timeLimitSeconds === undefined
-                ? "untimed"
-                : `time limit: ${Math.floor(row.timeLimitSeconds / 60)}m${
-                    row.timeLimitSeconds % 60 !== 0
-                      ? ` ${row.timeLimitSeconds % 60}s`
-                      : ""
-                  }`}
+                ? t("quizzes.detail.untimed")
+                : row.timeLimitSeconds % 60 !== 0
+                  ? t("quizzes.detail.timeLimitSeconds", {
+                      minutes: String(Math.floor(row.timeLimitSeconds / 60)),
+                      seconds: String(row.timeLimitSeconds % 60),
+                    })
+                  : t("quizzes.detail.timeLimit", { minutes: String(Math.floor(row.timeLimitSeconds / 60)) })}
             </div>
             <span
               style={{
@@ -167,7 +174,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
                 color: row.active ? "var(--lichen)" : "var(--ink-3)",
               }}
             >
-              {row.active ? "active" : "inactive"}
+              {row.active ? t("common.active") : t("common.inactive")}
             </span>
           </div>
         </div>
@@ -187,10 +194,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
               color: "var(--ink-2)",
             }}
           >
-            {submittedCount} submitted attempt{submittedCount === 1 ? "" : "s"}. Each result keeps
-            the questions exactly as that learner was asked them, so changes here apply to new
-            attempts only. The questions cannot all be removed; set <code>active</code> to{" "}
-            <code>false</code> to take the quiz offline.
+            {t.rich("quizzes.detail.submissions", { count: submittedCount, code })}
           </p>
         ) : null}
         <QuizSchemaEditor quizId={row.id} initialJson={pretty} />
@@ -205,20 +209,10 @@ export default async function AdminQuizDetailPage({ params }: Props) {
             lineHeight: 1.55,
           }}
         >
-          <strong style={{ color: "var(--ink-2)" }}>Schema reference.</strong>{" "}
-          The payload accepts <code>title</code>, <code>passThreshold</code>,
-          <code> active</code>, an optional <code>timeLimitSeconds</code>
-          (<code>null</code> = untimed; otherwise an integer
-          between 60 and 7200 = 1 min to 2 h), an optional{" "}
-          <code>maxAttempts</code> (<code>null</code> = unlimited; otherwise a
-          whole number from 1 to 20 — attempts each learner may submit),{" "}
-          <code>rttSubjectId</code> (the RTT subject the quiz belongs to; it can be
-          changed, not removed; a quiz on a curriculum subject has none, and
-          setting one moves it to that RTT subject), and a{" "}
-          <code>questions[]</code> array. Each question must have{" "}
-          <code>prompt</code> (string), <code>options</code> (array of ≥ 2
-          strings), <code>correctIndex</code> (0-based integer into options),
-          and an optional <code>explanation</code>.
+          {t.rich("quizzes.detail.schemaReference", {
+            code,
+            strong: (chunks) => <strong style={{ color: "var(--ink-2)" }}>{chunks}</strong>,
+          })}
         </aside>
       </section>
     </main>

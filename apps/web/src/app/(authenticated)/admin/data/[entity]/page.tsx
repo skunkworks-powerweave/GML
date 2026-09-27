@@ -42,11 +42,16 @@
 //       and audits `admin.row.bulk_delete` with count + ids[0..5] in metadata.
 //   Sort + bulk delete are role-gated identically to the existing single-row
 //   delete (entity.mutateRoles via mutateRolesFor in actions.ts).
+//
+// Every word on the page is in the user's language: the grid's own (adminData
+// grid.*), the entity's title, column headers and enum values
+// (adminData.entities.<slug>, admin/labels.ts). Row values are data.
 
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { and, asc, desc, eq, getTableName, gte, ilike, lt, type SQL } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { z } from "zod";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
@@ -61,6 +66,8 @@ import { referenceLabels, referenceOptions, withCurrentValues, type RefContext }
 import { exportRolesFor } from "@/admin/access";
 import { istDayRange, toIstDate, toIstDateTime } from "@/admin/dates";
 import { dateInputType, enumOptions } from "@/admin/zod-shape";
+import { adminMessage, columnLabel, entityLabel, enumLabel, rowFormText, type Translate } from "@/admin/labels";
+import type { AdminMessage } from "@/admin/types";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
 import { ImportCsv } from "./import-csv";
@@ -141,7 +148,7 @@ function unwrapZod(zodType: z.ZodTypeAny): z.ZodTypeAny {
  * string schema were dropped silently, returning the unfiltered table. The
  * Drizzle column's own type decides the operator now; zod only contributes
  * an enum's allowed values. A value the column cannot hold is skipped and
- * `note` records why, which the page shows.
+ * `note` records why (a grid.skip.* message), which the page shows.
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -154,7 +161,7 @@ function buildColumnFilter(
   zodType: z.ZodTypeAny | undefined,
   col: unknown,
   value: string,
-  note: (why: string) => void = () => undefined,
+  note: (why: AdminMessage) => void = () => undefined,
 ): SQL | null {
   const column = col as { columnType?: string; enumValues?: readonly string[] };
   const inner = zodType ? unwrapZod(zodType) : undefined;
@@ -170,7 +177,7 @@ function buildColumnFilter(
         : null;
   if (options) {
     if (!options.includes(value)) {
-      note(`not one of ${options.join(", ")}`);
+      note({ key: "grid.skip.notOneOf", values: { options: options.join(", ") } });
       return null;
     }
     return eq(col as never, value as never);
@@ -181,7 +188,7 @@ function buildColumnFilter(
       // A link to another row: the filter's picker submits its id.
       if (!UUID_RE.test(value)) {
         // Past REF_OPTION_LIMIT there is no list to pick from, only a box.
-        note("paste the row's id, shown at the top of its Edit panel");
+        note({ key: "grid.skip.pasteId" });
         return null;
       }
       return eq(col as never, value as never);
@@ -194,7 +201,7 @@ function buildColumnFilter(
       // ZodBoolean's case.
       const v = value.toLowerCase();
       if (v !== "true" && v !== "false" && v !== "yes" && v !== "no") {
-        note("yes or no");
+        note({ key: "grid.skip.yesNo" });
         return null;
       }
       return eq(col as never, (v === "true" || v === "yes") as never);
@@ -208,7 +215,7 @@ function buildColumnFilter(
       // ZodNumber's case.
       const n = Number(value);
       if (!Number.isFinite(n)) {
-        note("not a number");
+        note({ key: "grid.skip.notNumber" });
         return null;
       }
       return eq(col as never, n as never);
@@ -216,7 +223,7 @@ function buildColumnFilter(
     case "PgDate":
     case "PgDateString":
       if (!istDayRange(value)) {
-        note("not a date (YYYY-MM-DD)");
+        note({ key: "grid.skip.notDate" });
         return null;
       }
       return eq(col as never, value.trim() as never);
@@ -224,16 +231,19 @@ function buildColumnFilter(
       // That calendar day in the programme's timezone.
       const day = istDayRange(value);
       if (!day) {
-        note("not a date (YYYY-MM-DD)");
+        note({ key: "grid.skip.notDate" });
         return null;
       }
       return and(gte(col as never, day[0] as never), lt(col as never, day[1] as never))!;
     }
     default:
-      note("this column cannot be filtered");
+      note({ key: "grid.skip.notFilterable" });
       return null;
   }
 }
+
+/** The delete refusals the grid names by `?error=`; any other code is "unknown". */
+const GRID_ERRORS = ["still_referenced", "duplicate", "delete_failed"] as const;
 
 export default async function AdminGridPage({ params, searchParams }: PageProps) {
   const { entity: slug } = await params;
@@ -249,6 +259,15 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   if (entity.gate) {
     await assertSectionGate(session.user.id, entity.gate, `/admin/data/${slug}`);
   }
+  const t = await getTranslations("adminData");
+  // The same translator, as admin/labels.ts takes it.
+  const tl = t as unknown as Translate;
+  const tAction = await getTranslations("action");
+  const title = entityLabel(tl, entity);
+  const header = (key: string) => columnLabel(tl, entity, key);
+  // The row form is a client component: its field labels, hints and enum
+  // choices are resolved here and passed down, not shipped to every page.
+  const formText = rowFormText(tl, entity);
 
   // Can THIS caller actually export?
   //
@@ -329,7 +348,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     const col = tableColumns[key];
     if (!col) continue;
     const clause = buildColumnFilter(formShape[key], col, value, (why) => {
-      skippedWhy[key] = why;
+      skippedWhy[key] = adminMessage(tl, why);
     });
     if (clause === null) {
       skippedFilters[key] = value;
@@ -417,11 +436,25 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // password (admin/references.ts).
   const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
   const refLabels = await referenceLabels(db, entity, rows, refCtx);
+  // Each column's allowed values, where it is an enum -- a ZodEnum over a
+  // varchar, or a Postgres enum column: its filter offers them, and its cells
+  // and choices show them by name (adminData.entities.<slug>.enum).
+  const choicesFor = (key: string): string[] | null => {
+    const col = tableColumns[key] as { columnType?: string; enumValues?: readonly string[] } | undefined;
+    return enumOptions(formShape[key]) ?? (col?.columnType === "PgEnumColumn" ? [...(col.enumValues ?? [])] : null);
+  };
+  const yesNo = (v: boolean) => (v ? t("grid.yes") : t("grid.no"));
   const displayRows = rows.map((r) => {
     const out: Record<string, unknown> = { ...r };
     for (const [field, labels] of Object.entries(refLabels)) {
       const v = r[field];
       if (typeof v === "string" && labels[v]) out[field] = labels[v];
+    }
+    for (const c of entity.displayColumns) {
+      const v = r[c.key];
+      const choices = typeof v === "string" ? choicesFor(c.key) : null;
+      if (choices) out[c.key] = enumLabel(tl, entity, c.key, v as string, choices);
+      else if (typeof v === "boolean") out[c.key] = yesNo(v);
     }
     // Timestamps in the programme's timezone, with their time: the cells used
     // to show the UTC date alone, so a webinar at 10:30 IST and one at 23:00
@@ -447,7 +480,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     if (v === null || v === undefined) return "—";
     if (v instanceof Date) return v.toISOString().slice(0, 10);
     if (typeof v === "object") return JSON.stringify(v);
-    if (typeof v === "boolean") return v ? "yes" : "no";
+    if (typeof v === "boolean") return yesNo(v);
     return String(v);
   };
 
@@ -495,12 +528,9 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // swallowed into console.error while the page revalidated and re-rendered
   // the undeleted row -- so the button looked broken rather than refused.
   const rawError = typeof sp.error === "string" ? sp.error : undefined;
-  const GRID_ERRORS: Record<string, string> = {
-    still_referenced:
-      "That row can't be deleted because other records still reference it. Remove or reassign those first.",
-    duplicate: "That change conflicts with an existing row.",
-    delete_failed: "That delete could not be completed. Nothing was changed.",
-  };
+  // Only a code in GRID_ERRORS names a message: nothing typed into the URL
+  // is used as a message path (an inherited name like __proto__ included).
+  const knownError = (GRID_ERRORS as readonly string[]).includes(rawError ?? "") ? rawError : undefined;
   // `ref` is the table that still references the row (actions.ts
   // gridErrorQuery). Named by its entity label, so the operator knows where to
   // go; an unregistered table falls back to the generic sentence.
@@ -521,14 +551,17 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       .from(entity.table as never)
       .where(eq(idCol as never, lockedRowId))
       .limit(1)) as Record<string, unknown>[];
-    lockedReason = locked ? entity.guardMutation("delete", locked) : null;
+    const reason = locked ? entity.guardMutation("delete", locked) : null;
+    lockedReason = reason ? adminMessage(tl, reason) : null;
   }
   const gridError = rawError
     ? rawError === "locked"
-      ? (lockedReason ?? "That row is locked in its current state and cannot be deleted from the grid.")
+      ? (lockedReason ?? t("grid.errors.locked"))
       : rawError === "still_referenced" && refEntity
-      ? `That row can't be deleted because ${refEntity.label} records still reference it. Remove or reassign those first.`
-      : (lookupOwn(GRID_ERRORS, rawError) ?? "That action could not be completed.")
+      ? t("grid.errors.stillReferencedBy", { entity: entityLabel(tl, refEntity) })
+      : knownError
+      ? t(`grid.errors.${knownError}`)
+      : t("grid.errors.unknown")
     : null;
 
   return (
@@ -545,16 +578,22 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       <header className="mb-6 flex items-baseline justify-between">
         <div>
           <p className="text-xs uppercase tracking-wide text-neutral-500">
-            <Link href="/admin" className="hover:underline">Admin</Link> · Data
+            {t.rich("grid.crumb", {
+              link: (chunks) => (
+                <Link href="/admin" className="hover:underline">
+                  {chunks}
+                </Link>
+              ),
+            })}
           </p>
-          <h1 className="text-2xl font-semibold">{entity.label}</h1>
+          <h1 className="text-2xl font-semibold">{title}</h1>
         </div>
         <div className="relative flex items-center gap-3 text-xs text-neutral-500">
-          <span>Page {pageNum} · {rows.length} row{rows.length === 1 ? "" : "s"}</span>
+          <span>{t("grid.pageRows", { page: pageNum, count: rows.length })}</span>
           {canImport ? (
             <ImportCsv
               entitySlug={slug}
-              entityLabel={entity.label}
+              entityLabel={title}
               // `id` too: a row carrying one updates that row (csv.ts importCsv).
               acceptedColumns={["id", ...entity.formFields]}
               reportsDuplicates={Boolean(entity.duplicateKey)}
@@ -564,13 +603,13 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             <a
               href={`/api/admin/data/${slug}/export`}
               className="rounded-md border border-neutral-300 bg-white px-2 py-1 hover:border-neutral-400"
-              title="Download CSV"
-            >Export CSV</a>
+              title={t("grid.exportTitle")}
+            >{t("grid.exportCsv")}</a>
           ) : (
             <span
               className="rounded-md border border-neutral-200 px-2 py-1 text-neutral-400"
-              title="Exporting learner records requires a super administrator"
-            >Export CSV</span>
+              title={t("grid.exportLocked")}
+            >{t("grid.exportCsv")}</span>
           )}
         </div>
       </header>
@@ -580,17 +619,23 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       {editRowId && editRow ? (
         <section className="mb-8 rounded-lg border border-amber-300 bg-amber-50 p-4">
           <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="text-sm font-medium text-amber-900">Edit row</h2>
+            <h2 className="text-sm font-medium text-amber-900">{t("grid.editRow")}</h2>
             <Link href={`/admin/data/${slug}`} className="text-xs text-amber-900 hover:underline">
-              Close
+              {t("grid.close")}
             </Link>
           </div>
           {/* The row's id, whole and selectable: what another table's UUID box
               (a link past REF_OPTION_LIMIT) and a CSV id column ask for. The
               grid shows every link by name and nowhere else shows an id. */}
           <p className="mb-3 text-xs text-amber-900">
-            Row id:{" "}
-            <code data-testid="edit-row-id" className="select-all font-mono">{String(editRow.id)}</code>
+            {t.rich("grid.rowId", {
+              id: String(editRow.id),
+              code: (chunks) => (
+                <code data-testid="edit-row-id" className="select-all font-mono">
+                  {chunks}
+                </code>
+              ),
+            })}
           </p>
           <RowForm
             entitySlug={slug}
@@ -598,12 +643,13 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             rowId={editRowId}
             initialValues={editRow}
             options={editOptions}
+            text={formText}
           />
         </section>
       ) : (
         <section className="mb-8 rounded-lg border border-neutral-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-medium text-neutral-700">Add new</h2>
-          <RowForm entitySlug={slug} mode="create" options={refOptions} />
+          <h2 className="mb-3 text-sm font-medium text-neutral-700">{t("grid.addNew")}</h2>
+          <RowForm entitySlug={slug} mode="create" options={refOptions} text={formText} />
         </section>
       )}
 
@@ -616,11 +662,18 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             data-testid="grid-filters-skipped"
             className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900"
           >
-            Not applied:{" "}
-            {Object.entries(skippedFilters)
-              .map(([k, v]) => `${columnsByKey.get(k)?.label ?? k} "${v}" (${skippedWhy[k] ?? "unusable"})`)
-              .join("; ")}
-            . The rows below are not narrowed by {Object.keys(skippedFilters).length === 1 ? "it" : "them"}.
+            {t("grid.notApplied", {
+              filters: Object.entries(skippedFilters)
+                .map(([k, v]) =>
+                  t("grid.notAppliedItem", {
+                    column: columnsByKey.has(k) ? header(k) : k,
+                    value: v,
+                    why: skippedWhy[k] ?? t("grid.skip.unusable"),
+                  }),
+                )
+                .join("; "),
+              count: Object.keys(skippedFilters).length,
+            })}
           </p>
         ) : null}
         <form method="get" className="flex flex-wrap items-end gap-2" data-filter-form="true">
@@ -632,17 +685,16 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             const name = `filter[${c.key}]`;
             const current = filters[c.key] ?? "";
             const cls =
+              // i18n-ignore: CSS class list
               "rounded-md border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-900 focus:outline-none";
             const col = tableColumns[c.key] as { columnType?: string; enumValues?: readonly string[] } | undefined;
             const refs = refOptions[c.key];
-            const choices =
-              enumOptions(formShape[c.key]) ??
-              (col?.columnType === "PgEnumColumn" ? [...(col.enumValues ?? [])] : null);
+            const choices = choicesFor(c.key);
             let control: ReactNode;
             if (Array.isArray(refs)) {
               control = (
                 <select name={name} defaultValue={current} className={cls}>
-                  <option value="">any</option>
+                  <option value="">{t("grid.any")}</option>
                   {refs.map((o) => (
                     <option key={o.id} value={o.id}>
                       {o.label}
@@ -653,10 +705,10 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             } else if (choices) {
               control = (
                 <select name={name} defaultValue={current} className={cls}>
-                  <option value="">any</option>
+                  <option value="">{t("grid.any")}</option>
                   {choices.map((v) => (
                     <option key={v} value={v}>
-                      {v.replace(/_/g, " ")}
+                      {enumLabel(tl, entity, c.key, v, choices)}
                     </option>
                   ))}
                 </select>
@@ -664,9 +716,9 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
             } else if (col?.columnType === "PgBoolean") {
               control = (
                 <select name={name} defaultValue={current} className={cls}>
-                  <option value="">any</option>
-                  <option value="true">yes</option>
-                  <option value="false">no</option>
+                  <option value="">{t("grid.any")}</option>
+                  <option value="true">{t("grid.yes")}</option>
+                  <option value="false">{t("grid.no")}</option>
                 </select>
               );
             } else if (col?.columnType === "PgTimestamp" || col?.columnType === "PgDate" || col?.columnType === "PgDateString") {
@@ -677,14 +729,14 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                 <input
                   name={name}
                   defaultValue={current}
-                  placeholder={refs === null ? "paste the row's id" : "contains…"}
+                  placeholder={refs === null ? t("grid.pasteId") : t("grid.contains")}
                   className={cls}
                 />
               );
             }
             return (
               <label key={c.key} className="flex min-w-[8rem] flex-col gap-1 text-[11px] text-neutral-600">
-                <span className="font-medium">{c.label}</span>
+                <span className="font-medium">{header(c.key)}</span>
                 {control}
               </label>
             );
@@ -694,14 +746,14 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               type="submit"
               className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs text-white"
             >
-              Apply filters
+              {t("grid.applyFilters")}
             </button>
             {Object.keys(appliedFilters).length > 0 ? (
               <a
                 href={`/admin/data/${slug}`}
                 className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:border-neutral-400"
               >
-                Clear
+                {t("grid.clear")}
               </a>
             ) : null}
           </div>
@@ -713,32 +765,32 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
           <section className="mb-4">
             <MobileEntityCardList
               entitySlug={slug}
-              entityLabel={entity.label}
+              entityLabel={title}
               rows={displayRows}
               columns={entity.displayColumns.map((c) => ({
                 key: c.key,
-                label: c.label,
+                label: header(c.key),
                 format: c.format,
               }))}
             />
           </section>
           <nav
             className="mb-6 flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-500"
-            aria-label="Card list pagination"
+            aria-label={t("grid.cardPagination")}
           >
             <div>
               {pageNum > 1 ? (
-                <Link href={buildPageHref(pageNum - 1)} className="hover:underline">← Prev</Link>
+                <Link href={buildPageHref(pageNum - 1)} className="hover:underline">{t("grid.prev")}</Link>
               ) : (
-                <span className="text-neutral-300">← Prev</span>
+                <span className="text-neutral-300">{t("grid.prev")}</span>
               )}
             </div>
-            <div>Page {pageNum}</div>
+            <div>{t("grid.page", { page: pageNum })}</div>
             <div>
               {rows.length === PAGE_SIZE ? (
-                <Link href={buildPageHref(pageNum + 1)} className="hover:underline">Next →</Link>
+                <Link href={buildPageHref(pageNum + 1)} className="hover:underline">{t("grid.next")}</Link>
               ) : (
-                <span className="text-neutral-300">Next →</span>
+                <span className="text-neutral-300">{t("grid.next")}</span>
               )}
             </div>
           </nav>
@@ -787,22 +839,20 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                         data-sort-header={c.key}
                         className="inline-flex items-center gap-1 hover:text-neutral-900"
                       >
-                        {c.label}
+                        {header(c.key)}
                         <span aria-hidden="true">{arrow}</span>
                       </Link>
                     </th>
                   );
                 })}
-                <th className="px-3 py-2 font-medium text-right">Actions</th>
+                <th className="px-3 py-2 font-medium text-right">{t("grid.actions")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={entity.displayColumns.length + 2} className="px-3 py-8 text-center text-neutral-500">
-                    {Object.keys(appliedFilters).length > 0
-                      ? "No rows match the active filters. Clear filters to see everything."
-                      : "No rows yet. Add one above."}
+                    {Object.keys(appliedFilters).length > 0 ? t("grid.noMatches") : t("grid.empty")}
                   </td>
                 </tr>
               ) : (
@@ -826,7 +876,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                               className="text-xs text-neutral-700 hover:underline"
                               data-action="edit-row"
                             >
-                              Edit
+                              {tAction("edit")}
                             </Link>
                           ) : null}
                           {rowId ? (
@@ -848,16 +898,16 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
         <nav className="flex items-center justify-between border-t border-neutral-100 px-3 py-2 text-xs text-neutral-500">
           <div>
             {pageNum > 1 ? (
-              <Link href={buildPageHref(pageNum - 1)} className="hover:underline">← Prev</Link>
+              <Link href={buildPageHref(pageNum - 1)} className="hover:underline">{t("grid.prev")}</Link>
             ) : (
-              <span className="text-neutral-300">← Prev</span>
+              <span className="text-neutral-300">{t("grid.prev")}</span>
             )}
           </div>
           <div>
             {rows.length === PAGE_SIZE ? (
-              <Link href={buildPageHref(pageNum + 1)} className="hover:underline">Next →</Link>
+              <Link href={buildPageHref(pageNum + 1)} className="hover:underline">{t("grid.next")}</Link>
             ) : (
-              <span className="text-neutral-300">Next →</span>
+              <span className="text-neutral-300">{t("grid.next")}</span>
             )}
           </div>
         </nav>

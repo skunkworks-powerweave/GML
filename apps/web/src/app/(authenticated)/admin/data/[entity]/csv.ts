@@ -1,9 +1,16 @@
 // CSV import/export for the generic admin grid.
 // Export: streams rows as text/csv with displayColumns as headers.
 // Import: parses CSV, validates each row via entity.formSchema, batch-inserts via withAudit.
+//
+// The column names in the header of an export, and the ones an import reads,
+// are a data contract with spreadsheets (the form fields' keys) and stay as
+// they are in every language. What the importer reports about each row, and
+// the marker row of a truncated export, are in the user's language
+// (adminData.import).
 
 import "server-only";
 import Papa from "papaparse";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
 import type { AdminEntity } from "@/admin/types";
@@ -12,6 +19,8 @@ import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
 import { eq, getTableColumns, inArray, sql, type AnyColumn } from "drizzle-orm";
 import { describeWriteError } from "@/admin/db-errors";
+import { issueLine } from "@/admin/issues";
+import { adminMessage, problemsText, type Translate } from "@/admin/labels";
 import { MutationRefused, updateAudit } from "@/admin/audit-image";
 import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { keepStoredPrecision } from "@/admin/dates";
@@ -41,6 +50,33 @@ function getEntityOrThrow(slug: string) {
 
 function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
   return entity.mutateRoles ?? entity.readRoles;
+}
+
+/** The adminData translator for the user making the request. */
+async function translator(): Promise<Translate> {
+  return (await getTranslations("adminData")) as unknown as Translate;
+}
+
+/**
+ * PapaParse's complaint about a file, in the user's language: its message is
+ * English, so a known code is said again from the bundle (with the counts its
+ * message carries); an unknown one is passed on as Papa wrote it.
+ */
+function parseErrorText(t: Translate, e: { code?: string; message: string }): string {
+  switch (e.code) {
+    case "MissingQuotes":
+    case "InvalidQuotes":
+      return t(`import.parse.${e.code}`);
+    case "UndetectableDelimiter":
+      return t("import.parse.UndetectableDelimiter", { delimiter: `'${Papa.DefaultDelimiter}'` });
+    case "TooFewFields":
+    case "TooManyFields": {
+      const m = /expected (\d+) fields but parsed (\d+)/.exec(e.message);
+      return m ? t(`import.parse.${e.code}`, { expected: m[1]!, parsed: m[2]! }) : e.message;
+    }
+    default:
+      return e.message;
+  }
 }
 
 /**
@@ -90,6 +126,7 @@ function sameRecord(key: readonly string[], a: Record<string, unknown>, b: Recor
  * queries rather than one per line.
  */
 async function likelyDuplicates(
+  t: Translate,
   entity: AdminEntity,
   key: readonly string[],
   rows: ReadonlyArray<{ line: number; data: Record<string, unknown> }>,
@@ -122,15 +159,13 @@ async function likelyDuplicates(
     const k = keyText(row.data[firstField]);
     const match = stored.get(k)?.find((s) => sameRecord(key, row.data, s));
     if (match) {
-      out.set(
-        row.line,
-        `looks like a record already on this table (id ${String(match.id)}): to change it, put that id in an id column; to add a second record with these details, use Add row`,
-      );
+      out.set(row.line, t("import.likelyDuplicate", { id: String(match.id) }));
       continue;
     }
     const repeat = earlier.get(k)?.find((e) => sameRecord(key, row.data, e.data));
     if (repeat) {
-      out.set(row.line, `repeats line ${repeat.line} of this file`);
+      // A string, not a number: line 1234, not 1,234.
+      out.set(row.line, t("import.repeatsLine", { line: String(repeat.line) }));
       continue;
     }
     const seen = earlier.get(k);
@@ -202,11 +237,12 @@ export async function exportCsv(slug: string): Promise<Response> {
 
   if (truncated) {
     // A row inside the file itself. A header is invisible to anyone who opens
-    // the download in a spreadsheet, which is everyone.
+    // the download in a spreadsheet, which is everyone. In the language of
+    // whoever downloaded it; the column names stay the data contract.
+    const t = await translator();
     const marker: Record<string, string> = {};
     for (const k of headers) marker[k] = "";
-    marker[headers[0] ?? "id"] =
-      `*** TRUNCATED at ${EXPORT_ROW_LIMIT} rows — this export is INCOMPLETE ***`;
+    marker[headers[0] ?? "id"] = t("import.truncated", { limit: String(EXPORT_ROW_LIMIT) });
     data.push(marker);
   }
 
@@ -248,6 +284,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
 }> {
   const entity = getEntityOrThrow(slug);
   await requireRole(mutateRolesFor(entity));
+  const t = await translator();
 
   const parsed = Papa.parse<Record<string, string>>(csv, {
     header: true,
@@ -261,7 +298,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
       skipped: parsed.data.length,
       // Papa's `row` is the 0-based data row; the operator's spreadsheet line
       // is that + 2 (the header is line 1), the same numbering as below.
-      errors: parsed.errors.map((e) => ({ row: e.row != null ? e.row + 2 : -1, message: e.message })),
+      errors: parsed.errors.map((e) => ({ row: e.row != null ? e.row + 2 : -1, message: parseErrorText(t, e) })),
     };
   }
 
@@ -302,7 +339,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
     const line = i + 2; // header is line 1
     const id = idOf(raw);
     if (id && !UUID_RE.test(id)) {
-      errors.push({ row: line, message: "id: not a row id (leave it empty to add a new row)" });
+      errors.push({ row: line, message: t("import.notRowId") });
       continue;
     }
     const before = id ? existing.get(id) : undefined;
@@ -341,7 +378,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
     const parse = entity.formSchema.safeParse(candidate);
     if (!parse.success) {
       const issue = parse.error.issues[0];
-      errors.push({ row: line, message: `${issue?.path.join(".") ?? "row"}: ${issue?.message ?? "invalid"}` });
+      errors.push({ row: line, message: issue ? issueLine(t, issue) : t("import.invalidRow") });
       continue;
     }
     // The entity's database-backed rules, which the grid's form enforces too
@@ -350,8 +387,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
     // change (an observer deactivated since) does not refuse it.
     const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>, before);
     if (problems) {
-      const [field, message] = Object.entries(problems)[0]!;
-      errors.push({ row: line, message: `${field}: ${message}` });
+      errors.push({ row: line, message: problemsText(t, problems).summary });
       continue;
     }
     const valid = parse.data as Record<string, unknown>;
@@ -369,7 +405,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
   // record (AdminEntity.duplicateKey); a match is reported with the stored
   // row's id, so the operator can update it instead.
   if (entity.duplicateKey) {
-    const dupes = await likelyDuplicates(entity, entity.duplicateKey, validRows.filter((r) => !r.id));
+    const dupes = await likelyDuplicates(t, entity, entity.duplicateKey, validRows.filter((r) => !r.id));
     for (const [line, message] of dupes) errors.push({ row: line, message });
     const kept = validRows.filter((r) => !dupes.has(r.line));
     validRows.length = 0;
@@ -425,19 +461,19 @@ export async function importCsv(slug: string, csv: string): Promise<{
               // Checked above as a new row or as a change to this one; a row
               // that appeared or vanished since is refused, not guessed at.
               if (!before) {
-                if (row.update) throw new MutationRefused("That row no longer exists.");
+                if (row.update) throw new MutationRefused(t("write.rowGone"));
                 await sp.insert(entity.table as never).values({ ...row.data, id: row.id } as never);
                 inserted += 1;
                 return;
               }
               if (!row.update) {
-                throw new MutationRefused("id: that row was added while this file was importing; import it again.");
+                throw new MutationRefused(t("import.addedMeanwhile"));
               }
               // As the grid's edit: a hand-typed minute equal to the stored
               // time keeps its seconds.
               const next = keepStoredPrecision(before, row.data);
               const reason = entity.guardMutation?.("update", before, { ...before, ...next });
-              if (reason) throw new MutationRefused(reason);
+              if (reason) throw new MutationRefused(adminMessage(t, reason));
               // A file of ids alone changes nothing, and UPDATE needs a column.
               if (Object.keys(next).length > 0) {
                 await sp
@@ -453,7 +489,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
           } catch (err) {
             errors.push({
               row: row.line,
-              message: err instanceof MutationRefused ? err.message : describeWriteError(entity, err),
+              message: err instanceof MutationRefused ? err.message : describeWriteError(t, entity, err).text,
             });
           }
         }
@@ -476,7 +512,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
               });
               inserted += 1;
             } catch (err) {
-              errors.push({ row: row.line, message: describeWriteError(entity, err) });
+              errors.push({ row: row.line, message: describeWriteError(t, entity, err).text });
             }
           }
         }
@@ -508,7 +544,7 @@ export async function importCsv(slug: string, csv: string): Promise<{
       inserted: 0,
       updated: 0,
       skipped: parsed.data.length,
-      errors: [...errors.slice(0, errorsBefore), { row: -1, message: "The import could not be completed. Nothing was saved." }],
+      errors: [...errors.slice(0, errorsBefore), { row: -1, message: t("import.failed") }],
     };
   }
 

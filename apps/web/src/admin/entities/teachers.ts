@@ -4,19 +4,18 @@ import type { AdminEntity } from "../types";
 
 export const teachersEntity: AdminEntity = {
   slug: "teachers",
-  label: "Teachers",
   table: teachers,
   readRoles: ["programme_admin", "super_admin", "mentor", "observer"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "userId", label: "Login account" },
-    { key: "fullName", label: "Name" },
-    { key: "schoolId", label: "School" },
-    { key: "phone", label: "Phone" },
-    { key: "subjectSpecialism", label: "Subject" },
-    { key: "joinedPhase", label: "Joined at" },
-    { key: "currentPhaseId", label: "Current phase" },
-    { key: "active", label: "Active" },
+    { key: "userId" },
+    { key: "fullName" },
+    { key: "schoolId" },
+    { key: "phone" },
+    { key: "subjectSpecialism" },
+    { key: "joinedPhase" },
+    { key: "currentPhaseId" },
+    { key: "active" },
   ],
   formSchema: z.object({
     // LINK TO A LOGIN ACCOUNT -- REPAIRABLE, not just settable once.
@@ -60,7 +59,6 @@ export const teachersEntity: AdminEntity = {
     active: z.boolean().default(true),
   }),
   fields: {
-    joinedPhase: { help: "Free text, e.g. \"Phase 1\" -- where the teacher started." },
     userId: { userRoles: ["teacher"] },
   },
   formFields: [

@@ -4,9 +4,13 @@
 // FormSchemaEditor — textarea + Save button (PUTs to /api/admin/forms/[id]).
 // FormSchemaPreview — live read-only render of the parsed JSON; gracefully shows
 // a "schema does not parse" panel on invalid JSON.
+//
+// The editor's words are in the viewer's language (adminData.client.formEditor);
+// the schema, and everything the preview shows from it, is data.
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 
 type EditorProps = {
   formId: string;
@@ -26,6 +30,8 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
   const [save, setSave] = useState<SaveState>({ kind: "idle" });
   const [, startTransition] = useTransition();
   const router = useRouter();
+  const t = useTranslations("adminData.client");
+  const tAction = useTranslations("action");
 
   // Track whether the textarea has been edited away from the persisted value.
   const dirty = text !== initialSchema;
@@ -41,7 +47,7 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
 
   const onSave = async () => {
     if (parseError) {
-      setSave({ kind: "err", message: `JSON does not parse: ${parseError}` });
+      setSave({ kind: "err", message: t("formEditor.invalidJson", { error: parseError }) });
       return;
     }
     setSave({ kind: "saving" });
@@ -55,7 +61,7 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
         const body = await res.json().catch(() => ({}));
         setSave({
           kind: "err",
-          message: body?.message || body?.error || `HTTP ${res.status}`,
+          message: body?.message || body?.error || t("formEditor.http", { status: String(res.status) }),
         });
         return;
       }
@@ -96,7 +102,7 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
             color: "var(--ink-3)",
           }}
         >
-          Schema (raw JSON)
+          {t("formEditor.heading")}
         </div>
         <div
           style={{
@@ -105,7 +111,9 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
             color: parseError ? "var(--rust)" : "var(--ink-3)",
           }}
         >
-          {parseError ? `× invalid JSON` : `✓ parses · v${version}${dirty ? " · unsaved" : ""}`}
+          {parseError
+            ? t("formEditor.badJson")
+            : t("formEditor.parses", { version, dirty: dirty ? "yes" : "no" })}
         </div>
       </div>
       <textarea
@@ -154,7 +162,7 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
               save.kind === "saving" || !dirty || !!parseError ? "not-allowed" : "pointer",
           }}
         >
-          {save.kind === "saving" ? "Saving…" : "Save schema"}
+          {save.kind === "saving" ? tAction("saving") : t("formEditor.save")}
         </button>
         <button
           type="button"
@@ -170,7 +178,7 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
             cursor: !dirty ? "not-allowed" : "pointer",
           }}
         >
-          Discard
+          {t("formEditor.discard")}
         </button>
         <SaveStatus state={save} />
       </div>
@@ -179,6 +187,7 @@ export function FormSchemaEditor({ formId, initialSchema, initialVersion }: Edit
 }
 
 function SaveStatus({ state }: { state: SaveState }) {
+  const t = useTranslations("adminData.client");
   if (state.kind === "ok") {
     return (
       <span
@@ -189,7 +198,7 @@ function SaveStatus({ state }: { state: SaveState }) {
           marginLeft: "auto",
         }}
       >
-        Saved · v{state.version}
+        {t("formEditor.saved", { version: state.version })}
       </span>
     );
   }
@@ -221,6 +230,7 @@ export function FormSchemaPreview({ initialSchema }: PreviewProps) {
   // The preview is driven by a sibling editor; we listen for the editor's
   // textarea via a custom event on window. Falls back to initial schema.
   const [json, setJson] = useState(initialSchema);
+  const t = useTranslations("adminData.client");
 
   useEffect(() => {
     // We update on focus changes (after edits land). Lightweight polling of the
@@ -264,7 +274,7 @@ export function FormSchemaPreview({ initialSchema }: PreviewProps) {
           color: "var(--ink-3)",
         }}
       >
-        Preview (read-only)
+        {t("formEditor.preview")}
       </div>
       {error ? (
         <div
@@ -278,7 +288,7 @@ export function FormSchemaPreview({ initialSchema }: PreviewProps) {
             fontFamily: "var(--mono)",
           }}
         >
-          Schema does not parse: {error}
+          {t("formEditor.previewError", { error })}
         </div>
       ) : (
         <SchemaRenderer schema={parsed} />
@@ -351,7 +361,12 @@ function SectionBlock({ section, index }: { section: unknown; index: number }) {
   if (!section || typeof section !== "object" || Array.isArray(section)) {
     return <CodeBlock value={section} />;
   }
-  const s = section as { title?: unknown; items?: unknown };
+  return <SectionCard section={section as { title?: unknown; items?: unknown }} index={index} />;
+}
+
+/** One section of the preview: its title (data) or "Section n", then its items. */
+function SectionCard({ section: s, index }: { section: { title?: unknown; items?: unknown }; index: number }) {
+  const t = useTranslations("adminData.client");
   const items = Array.isArray(s.items) ? s.items : [];
   return (
     <div
@@ -388,12 +403,12 @@ function SectionBlock({ section, index }: { section: unknown; index: number }) {
           {index + 1}
         </span>
         <span style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)" }}>
-          {typeof s.title === "string" ? s.title : `Section ${index + 1}`}
+          {typeof s.title === "string" ? s.title : t("formEditor.section", { n: index + 1 })}
         </span>
       </div>
       <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 }}>
         {items.length === 0 ? (
-          <li style={{ fontSize: 11, color: "var(--ink-4)" }}>(no items)</li>
+          <li style={{ fontSize: 11, color: "var(--ink-4)" }}>{t("formEditor.noItems")}</li>
         ) : (
           items.map((it, j) => <ItemRow key={j} item={it} />)
         )}
@@ -410,14 +425,21 @@ function ItemRow({ item }: { item: unknown }) {
       </li>
     );
   }
-  const it = item as {
-    id?: unknown;
-    label?: unknown;
-    kind?: unknown;
-    scale?: unknown;
-    rows?: unknown;
-    options?: unknown;
-  };
+  return <ItemLine it={item as ItemShape} />;
+}
+
+type ItemShape = {
+  id?: unknown;
+  label?: unknown;
+  kind?: unknown;
+  scale?: unknown;
+  rows?: unknown;
+  options?: unknown;
+};
+
+/** One item of the preview: its kind (a schema token) and label and options (data). */
+function ItemLine({ it }: { it: ItemShape }) {
+  const t = useTranslations("adminData.client");
   const kindLabel = typeof it.kind === "string" ? it.kind : "?";
   const scale = typeof it.scale === "number" ? it.scale : null;
   return (
@@ -447,10 +469,10 @@ function ItemRow({ item }: { item: unknown }) {
         {scale ? ` · 1-${scale}` : ""}
       </span>
       <div style={{ flex: 1 }}>
-        <div>{typeof it.label === "string" ? it.label : "(no label)"}</div>
+        <div>{typeof it.label === "string" ? it.label : t("formEditor.noLabel")}</div>
         {Array.isArray(it.options) && it.options.length > 0 ? (
           <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-            options: {it.options.map(String).join(" · ")}
+            {t("formEditor.options", { options: it.options.map(String).join(" · ") })}
           </div>
         ) : null}
       </div>

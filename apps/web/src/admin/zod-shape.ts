@@ -267,26 +267,6 @@ export function isLongText(zodType: z.ZodTypeAny | undefined): boolean {
   return typeof max === "number" && max > 2000;
 }
 
-/**
- * What the form calls a field: the entity's own label if it gives one, else
- * the grid column's label, else the key spelled out ("rttSubjectId" ->
- * "Rtt subject"). The form used to print the raw key -- `mentorId`,
- * `classTeacherName` -- which is a column name, not a question.
- */
-export function fieldLabel(
-  entity: { fields?: Record<string, { label?: string }>; displayColumns: Array<{ key: string; label: string }> },
-  field: string,
-): string {
-  const own = entity.fields?.[field]?.label ?? entity.displayColumns.find((c) => c.key === field)?.label;
-  if (own) return own;
-  const words = field
-    .replace(/Id$/, "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .replace(/\b(rtt|url)\b/g, (w) => w.toUpperCase());
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
 /** Render a stored value into the string an <input> should show. */
 export function toInputValue(
   kind: FieldKind,

@@ -24,14 +24,19 @@
 // viewer holding that password -- see RefContext.
 //
 // Takes the database as a parameter so tests/behaviour can run it on a
-// rolled-back transaction.
+// rolled-back transaction. The few words added to a name -- "Grade" in a
+// class's label, "(deleted account)" after a link -- are in the viewer's
+// language (adminData.references).
 
 import "server-only";
 import { and, asc, eq, getTableColumns, getTableName, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgTable, type PgColumn } from "drizzle-orm/pg-core";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { getLocale, getTranslations } from "next-intl/server";
 import * as s from "@gml/db/schema";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import type { GateSlug } from "@/lib/gates";
+import type { Translate } from "./labels";
 import { ADMIN_ENTITIES } from "./registry";
 import type { AdminEntity } from "./types";
 
@@ -57,7 +62,8 @@ export const REF_OPTION_LIMIT = 1000;
 type LabelSource = {
   table: AnyPgTable;
   id: PgColumn;
-  label: SQL<string>;
+  /** The name, or one built from a translated message (a class: "School · Grade 3"). */
+  label: SQL<string> | ((t: Translate) => SQL<string>);
   /** A second table the label needs (a term is named by its phase too). */
   join?: { table: AnyPgTable; on: SQL };
   /** Rows the picker leaves out (soft-deleted accounts). */
@@ -96,11 +102,12 @@ const LABELS: Record<string, LabelSource> = {
   rtt_modules: { table: s.rttModules, id: s.rttModules.id, label: sql<string>`${s.rttModules.title}` },
   rtt_sessions: { table: s.rttSessions, id: s.rttSessions.id, label: sql<string>`${s.rttSessions.title}` },
   subjects: { table: s.subjects, id: s.subjects.id, label: sql<string>`${s.subjects.name}` },
-  // Likewise "Grade 3" exists in every school.
+  // Likewise "Grade 3" exists in every school. The word is the viewer's.
   classes: {
     table: s.classes,
     id: s.classes.id,
-    label: sql<string>`${s.schools.name} || ' · Grade ' || ${s.classes.grade}`,
+    label: (t) =>
+      sqlMessage(t, "references.classLabel", { school: sql`${s.schools.name}`, grade: sql`${s.classes.grade}` }),
     join: { table: s.schools, on: eq(s.schools.id, s.classes.schoolId) },
   },
   course_outlines: { table: s.courseOutlines, id: s.courseOutlines.id, label: sql<string>`${s.courseOutlines.name}` },
@@ -134,9 +141,35 @@ export function referenceFields(entity: AdminEntity): Record<string, string> {
   return out;
 }
 
-function labelQuery(db: Db, src: LabelSource) {
-  const q = db.select({ id: src.id, label: src.label }).from(src.table as never).$dynamic();
+/**
+ * A translated message whose arguments are SQL expressions, as one SQL string
+ * concatenation: the message is formatted with a marker around each argument's
+ * name and cut at the markers, so each language keeps its own word order.
+ */
+function sqlMessage(t: Translate, key: string, args: Record<string, SQL>): SQL<string> {
+  const MARK = "\u0001";
+  const marked = t(key, Object.fromEntries(Object.keys(args).map((name) => [name, `${MARK}${name}${MARK}`])));
+  // Odd pieces are argument names, even pieces the message's own text.
+  const pieces = marked
+    .split(MARK)
+    .map((piece, i) => (i % 2 ? sql`(${args[piece]!})::text` : piece ? sql`${piece}::text` : null))
+    .filter((p): p is SQL => p !== null);
+  return sql.join(pieces, sql` || `) as SQL<string>;
+}
+
+/** The SQL naming a row of `src`, in the viewer's language where it has words. */
+function labelOf(src: LabelSource, t: Translate): SQL<string> {
+  return typeof src.label === "function" ? src.label(t) : src.label;
+}
+
+function labelQuery(db: Db, src: LabelSource, t: Translate) {
+  const q = db.select({ id: src.id, label: labelOf(src, t) }).from(src.table as never).$dynamic();
   return src.join ? q.innerJoin(src.join.table as never, src.join.on) : q;
+}
+
+/** getTranslations("adminData"), as the helpers here take it. */
+async function translator(): Promise<Translate> {
+  return (await getTranslations("adminData")) as unknown as Translate;
 }
 
 /** The section gate guarding a table's rows: the gate of the entity that administers it. */
@@ -184,7 +217,9 @@ export async function referenceOptions(
   ctx: RefContext,
 ): Promise<Record<string, RefOption[] | null>> {
   const out: Record<string, RefOption[] | null> = {};
-  for (const [field, target] of Object.entries(await visibleReferenceFields(entity, ctx))) {
+  const fields = Object.entries(await visibleReferenceFields(entity, ctx));
+  const t = fields.length ? await translator() : null;
+  for (const [field, target] of fields) {
     const src = LABELS[target]!;
     // An account picker can be narrowed to the roles that make sense for the
     // link (an observation cycle's observer is an observer account).
@@ -192,9 +227,9 @@ export async function referenceOptions(
     const filters = [src.hide, roles?.length ? inArray(s.users.role, roles) : undefined].filter(
       (f): f is SQL => Boolean(f),
     );
-    const q = labelQuery(db, src);
+    const q = labelQuery(db, src, t!);
     const rows = (await (filters.length ? q.where(and(...filters)) : q)
-      .orderBy(asc(src.label))
+      .orderBy(asc(labelOf(src, t!)))
       .limit(REF_OPTION_LIMIT + 1)) as Array<{ id: unknown; label: unknown }>;
     out[field] =
       rows.length > REF_OPTION_LIMIT
@@ -213,7 +248,7 @@ export async function referenceOptions(
  * the first option, "— none —", and the edit turned it into NULL: correcting
  * the teacher's phone number silently unlinked her login, and her cycles and
  * pairings with it. The current value is always offered, and says why it
- * would not otherwise be.
+ * would not otherwise be (adminData.references, in the viewer's language).
  */
 export async function withCurrentValues(
   db: Db,
@@ -223,12 +258,15 @@ export async function withCurrentValues(
 ): Promise<Record<string, RefOption[] | null>> {
   const fields = referenceFields(entity);
   const out = { ...options };
+  let t: Translate | null = null;
   for (const [field, list] of Object.entries(options)) {
     const id = row[field];
     if (!Array.isArray(list) || typeof id !== "string" || !id || list.some((o) => o.id === id)) continue;
+    t ??= await translator();
     const src = LABELS[fields[field]!]!;
-    const [named] = (await labelQuery(db, src).where(eq(src.id, id)).limit(1)) as Array<{ label: unknown }>;
-    let why = "current value";
+    const [named] = (await labelQuery(db, src, t).where(eq(src.id, id)).limit(1)) as Array<{ label: unknown }>;
+    const label = String(named?.label ?? id);
+    let shown = t("references.currentValue", { label });
     if (fields[field] === "users") {
       const [account] = await db
         .select({ role: s.users.role, deletedAt: s.users.deletedAt })
@@ -236,12 +274,15 @@ export async function withCurrentValues(
         .where(eq(s.users.id, id))
         .limit(1);
       const roles = entity.fields?.[field]?.userRoles;
-      if (account?.deletedAt) why = "deleted account";
+      if (account?.deletedAt) shown = t("references.deletedAccount", { label });
       else if (account && roles?.length && !roles.includes(account.role as never)) {
-        why = `not a ${roles.join(" or ")} account`;
+        // "a mentor or teacher account": the roles listed as the language lists alternatives.
+        const alternatives = new Intl.ListFormat(INTL_LOCALE[normalizeLocale(await getLocale())], { type: "disjunction" });
+        const nouns = roles.map((r) => t!(`references.roleNoun.${r}`));
+        shown = t("references.wrongRole", { label, roles: alternatives.format(nouns) });
       }
     }
-    out[field] = [{ id, label: `${String(named?.label ?? id)} (${why})` }, ...list];
+    out[field] = [{ id, label: shown }, ...list];
   }
   return out;
 }
@@ -270,9 +311,10 @@ export async function referenceLabels(
     }
   }
   const labelsByTarget = new Map<string, Map<string, string>>();
+  const t = idsByTarget.size ? await translator() : null;
   for (const [target, ids] of idsByTarget) {
     const src = LABELS[target]!;
-    const found = (await labelQuery(db, src).where(inArray(src.id, [...ids]))) as Array<{
+    const found = (await labelQuery(db, src, t!).where(inArray(src.id, [...ids]))) as Array<{
       id: unknown;
       label: unknown;
     }>;

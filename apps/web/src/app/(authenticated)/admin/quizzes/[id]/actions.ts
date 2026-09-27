@@ -4,8 +4,11 @@
 // `saveQuizSchema` validates incoming JSON shape, updates quiz metadata and --
 // only when the payload carries a `questions` array -- rewrites the
 // quiz_questions rows, in one transaction. Audits `quiz.schema.update`.
+// A refusal carries a code (`error`) and a sentence in the user's language
+// (`message`, adminData.quizzes.save); the payload's key names in it are code.
 
 import { and, eq, gt, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { quizzes, quizQuestions, quizSubmissions, rttSubjects } from "@gml/db/schema";
 import { isUuid } from "@/lib/ids";
@@ -60,6 +63,7 @@ export async function saveQuizSchema(
   rawJson: string,
 ): Promise<SaveQuizResult> {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("adminData");
 
   let parsed: IncomingPayload;
   try {
@@ -69,7 +73,7 @@ export async function saveQuizSchema(
   }
 
   if (!parsed || typeof parsed !== "object") {
-    return { ok: false, error: "invalid_shape", message: "Payload must be an object." };
+    return { ok: false, error: "invalid_shape", message: t("quizzes.save.notObject") };
   }
 
   // Validate questions if present.
@@ -79,27 +83,27 @@ export async function saveQuizSchema(
   // offline deleted every question and reported "Saved · 0 questions" -- and
   // every past result's review lost the questions it answered.
   if (parsed.questions !== undefined && !Array.isArray(parsed.questions)) {
-    return { ok: false, error: "invalid_questions", message: "questions must be an array." };
+    return { ok: false, error: "invalid_questions", message: t("quizzes.save.questionsArray") };
   }
   const replaceQuestions = Array.isArray(parsed.questions);
   const incoming = parsed.questions ?? [];
   for (let i = 0; i < incoming.length; i++) {
     const q = incoming[i];
     if (!q || typeof q !== "object") {
-      return { ok: false, error: "invalid_question", message: `Question ${i + 1} is not an object.` };
+      return { ok: false, error: "invalid_question", message: t("quizzes.save.questionNotObject", { n: i + 1 }) };
     }
     if (typeof q.prompt !== "string" || q.prompt.trim().length === 0) {
       return {
         ok: false,
         error: "invalid_prompt",
-        message: `Question ${i + 1} is missing a prompt.`,
+        message: t("quizzes.save.missingPrompt", { n: i + 1 }),
       };
     }
     if (!Array.isArray(q.options) || q.options.length < 2) {
       return {
         ok: false,
         error: "invalid_options",
-        message: `Question ${i + 1} must have at least 2 options.`,
+        message: t("quizzes.save.options", { n: i + 1 }),
       };
     }
     if (
@@ -111,7 +115,7 @@ export async function saveQuizSchema(
       return {
         ok: false,
         error: "invalid_correct_index",
-        message: `Question ${i + 1}'s correctIndex must be 0..${q.options.length - 1}.`,
+        message: t("quizzes.save.correctIndex", { n: i + 1, max: q.options.length - 1 }),
       };
     }
   }
@@ -123,7 +127,7 @@ export async function saveQuizSchema(
     .where(eq(quizzes.id, quizId))
     .limit(1);
   if (!existing) {
-    return { ok: false, error: "not_found" };
+    return { ok: false, error: "not_found", message: t("quizzes.save.notFound") };
   }
 
   // Emptying a quiz on purpose is still possible -- until learners have sat
@@ -138,8 +142,7 @@ export async function saveQuizSchema(
       return {
         ok: false,
         error: "questions_in_use",
-        message:
-          'Learners have already submitted this quiz, so its questions cannot all be removed. Set "active": false to take it offline.',
+        message: t("quizzes.save.inUse"),
       };
     }
   }
@@ -178,8 +181,7 @@ export async function saveQuizSchema(
       return {
         ok: false,
         error: "invalid_time_limit",
-        message:
-          "timeLimitSeconds must be null (untimed) or an integer between 60 (1 min) and 7200 (2 h).",
+        message: t("quizzes.save.timeLimit"),
       };
     }
     updateSet.timeLimitSeconds = parsed.timeLimitSeconds;
@@ -196,7 +198,7 @@ export async function saveQuizSchema(
       return {
         ok: false,
         error: "invalid_max_attempts",
-        message: "maxAttempts must be null (unlimited) or a whole number between 1 and 20.",
+        message: t("quizzes.save.maxAttempts"),
       };
     }
     updateSet.maxAttempts = parsed.maxAttempts;
@@ -219,7 +221,7 @@ export async function saveQuizSchema(
       return {
         ok: false,
         error: "invalid_rtt_subject",
-        message: "rttSubjectId must be the id of an existing RTT subject.",
+        message: t("quizzes.save.rttSubject"),
       };
     }
     updateSet.rttSubjectId = subject.id;

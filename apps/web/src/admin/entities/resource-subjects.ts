@@ -4,13 +4,12 @@ import type { AdminEntity } from "../types";
 
 export const resourceSubjectsEntity: AdminEntity = {
   slug: "resource-subjects",
-  label: "Resource ↔ Subject links",
   table: resourceSubjects,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "resourceId", label: "Resource" },
-    { key: "subjectId", label: "Subject" },
+    { key: "resourceId" },
+    { key: "subjectId" },
   ],
   formSchema: z.object({
     resourceId: z.string().uuid(),

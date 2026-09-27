@@ -41,6 +41,7 @@ import {
   useTransition,
   type ReactNode,
 } from "react";
+import { useTranslations } from "next-intl";
 import { bulkDeleteAction } from "./actions";
 
 type Ctx = {
@@ -111,13 +112,14 @@ export function BulkSelectionProvider({
 /** Row checkbox (rendered in the leftmost <td> of every body row). */
 export function BulkRowCheckbox({ rowId }: { rowId: string }) {
   const { selected, toggle } = useSelectedRows();
+  const t = useTranslations("adminData.client");
   const checked = selected.has(rowId);
   return (
     <input
       type="checkbox"
       checked={checked}
       onChange={() => toggle(rowId)}
-      aria-label={`Select row ${rowId.slice(0, 8)}`}
+      aria-label={t("bulk.selectRow", { id: rowId.slice(0, 8) })}
       data-bulk-row-checkbox="true"
       className="h-4 w-4 rounded border-neutral-300"
     />
@@ -127,6 +129,7 @@ export function BulkRowCheckbox({ rowId }: { rowId: string }) {
 /** Header checkbox (rendered in the thead leftmost <th>). */
 export function BulkSelectAllCheckbox() {
   const { selected, allRowIds, setMany } = useSelectedRows();
+  const t = useTranslations("adminData.client");
   const total = allRowIds.length;
   const selectedCount = allRowIds.reduce(
     (n, id) => (selected.has(id) ? n + 1 : n),
@@ -142,7 +145,7 @@ export function BulkSelectAllCheckbox() {
         if (el) el.indeterminate = someOn;
       }}
       onChange={() => setMany(allRowIds, !allOn)}
-      aria-label={allOn ? "Deselect all rows" : "Select all rows"}
+      aria-label={allOn ? t("bulk.deselectAll") : t("bulk.selectAll")}
       data-bulk-select-all="true"
       className="h-4 w-4 rounded border-neutral-300"
     />
@@ -157,15 +160,13 @@ export function BulkSelectAllCheckbox() {
 export function BulkDeleteToolbar({ entitySlug }: { entitySlug: string }) {
   const { selected, clear } = useSelectedRows();
   const [pending, startTransition] = useTransition();
+  const t = useTranslations("adminData.client");
   const count = selected.size;
 
   if (count === 0) return null;
 
   const handleDelete = () => {
-    const message =
-      count === 1
-        ? `Delete 1 selected row? This cannot be undone.`
-        : `Delete ${count} selected rows? This cannot be undone.`;
+    const message = t("bulk.confirm", { count });
     if (typeof window !== "undefined" && !window.confirm(message)) {
       return;
     }
@@ -185,18 +186,16 @@ export function BulkDeleteToolbar({ entitySlug }: { entitySlug: string }) {
       className="sticky top-0 z-10 mb-2 flex items-center justify-between rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm"
       data-bulk-toolbar="true"
       role="region"
-      aria-label="Bulk actions"
+      aria-label={t("bulk.region")}
     >
-      <span className="text-red-900">
-        {count} row{count === 1 ? "" : "s"} selected
-      </span>
+      <span className="text-red-900">{t("bulk.selected", { count })}</span>
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={clear}
           className="text-xs text-red-900 hover:underline"
         >
-          Clear selection
+          {t("bulk.clear")}
         </button>
         <button
           type="button"
@@ -205,7 +204,7 @@ export function BulkDeleteToolbar({ entitySlug }: { entitySlug: string }) {
           data-bulk-delete-button="true"
           className="rounded-md bg-red-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
         >
-          {pending ? "Deleting…" : `Delete ${count} selected`}
+          {pending ? t("bulk.deleting") : t("bulk.delete", { count })}
         </button>
       </div>
     </div>

@@ -4,16 +4,15 @@ import type { AdminEntity } from "../types";
 
 export const resourcesEntity: AdminEntity = {
   slug: "resources",
-  label: "Resources (reading material)",
   table: resources,
   readRoles: ["teacher", "observer", "mentor", "programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "name", label: "Name" },
-    { key: "kind", label: "Kind" },
-    { key: "owner", label: "Owner" },
-    { key: "pages", label: "Pages" },
-    { key: "active", label: "Active" },
+    { key: "name" },
+    { key: "kind" },
+    { key: "owner" },
+    { key: "pages" },
+    { key: "active" },
   ],
   formSchema: z.object({
     name: z.string().min(2).max(240),
@@ -25,7 +24,7 @@ export const resourcesEntity: AdminEntity = {
     tags: z.array(z.string()).default([]),
     active: z.boolean().default(true),
   }).refine((v) => Boolean(v.fileKey) || Boolean(v.externalUrl), {
-    message: "resource must have either a file_key or an external_url",
+    message: "validation.resourceSource",
     path: ["fileKey"],
   }),
   formFields: ["name", "kind", "owner", "pages", "fileKey", "externalUrl", "tags", "active"],

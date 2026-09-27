@@ -7,17 +7,16 @@ import type { AdminEntity } from "../types";
 // Distinct from the curriculum-side `subjects` table that ships in spec 014.
 export const rttSubjectsEntity: AdminEntity = {
   slug: "rtt-subjects",
-  label: "RTT Subjects",
   table: rttSubjects,
   readRoles: ["programme_admin", "super_admin", "mentor", "observer"],
   mutateRoles: ["programme_admin", "super_admin"],
   displayColumns: [
-    { key: "name", label: "Name" },
-    { key: "code", label: "Code" },
-    { key: "termId", label: "Term" },
-    { key: "districtId", label: "District" },
-    { key: "zoneId", label: "Zone" },
-    { key: "active", label: "Active" },
+    { key: "name" },
+    { key: "code" },
+    { key: "termId" },
+    { key: "districtId" },
+    { key: "zoneId" },
+    { key: "active" },
   ],
   // WHERE the subject is taught (migration 0038; lib/rtt/scope.ts): neither
   // for the whole programme, a district for all its zones, or one zone. Not
@@ -34,12 +33,10 @@ export const rttSubjectsEntity: AdminEntity = {
     })
     .refine((v) => !(v.districtId && v.zoneId), {
       path: ["zoneId"],
-      message: "Choose a district or a zone, not both: a zone is already in its district.",
+      message: "validation.districtOrZone",
     }),
+  // The district and zone inputs carry a line of guidance each:
+  // adminData.entities.rtt-subjects.help (admin/labels.ts).
   formFields: ["name", "code", "termId", "districtId", "zoneId", "active"],
-  fields: {
-    districtId: { help: "Leave district and zone empty for a subject taught across the whole programme." },
-    zoneId: { help: "Or one zone only. Teachers see the subjects of their own district and zone." },
-  },
   describeRow: (r) => `rtt-subject:${r.name ?? r.id}`,
 };

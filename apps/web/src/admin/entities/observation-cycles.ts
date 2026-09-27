@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { and, eq, isNull } from "drizzle-orm";
 import { observationCycles, users } from "@gml/db/schema";
-import type { AdminDb, AdminEntity } from "../types";
+import type { AdminDb, AdminEntity, AdminMessage } from "../types";
 
 /**
  * The observer must be a live observer account -- the rule
@@ -19,7 +19,7 @@ async function liveObserver(
   db: AdminDb,
   row: Record<string, unknown>,
   before?: Record<string, unknown>,
-): Promise<Record<string, string> | null> {
+): Promise<Record<string, AdminMessage> | null> {
   const id = row.observerId;
   if (typeof id !== "string") return null; // zod already required it
   if (before && id === before.observerId) return null;
@@ -28,7 +28,7 @@ async function liveObserver(
     .from(users)
     .where(and(eq(users.id, id), eq(users.role, "observer"), eq(users.active, true), isNull(users.deletedAt)))
     .limit(1);
-  return found ? null : { observerId: "must be an active observer account" };
+  return found ? null : { observerId: { key: "validation.activeObserver" } };
 }
 
 /**
@@ -49,25 +49,26 @@ async function liveObserver(
  *
  * Code, schedule, subject and topic stay editable, and every change is
  * audited with its previous value.
+ *
+ * The refusal names the stage and the locked field, in the viewer's language
+ * (adminData.guard.cycleUndeletable / cycleFieldLocked).
  */
 const OBSERVER_FIXED_FROM: ReadonlySet<unknown> = new Set(["observed", "post_submitted", "complete"]);
-const LOCKED_NOUN = { teacherId: "teacher", kind: "kind", observerId: "observer" } as const;
 
 function lockAfterNomination(
   op: "update" | "delete",
   before: Record<string, unknown>,
   next?: Record<string, unknown>,
-): string | null {
+): AdminMessage | null {
   if (before.status === "nominated") return null;
-  if (op === "delete") {
-    return `This cycle is at stage "${String(before.status)}" and has work recorded under it; it cannot be deleted from the grid.`;
-  }
+  const stage = String(before.status);
+  if (op === "delete") return { key: "guard.cycleUndeletable", values: { stage } };
   const locked = OBSERVER_FIXED_FROM.has(before.status)
     ? (["teacherId", "kind", "observerId"] as const)
     : (["teacherId", "kind"] as const);
   for (const field of locked) {
     if (next && field in next && next[field] !== before[field]) {
-      return `This cycle is at stage "${String(before.status)}": its ${LOCKED_NOUN[field]} can no longer be changed.`;
+      return { key: "guard.cycleFieldLocked", values: { stage, field } };
     }
   }
   return null;
@@ -87,7 +88,6 @@ function lockAfterNomination(
 // Test: tests/behaviour/admin-entities.test.ts.
 export const observationCyclesEntity: AdminEntity = {
   slug: "observation-cycles",
-  label: "Observation Cycles",
   table: observationCycles,
   readRoles: ["programme_admin", "super_admin"],
   mutateRoles: ["programme_admin", "super_admin"],
@@ -98,13 +98,13 @@ export const observationCyclesEntity: AdminEntity = {
   // Test: tests/behaviour/admin-cycle-lock.test.ts.
   guardMutation: lockAfterNomination,
   displayColumns: [
-    { key: "code", label: "Code" },
-    { key: "teacherId", label: "Teacher" },
-    { key: "observerId", label: "Observer (user)" },
-    { key: "kind", label: "Kind" },
-    { key: "scheduledAt", label: "Scheduled" },
-    { key: "topic", label: "Topic" },
-    { key: "status", label: "Stage" },
+    { key: "code" },
+    { key: "teacherId" },
+    { key: "observerId" },
+    { key: "kind" },
+    { key: "scheduledAt" },
+    { key: "topic" },
+    { key: "status" },
   ],
   formSchema: z.object({
     // NOT NULL + UNIQUE varchar(48). Without the guard a long value comes back
@@ -135,8 +135,7 @@ export const observationCyclesEntity: AdminEntity = {
   }),
   formFields: ["code", "teacherId", "observerId", "kind", "scheduledAt", "subjectId", "topic"],
   fields: {
-    observerId: { label: "Observer", userRoles: ["observer"] },
-    subjectId: { label: "Subject" },
+    observerId: { userRoles: ["observer"] },
   },
   describeRow: (r) => `observation-cycle:${r.code ?? r.id}`,
 };

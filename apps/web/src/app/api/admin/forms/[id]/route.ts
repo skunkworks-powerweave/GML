@@ -28,6 +28,9 @@ import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/ids";
 import { FormSchemaSchema } from "@/lib/forms/schema";
+import { getTranslations } from "next-intl/server";
+import { issueMessage } from "@/admin/issues";
+import type { Translate } from "@/admin/labels";
 
 export const dynamic = "force-dynamic";
 
@@ -115,16 +118,21 @@ export async function PUT(
   // lib/forms/schema.ts.
   const checked = FormSchemaSchema.safeParse(parsed);
   if (!checked.success) {
+    // In the administrator's language: the frame from adminData.forms.save,
+    // each issue through the same translator the data grid uses.
+    const t = (await getTranslations("adminData")) as unknown as Translate;
     const issues = checked.error.issues;
     const listed = issues
       .slice(0, 3)
-      .map((i) => `${i.path.length > 0 ? i.path.join(".") : "(the whole definition)"}: ${i.message}`)
+      .map((i) => `${i.path.length > 0 ? i.path.join(".") : t("forms.save.whole")}: ${issueMessage(t, i)}`)
       .join("; ");
-    const more = issues.length > 3 ? ` (and ${issues.length - 3} more)` : "";
     return NextResponse.json(
       {
         error: "invalid_schema",
-        message: `The form definition was not saved: ${listed}${more}.`,
+        message:
+          issues.length > 3
+            ? t("forms.save.notSavedMore", { list: listed, count: issues.length - 3 })
+            : t("forms.save.notSaved", { list: listed }),
         issues: issues.slice(0, 20),
       },
       { status: 400 },
