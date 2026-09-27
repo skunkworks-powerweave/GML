@@ -224,8 +224,8 @@ const baselineMentee: FormSchema = {
 
 // ---- PROGRESS Q1 (mentee) — 8 fields -------------------------------------
 const progress1Mentee: FormSchema = {
-  title: "Quarter 1 progress — Teacher reflection",
-  titleHindi: "तिमाही 1 प्रगति — शिक्षक चिंतन",
+  title: "Progress check 1 — Teacher reflection",
+  titleHindi: "प्रगति जाँच 1 — शिक्षक चिंतन",
   audience: "mentee",
   intro: "Filled at the end of Quarter 1. Compare how you feel now to the baseline form.",
   introHindi: "तिमाही 1 के अंत में भरें। आधार-रेखा फ़ॉर्म से तुलना करें।",
@@ -293,8 +293,8 @@ const progress1Mentee: FormSchema = {
 
 // ---- PROGRESS Q2 (mentee) — version "2" — 9 fields -----------------------
 const progress2Mentee: FormSchema = {
-  title: "Quarter 2 progress — Teacher reflection",
-  titleHindi: "तिमाही 2 प्रगति — शिक्षक चिंतन",
+  title: "Progress check 2 — Teacher reflection",
+  titleHindi: "प्रगति जाँच 2 — शिक्षक चिंतन",
   audience: "mentee",
   intro: "Filled at the end of Quarter 2. Halfway point — be honest about what's not working.",
   introHindi: "तिमाही 2 के अंत में भरें। आधे रास्ते पर — जो काम नहीं कर रहा उसके बारे में ईमानदार रहें।",

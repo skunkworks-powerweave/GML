@@ -66,6 +66,7 @@ import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { rateLimit, rateLimitRefund } from "@/lib/rate-limit";
 import { clientIp } from "@/lib/request-ip";
+import { mustChangePassword } from "@/lib/password-policy";
 
 export type SessionUser = {
   id: string;
@@ -73,6 +74,12 @@ export type SessionUser = {
   name: string | null;
   image: string | null;
   role: RoleName;
+  /**
+   * An administrator set this password and it must be replaced first (the
+   * proxy sends every page to /settings meanwhile). Read by Settings so its
+   * notice does not depend on the ?password=required the redirect carries.
+   */
+  mustChangePassword?: boolean;
 };
 
 export type Session = { user: SessionUser };
@@ -134,6 +141,7 @@ export async function auth(): Promise<Session | null> {
       name: orNull(claims.user_name),
       image: orNull(claims.user_image),
       role: effectiveRole,
+      mustChangePassword: mustChangePassword(claims.app_metadata),
     },
   };
 }

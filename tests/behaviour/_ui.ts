@@ -135,7 +135,7 @@ type RequestState = {
   cookies: Record<string, string>;
   headers: Record<string, string>;
   /** What the @/auth stub's auth() returns; null means signed out. */
-  session?: { user: { id: string; email: string | null; name: string | null; image: string | null; role: string } } | null;
+  session?: { user: { id: string; email: string | null; name: string | null; image: string | null; role: string; mustChangePassword?: boolean } } | null;
   /** Paths passed to the next/cache stub's revalidatePath(). */
   revalidated?: string[];
   /** What the (opt-in) @/lib/supabase/server stub's supabaseAdmin() returns. */

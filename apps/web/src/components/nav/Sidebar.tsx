@@ -169,6 +169,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                     alignItems: "center",
                     gap: 9,
                     padding: "6px 8px",
+                    position: "relative",
                     borderRadius: "var(--r-2)",
                     color: "var(--ink-2)",
                     background: "transparent",

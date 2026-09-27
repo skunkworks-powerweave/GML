@@ -19,10 +19,13 @@ const field: React.CSSProperties = {
   width: "100%",
 };
 
-export function ChangePasswordForm() {
-  // proxy.ts sends someone here with ?password=required while they are still
-  // on a password an administrator set; the form opens and says why.
-  const required = useSearchParams()?.get("password") === "required";
+export function ChangePasswordForm({ required: requiredBySession = false }: { required?: boolean }) {
+  // Someone still on a password an administrator set: the form opens and says
+  // why. Settings passes it from the session (auth()), because straight after
+  // sign-in the proxy's redirect happens inside a client navigation that can
+  // render this page without the ?password=required it carries -- a new user
+  // then saw Settings with no reason given and the form closed.
+  const required = useSearchParams()?.get("password") === "required" || requiredBySession;
   const [open, setOpen] = useState(required);
   const [state, formAction, pending] = useActionState<ChangePasswordState | undefined, FormData>(
     changePasswordAction,

@@ -34,6 +34,8 @@ type Props = {
   roleLabel: string;
   /** chip variant class — e.g. "chip-saffron", "chip-indigo". Empty string falls back to neutral .chip. */
   roleChipKind: string;
+  /** The session's password must be replaced before anything else. */
+  passwordRequired?: boolean;
 };
 
 // Compute the subset of `current` whose values differ from `baseline`. Keeps
@@ -52,7 +54,7 @@ function computeDelta(baseline: SettingsFormValues, current: SettingsFormValues)
 /** Preferences the layouts render (lang, strings, body classes): a save must re-render them. */
 const RENDERED_BY_LAYOUT: ReadonlyArray<keyof SettingsFormValues> = ["uiLanguage", "highContrast", "reducedMotion"];
 
-export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props) {
+export function SettingsForm({ initial, email, roleLabel, roleChipKind, passwordRequired = false }: Props) {
   const router = useRouter();
   const [values, setValues] = useState<SettingsFormValues>(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -275,7 +277,7 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind }: Props)
               existed. With self-service reset off until IT configures SMTP,
               this is the ONLY way a user can change the password an
               administrator chose for them. */}
-          <ChangePasswordForm />
+          <ChangePasswordForm required={passwordRequired} />
         </KvRow>
         <KvRow label="Replay tour">
           <ReplayTourButton />
