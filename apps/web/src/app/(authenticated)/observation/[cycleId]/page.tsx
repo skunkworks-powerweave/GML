@@ -9,6 +9,7 @@
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { auth } from "@/auth";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
@@ -20,7 +21,7 @@ import { teachers, subjects, observationEvidence } from "@gml/db/schema";
 import { UploadProgress } from "@/components/video/UploadProgress";
 import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { Fragment } from "react";
-import { loadSubmittedForms, STAGE_FORMS, stageFieldLabel, type StageKind } from "@/lib/observation/forms";
+import { loadSubmittedForms, STAGE_FORMS, stageFieldName, type StageKind } from "@/lib/observation/forms";
 import { parseNotes } from "@/lib/observation/notes";
 import { SubmittedForms } from "./SubmittedForms";
 import { DraftTextarea } from "./DraftTextarea";
@@ -30,6 +31,7 @@ import { getDeviceType } from "@/lib/device";
 import { whatsappPhoneForUsers } from "@/lib/env";
 import { lookupOwn } from "@/lib/lookup";
 import { MobileDetailFrame } from "@/components/shells";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import {
   submitPreFormAction,
   submitObserverFormAction,
@@ -40,15 +42,35 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Observation cycle" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("observation");
+  return { title: t("cycle.metaTitle") };
+}
 
+// The stepper's steps, in order; each one's words are cycle.stages.<id>.
 const CYCLE_STAGES = [
-  { id: "nominated", label: "Nominated" },
-  { id: "pre_submitted", label: "Pre-form" },
-  { id: "observed", label: "Observed" },
-  { id: "post_submitted", label: "Post-form" },
-  { id: "complete", label: "Complete" },
-];
+  { id: "nominated" },
+  { id: "pre_submitted" },
+  { id: "observed" },
+  { id: "post_submitted" },
+  { id: "complete" },
+] as const;
+
+// Every ?error= ./actions.ts can issue, and how loudly each is shown; the
+// words are cycle.errors.<code>. invalid_form is worded below, with the
+// question it names.
+const CYCLE_ERRORS: Record<string, "warn" | "error"> = {
+  invalid_form: "warn",
+  invalid_transition: "error",
+  empty_note: "warn",
+  note_too_long: "warn",
+  submit_failed: "error",
+  cycle_locked: "warn",
+  invalid_cycle: "error",
+  cycle_not_found: "error",
+};
+
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
 
 export default async function CycleDetailPage({
   params,
@@ -59,45 +81,31 @@ export default async function CycleDetailPage({
 }) {
   const { cycleId } = await params;
   const sp = (await searchParams) ?? {};
+  const t = await getTranslations("observation");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
   // A repeated ?error=a&error=b arrives as an array, which has no trim().
   const error = typeof sp.error === "string" ? sp.error.trim() : "";
   // Only a known question's label is echoed back, never the raw parameter.
-  const invalidField = stageFieldLabel(typeof sp.field === "string" ? sp.field.trim() : "");
+  const invalidField = stageFieldName(typeof sp.field === "string" ? sp.field.trim() : "");
+  // The limit is stated: "too long" told nobody how long was allowed.
+  const max = MAX_TEXT_LENGTH.toLocaleString(intl);
 
-  const CYCLE_ERRORS: Record<string, { message: string; tone: "warn" | "error" }> = {
-    invalid_form: {
-      // The limit is stated: "too long" told nobody how long was allowed.
-      message: `${invalidField ? `"${invalidField}"` : "An answer"} was blank or longer than ${MAX_TEXT_LENGTH.toLocaleString("en-IN")} characters, so nothing was recorded and the cycle has not moved on. Please correct it and submit again.`,
-      tone: "warn",
-    },
-    invalid_transition: {
-      message:
-        "That action can't be performed in the cycle's current status. The page has been refreshed.",
-      tone: "error",
-    },
-    empty_note: { message: "Note text can't be empty.", tone: "warn" },
-    note_too_long: {
-      message: `A note can be at most ${MAX_TEXT_LENGTH.toLocaleString("en-IN")} characters, so this one was not added. Please shorten it and add it again.`,
-      tone: "warn",
-    },
-    submit_failed: {
-      message:
-        "Your answers could not be saved and nothing was recorded. Please try submitting the form again.",
-      tone: "error",
-    },
-    cycle_locked: {
-      message: "This cycle has been signed off. Its record is closed, so nothing more can be added to it.",
-      tone: "warn",
-    },
-    invalid_cycle: { message: "That cycle reference was not valid.", tone: "error" },
-    cycle_not_found: { message: "That cycle no longer exists.", tone: "error" },
-  };
-  const cycleError = error
-    ? (lookupOwn(CYCLE_ERRORS, error) ?? {
-        message: "That action could not be completed. Please try again.",
-        tone: "error" as const,
-      })
-    : null;
+  const tone = error ? lookupOwn(CYCLE_ERRORS, error) : undefined;
+  const cycleError = !error
+    ? null
+    : !tone
+      ? { message: t("cycle.errors.unknown"), tone: "error" as const }
+      : {
+          message:
+            error === "invalid_form"
+              ? invalidField
+                ? t("cycle.errors.invalidFormField", { field: t(`fields.${invalidField}.label`), max })
+                : t("cycle.errors.invalidForm", { max })
+              : error === "note_too_long"
+                ? t("cycle.errors.note_too_long", { max })
+                : t(`cycle.errors.${error}`),
+          tone,
+        };
 
   // OWNERSHIP GATE. This page did not call auth() at all -- it was login-gated
   // only by the proxy policy and the (authenticated) layout, then loaded the
@@ -124,7 +132,10 @@ export default async function CycleDetailPage({
   // shown to nobody, so the observer never read the lesson plan, the teacher
   // never read the rubric, and sign-off happened blind. Seed templates in the
   // same table are dropped here rather than counted as submissions.
-  const forms = await loadSubmittedForms(db, cycleId, teacher?.userId ?? null);
+  const forms = await loadSubmittedForms(db, cycleId, teacher?.userId ?? null, {
+    title: (kind) => t(`stages.${kind}.title`),
+    field: (name) => t(`fields.${name}.label`),
+  });
   const evidence = await db.select().from(observationEvidence).where(eq(observationEvidence.cycleId, cycleId));
   const notes = parseNotes(cycle.remark);
   // What each textarea keeps if a submit is refused, keyed to this viewer and
@@ -199,13 +210,13 @@ export default async function CycleDetailPage({
   // sticky-bottom slot when active (so it stays reachable on long scrolls);
   // desktop continues to render the inline header CTA unchanged.
   const device = await getDeviceType();
-  const mobileTitle = teacher?.fullName ?? cycle.code ?? "Cycle";
+  const mobileTitle = teacher?.fullName ?? cycle.code ?? t("cycle.mobileTitle");
   const stickyAction =
     canSignOff ? (
       <form action={signOffCycleAction}>
         <input type="hidden" name="cycleId" value={cycleId} />
         <SubmitButton className="btn btn-primary btn-sm">
-          Sign off cycle
+          {t("cycle.signOff")}
         </SubmitButton>
       </form>
     ) : undefined;
@@ -215,12 +226,14 @@ export default async function CycleDetailPage({
       <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
         <div>
           <Link href="/observation" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
-            ← All cycles
+            {t("allCycles")}
           </Link>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
             <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>{cycle.code}</span>
-            <span className={kindChipClass}>{cycle.kind}</span>
-            <span className={statusChipClass}>{cycle.status.replace(/_/g, " ")}</span>
+            <span className={kindChipClass}>{t.has(`kindChip.${cycle.kind}`) ? t(`kindChip.${cycle.kind}`) : cycle.kind}</span>
+            <span className={statusChipClass}>
+              {t.has(`statusChip.${cycle.status}`) ? t(`statusChip.${cycle.status}`) : cycle.status.replace(/_/g, " ")}
+            </span>
           </div>
           <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
             {teacher?.fullName ?? "—"}
@@ -236,7 +249,7 @@ export default async function CycleDetailPage({
             {cycle.topic ? `${cycle.topic}` : null}
             {(subject || cycle.topic) && cycle.scheduledAt ? " · " : null}
             {cycle.scheduledAt
-              ? new Date(cycle.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
+              ? new Date(cycle.scheduledAt).toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" })
               : null}
           </p>
         </div>
@@ -244,7 +257,7 @@ export default async function CycleDetailPage({
           <form action={signOffCycleAction}>
             <input type="hidden" name="cycleId" value={cycleId} />
             <SubmitButton className="btn btn-primary">
-              Sign off cycle
+              {t("cycle.signOff")}
             </SubmitButton>
           </form>
         ) : null}
@@ -294,7 +307,7 @@ export default async function CycleDetailPage({
                 <span key={stage.id} style={{ display: "contents" }}>
                   <div className={stepClass}>
                     <span className="num">{isPast ? "✓" : i + 1}</span>
-                    <span>{stage.label}</span>
+                    <span>{t(`cycle.stages.${stage.id}`)}</span>
                   </div>
                   {i < CYCLE_STAGES.length - 1 ? <span className="sep">·····</span> : null}
                 </span>
@@ -310,17 +323,17 @@ export default async function CycleDetailPage({
           teachers use from their phones, was pushed off screen. */}
       <section className="grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <article className="card card-hi" style={{ padding: 16 }}>
-          <div className="label" style={{ marginBottom: 6 }}>Forms · {forms.length}</div>
-          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Pre &amp; post-observation</h2>
+          <div className="label" style={{ marginBottom: 6 }}>{t("cycle.formsLabel", { count: forms.length })}</div>
+          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>{t("cycle.formsTitle")}</h2>
           <SubmittedForms forms={forms} />
 
           {/* CTA: Submit pre-form */}
           {canSubmitPre ? (
             <form action={submitPreFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <StageFields kind="pre" drafts={drafts} />
+              <StageFields kind="pre" drafts={drafts} t={t} />
               <SubmitButton className="btn btn-primary btn-sm">
-                Submit pre-form
+                {t("cycle.submitPre")}
               </SubmitButton>
             </form>
           ) : null}
@@ -329,9 +342,9 @@ export default async function CycleDetailPage({
           {canSubmitObserver ? (
             <form action={submitObserverFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <StageFields kind="observer" drafts={drafts} />
+              <StageFields kind="observer" drafts={drafts} t={t} />
               <SubmitButton className="btn btn-primary btn-sm">
-                Submit observer-form
+                {t("cycle.submitObserver")}
               </SubmitButton>
             </form>
           ) : null}
@@ -340,29 +353,28 @@ export default async function CycleDetailPage({
           {canSubmitPost ? (
             <form action={submitPostFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
-              <StageFields kind="post" drafts={drafts} />
+              <StageFields kind="post" drafts={drafts} t={t} />
               <SubmitButton className="btn btn-primary btn-sm">
-                Submit post-form
+                {t("cycle.submitPost")}
               </SubmitButton>
             </form>
           ) : null}
         </article>
 
         <article className="card card-hi" style={{ padding: 16 }}>
-          <div className="label" style={{ marginBottom: 6 }}>Evidence · {evidence.length}</div>
-          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>Lesson video</h2>
+          <div className="label" style={{ marginBottom: 6 }}>{t("cycle.evidenceLabel", { count: evidence.length })}</div>
+          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>{t("cycle.evidenceTitle")}</h2>
           {evidence.length === 0 ? (
             <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
-              {locked ? (
-                "No video evidence was linked to this cycle."
-              ) : whatsappPhone ? (
-                <>
-                  No video evidence linked yet. The teacher uploads it below, or sends it by WhatsApp with the caption{" "}
-                  <span className="kbd">OBS-{cycle.code.replace(/^OBS-/, "")}</span>.
-                </>
-              ) : (
-                "No video evidence linked yet. The teacher uploads it below."
-              )}
+              {locked
+                ? t("cycle.evidenceNoneLocked")
+                : whatsappPhone
+                  ? t.rich("cycle.evidenceNoneWhatsapp", {
+                      // i18n-ignore: the caption the WhatsApp webhook links (OBS-<code>), a code, not words
+                      caption: `OBS-${cycle.code.replace(/^OBS-/, "")}`,
+                      kbd: (chunks) => <span className="kbd">{chunks}</span>,
+                    })
+                  : t("cycle.evidenceNone")}
             </p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -375,10 +387,10 @@ export default async function CycleDetailPage({
                   <div style={{ fontWeight: 500 }}>
                     {e.videoSubmissionId ? (
                       <Link href={`/videos/${e.videoSubmissionId}`}>
-                        Open video →
+                        {t("cycle.openVideo")}
                       </Link>
                     ) : (
-                      <span style={{ color: "var(--ink-3)" }}>(no video yet)</span>
+                      <span style={{ color: "var(--ink-3)" }}>{t("cycle.noVideoYet")}</span>
                     )}
                   </div>
                   {e.caption ? <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>{e.caption}</div> : null}
@@ -391,7 +403,7 @@ export default async function CycleDetailPage({
           <div style={{ marginTop: 12 }}>
             {locked ? (
               <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                Signed off — this record is closed and accepts no further evidence.
+                {t("cycle.lockedEvidence")}
               </p>
             ) : (
               <>
@@ -402,7 +414,7 @@ export default async function CycleDetailPage({
                   href={uploadHref({ contextType: "observation_cycle", contextId: cycleId })}
                   style={{ display: "inline-block", marginTop: 8, fontSize: 12, color: "var(--indigo)" }}
                 >
-                  {whatsappPhone ? "Record on a phone, or send by WhatsApp →" : "Record on a phone →"}
+                  {whatsappPhone ? t("cycle.recordOrWhatsapp") : t("cycle.record")}
                 </Link>
               </>
             )}
@@ -421,10 +433,10 @@ export default async function CycleDetailPage({
           the fix is to make the UI honest about that rather than to make the
           action destructive. */}
       <section className="card card-hi" style={{ marginTop: 18, padding: 16 }}>
-        <div className="label" style={{ marginBottom: 6 }}>Remark</div>
+        <div className="label" style={{ marginBottom: 6 }}>{t("cycle.remarkLabel")}</div>
         {/* "Notes", not "Mentor notes": observers and administrators write
             here too, and each entry now names its author and role. */}
-        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>Notes</h2>
+        <h2 className="serif" style={{ fontSize: 16, marginBottom: 8 }}>{t("cycle.notesTitle")}</h2>
         {notes.length > 0 ? (
           // ENTRY BY ENTRY, not the column printed whole. Printed pre-wrap, a
           // note holding a blank line and a line shaped like an entry header
@@ -434,13 +446,14 @@ export default async function CycleDetailPage({
             {notes.map((n, i) => (
               <li key={i} data-note-entry="" style={{ borderLeft: "2px solid var(--line)", paddingLeft: 10 }}>
                 <div data-note-author="" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                  {n.author ? (
-                    <>
-                      <strong style={{ color: "var(--ink)" }}>{n.author}</strong> ({n.role})
-                    </>
-                  ) : (
-                    "Earlier note"
-                  )}
+                  {n.author
+                    ? t.rich("cycle.noteAuthor", {
+                        name: n.author,
+                        // The role the entry was written under, as a word.
+                        role: n.role && t.has(`cycle.noteRole.${n.role}`) ? t(`cycle.noteRole.${n.role}`) : (n.role ?? ""),
+                        author: (chunks) => <strong style={{ color: "var(--ink)" }}>{chunks}</strong>,
+                      })
+                    : t("cycle.earlierNote")}
                   {n.at ? <span className="mono">{` · ${n.at} UTC`}</span> : null}
                 </div>
                 {/* pre-wrap keeps the line breaks inside the note. */}
@@ -454,7 +467,7 @@ export default async function CycleDetailPage({
             ))}
           </ol>
         ) : (
-          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>No notes yet.</p>
+          <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>{t("cycle.noNotes")}</p>
         )}
         {canAddNote ? (
         <form action={addNoteAction} style={{ display: "grid", gap: 8 }}>
@@ -469,13 +482,13 @@ export default async function CycleDetailPage({
             maxLength={MAX_TEXT_LENGTH}
             className="text"
             // Named: a placeholder is not a label, and vanishes as you type.
-            aria-label="New note"
-            placeholder="Add a note. Existing notes are kept above."
+            aria-label={t("cycle.newNoteLabel")}
+            placeholder={t("cycle.newNotePlaceholder")}
             style={{ fontSize: 13 }}
           />
           <div>
             <SubmitButton className="btn btn-sm">
-              Add note
+              {t("cycle.addNote")}
             </SubmitButton>
           </div>
         </form>
@@ -503,10 +516,13 @@ export default async function CycleDetailPage({
 function StageFields({
   kind,
   drafts,
+  t,
 }: {
   kind: StageKind;
   /** version: the cycle's status (see `drafts` above). */
   drafts: { userId: string; cycleId: string; version: string };
+  /** The page's "observation" translator: each question's words. */
+  t: Translate;
 }) {
   return (
     <>
@@ -515,7 +531,9 @@ function StageFields({
           {/* htmlFor/id: the label sat beside the box without naming it, so a
               screen reader announced only the placeholder, which is gone
               once anything is typed. */}
-          <label htmlFor={`cycle-${kind}-${f.name}`} className="label" style={{ fontSize: 11 }}>{f.label}</label>
+          <label htmlFor={`cycle-${kind}-${f.name}`} className="label" style={{ fontSize: 11 }}>
+            {t(`fields.${f.name}.label`)}
+          </label>
           <DraftTextarea
             id={`cycle-${kind}-${f.name}`}
             name={f.name}
@@ -525,7 +543,7 @@ function StageFields({
             required={f.required}
             maxLength={MAX_TEXT_LENGTH}
             className="text"
-            placeholder={f.placeholder}
+            placeholder={t(`fields.${f.name}.placeholder`)}
             style={{ fontSize: 13 }}
           />
         </Fragment>

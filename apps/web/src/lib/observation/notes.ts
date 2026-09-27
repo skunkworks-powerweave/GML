@@ -42,6 +42,7 @@ export type NoteEntry = {
  */
 export function formatNoteEntry(at: Date, author: string, role: string, note: string): string {
   const stamp = at.toISOString().slice(0, 16).replace("T", " ");
+  // i18n-ignore: stored in the note as its author's name (data, one language for every reader)
   const who = author.replace(/\s+/g, " ").trim() || "Unknown user";
   const body = note
     .replace(/\r\n?/g, "\n")

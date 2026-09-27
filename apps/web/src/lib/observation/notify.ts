@@ -17,11 +17,17 @@
 // unlocked the section. They now say only that there is a cycle; the entity
 // link opens it through the gate, which returns the reader to that cycle.
 //
-// Database as a parameter, no "server-only": tests/behaviour runs it.
+// IN EACH RECIPIENT'S LANGUAGE. The rows are written through notifyLocalized,
+// which renders the subject and body from the "observation" namespace
+// (notify.assigned / notify.complete) in the language each party saved: the
+// administrator who nominates in English leaves a Hindi-speaking teacher a
+// Hindi notification.
+//
+// Database as a parameter: tests/behaviour runs it.
 
 import { and, eq, isNotNull } from "drizzle-orm";
 import { mentorPairings, mentors, observationCycles, teachers } from "@gml/db/schema";
-import { notify } from "@gml/db/notify";
+import { notifyLocalized } from "../notify-localized";
 import type { Db } from "../visibility";
 
 /**
@@ -59,8 +65,8 @@ async function cycleParties(db: Db, cycleId: string) {
 
 /**
  * Tell a cycle's parties -- everyone but the person who acted -- that it was
- * assigned or has been signed off. Never throws (notify() logs a failure), so
- * a notification can never undo the action it reports.
+ * assigned or has been signed off. Never throws (notifyLocalized() logs a
+ * failure), so a notification can never undo the action it reports.
  */
 export async function notifyCycleParties(
   db: Db,
@@ -72,23 +78,16 @@ export async function notifyCycleParties(
     const cycle = await cycleParties(db, cycleId);
     if (!cycle) return 0;
     // Generic on purpose: see the header.
-    const subject =
-      event === "cycle.assigned"
-        ? "You have been added to an observation cycle"
-        : "An observation cycle you are part of has been signed off";
-    const body =
-      event === "cycle.assigned"
-        ? "Open it to see which cycle and when; the Observation section asks for its password first."
-        : "Its forms and notes stay on the cycle page in the Observation section.";
-    return await notify(
+    const key = event === "cycle.assigned" ? "assigned" : "complete";
+    return await notifyLocalized(
       db,
+      "observation",
       cycle.userIds.map((userId) => ({
         userId,
         kind: event,
-        subject,
-        body,
         entityType: "observation_cycle",
         entityId: cycleId,
+        text: (t) => ({ subject: t(`notify.${key}.subject`), body: t(`notify.${key}.body`) }),
       })),
       { excludeUserId: actorUserId },
     );

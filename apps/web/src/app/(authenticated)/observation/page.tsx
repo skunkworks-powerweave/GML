@@ -11,29 +11,26 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom, cycleVisibilityFilter } from "@/lib/authz";
-import { listCycles, parsePage, videoCell } from "@/lib/observation/list";
+import { listCycles, parsePage, videoCell, type VideoCell } from "@/lib/observation/list";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Observation cycles" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("observation");
+  return { title: t("list.metaTitle") };
+}
 
 const KIND_CHIP: Record<string, string> = {
   baseline: "",
   developmental: "chip-indigo",
   evaluative: "chip-saffron",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  nominated: "Nominated",
-  pre_submitted: "Pre submitted",
-  observed: "Observed",
-  post_submitted: "Post submitted",
-  complete: "Complete",
 };
 
 const CYCLE_STAGES = ["nominated", "pre_submitted", "observed", "post_submitted", "complete"] as const;
@@ -48,21 +45,10 @@ const STATUS_VALUES = new Set([
 
 const KIND_VALUES = new Set(["baseline", "developmental", "evaluative"]);
 
-const STATUS_TABS = [
-  { v: "all", l: "All" },
-  { v: "nominated", l: "Nominated" },
-  { v: "pre_submitted", l: "Pre-form in" },
-  { v: "observed", l: "Observed" },
-  { v: "post_submitted", l: "Post-form in" },
-  { v: "complete", l: "Complete" },
-];
+// The chips' words are list.statusTabs.<v> and list.kindTabs.<v>.
+const STATUS_TABS = ["all", ...CYCLE_STAGES] as const;
 
-const KIND_TABS = [
-  { v: "all", l: "All kinds" },
-  { v: "baseline", l: "Baseline" },
-  { v: "developmental", l: "Developmental" },
-  { v: "evaluative", l: "Evaluative" },
-];
+const KIND_TABS = ["all", "baseline", "developmental", "evaluative"] as const;
 
 type SearchParams = Promise<{ status?: string; kind?: string; page?: string }>;
 
@@ -83,6 +69,8 @@ export default async function ObservationListPage({
   searchParams: SearchParams;
 }) {
   const sp = await searchParams;
+  const t = await getTranslations("observation");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
   const statusFilter = STATUS_VALUES.has(sp.status ?? "") ? sp.status! : "all";
   const kindFilter = KIND_VALUES.has(sp.kind ?? "") ? sp.kind! : "all";
 
@@ -174,11 +162,10 @@ export default async function ObservationListPage({
       <div className="page-header">
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div className="label">Classroom observation</div>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Observation cycles</h1>
+            <div className="label">{t("sectionLabel")}</div>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("list.title")}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 6 }}>
-              A cycle has three steps: <b>Pre-form</b> from teacher → <b>Observation</b> (live or video) → <b>Post-debrief</b> with mentor.
-              Every step is time-stamped and signed.
+              {t.rich("list.intro", { b: (chunks) => <b>{chunks}</b> })}
             </p>
           </div>
           {canNominate ? (
@@ -187,7 +174,7 @@ export default async function ObservationListPage({
               className="btn btn-primary"
               style={{ textDecoration: "none", whiteSpace: "nowrap" }}
             >
-              Nominate cycle
+              {t("list.nominate")}
             </Link>
           ) : null}
         </div>
@@ -205,12 +192,12 @@ export default async function ObservationListPage({
           style={{ display: "flex", padding: 10, gap: 16, alignItems: "center", flexWrap: "wrap" }}
         >
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {STATUS_TABS.map((f) => {
-              const active = statusFilter === f.v;
+            {STATUS_TABS.map((v) => {
+              const active = statusFilter === v;
               return (
                 <Link
-                  key={f.v}
-                  href={buildHref(f.v, kindFilter)}
+                  key={v}
+                  href={buildHref(v, kindFilter)}
                   aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
@@ -221,20 +208,20 @@ export default async function ObservationListPage({
                     textDecoration: "none",
                   }}
                 >
-                  {f.l}
-                  <span style={{ opacity: 0.6, marginLeft: 4 }}>{statusCount(f.v)}</span>
+                  {t(`list.statusTabs.${v}`)}
+                  <span style={{ opacity: 0.6, marginLeft: 4 }}>{statusCount(v)}</span>
                 </Link>
               );
             })}
           </div>
           <div style={{ width: 1, height: 20, background: "var(--line)" }} />
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {KIND_TABS.map((f) => {
-              const active = kindFilter === f.v;
+            {KIND_TABS.map((v) => {
+              const active = kindFilter === v;
               return (
                 <Link
-                  key={f.v}
-                  href={buildHref(statusFilter, f.v)}
+                  key={v}
+                  href={buildHref(statusFilter, v)}
                   aria-current={active ? "page" : undefined}
                   className="btn btn-sm"
                   style={{
@@ -245,8 +232,8 @@ export default async function ObservationListPage({
                     textDecoration: "none",
                   }}
                 >
-                  {f.l}
-                  <span style={{ opacity: 0.6, marginLeft: 4 }}>{kindCount(f.v)}</span>
+                  {t(`list.kindTabs.${v}`)}
+                  <span style={{ opacity: 0.6, marginLeft: 4 }}>{kindCount(v)}</span>
                 </Link>
               );
             })}
@@ -256,10 +243,10 @@ export default async function ObservationListPage({
         <div className="card">
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-              No observation cycles match this filter.
+              {t("list.empty")}
               {canNominate ? (
                 <div style={{ fontSize: 12, marginTop: 8 }}>
-                  <Link href="/observation/new">Nominate a cycle</Link> to start one.
+                  {t.rich("list.emptyNominate", { link: (chunks) => <Link href="/observation/new">{chunks}</Link> })}
                 </div>
               ) : null}
             </div>
@@ -268,13 +255,13 @@ export default async function ObservationListPage({
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Cycle</th>
-                    <th>Teacher</th>
-                    <th>Subject / Topic</th>
-                    <th>Kind</th>
-                    <th>Stage</th>
-                    <th>Date</th>
-                    <th>Video</th>
+                    <th>{t("list.columns.cycle")}</th>
+                    <th>{t("list.columns.teacher")}</th>
+                    <th>{t("list.columns.subjectTopic")}</th>
+                    <th>{t("list.columns.kind")}</th>
+                    <th>{t("list.columns.stage")}</th>
+                    <th>{t("list.columns.date")}</th>
+                    <th>{t("list.columns.video")}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -303,24 +290,25 @@ export default async function ObservationListPage({
                         ) : null}
                       </td>
                       <td>
-                        <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>{c.kind}</span>
+                        <span className={`chip ${KIND_CHIP[c.kind] ?? ""}`}>
+                          {t.has(`kindChip.${c.kind}`) ? t(`kindChip.${c.kind}`) : c.kind}
+                        </span>
                       </td>
                       <td>
-                        <CycleStage status={c.status} />
+                        <CycleStage
+                          status={c.status}
+                          label={t.has(`list.stage.${c.status}`) ? t(`list.stage.${c.status}`) : c.status.replace("_", " ")}
+                        />
                       </td>
                       <td className="mono" style={{ fontSize: 12 }}>
                         {c.scheduledAt
-                          ? new Date(c.scheduledAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
+                          ? new Date(c.scheduledAt).toLocaleDateString(intl, { day: "numeric", month: "short" })
                           : <span style={{ color: "var(--ink-4)" }}>—</span>}
                       </td>
                       <td>
                         {/* From the cycle's linked videos (lib/observation/list.ts),
                             not video_min, which only the demo seed ever wrote. */}
-                        {videoCell(c) === "—" ? (
-                          <span style={{ color: "var(--ink-4)" }}>—</span>
-                        ) : (
-                          <span style={{ fontSize: 12 }}>{videoCell(c)}</span>
-                        )}
+                        <VideoCellText cell={videoCell(c)} t={t} />
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <Link
@@ -353,16 +341,16 @@ export default async function ObservationListPage({
                 color: "var(--ink-3)",
               }}
             >
-              <span>{`Showing ${from}–${to} of ${total}`}</span>
+              <span>{t("list.showing", { from, to, total })}</span>
               <span style={{ display: "flex", gap: 8 }}>
                 {page > 1 ? (
                   <Link href={buildHref(statusFilter, kindFilter, page - 1)} className="btn btn-sm">
-                    ← Previous
+                    {t("list.previous")}
                   </Link>
                 ) : null}
                 {hasNext ? (
                   <Link href={buildHref(statusFilter, kindFilter, page + 1)} className="btn btn-sm">
-                    Next →
+                    {t("list.next")}
                   </Link>
                 ) : null}
               </span>
@@ -374,7 +362,21 @@ export default async function ObservationListPage({
   );
 }
 
-function CycleStage({ status }: { status: string }) {
+type Translate = Awaited<ReturnType<typeof getTranslations>>;
+
+/** The Video cell, in the reader's language ("—" when there is no video). */
+function VideoCellText({ cell, t }: { cell: VideoCell; t: Translate }) {
+  if (cell === null) return <span style={{ color: "var(--ink-4)" }}>—</span>;
+  const words =
+    cell.kind === "minutes"
+      ? t("list.video.minutes", { minutes: cell.minutes })
+      : cell.kind === "videos"
+        ? t("list.video.count", { count: cell.count })
+        : t("list.video.processing");
+  return <span style={{ fontSize: 12 }}>{words}</span>;
+}
+
+function CycleStage({ status, label }: { status: string; label: string }) {
   const idx = (CYCLE_STAGES as readonly string[]).indexOf(status);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
@@ -395,7 +397,7 @@ function CycleStage({ status }: { status: string }) {
         />
       ))}
       <span style={{ marginLeft: 6, fontSize: 11, color: "var(--ink-3)" }}>
-        {STATUS_LABEL[status] ?? status.replace("_", " ")}
+        {label}
       </span>
     </div>
   );

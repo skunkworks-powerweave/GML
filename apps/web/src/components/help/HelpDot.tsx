@@ -8,19 +8,23 @@
 // inline ⓘ circle instead of a dotted-underline span.
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { helpFor } from "@/lib/help";
 import { openHelp } from "./HelpPanel";
+import { useHelpEntries } from "./useHelpEntries";
 
 type HelpDotProps = {
   /** Dictionary slug. If unknown, the dot renders nothing. */
   k: string;
   /** Optional pixel size of the dot. Defaults to 12px to match prototype line height. */
   size?: number;
-  /** Optional aria-label override. Defaults to "What is <title>?". */
+  /** Optional aria-label override. Defaults to "What is <title>?" (help.client.dot.label). */
   label?: string;
 };
 
 export function HelpDot({ k, size = 12, label }: HelpDotProps) {
+  const t = useTranslations("help.client");
+  const words = useHelpEntries()?.[k];
   const entry = helpFor(k);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -35,6 +39,7 @@ export function HelpDot({ k, size = 12, label }: HelpDotProps) {
   }, [open]);
 
   if (!entry) return null;
+  const title = words?.title ?? k;
 
   return (
     <span
@@ -46,7 +51,7 @@ export function HelpDot({ k, size = 12, label }: HelpDotProps) {
     >
       <button
         type="button"
-        aria-label={label ?? `What is ${entry.title}?`}
+        aria-label={label ?? t("dot.label", { title })}
         onClick={(e) => {
           e.stopPropagation();
           setOpen((o) => !o);
@@ -93,9 +98,9 @@ export function HelpDot({ k, size = 12, label }: HelpDotProps) {
             lineHeight: 1.5,
           }}
         >
-          <span style={{ display: "block", fontWeight: 600, fontSize: 12, marginBottom: 4 }}>{entry.title}</span>
-          <span style={{ display: "block", color: "var(--ink-2)" }}>{entry.short}</span>
-          {entry.long || (entry.related && entry.related.length > 0) ? (
+          <span style={{ display: "block", fontWeight: 600, fontSize: 12, marginBottom: 4 }}>{title}</span>
+          <span style={{ display: "block", color: "var(--ink-2)" }}>{words?.short}</span>
+          {Boolean(words?.long) || (entry.related && entry.related.length > 0) ? (
             <button
               type="button"
               data-help-more
@@ -115,7 +120,7 @@ export function HelpDot({ k, size = 12, label }: HelpDotProps) {
                 cursor: "pointer",
               }}
             >
-              Tell me more →
+              {t("tooltip.more")}
             </button>
           ) : null}
         </span>

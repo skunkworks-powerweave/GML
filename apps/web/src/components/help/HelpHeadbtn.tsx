@@ -13,19 +13,23 @@
 // the FTUX tour's selector -- and querySelector takes the first. The anchor
 // lives on the top bar's HelpButton (and the mobile FAB) only.
 
+import { useTranslations } from "next-intl";
 import { helpFor } from "@/lib/help";
 import { openHelp } from "./HelpPanel";
+import { useHelpEntries } from "./useHelpEntries";
 
 type HelpHeadbtnProps = {
   /** Dictionary slug to open on click. */
   k: string;
-  /** Optional label override. Defaults to "Help on <title>". */
+  /** Optional label override. Defaults to "Help on <title>" (help.client.headbtn.label). */
   label?: string;
 };
 
 export function HelpHeadbtn({ k, label }: HelpHeadbtnProps) {
+  const t = useTranslations("help.client");
+  const words = useHelpEntries()?.[k];
   const entry = helpFor(k);
-  const aria = label ?? `Help on ${entry?.title ?? k}`;
+  const aria = label ?? t("headbtn.label", { title: entry && words ? words.title : k });
   return (
     <button
       type="button"

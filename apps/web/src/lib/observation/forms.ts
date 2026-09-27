@@ -23,53 +23,32 @@ import { lookupOwn } from "../lookup";
 
 export type StageKind = "pre" | "observer" | "post";
 
-export type StageField = FormField & { label: string; placeholder: string };
+export type StageField = FormField;
 
 /**
  * What each stage asks. The cycle page renders its inputs from this, and the
  * read-back labels come from it, so a field cannot be added to one without the
- * other.
+ * other. The words -- each stage's title, each question and its placeholder --
+ * are in the "observation" message namespace (stages.<kind>.title,
+ * fields.<name>.label / .placeholder), in the reader's language; this module
+ * holds only the questions' names and rules.
  */
-export const STAGE_FORMS: Record<StageKind, { title: string; fields: StageField[] }> = {
+export const STAGE_FORMS: Record<StageKind, { fields: StageField[] }> = {
   pre: {
-    title: "Pre-observation form",
-    fields: [
-      {
-        name: "lessonPlanSummary",
-        kind: "textarea",
-        label: "Lesson plan summary",
-        required: true,
-        placeholder: "What will you teach today?",
-      },
-    ],
+    fields: [{ name: "lessonPlanSummary", kind: "textarea", required: true }],
   },
   observer: {
-    title: "Observer rubric",
-    fields: [
-      {
-        name: "narrativeComments",
-        kind: "textarea",
-        label: "Observer rubric notes",
-        required: true,
-        placeholder: "Rubric narrative…",
-      },
-    ],
+    fields: [{ name: "narrativeComments", kind: "textarea", required: true }],
   },
   post: {
-    title: "Post-observation reflection",
-    fields: [
-      {
-        name: "whatWorked",
-        kind: "textarea",
-        label: "What worked / What didn't",
-        required: true,
-        placeholder: "Reflect on the lesson…",
-      },
-    ],
+    fields: [{ name: "whatWorked", kind: "textarea", required: true }],
   },
 };
 
-const STAGE_ORDER: readonly string[] = ["pre", "observer", "post"];
+/** The stage kinds, in stage order. */
+export const STAGE_KINDS: readonly StageKind[] = ["pre", "observer", "post"];
+
+const STAGE_ORDER: readonly string[] = STAGE_KINDS;
 
 export type StageParse =
   | { ok: true; responses: Record<string, string> }
@@ -106,16 +85,34 @@ export function parseStageResponses(kind: StageKind, formData: FormData): StageP
   return { ok: true, responses };
 }
 
-/** The question a field name belongs to, for an error message. */
-export function stageFieldLabel(name: string): string | null {
+/**
+ * `name` when it is one of the stages' questions, else null -- for an error
+ * message that names the question (fields.<name>.label).
+ */
+export function stageFieldName(name: string): string | null {
   // Own keys only: ?field=__proto__ read back Object.prototype, and the cycle
   // page printed it as the question's name (lib/lookup.ts).
-  return lookupOwn(LABELS, name) ?? null;
+  return lookupOwn(FIELD_NAMES, name) ?? null;
 }
 
-const LABELS: Record<string, string> = Object.fromEntries(
-  Object.values(STAGE_FORMS).flatMap((s) => s.fields.map((f) => [f.name, f.label])),
+const FIELD_NAMES: Record<string, string> = Object.fromEntries(
+  Object.values(STAGE_FORMS).flatMap((s) => s.fields.map((f) => [f.name, f.name])),
 );
+
+/** Whether `kind` is a stage kind (pre, observer, post). */
+export function isStageKind(kind: string): kind is StageKind {
+  return (STAGE_ORDER as readonly string[]).includes(kind);
+}
+
+/**
+ * The words a submitted form is read back with, in the reader's language:
+ * a stage's title and a question's label. Only asked for known stages and
+ * questions; anything else is shown by its stored name.
+ */
+export type StageLabels = {
+  title: (kind: StageKind) => string;
+  field: (name: string) => string;
+};
 
 export type StoredForm = {
   id: string;
@@ -165,7 +162,7 @@ function display(value: unknown): string {
  */
 export function submittedFormView(
   rows: readonly StoredForm[],
-  opts: { teacherUserId: string | null },
+  opts: { teacherUserId: string | null; labels: StageLabels },
 ): SubmittedFormView[] {
   return rows
     .filter((r) => !isTemplateRow(r))
@@ -174,7 +171,7 @@ export function submittedFormView(
     .map((r) => ({
       id: r.id,
       kind: r.kind,
-      title: STAGE_FORMS[r.kind as StageKind]?.title ?? r.kind,
+      title: isStageKind(r.kind) ? opts.labels.title(r.kind) : r.kind,
       submittedAt: r.submittedAt,
       submitterName: r.submitterName,
       onBehalf:
@@ -184,7 +181,10 @@ export function submittedFormView(
       entries: Object.entries(r.responses ?? {})
         // `__`-prefixed keys are form plumbing, never answers.
         .filter(([key]) => !key.startsWith("__"))
-        .map(([key, value]) => ({ label: LABELS[key] ?? key, value: display(value) })),
+        .map(([key, value]) => {
+          const known = stageFieldName(key);
+          return { label: known ? opts.labels.field(known) : key, value: display(value) };
+        }),
     }));
 }
 
@@ -198,6 +198,7 @@ export async function loadSubmittedForms(
   db: Db,
   cycleId: string,
   teacherUserId: string | null,
+  labels: StageLabels,
 ): Promise<SubmittedFormView[]> {
   const rows = await db
     .select({
@@ -211,5 +212,5 @@ export async function loadSubmittedForms(
     .from(observationForms)
     .leftJoin(users, eq(users.id, observationForms.submittedByUserId))
     .where(eq(observationForms.cycleId, cycleId));
-  return submittedFormView(rows, { teacherUserId });
+  return submittedFormView(rows, { teacherUserId, labels });
 }

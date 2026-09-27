@@ -9,6 +9,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, isNull, like } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, schools, subjects, teachers, users } from "@gml/db/schema";
@@ -19,7 +20,10 @@ import { nominateCycleAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Nominate a cycle" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("observation");
+  return { title: t("nominate.metaTitle") };
+}
 
 const field: React.CSSProperties = {
   padding: "8px 10px",
@@ -36,21 +40,19 @@ const labelText: React.CSSProperties = {
   color: "var(--ink-2)",
 };
 
-const ERRORS: Record<string, string> = {
-  invalid: "Some of the details are missing or not valid.",
-  observer: "That observer account is not an active observer. Pick one from the list.",
-  duplicate: "Another cycle took that code at the same moment. Please submit again.",
-  failed: "The cycle could not be saved. Please try again.",
-};
+// The ?error= codes ./actions.ts redirects with, and the fields it can name;
+// the words are nominate.errors.<code> and nominate.fields.<field>. Own keys
+// only (lib/lookup.ts): ?error=__proto__ must read as no error at all.
+const ERRORS: Record<string, true> = { invalid: true, observer: true, duplicate: true, failed: true };
 
-const FIELD_NAMES: Record<string, string> = {
-  teacherId: "Teacher",
-  observerId: "Observer",
-  kind: "Kind",
-  scheduledAt: "Date",
-  subjectId: "Subject",
-  topic: "Topic",
-  code: "Code",
+const FIELD_NAMES: Record<string, true> = {
+  teacherId: true,
+  observerId: true,
+  kind: true,
+  scheduledAt: true,
+  subjectId: true,
+  topic: true,
+  code: true,
 };
 
 export default async function NominateCyclePage({
@@ -60,6 +62,7 @@ export default async function NominateCyclePage({
 }) {
   await requireRole(["programme_admin", "super_admin"]);
   const sp = await searchParams;
+  const t = await getTranslations("observation");
 
   const year = new Date().getUTCFullYear();
   const [teacherRows, observerRows, subjectRows, codeRows] = await Promise.all([
@@ -91,28 +94,33 @@ export default async function NominateCyclePage({
     codeRows.map((r) => r.code),
   );
 
-  const error = lookupOwn(ERRORS, sp.error) ?? null;
-  const badField = lookupOwn(FIELD_NAMES, sp.field) ?? null;
+  const errorCode = lookupOwn(ERRORS, sp.error) ? (sp.error as string) : null;
+  const badField = lookupOwn(FIELD_NAMES, sp.field) ? (sp.field as string) : null;
+  const error = errorCode
+    ? errorCode === "invalid" && badField
+      ? t("nominate.errors.invalidField", { field: t(`nominate.fields.${badField}`) })
+      : t(`nominate.errors.${errorCode}`)
+    : null;
   const missing =
     teacherRows.length === 0
-      ? { what: "teachers", href: "/admin/data/teachers", label: "Admin → Teachers" }
+      ? { what: "teachers" as const, href: "/admin/data/teachers" }
       : observerRows.length === 0
-        ? { what: "observer accounts", href: "/admin/users", label: "Admin → Users (role: Observer)" }
+        ? { what: "observers" as const, href: "/admin/users" }
         : null;
+  const missingLink = (chunks: React.ReactNode) => <Link href={missing?.href ?? "/admin"}>{chunks}</Link>;
 
   return (
     <div>
       <div className="page-header">
         <Link href="/observation" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
-          ← All cycles
+          {t("allCycles")}
         </Link>
         <div className="label" style={{ marginTop: 8 }}>
-          Classroom observation
+          {t("sectionLabel")}
         </div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Nominate a cycle</h1>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("nominate.title")}</h1>
         <p style={{ color: "var(--ink-3)", marginTop: 6, maxWidth: 640, lineHeight: 1.5 }}>
-          The cycle starts at <b>Nominated</b>; the teacher&rsquo;s pre-form moves it on. It is
-          visible to the observer you choose, the teacher, and the teacher&rsquo;s mentor.
+          {t.rich("nominate.intro", { b: (chunks) => <b>{chunks}</b> })}
         </p>
       </div>
 
@@ -131,7 +139,6 @@ export default async function NominateCyclePage({
             }}
           >
             {error}
-            {sp.error === "invalid" && badField ? ` Check: ${badField}.` : null}
           </div>
         ) : null}
 
@@ -148,36 +155,37 @@ export default async function NominateCyclePage({
               marginBottom: 16,
             }}
           >
-            There are no active {missing.what} yet, so a cycle cannot be nominated. Add them at{" "}
-            <Link href={missing.href}>{missing.label}</Link> first.
+            {missing.what === "teachers"
+              ? t.rich("nominate.missingTeachers", { link: missingLink })
+              : t.rich("nominate.missingObservers", { link: missingLink })}
           </p>
         ) : null}
 
         <form action={nominateCycleAction} className="card" style={{ padding: 18, display: "grid", gap: 14 }}>
           <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-            Code: <span className="mono">{nextCode}</span> (assigned when you save)
+            {t.rich("nominate.code", { code: nextCode, mono: (chunks) => <span className="mono">{chunks}</span> })}
           </div>
 
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={labelText}>Teacher being observed</span>
+            <span style={labelText}>{t("nominate.teacher")}</span>
             <select name="teacherId" required defaultValue="" style={field}>
               <option value="" disabled>
-                Choose a teacher…
+                {t("nominate.chooseTeacher")}
               </option>
-              {teacherRows.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                  {t.school ? ` — ${t.school}` : ""}
+              {teacherRows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                  {row.school ? ` — ${row.school}` : ""}
                 </option>
               ))}
             </select>
           </label>
 
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={labelText}>Observer</span>
+            <span style={labelText}>{t("nominate.observer")}</span>
             <select name="observerId" required defaultValue="" style={field}>
               <option value="" disabled>
-                Choose an observer…
+                {t("nominate.chooseObserver")}
               </option>
               {observerRows.map((o) => (
                 <option key={o.id} value={o.id}>
@@ -190,25 +198,25 @@ export default async function NominateCyclePage({
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
             <label style={{ display: "grid", gap: 4 }}>
-              <span style={labelText}>Kind</span>
+              <span style={labelText}>{t("nominate.kind")}</span>
               <select name="kind" required defaultValue="" style={field}>
                 <option value="" disabled>
-                  Choose…
+                  {t("nominate.choose")}
                 </option>
-                <option value="baseline">Baseline</option>
-                <option value="developmental">Developmental</option>
-                <option value="evaluative">Evaluative</option>
+                <option value="baseline">{t("kind.baseline")}</option>
+                <option value="developmental">{t("kind.developmental")}</option>
+                <option value="evaluative">{t("kind.evaluative")}</option>
               </select>
             </label>
             <label style={{ display: "grid", gap: 4 }}>
-              <span style={labelText}>Date</span>
+              <span style={labelText}>{t("nominate.date")}</span>
               <input name="scheduledAt" type="date" required style={field} />
             </label>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
             <label style={{ display: "grid", gap: 4 }}>
-              <span style={labelText}>Subject (optional)</span>
+              <span style={labelText}>{t("nominate.subject")}</span>
               <select name="subjectId" defaultValue="" style={field}>
                 <option value="">—</option>
                 {subjectRows.map((s) => (
@@ -219,18 +227,19 @@ export default async function NominateCyclePage({
               </select>
             </label>
             <label style={{ display: "grid", gap: 4 }}>
-              <span style={labelText}>Topic (optional)</span>
+              <span style={labelText}>{t("nominate.topic")}</span>
               <input name="topic" type="text" maxLength={240} style={field} />
             </label>
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button type="submit" className="btn btn-primary" disabled={missing !== null}>
-              Nominate cycle
+              {t("nominate.submit")}
             </button>
             <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-              Loading many at once? Use CSV import at{" "}
-              <Link href="/admin/data/observation-cycles">Admin → Observation Cycles</Link>.
+              {t.rich("nominate.csv", {
+                link: (chunks) => <Link href="/admin/data/observation-cycles">{chunks}</Link>,
+              })}
             </span>
           </div>
         </form>
