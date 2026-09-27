@@ -8,7 +8,7 @@
 // navigation; `serverActive` is the layout's answer, used only when there is
 // no pathname to read.
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
 import { activeNavIdFor, activeTabIdFor } from "@/config/nav";
@@ -34,6 +34,23 @@ export function ActiveNavLink({ role, id, kind, serverActive, style, activeStyle
   return (
     <Link {...link} aria-current={active ? "page" : undefined} style={active ? { ...style, ...activeStyle } : style}>
       {children}
+      <NavPendingHint />
     </Link>
   );
+}
+
+/**
+ * A dot that fades in while this link's page is loading: feedback for a tap
+ * on a slow link, which otherwise looked like it had done nothing. Always
+ * rendered and fixed in place (globals.css .nav-pending-hint), so only its
+ * opacity changes and nothing shifts.
+ *
+ * NOT a route-level loading.tsx. That gave the same feedback, but its Suspense
+ * boundary around every signed-in page left a server action that returns to
+ * the same page pending for good: a note or a commitment was saved while its
+ * button said "Saving…" and the page never showed it (UAT, 2026-09-27).
+ */
+function NavPendingHint() {
+  const { pending } = useLinkStatus();
+  return <span aria-hidden className="nav-pending-hint" data-pending={pending ? "true" : "false"} />;
 }

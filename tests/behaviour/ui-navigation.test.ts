@@ -199,3 +199,25 @@ test("FR-28: every role's tab bar ends in Menu, and Menu lists the role's whole 
     delete (globalThis as Record<string, unknown>).__gmlTestSession;
   }
 });
+
+// ── FR-31, revised: tap feedback without a route-level loading boundary ──────
+
+test("every nav link shows a pending dot while its page loads, and no loading.tsx wraps the signed-in pages", async () => {
+  // app/(authenticated)/loading.tsx gave a tap on a slow link feedback, but
+  // its Suspense boundary left a server action that returns to the same page
+  // pending for good: a note or a commitment saved while its button said
+  // "Saving…" and the page never showed it. Found in UAT; reproduced on 4 of
+  // 4 tries with the file and 0 of 4 without it.
+  const { existsSync } = await import("node:fs");
+  assert.equal(existsSync(join(SRC_DIR, "app", "(authenticated)", "loading.tsx")), false, "a route-level loading.tsx is back");
+
+  const hints = (html: string) => (html.match(/class="nav-pending-hint" data-pending="false"/g) ?? []).length;
+  const { Sidebar } = await import("../../apps/web/src/components/nav/Sidebar.tsx");
+  const side = await render(h(Sidebar, { role: "mentor" }));
+  assert.equal(hints(side), openingTags(side, "a").length, "every sidebar link carries the hint, idle at rest");
+  const { BottomTabs } = await import("../../apps/web/src/components/nav/BottomTabs.tsx");
+  const tabs = await render(h(BottomTabs, { role: "teacher" }));
+  assert.equal(hints(tabs), openingTags(tabs, "a").length, "every tab carries the hint, idle at rest");
+  const css = readFileSync(join(SRC_DIR, "app", "globals.css"), "utf8");
+  assert.match(css, /\.nav-pending-hint\[data-pending="true"\]\s*\{[^}]*opacity:\s*1/, "the hint shows while pending");
+});

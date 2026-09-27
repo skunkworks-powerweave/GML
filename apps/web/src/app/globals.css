@@ -237,6 +237,15 @@ input.text:focus, textarea.text:focus, select.text:focus {
 
 .divider { height: 1px; background: var(--line); }
 
+/* The dot on a nav link whose page is loading (ActiveNavLink, useLinkStatus). */
+.nav-pending-hint {
+  position: absolute; top: 6px; right: 6px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--saffron); opacity: 0;
+  transition: opacity 0.15s; pointer-events: none;
+}
+.nav-pending-hint[data-pending="true"] { opacity: 1; animation: nav-pending-pulse 1s ease-in-out infinite; }
+@keyframes nav-pending-pulse { 50% { opacity: 0.35; } }
+
 /* The bar over the current bottom tab (BottomTabs, ActiveNavLink). */
 .m-tab-indicator { background: transparent; }
 [aria-current="page"] > .m-tab-indicator { background: var(--ink); }
