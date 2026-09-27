@@ -13,7 +13,7 @@
 // faked here, and nothing downstream of it is.
 
 type Session = {
-  user: { id: string; role: string; email: string | null; name: string | null; image: string | null };
+  user: { id: string; role: string; email: string | null; name: string | null; image: string | null; mustChangePassword?: boolean };
 };
 
 type State = { session?: Session | null };

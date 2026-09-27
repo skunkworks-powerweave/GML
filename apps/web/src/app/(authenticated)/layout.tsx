@@ -165,7 +165,13 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
           styles and cannot respond. Renders nothing. */}
       <DeviceSync initial={device} />
       <AntiDownloadGuard />
-      {prefsFailed ? null : <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} whatsapp={whatsappPhoneForUsers() !== null} />}
+      {/* Not while an administrator-set password must still be changed: the
+          proxy sends every page to Settings until it is, so the tour would
+          sit over the password form pointing at pages that lead back there.
+          ftux_seen_at stays unset, so it plays on the first page after. */}
+      {prefsFailed || session.user.mustChangePassword ? null : (
+        <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} whatsapp={whatsappPhoneForUsers() !== null} />
+      )}
       <QuickFind userId={user.id} />
       {/* THE LANGUAGE IS DECLARED, NOT JUST RECORDED. This was
           data-html-lang={htmlLang}: a data attribute, invisible to the browser
