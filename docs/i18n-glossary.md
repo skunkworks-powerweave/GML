@@ -111,3 +111,37 @@ PDF, Q1–Q4, URLs, email addresses.
 | loading… | लोड हो रहा है… | ལོངས་བཞིན།… |
 | something went wrong / try again | कुछ गड़बड़ हो गई / फिर कोशिश करें | ནོར་འཁྲུལ་ཞིག་བྱུང་། / ཡང་བསྐྱར་ཚོད་ལྟ་གནང་རོགས། |
 | nothing yet / none | अभी कुछ नहीं / कोई नहीं | ད་དུང་གང་ཡང་མེད། / གཅིག་ཀྱང་མེད། |
+| learner | शिक्षार्थी | སློབ་མ། |
+| lesson | पाठ | སློབ་ཁྲིད། |
+| grade (school year) | कक्षा | འཛིན་རིམ། |
+| school term | टर्म | སློབ་དུས། |
+| lesson topic | प्रकरण | བརྗོད་གཞི། |
+| step (of the tour) | कदम | གོ་རིམ། |
+| feedback | फ़ीडबैक | བསམ་འཆར། |
+| rubric | रूब्रिक | ཚད་གཞི། |
+| endline | अंतिम आकलन | མཐའ་མའི་ཚོད་དཔག |
+| sign-in (a login session) | साइन-इन | ནང་འཛུལ། |
+| device | डिवाइस | འཕྲུལ་ཆས། |
+| browser | ब्राउज़र | དྲ་བཤར་ཆས། |
+| caption | कैप्शन | མཆན་བྱང་། |
+| status | स्थिति | གནས་སྟངས། |
+| cancelled | रद्द | ཕྱིར་འཐེན་བྱས་ཟིན། |
+| ready (to review) | तैयार | གྲ་སྒྲིག་ཟིན། |
+| present / absent | उपस्थित / अनुपस्थित | ཚོགས་འཛུལ་བྱས། / ཚོགས་འཛུལ་མ་བྱས། |
+| row / column (data tables) | पंक्ति / कॉलम | ཐིག་ཕྲེང་། / ཀ་ཐིག |
+| package (SCORM) | पैकेज | ཐུམ་སྒྲིལ། |
+| the programme's name | RTT — रिफ़्रेशर शिक्षक प्रशिक्षण | དགེ་རྒན་བསྐྱར་སྦྱོང་། |
+
+### Open for the native reviewer
+
+- **Bhoti དུས་ཚོད།** is used for both "session (class)" and "time". A table
+  with a Session column and a Time column reads the same word twice. Pick a
+  distinct word for one of them (for "session", perhaps ཚོགས་ཐེངས།) and it
+  can be replaced across `bo/*.json` in one pass.
+- **Bhoti plurals**: CLDR gives Tibetan only the "other" plural form, so
+  `{count, plural, …}` messages in `bo` have one branch. Check that the
+  counted phrases read naturally.
+- Coined technical terms in the admin screens (webhook འབྱོར་ལེན་སྒོ།, token
+  lifetime རྟགས་འཛིན་དུས་ཡུན།, slug ཐོ་མིང་།, dead jobs འགག་སྡོད་ལས་ཀ།) are best
+  guesses; the admin screens are read by programme staff, who may prefer the
+  English term.
