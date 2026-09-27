@@ -164,19 +164,14 @@ export function retryDelayMs(attempt: number): number {
   return Math.min(60_000, 2000 * 2 ** Math.max(0, attempt));
 }
 
-export function failureMessage(kind: SaveFailure): string {
-  switch (kind) {
-    case "expired":
-      return "Your session expired — sign in again. Your answers are kept on this device.";
-    case "locked":
-      return "The mentorship section locked — enter its password again. Your answers are kept on this device.";
-    case "rejected":
-      return "Not saved — the server refused these answers. They are kept on this device; if it keeps happening, tell your programme administrator.";
-    case "offline":
-      return "Offline — answers kept on this device, retrying…";
-    default:
-      return "Not saved — answers kept on this device, retrying…";
-  }
+/**
+ * What a failed save means for the answers -- kept on the device, retrying or
+ * not, what to do -- in the reader's language. `t` is the runner's
+ * useTranslations("mentorship.client"); the sentences are
+ * mentorship.client.formRunner.failure.<kind> in the translation bundles.
+ */
+export function failureMessage(kind: SaveFailure, t: (key: string) => string): string {
+  return t(`formRunner.failure.${kind}`);
 }
 
 /**

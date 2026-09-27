@@ -18,7 +18,9 @@
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { actorFrom, assertCanAccessPairing, pairingClosed } from "@/lib/authz";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import Link from "next/link";
 import { SubmitButton } from "@/components/SubmitButton";
 import { and, asc, eq, desc, inArray, sql } from "drizzle-orm";
@@ -52,14 +54,36 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Pairing" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("mentorship");
+  return { title: t("pairing.metaTitle") };
+}
 
 const QUARTERS = ["baseline", "progress_1", "progress_2", "final"] as const;
-const QUARTER_LABEL: Record<string, string> = {
-  baseline: "Q1 · Baseline",
-  progress_1: "Q2 · Progress",
-  progress_2: "Q3 · Progress",
-  final: "Q4 · Final",
+
+/** A meeting's month, as keys under mentorship.pairing.meetings.month ("JAN" in English). */
+const MONTH_KEYS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"] as const;
+
+/**
+ * EVERY ?error= actions.ts CAN REDIRECT WITH, and its message key under
+ * mentorship.pairing.errors. Read with lookupOwn: a code that is the name of
+ * something every object inherits is an unknown code.
+ */
+const PAIRING_ERRORS: Record<string, string> = {
+  invalid_meeting: "invalidMeeting",
+  invalid_meeting_time: "invalidMeetingTime",
+  invalid_pairing: "invalidPairing",
+  pairing_not_found: "pairingNotFound",
+  invalid_commitment: "invalidCommitment",
+  empty_commitment: "emptyCommitment",
+  // The rule the action applies: 50 OPEN commitments (done ones do not
+  // count), within a record of at most 500.
+  commitments_full: "commitmentsFull",
+  meetings_mentor_only: "meetingsMentorOnly",
+  invalid_duration: "invalidDuration",
+  meeting_not_found: "meetingNotFound",
+  meeting_has_recording: "meetingHasRecording",
+  pairing_closed: "pairingClosed",
 };
 
 /** A meeting still to come is cancelled, not removed, and has nothing to record yet. */
@@ -104,31 +128,17 @@ export default async function PairingDetailPage({
   if (!session?.user?.id) redirect("/login");
   const canComplete = hasAnyRole(session.user.role, ["programme_admin", "super_admin"]);
   const showLogMeetingForm = sp.logMeeting === "1";
+  const t = await getTranslations("mentorship");
+  const tAction = await getTranslations("action");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
 
-  // EVERY ?error= actions.ts CAN REDIRECT WITH.
-  // All six were silent: the actions bounced back here on failure and the page
-  // rendered nothing, so a rejected "Log meeting" or "Add commitment" looked
-  // exactly like a successful one that had not appeared yet. Unknown codes fall
-  // through to a generic sentence rather than rendering the raw code.
-  const PAIRING_ERRORS: Record<string, string> = {
-    invalid_meeting: "A meeting needs both a date and a time. Nothing was saved.",
-    invalid_meeting_time: "That meeting date could not be read. Please pick it again.",
-    invalid_pairing: "That pairing reference was not valid.",
-    pairing_not_found: "That pairing no longer exists.",
-    invalid_commitment: "That commitment reference was not valid.",
-    empty_commitment: "A commitment needs some text before it can be added.",
-    // The rule the action applies: 50 OPEN commitments (done ones do not
-    // count), within a record of at most 500.
-    commitments_full:
-      "This pairing already has 50 open commitments. Mark some done before adding more.",
-    meetings_mentor_only: "Meetings are logged by the mentor. Nothing was saved.",
-    invalid_duration: "Duration must be a whole number of minutes, from 1 to 600. Nothing was saved.",
-    meeting_not_found: "That meeting is not on this pairing any more.",
-    meeting_has_recording: "That meeting has a recording attached, so it was kept.",
-    pairing_closed: "This pairing is complete, so its record is closed. Nothing was saved.",
-  };
+  // All the ?error= codes were silent: the actions bounced back here on
+  // failure and the page rendered nothing, so a rejected "Log meeting" or "Add
+  // commitment" looked exactly like a successful one that had not appeared
+  // yet. Unknown codes fall through to a generic sentence rather than
+  // rendering the raw code (PAIRING_ERRORS above).
   const pairingError = sp.error
-    ? (lookupOwn(PAIRING_ERRORS, sp.error) ?? "That action could not be completed. Please try again.")
+    ? t(`pairing.errors.${lookupOwn(PAIRING_ERRORS, sp.error) ?? "unknown"}`)
     : null;
 
   // OWNERSHIP GATE. auth() above only established that SOMEONE is signed in.
@@ -183,8 +193,11 @@ export default async function PairingDetailPage({
       ? await db.select({ phone: users.phone }).from(users).where(eq(users.id, mentor.userId)).limit(1)
       : [];
   const contactPhone = viewerIsMentee ? (mentorUser?.phone ?? null) : (teacher?.phone ?? null);
-  const contactName = viewerIsMentee ? (mentor?.name ?? "Mentor") : (teacher?.fullName ?? "Mentee");
-  const waText = `Hi ${contactName}, checking in on our mentorship pairing.`;
+  const contactName = viewerIsMentee
+    ? (mentor?.name ?? t("pairing.contactMentor"))
+    : (teacher?.fullName ?? t("pairing.contactMentee"));
+  // The greeting the chat opens with, in the sender's language.
+  const waText = t("pairing.whatsappText", { name: contactName });
   const waHref =
     contactPhone && contactPhone.replace(/[^0-9]/g, "").length >= 10
       ? `https://wa.me/${contactPhone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(waText)}`
@@ -340,14 +353,14 @@ export default async function PairingDetailPage({
       ) : null}
       <div className="page-header">
         <Link href="/mentorship" className="btn btn-sm btn-ghost" style={{ marginBottom: 6, display: "inline-flex" }}>
-          ← All pairings
+          {t("pairing.backToAll")}
         </Link>
         {/* The row wraps, so a phone puts the buttons under the name. The name
             breaks lines at 240 px and shrinks, so on a desktop a long name
             wraps inside it and the buttons stay beside it. */}
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
           <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-            <div className="label">Pairing</div>
+            <div className="label">{t("pairing.eyebrow")}</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4, lineHeight: 1.15 }}>
               {mentor?.name ?? "—"}{" "}
               <span style={{ color: "var(--ink-3)", fontWeight: 400 }}>↔</span>{" "}
@@ -359,14 +372,16 @@ export default async function PairingDetailPage({
               ) : null}
             </h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4, fontSize: 13 }}>
-              <span className="chip chip-ink" style={{ marginRight: 8 }}>{pairing.status}</span>
-              Q{currentQuarter} · Started{" "}
-              {new Date(pairing.startedAt).toLocaleDateString("en-IN", {
-                day: "numeric",
-                month: "long",
-                year: "numeric",
+              <span className="chip chip-ink" style={{ marginRight: 8 }}>{t("pairingStatus", { status: pairing.status })}</span>
+              {t("pairing.headline", {
+                quarter: currentQuarter,
+                date: new Date(pairing.startedAt).toLocaleDateString(intl, {
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }),
+                count: meetingTotal,
               })}
-              {` · ${meetingTotal} meeting${meetingTotal === 1 ? "" : "s"}`}
             </p>
           </div>
 
@@ -381,7 +396,7 @@ export default async function PairingDetailPage({
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn btn-sm"
-                aria-label="Open WhatsApp chat"
+                aria-label={t("pairing.whatsappAria")}
               >
                 WhatsApp
               </a>
@@ -389,7 +404,7 @@ export default async function PairingDetailPage({
               <span
                 className="btn btn-sm"
                 style={{ opacity: 0.45, cursor: "not-allowed" }}
-                title={`No phone on file for ${viewerIsMentee ? "your mentor" : "the mentee"}`}
+                title={t("pairing.noPhone", { who: viewerIsMentee ? "mentor" : "mentee" })}
                 aria-disabled="true"
               >
                 WhatsApp
@@ -399,9 +414,9 @@ export default async function PairingDetailPage({
               <Link
                 href={`/mentorship/${pairingId}?logMeeting=1`}
                 className="btn btn-sm btn-primary"
-                aria-label="Log a new meeting"
+                aria-label={t("pairing.logMeetingAria")}
               >
-                + Log meeting
+                {t("pairing.logMeeting")}
               </Link>
             ) : null}
             {canComplete && pairing.status !== "complete" ? (
@@ -409,10 +424,11 @@ export default async function PairingDetailPage({
                 <input type="hidden" name="pairingId" value={pairingId} />
                 <SubmitButton
                   className="btn btn-sm"
-                  aria-label="Mark pairing complete"
+                  pendingLabel={tAction("saving")}
+                  aria-label={t("pairing.completeAria")}
                   style={{ background: "var(--lichen)", color: "white", borderColor: "var(--lichen)" }}
                 >
-                  Complete pairing
+                  {t("pairing.complete")}
                 </SubmitButton>
               </form>
             ) : null}
@@ -431,7 +447,7 @@ export default async function PairingDetailPage({
                 column the date-and-time picker was ~75 px wide on a phone. */}
             <div className="grid grid-cols-1 gap-[10px] sm:grid-cols-[minmax(0,1fr)_120px]">
               <label style={{ fontSize: 12 }}>
-                <div className="label" style={{ marginBottom: 4 }}>When *</div>
+                <div className="label" style={{ marginBottom: 4 }}>{t("pairing.meetingForm.when")}</div>
                 <input
                   type="datetime-local"
                   name="scheduledAt"
@@ -445,7 +461,7 @@ export default async function PairingDetailPage({
                 />
               </label>
               <label style={{ fontSize: 12 }}>
-                <div className="label" style={{ marginBottom: 4 }}>Duration (min)</div>
+                <div className="label" style={{ marginBottom: 4 }}>{t("pairing.meetingForm.duration")}</div>
                 <input
                   type="number"
                   name="durationMin"
@@ -464,11 +480,11 @@ export default async function PairingDetailPage({
               </label>
             </div>
             <label style={{ fontSize: 12 }}>
-              <div className="label" style={{ marginBottom: 4 }}>Notes</div>
+              <div className="label" style={{ marginBottom: 4 }}>{t("pairing.meetingForm.notes")}</div>
               <textarea
                 name="notes"
                 rows={3}
-                placeholder="What was discussed, what did the mentee commit to?"
+                placeholder={t("pairing.meetingForm.notesPlaceholder")}
                 style={{
                   width: "100%",
                   padding: "6px 8px",
@@ -480,10 +496,10 @@ export default async function PairingDetailPage({
             </label>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost">
-                Cancel
+                {tAction("cancel")}
               </Link>
-              <SubmitButton className="btn btn-sm btn-primary">
-                Save meeting
+              <SubmitButton className="btn btn-sm btn-primary" pendingLabel={tAction("saving")}>
+                {t("pairing.meetingForm.save")}
               </SubmitButton>
             </div>
           </form>
@@ -501,14 +517,7 @@ export default async function PairingDetailPage({
           {QUARTERS.map((q, i) => {
             const qNum = i + 1;
             const state = currentQuarter >= qNum ? (qNum < currentQuarter ? "done" : "current") : "future";
-            const subtitle =
-              qNum === 1
-                ? "Baseline + onboarding"
-                : qNum === 2
-                  ? "First developmental cycle"
-                  : qNum === 3
-                    ? "Mid-year evaluation"
-                    : "Endline + certification";
+            const subtitle = t(`pairing.quarter.subtitle${qNum}`);
             const formKind = QUARTER_TO_KIND[qNum];
             // No active form for this quarter yet -> no link, rather than a
             // link to a "Form not found" shell.
@@ -551,9 +560,9 @@ export default async function PairingDetailPage({
                   >
                     {state === "done" ? "✓" : qNum}
                   </div>
-                  <span style={{ fontWeight: 500, fontSize: 12 }}>{QUARTER_LABEL[q].split(" · ")[0]}</span>
+                  <span style={{ fontWeight: 500, fontSize: 12 }}>Q{qNum}</span>
                   <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--ink-3)" }}>
-                    {state === "done" ? "Closed" : state === "current" ? "In progress" : "Upcoming"}
+                    {t(`pairing.quarter.${state}`)}
                   </span>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 6 }}>{subtitle}</div>
@@ -567,9 +576,9 @@ export default async function PairingDetailPage({
                     href={formHref}
                     className="btn btn-sm"
                     style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`Fill your Q${qNum} form (the quarter is closed)`}
+                    aria-label={t("pairing.quarter.fillClosedAria", { quarter: qNum })}
                   >
-                    Fill your Q{qNum} form →
+                    {t("pairing.quarter.fillClosed", { quarter: qNum })}
                   </Link>
                 ) : state === "done" ? (
                   // The READ-ONLY record. This opened the live form, where
@@ -579,16 +588,16 @@ export default async function PairingDetailPage({
                     href={`/mentorship/${pairingId}/responses`}
                     className="btn btn-sm btn-ghost"
                     style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`View Q${qNum} responses`}
+                    aria-label={t("pairing.quarter.viewResponsesAria", { quarter: qNum })}
                   >
-                    View responses →
+                    {t("pairing.quarter.viewResponses")}
                   </Link>
                 ) : !formHref ? (
                   // No active form published for this quarter and audience.
                   // Saying so beats a link into a "Form not found" shell.
                   state === "future" ? null : (
                     <span style={{ marginTop: 10, fontSize: 11, color: "var(--ink-3)", display: "inline-flex" }}>
-                      No form published for this quarter yet.
+                      {t("pairing.quarter.noForm")}
                     </span>
                   )
                 ) : state !== "current" ? null : viewerIsAdmin ? (
@@ -596,27 +605,27 @@ export default async function PairingDetailPage({
                     href={formHref}
                     className="btn btn-sm btn-ghost"
                     style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`Preview Q${qNum} mentor form`}
+                    aria-label={t("pairing.quarter.previewAria", { quarter: qNum })}
                   >
-                    Preview form →
+                    {t("pairing.quarter.preview")}
                   </Link>
                 ) : answeredByViewer.has(formKind) ? (
                   <Link
                     href={`/mentorship/${pairingId}/responses`}
                     className="btn btn-sm btn-ghost"
                     style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`Q${qNum} form submitted: view responses`}
+                    aria-label={t("pairing.quarter.submittedAria", { quarter: qNum })}
                   >
-                    ✓ Submitted · view →
+                    {t("pairing.quarter.submitted")}
                   </Link>
                 ) : (
                   <Link
                     href={formHref}
                     className="btn btn-sm"
                     style={{ marginTop: 10, fontSize: 11, display: "inline-flex" }}
-                    aria-label={`Fill Q${qNum} progress form`}
+                    aria-label={t("pairing.quarter.fillAria", { quarter: qNum })}
                   >
-                    Fill progress form →
+                    {t("pairing.quarter.fill")}
                   </Link>
                 )}
               </div>
@@ -642,27 +651,27 @@ export default async function PairingDetailPage({
             >
               <div>
                 <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
-                  Meetings & touchpoints
+                  {t("pairing.meetings.title")}
                 </h2>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                  Mentor logs every contact — phone, video, in-person, WhatsApp
+                  {t("pairing.meetings.subtitle")}
                 </div>
               </div>
               <span className="chip">{meetingTotal}</span>
             </div>
             {meetings.length === 0 ? (
               <p style={{ padding: 16, fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                No meetings logged yet.
+                {t("pairing.meetings.empty")}
               </p>
             ) : (
               <div>
                 {meetings.map((m, i) => {
                   const d = new Date(m.scheduledAt);
                   const day = String(d.getDate()).padStart(2, "0");
-                  const mon = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getMonth()];
+                  const mon = t(`pairing.meetings.month.${MONTH_KEYS[d.getMonth()]}`);
                   const recordings = recordingsOf(m);
                   const upcoming = isUpcoming(d);
-                  const when = d.toLocaleDateString("en-IN", { day: "numeric", month: "long" });
+                  const when = d.toLocaleDateString(intl, { day: "numeric", month: "long" });
                   return (
                     <div
                       key={m.id}
@@ -683,10 +692,12 @@ export default async function PairingDetailPage({
                       <div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontWeight: 500 }}>
-                            {d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}
+                            {d.toLocaleTimeString(intl, { hour: "numeric", minute: "2-digit" })}
                           </span>
                           {m.durationMin ? (
-                            <span className="chip" style={{ marginLeft: "auto" }}>{m.durationMin}m</span>
+                            <span className="chip" style={{ marginLeft: "auto" }}>
+                              {t("pairing.meetings.minutes", { minutes: m.durationMin })}
+                            </span>
                           ) : null}
                         </div>
                         {m.notes ? (
@@ -699,10 +710,12 @@ export default async function PairingDetailPage({
                             {recordings.map((r, n) => (
                               <li key={r.id}>
                                 <Link href={`/videos/${r.id}`} style={{ fontSize: 11, color: "var(--indigo)" }}>
-                                  {recordings.length === 1 ? "Open recording →" : `Open recording ${n + 1} →`}
+                                  {recordings.length === 1
+                                    ? t("pairing.meetings.openRecording")
+                                    : t("pairing.meetings.openRecordingN", { n: n + 1 })}
                                 </Link>
                                 {r.status && r.status !== "ready" ? (
-                                  <span className="chip" style={{ marginLeft: 6 }}>{r.status.replace(/_/g, " ")}</span>
+                                  <span className="chip" style={{ marginLeft: 6 }}>{t("videoStatus", { status: r.status })}</span>
                                 ) : null}
                               </li>
                             ))}
@@ -717,9 +730,9 @@ export default async function PairingDetailPage({
                               href={uploadHref({ contextType: "mentor_meeting", contextId: m.id })}
                               className="btn btn-sm"
                               style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
-                              aria-label={`Attach another recording of the meeting of ${when}`}
+                              aria-label={t("pairing.meetings.attachAnotherAria", { when })}
                             >
-                              Attach another recording →
+                              {t("pairing.meetings.attachAnother")}
                             </Link>
                           )
                         ) : (
@@ -745,18 +758,22 @@ export default async function PairingDetailPage({
                                       href={uploadHref({ contextType: "mentor_meeting", contextId: m.id })}
                                       className="btn btn-sm"
                                       style={{ fontSize: 11, marginTop: 4, marginRight: 6, display: "inline-flex" }}
-                                      aria-label={`Attach the recording of the meeting of ${when}`}
+                                      aria-label={t("pairing.meetings.attachAria", { when })}
                                     >
-                                      Attach recording →
+                                      {t("pairing.meetings.attach")}
                                     </Link>
                                   )}
                                   <Link
                                     href={`/mentorship/${pairingId}?confirmCancel=${m.id}`}
                                     className="btn btn-sm btn-ghost"
                                     style={{ fontSize: 11, marginTop: 4, display: "inline-flex" }}
-                                    aria-label={upcoming ? `Cancel the meeting on ${when}` : `Remove the meeting of ${when} from the record`}
+                                    aria-label={
+                                      upcoming
+                                        ? t("pairing.meetings.cancelAria", { when })
+                                        : t("pairing.meetings.removeAria", { when })
+                                    }
                                   >
-                                    {upcoming ? "Cancel meeting" : "Remove"}
+                                    {upcoming ? t("pairing.meetings.cancel") : t("pairing.meetings.remove")}
                                   </Link>
                                 </>
                               );
@@ -773,16 +790,16 @@ export default async function PairingDetailPage({
                                 <p style={{ margin: 0, color: "var(--ink-2)" }}>
                                   {upcoming
                                     ? cancelIsShown
-                                      ? `Cancel the meeting on ${when}? The other people on this pairing will be told.`
-                                      : `Cancel the meeting on ${when}? Meeting-cancelled notices are switched off, so nobody will be told in the app. Let the other people on this pairing know yourself.`
-                                    : `Remove the meeting of ${when} from the record? It will stop counting towards this pairing's meetings. This cannot be undone.`}
+                                      ? t("pairing.meetings.confirmCancel", { when })
+                                      : t("pairing.meetings.confirmCancelSilent", { when })
+                                    : t("pairing.meetings.confirmRemove", { when })}
                                 </p>
                                 <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                                  <SubmitButton className="btn btn-sm" style={{ fontSize: 11 }}>
-                                    {upcoming ? "Yes, cancel it" : "Yes, remove it"}
+                                  <SubmitButton className="btn btn-sm" style={{ fontSize: 11 }} pendingLabel={tAction("saving")}>
+                                    {upcoming ? t("pairing.meetings.yesCancel") : t("pairing.meetings.yesRemove")}
                                   </SubmitButton>
                                   <Link href={`/mentorship/${pairingId}`} className="btn btn-sm btn-ghost" style={{ fontSize: 11 }}>
-                                    Keep it
+                                    {t("pairing.meetings.keep")}
                                   </Link>
                                 </div>
                               </form>
@@ -797,17 +814,17 @@ export default async function PairingDetailPage({
             )}
             {meetingPages > 1 ? (
               <nav
-                aria-label="Meeting pages"
+                aria-label={t("pairing.meetings.pagesLabel")}
                 style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--line)" }}
               >
                 {meetingPage > 1 ? (
                   <Link href={meetingsHref(meetingPage - 1)} className="btn btn-sm">
-                    ← Newer
+                    {t("pairing.meetings.newer")}
                   </Link>
                 ) : null}
                 {meetingPage < meetingPages ? (
                   <Link href={meetingsHref(meetingPage + 1)} className="btn btn-sm">
-                    Older →
+                    {t("pairing.meetings.older")}
                   </Link>
                 ) : null}
               </nav>
@@ -822,9 +839,9 @@ export default async function PairingDetailPage({
               upload itself does (uploads/context.ts). */}
           <div className="card card-hi" data-testid="quarterly-videos">
             <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
-              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>Quarterly videos</h2>
+              <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>{t("pairing.videos.title")}</h2>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                The mentee&apos;s lesson videos at the baseline (Q1) and the endline (Q4)
+                {t("pairing.videos.subtitle")}
               </div>
             </div>
             <div style={{ padding: 14, display: "grid", gap: 12, fontSize: 12 }}>
@@ -833,20 +850,20 @@ export default async function PairingDetailPage({
                 const open = q === 1 || currentQuarter >= 4;
                 return (
                   <div key={q}>
-                    <div style={{ fontWeight: 500 }}>{q === 1 ? "Q1 · Baseline" : "Q4 · Endline"}</div>
+                    <div style={{ fontWeight: 500 }}>{q === 1 ? t("pairing.videos.q1") : t("pairing.videos.q4")}</div>
                     {videos.length === 0 ? (
-                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>Not sent yet.</div>
+                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>{t("pairing.videos.notSent")}</div>
                     ) : (
                       <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
                         {videos.map((v) => (
                           <li key={v.id}>
                             <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
-                              Video of{" "}
-                              {new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
-                              →
+                              {t("pairing.videos.videoOf", {
+                                date: new Date(v.createdAt).toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" }),
+                              })}
                             </Link>
                             {v.status === "ready" ? null : (
-                              <span className="chip" style={{ marginLeft: 6 }}>{v.status.replace(/_/g, " ")}</span>
+                              <span className="chip" style={{ marginLeft: 6 }}>{t("videoStatus", { status: v.status })}</span>
                             )}
                           </li>
                         ))}
@@ -858,10 +875,12 @@ export default async function PairingDetailPage({
                         className="btn btn-sm"
                         style={{ fontSize: 11, marginTop: 6, display: "inline-flex" }}
                       >
-                        {videos.length === 0 ? `Upload the Q${q} video →` : `Upload another Q${q} video →`}
+                        {videos.length === 0
+                          ? t("pairing.videos.upload", { quarter: q })
+                          : t("pairing.videos.uploadAnother", { quarter: q })}
                       </Link>
                     ) : (
-                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>Opens in Q4.</div>
+                      <div style={{ color: "var(--ink-3)", marginTop: 2 }}>{t("pairing.videos.opensInQ4")}</div>
                     )}
                   </div>
                 );
@@ -869,16 +888,16 @@ export default async function PairingDetailPage({
               {quarterlyVideos.some((v) => v.quarter !== 1 && v.quarter !== 4) ? (
                 // Sent before the quarter was recorded (migration 0039).
                 <div>
-                  <div style={{ fontWeight: 500 }}>Quarter not recorded</div>
+                  <div style={{ fontWeight: 500 }}>{t("pairing.videos.noQuarter")}</div>
                   <ul style={{ listStyle: "none", padding: 0, margin: "4px 0 0", display: "grid", gap: 2 }}>
                     {quarterlyVideos
                       .filter((v) => v.quarter !== 1 && v.quarter !== 4)
                       .map((v) => (
                         <li key={v.id}>
                           <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
-                            Video of{" "}
-                            {new Date(v.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}{" "}
-                            →
+                            {t("pairing.videos.videoOf", {
+                              date: new Date(v.createdAt).toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" }),
+                            })}
                           </Link>
                         </li>
                       ))}
@@ -900,18 +919,17 @@ export default async function PairingDetailPage({
             >
               <div>
                 <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
-                  Q{currentQuarter} progress feedback
+                  {t("pairing.feedback.title", { quarter: currentQuarter })}
                 </h2>
                 <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                  4 mentor + 4 mentee forms across the year
+                  {t("pairing.feedback.subtitle")}
                 </div>
               </div>
               <span className="chip chip-saffron">{feedbackByKind.size}/8</span>
             </div>
             <div style={{ padding: 14, fontSize: 12 }}>
               <p style={{ color: "var(--ink-2)", lineHeight: 1.5, margin: 0 }}>
-                Mentor must complete an 8-question feedback form at the end of each quarter.
-                Auto-saves draft. Closes the quarter on submit.
+                {t("pairing.feedback.body")}
               </p>
               <div
                 style={{
@@ -921,8 +939,8 @@ export default async function PairingDetailPage({
                   color: "var(--ink-3)",
                 }}
               >
-                <span>Forms completed</span>
-                <span style={{ fontFamily: "var(--mono)" }}>{feedbackByKind.size} / 8 done</span>
+                <span>{t("pairing.feedback.completed")}</span>
+                <span style={{ fontFamily: "var(--mono)" }}>{t("pairing.feedback.done", { count: feedbackByKind.size })}</span>
               </div>
               <div className="bar" style={{ marginTop: 6 }}>
                 <div style={{ width: `${feedbackPct}%` }} />
@@ -932,7 +950,7 @@ export default async function PairingDetailPage({
                   href={`/mentorship/${pairingId}/responses`}
                   style={{ display: "inline-block", marginTop: 10, fontSize: 12, color: "var(--indigo)" }}
                 >
-                  Read the submitted feedback →
+                  {t("pairing.feedback.read")}
                 </Link>
               ) : null}
             </div>
@@ -941,10 +959,10 @@ export default async function PairingDetailPage({
           {pairing.conceptNote ? (
             <div className="card card-hi">
               <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
-                <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>Concept note</h2>
+                <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>{t("pairing.concept.title")}</h2>
               </div>
               <div style={{ padding: 14 }}>
-                <div className="label" style={{ marginBottom: 6 }}>Pairing goal</div>
+                <div className="label" style={{ marginBottom: 6 }}>{t("pairing.concept.goal")}</div>
                 <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, margin: 0 }}>
                   {pairing.conceptNote}
                 </p>
@@ -962,17 +980,17 @@ export default async function PairingDetailPage({
           <div className="card card-hi">
             <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
               <h2 style={{ fontFamily: "var(--serif)", fontSize: 16, margin: 0 }}>
-                Commitments register
+                {t("pairing.commitments.title")}
               </h2>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
-                What each of you agreed to do before the next meeting.
+                {t("pairing.commitments.subtitle")}
               </div>
             </div>
 
             <div style={{ padding: 4 }}>
               {commitments.length === 0 ? (
                 <p style={{ padding: "12px 14px", fontSize: 12, color: "var(--ink-3)", margin: 0 }}>
-                  {closed ? "Nothing was agreed." : "Nothing agreed yet. Add the first commitment below."}
+                  {closed ? t("pairing.commitments.emptyClosed") : t("pairing.commitments.empty")}
                 </p>
               ) : (
                 commitments.map((c, i) => (
@@ -999,7 +1017,7 @@ export default async function PairingDetailPage({
                     <SubmitButton
                       pendingLabel=""
                       disabled={closed}
-                      aria-label={`${c.done ? "Unmark" : "Mark"} commitment: ${c.text}`}
+                      aria-label={t(c.done ? "pairing.commitments.unmarkAria" : "pairing.commitments.markAria", { text: c.text })}
                       style={{
                         width: 16,
                         height: 16,
@@ -1020,15 +1038,17 @@ export default async function PairingDetailPage({
                         {c.text}
                       </div>
                       <div style={{ fontSize: 10, color: "var(--ink-3)" }}>
-                        {c.who}
-                        {c.due ? ` · ${c.due}` : ""}
+                        {/* Whose it is (mentor / mentee) in words; the due note is as typed. */}
+                        {c.due
+                          ? t("pairing.commitments.whoDue", { who: c.who, due: c.due })
+                          : t("pairing.commitments.who", { who: c.who })}
                       </div>
                     </div>
                     <span
                       className="mono"
                       style={{ fontSize: 10, color: "var(--ink-3)", textAlign: "right", overflowWrap: "anywhere" }}
                     >
-                      {c.done ? "done" : (c.due ?? "")}
+                      {c.done ? t("pairing.commitments.done") : (c.due ?? "")}
                     </span>
                   </form>
                 ))
@@ -1063,8 +1083,8 @@ export default async function PairingDetailPage({
                   name="text"
                   required
                   maxLength={500}
-                  placeholder="Add a commitment…"
-                  aria-label="New commitment"
+                  placeholder={t("pairing.commitments.addPlaceholder")}
+                  aria-label={t("pairing.commitments.addAria")}
                   style={{
                     width: "100%",
                     padding: "6px 8px",
@@ -1078,7 +1098,7 @@ export default async function PairingDetailPage({
                   <select
                     name="who"
                     defaultValue="mentee"
-                    aria-label="Whose commitment"
+                    aria-label={t("pairing.commitments.whoAria")}
                     style={{
                       flex: "0 0 90px",
                       padding: "6px 4px",
@@ -1088,14 +1108,14 @@ export default async function PairingDetailPage({
                       background: "var(--card)",
                     }}
                   >
-                    <option value="mentee">mentee</option>
-                    <option value="mentor">mentor</option>
+                    <option value="mentee">{t("pairing.commitments.mentee")}</option>
+                    <option value="mentor">{t("pairing.commitments.mentor")}</option>
                   </select>
                   <input
                     name="due"
                     maxLength={40}
-                    placeholder="Wk 8"
-                    aria-label="Due"
+                    placeholder={t("pairing.commitments.duePlaceholder")}
+                    aria-label={t("pairing.commitments.dueAria")}
                     style={{
                       flex: "1 1 0",
                       minWidth: 0,
@@ -1107,6 +1127,7 @@ export default async function PairingDetailPage({
                     }}
                   />
                   <SubmitButton
+                    pendingLabel={tAction("saving")}
                     style={{
                       flex: "none",
                       padding: "6px 12px",
@@ -1118,7 +1139,7 @@ export default async function PairingDetailPage({
                       cursor: "pointer",
                     }}
                   >
-                    Add
+                    {t("pairing.commitments.add")}
                   </SubmitButton>
                 </div>
               </form>

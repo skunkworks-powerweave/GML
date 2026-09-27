@@ -14,18 +14,27 @@ import type { Metadata } from "next";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { feedbackForms, feedbackResponses, mentorPairings, mentors, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
 import type { RoleName } from "@gml/shared/auth/roles";
-import { formCatalogueLinks, UNLOCK_FORMS_HREF, type PairingChoice } from "@/lib/forms/catalogue-links";
+import {
+  formCatalogueLinks,
+  UNLOCK_FORMS_HREF,
+  type CatalogueLink,
+  type PairingChoice,
+} from "@/lib/forms/catalogue-links";
 import { actorFrom, mentorshipAccess } from "@/lib/visibility";
 import { formTitle } from "@/lib/forms/quarterly";
 import { lookupOwn } from "@/lib/lookup";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Forms" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("mentorship");
+  return { title: t("forms.metaTitle") };
+}
 
 /**
  * Which audiences may this role fill in?
@@ -53,10 +62,13 @@ function audiencesFor(role: RoleName): ("mentor" | "mentee")[] {
   }
 }
 
-/** The submit action's own errors, which it used to send to /inbox (which ignored them). */
+/**
+ * The submit action's own errors, which it used to send to /inbox (which
+ * ignored them), and each one's message key under mentorship.forms.errors.
+ */
 const SUBMIT_ERRORS: Record<string, string> = {
-  form_not_found: "That form is no longer available, so your answers were not saved. Choose a current form below.",
-  invalid_form_submit: "That submission was incomplete and could not be saved. Please open the form again.",
+  form_not_found: "formNotFound",
+  invalid_form_submit: "invalidFormSubmit",
 };
 
 export default async function FormsIndexPage({
@@ -65,7 +77,10 @@ export default async function FormsIndexPage({
   searchParams?: Promise<{ error?: string }>;
 } = {}) {
   const sp = (await searchParams) ?? {};
-  const submitError = sp.error ? (lookupOwn(SUBMIT_ERRORS, sp.error) ?? null) : null;
+  const t = await getTranslations("mentorship");
+  const locale = await getLocale();
+  const submitErrorKey = sp.error ? lookupOwn(SUBMIT_ERRORS, sp.error) : undefined;
+  const submitError = submitErrorKey ? t(`forms.errors.${submitErrorKey}`) : null;
   const session = await auth();
   if (!session) redirect("/login?next=%2Fforms");
 
@@ -78,11 +93,10 @@ export default async function FormsIndexPage({
   if (audiences.length === 0) {
     return (
       <div style={{ padding: "24px 28px", maxWidth: 820 }}>
-        <div className="label">Feedback</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>Forms</h1>
+        <div className="label">{t("forms.eyebrow")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>{t("forms.title")}</h1>
         <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 10, lineHeight: 1.6 }}>
-          There are no feedback forms for your role. The mentorship feedback cycle is
-          completed by mentors and their mentees.
+          {t("forms.noRole")}
         </p>
       </div>
     );
@@ -144,13 +158,29 @@ export default async function FormsIndexPage({
     : await pairingsFor(session.user.id, role);
   const pairingCount = isAdmin || lookupFailed || locked ? null : pairings.length;
 
+  /** What a catalogue link says (lib/forms/catalogue-links.ts says what it is). */
+  const linkText = (l: CatalogueLink): string | null => {
+    switch (l.kind) {
+      case "unlock":
+        return t("forms.links.unlock");
+      case "choose":
+        return t("forms.links.choose");
+      case "all":
+        return t("forms.links.all", { count: l.count ?? pairings.length });
+      case "pairing":
+        return l.inactive ? t("forms.links.inactive", { name: l.label ?? "" }) : l.label;
+      default:
+        return l.label;
+    }
+  };
+
   return (
     <div style={{ padding: "24px 28px", maxWidth: 820 }}>
       <header style={{ marginBottom: 18 }}>
-        <div className="label">Feedback</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>Forms</h1>
+        <div className="label">{t("forms.eyebrow")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4 }}>{t("forms.title")}</h1>
         <p style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 6, lineHeight: 1.5 }}>
-          Feedback forms for the mentorship cycle. Answers save as you type.
+          {t("forms.intro")}
         </p>
       </header>
 
@@ -186,9 +216,7 @@ export default async function FormsIndexPage({
             marginBottom: 16,
           }}
         >
-          Mentorship feedback is behind the mentorship password.{" "}
-          <Link href={UNLOCK_FORMS_HREF}>Enter it</Link> to see who each form is for and to
-          answer it.
+          {t.rich("forms.locked", { link: (chunks) => <Link href={UNLOCK_FORMS_HREF}>{chunks}</Link> })}
         </p>
       ) : null}
 
@@ -205,23 +233,22 @@ export default async function FormsIndexPage({
             marginBottom: 16,
           }}
         >
-          You are not currently part of a mentorship pairing, so these forms cannot be
-          submitted yet. They will become available once your programme administrator
-          pairs you.
+          {t("forms.noPairing")}
         </p>
       ) : null}
 
       {pairingCount !== null && pairingCount > 1 ? (
         <p role="status" style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.5, marginBottom: 16 }}>
-          You are in {pairingCount} mentorship pairings. Each form is answered for one of
-          them &mdash; choose the name under the form. Every pairing is also listed at{" "}
-          <Link href="/mentorship">Mentorship</Link>, with its forms for each quarter.
+          {t.rich("forms.severalPairings", {
+            count: pairingCount,
+            link: (chunks) => <Link href="/mentorship">{chunks}</Link>,
+          })}
         </p>
       ) : null}
 
       {forms.length === 0 ? (
         <p style={{ fontSize: 13, color: "var(--ink-3)" }}>
-          No forms have been published yet.
+          {t("forms.empty")}
         </p>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
@@ -245,10 +272,10 @@ export default async function FormsIndexPage({
             const title = (
               <span>
                 <span style={{ fontWeight: 500, fontSize: 14 }}>
-                  {formTitle(f.schema, f.kind, f.audience)}
+                  {formTitle(f.schema, f.kind, f.audience, t, locale)}
                 </span>
                 <span style={{ fontSize: 12, color: "var(--ink-3)", marginLeft: 8 }}>
-                  for {f.audience === "mentor" ? "mentors" : "mentees"}
+                  {t("forms.forAudience", { audience: f.audience })}
                 </span>
               </span>
             );
@@ -264,12 +291,12 @@ export default async function FormsIndexPage({
                 }}
               >
                 {perPairing.length > 1
-                  ? `${answeredHere} of ${perPairing.length} answered`
+                  ? t("forms.answeredOf", { answered: answeredHere, total: perPairing.length })
                   : done
-                    ? "Answered"
+                    ? t("forms.answered")
                     : links.length === 0
-                      ? "Needs a pairing"
-                      : "Not started"}
+                      ? t("forms.needsPairing")
+                      : t("forms.notStarted")}
               </span>
             );
             const card: React.CSSProperties = {
@@ -288,14 +315,15 @@ export default async function FormsIndexPage({
             // One destination: the whole card is the link, as before.
             if (links.length === 1) {
               const only = links[0]!;
+              const onlyText = linkText(only);
               return (
                 <li key={f.id}>
                   <Link href={only.href} data-testid="form-link" style={card}>
                     <span>
                       {title}
-                      {only.label && !isAdmin ? (
+                      {onlyText && !isAdmin ? (
                         <span style={{ display: "block", fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>
-                          {only.label}
+                          {onlyText}
                         </span>
                       ) : null}
                     </span>
@@ -336,7 +364,7 @@ export default async function FormsIndexPage({
                           className="btn btn-sm"
                           style={{ textDecoration: "none" }}
                         >
-                          {l.label}
+                          {linkText(l)}
                           {doneHere ? " ✓" : ""}
                         </Link>
                       );

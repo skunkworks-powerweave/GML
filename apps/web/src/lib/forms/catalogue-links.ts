@@ -22,9 +22,23 @@ export type PairingChoice = {
   active: boolean;
 };
 
+/**
+ * One link on a catalogue row. What it SAYS is the page's, in its reader's
+ * language (mentorship.forms.links); this module says only what it is:
+ *   "pairing"  a named pairing: `label` is the other party's name (data), and
+ *              `inactive` marks one that is not active
+ *   "unlock"   the mentorship password prompt
+ *   "choose"   the pairing list, because the pairing lookup failed
+ *   "all"      the pairing list, for the `count` pairings a row cannot all show
+ *   "preview"  an administrator's bare form, which needs no words
+ */
 export type CatalogueLink = {
   href: string;
+  kind: "pairing" | "unlock" | "choose" | "all" | "preview";
+  /** The other party's name on a "pairing" link; null on every other kind. */
   label: string | null;
+  inactive?: boolean;
+  count?: number;
   /** Set on a per-pairing link, so the page can mark that pairing answered. */
   pairingId?: string;
 };
@@ -63,16 +77,16 @@ export function formCatalogueLinks(
 ): CatalogueLink[] {
   // An administrator is party to no pairing; the bare form is a preview, and
   // the runner says plainly that it cannot be submitted without one.
-  if (opts.isAdmin) return [{ href: `/forms/${slug}`, label: null }];
+  if (opts.isAdmin) return [{ href: `/forms/${slug}`, kind: "preview", label: null }];
 
   // The mentorship section is locked. Who the caller's mentees are is exactly
   // what its password guards, so the page looks no pairing up and the one link
   // is the password prompt.
-  if (opts.locked) return [{ href: UNLOCK_FORMS_HREF, label: "Enter the mentorship password to answer" }];
+  if (opts.locked) return [{ href: UNLOCK_FORMS_HREF, kind: "unlock", label: null }];
 
   // The lookup threw. Showing the forms is still the safer wrong answer; the
   // pairing list is a real choice, where the inbox was an unrelated feed.
-  if (opts.lookupFailed) return [{ href: PAIRING_LIST, label: "Choose a mentorship pairing" }];
+  if (opts.lookupFailed) return [{ href: PAIRING_LIST, kind: "choose", label: null }];
 
   // No pairing: nothing can be submitted, and the page says so in a banner.
   // No link rather than a link to a page that will refuse the answer.
@@ -80,16 +94,19 @@ export function formCatalogueLinks(
 
   if (opts.pairings.length === 1) {
     const only = opts.pairings[0]!;
-    return [{ href: formRunnerHref(slug, only.id), label: only.label, pairingId: only.id }];
+    return [{ href: formRunnerHref(slug, only.id), kind: "pairing", label: only.label, pairingId: only.id }];
   }
 
+  // Among several, the page marks one that is not active ("… (not active)").
   const shown: CatalogueLink[] = opts.pairings.slice(0, MAX_PAIRING_LINKS).map((p) => ({
     href: formRunnerHref(slug, p.id),
-    label: p.active ? p.label : `${p.label} (not active)`,
+    kind: "pairing",
+    label: p.label,
+    ...(p.active ? {} : { inactive: true }),
     pairingId: p.id,
   }));
   if (opts.pairings.length > MAX_PAIRING_LINKS) {
-    shown.push({ href: PAIRING_LIST, label: `All ${opts.pairings.length} pairings…` });
+    shown.push({ href: PAIRING_LIST, kind: "all", label: null, count: opts.pairings.length });
   }
   return shown;
 }

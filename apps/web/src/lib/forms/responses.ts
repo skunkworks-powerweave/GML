@@ -19,16 +19,20 @@
 import { and, desc, eq, type SQL } from "drizzle-orm";
 import { feedbackForms, feedbackResponses, users } from "@gml/db/schema";
 import { isAdmin, type Actor, type Db } from "@/lib/visibility";
-import { formTitle, isQuarterlyForm } from "@/lib/forms/quarterly";
+import { isQuarterlyForm, ownFormTitle } from "@/lib/forms/quarterly";
 
 export type AnswerView = { name: string; label: string; value: string };
 
+// Data only: the words around it (a form with no title of its own, a
+// respondent whose account is gone) are the page's, in its reader's language.
 export type ResponseView = {
   id: string;
-  title: string;
+  /** The form's own title, or null: the page names it from kind and audience. */
+  title: string | null;
   kind: string;
   audience: string;
-  respondentName: string;
+  /** Null when the respondent's account no longer exists. */
+  respondentName: string | null;
   byViewer: boolean;
   submittedAt: Date;
   answers: AnswerView[];
@@ -88,7 +92,7 @@ export function answersFor(schema: unknown, responses: Record<string, unknown>):
 }
 
 /** The responses on this pairing that `actor` may read, newest first. */
-export async function pairingResponses(db: Db, actor: Actor, pairingId: string): Promise<ResponseView[]> {
+export async function pairingResponses(db: Db, actor: Actor, pairingId: string, locale?: string): Promise<ResponseView[]> {
   const scope: SQL[] = [eq(feedbackResponses.pairingId, pairingId)];
   if (!isAdmin(actor) && actor.role !== "mentor") scope.push(eq(feedbackResponses.respondentUserId, actor.id));
   const rows = await db
@@ -125,10 +129,10 @@ export async function pairingResponses(db: Db, actor: Actor, pairingId: string):
   });
   return current.map((r) => ({
     id: r.id,
-    title: formTitle(r.schema, r.kind, r.audience),
+    title: ownFormTitle(r.schema, locale),
     kind: r.kind,
     audience: r.audience,
-    respondentName: r.respondentName ?? "A former user",
+    respondentName: r.respondentName ?? null,
     byViewer: r.respondentUserId === actor.id,
     submittedAt: r.submittedAt,
     answers: answersFor(r.schema, (r.responses ?? {}) as Record<string, unknown>),

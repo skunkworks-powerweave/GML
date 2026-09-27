@@ -37,12 +37,10 @@ export const QUARTER_AFTER: Record<string, number | undefined> = {
   progress_2: 4,
 };
 
-export const KIND_LABELS: Record<string, string> = {
-  baseline: "Baseline",
-  progress_1: "Progress check 1",
-  progress_2: "Progress check 2",
-  final: "Final reflection",
-};
+// What each kind is CALLED ("Baseline", "Progress check 1", ...) is in the
+// translation bundles, not here: mentorship.formKind and mentorship.formTitle
+// select on the kind, so a page resolves the name in its reader's language.
+// This used to be an English KIND_LABELS map.
 
 /** schema.purpose, or null for a quarterly form (which carries none). */
 export function formPurpose(schema: unknown): string | null {
@@ -84,14 +82,32 @@ export function quarterlyVersionByKind(
 }
 
 /**
- * What to call a form: its own title, or a readable name built from its kind
- * and audience. The fallback used to be `${kind.replace("_", " ")} · ${audience}`
- * -- "baseline · mentor" -- and the /forms catalogue labelled rows by kind only,
- * so the School visit checklist and the mentor baseline were both "Baseline
- * for mentors".
+ * The form's own title (schema.title, data an administrator loaded), or null
+ * when it has none. A form may also carry its Hindi title (titleHindi, as the
+ * seeds write it, or hindiTitle, as FormRenderer's type names it); a Hindi
+ * reader gets that one.
  */
-export function formTitle(schema: unknown, kind: string, audience: string): string {
-  const t = schema && typeof schema === "object" ? (schema as { title?: unknown }).title : undefined;
-  if (typeof t === "string" && t.trim().length > 0) return t;
-  return `${KIND_LABELS[kind] ?? kind} — ${audience === "mentor" ? "Mentor" : "Mentee"}`;
+export function ownFormTitle(schema: unknown, locale?: string): string | null {
+  const s = schema && typeof schema === "object" ? (schema as Record<string, unknown>) : {};
+  const text = (v: unknown) => (typeof v === "string" && v.trim().length > 0 ? v : null);
+  if (locale === "hi") {
+    const hindi = text(s.titleHindi) ?? text(s.hindiTitle);
+    if (hindi) return hindi;
+  }
+  return text(s.title);
+}
+
+/** A translator over the mentorship namespace (getTranslations("mentorship")). */
+export type FormTitleTranslator = (key: string, values: Record<string, string>) => string;
+
+/**
+ * What to call a form: its own title, or a readable name built from its kind
+ * and audience -- "Baseline — Mentor", in the reader's language
+ * (mentorship.formTitle). The fallback used to be
+ * `${kind.replace("_", " ")} · ${audience}` -- "baseline · mentor" -- and the
+ * /forms catalogue labelled rows by kind only, so the School visit checklist
+ * and the mentor baseline were both "Baseline for mentors".
+ */
+export function formTitle(schema: unknown, kind: string, audience: string, t: FormTitleTranslator, locale?: string): string {
+  return ownFormTitle(schema, locale) ?? t("formTitle", { kind, audience });
 }

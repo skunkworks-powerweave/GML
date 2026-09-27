@@ -12,13 +12,22 @@
 // variables (--ink/--paper/--line/--indigo/--saffron/--lichen/--rust/--r-*/
 // --serif/--deva). No Tailwind classes; tokens-only.
 
+//
+// The renderer's own words (buttons, the autosave notice, validation
+// messages, the default scale captions) are in the translation bundles under
+// mentorship.client.formRunner / .validation. The questions are data and are
+// shown as stored, with their seeded Hindi beside them.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { clearDraft, type DraftKey } from "@/lib/form-draft";
 import { failureMessage, keepLocalCopy, takeNewerLocalCopy, useDraftAutosave } from "./draft-resilience";
 import {
   MAX_TEXT_LENGTH,
   validateResponses,
+  validationMessage,
   type FormField as ServerFormField,
+  type ValidationTranslator,
 } from "@/lib/forms/validate";
 
 /**
@@ -121,13 +130,14 @@ type FormRendererProps = {
   context?: Record<string, string>;
 };
 
-const DEFAULT_LIKERT: [string, string, string, string, string] = [
-  "Strongly disagree",
-  "Disagree",
-  "Neutral",
-  "Agree",
-  "Strongly agree",
-];
+/**
+ * The five points of a likert with no captions of its own, as keys under
+ * mentorship.client.formRunner.likert. Shared with MobileFormRunner.
+ */
+export const DEFAULT_LIKERT_KEYS = ["stronglyDisagree", "disagree", "neutral", "agree", "stronglyAgree"] as const;
+
+/** A rating's verdict per star count (0 = unrated), as keys under ...formRunner.rating. */
+const RATING_VERDICT_KEYS = ["notRated", "emerging", "developing", "proficient", "strong", "exemplary"] as const;
 
 const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -181,11 +191,12 @@ export function isHindiNameField(name: string): boolean {
  * characters, choices that are not options, too many selections and scale
  * answers off the scale -- so an answer could pass here, travel over a slow
  * link, and come back refused. lib/forms/validate.ts is dependency-free, so
- * both sides now run the one validator.
+ * both sides now run the one validator. `t` is the runner's
+ * useTranslations("mentorship.client"): the message is in the reader's language.
  */
-export function validateField(field: FormField, raw: unknown): string | null {
+export function validateField(field: FormField, raw: unknown, t: ValidationTranslator): string | null {
   const [first] = validateResponses([field as ServerFormField], { [field.name]: raw });
-  return first?.message ?? null;
+  return first ? validationMessage(first, t) : null;
 }
 
 /**
@@ -235,10 +246,11 @@ export function optionText(o: FieldOption): string {
 export function validateAll(
   fields: FormField[],
   values: Record<string, unknown>,
+  t: ValidationTranslator,
 ): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const f of fields) {
-    const err = validateField(f, values[f.name]);
+    const err = validateField(f, values[f.name], t);
     if (err) errors[f.name] = err;
   }
   return errors;
@@ -350,6 +362,7 @@ function Select({
   value: unknown;
   onChange: (v: string) => void;
 }) {
+  const t = useTranslations("mentorship.client");
   return (
     <select
       id={field.name}
@@ -359,7 +372,7 @@ function Select({
       onChange={(e) => onChange(e.target.value)}
       style={inputBaseStyle}
     >
-      <option value="">Choose…</option>
+      <option value="">{t("formRunner.choose")}</option>
       {normalizeOptions(field.options).map((o) =>(
         <option key={o.value} value={o.value}>
           {optionText(o)}
@@ -499,7 +512,9 @@ function Likert({
   value: unknown;
   onChange: (v: number) => void;
 }) {
-  const labels = field.likertLabels ?? DEFAULT_LIKERT;
+  const t = useTranslations("mentorship.client");
+  // The schema's own captions are data; the default five are the renderer's.
+  const labels = field.likertLabels ?? DEFAULT_LIKERT_KEYS.map((k) => t(`formRunner.likert.${k}`));
   // Accept a STRING too. Prior answers come back as strings.
   //
   // A submitted response is read out of FormData and stored in
@@ -572,17 +587,11 @@ function Rating({
   value: unknown;
   onChange: (v: number) => void;
 }) {
+  const t = useTranslations("mentorship.client");
   const max = field.starsMax ?? 5;
   // Same string-vs-number problem as Likert above.
   const current = coerceScaleValue(value) ?? 0;
-  const verdict = [
-    "Not yet rated",
-    "Emerging",
-    "Developing",
-    "Proficient",
-    "Strong",
-    "Exemplary",
-  ];
+  const verdict = RATING_VERDICT_KEYS.map((k) => t(`formRunner.rating.${k}`));
   return (
     <div role="group" aria-label={field.label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
       {/* THE VALUE HAS TO LEAVE THE PAGE.
@@ -604,7 +613,7 @@ function Rating({
             // The state lives in the NAME, once. `on` is cumulative (stars
             // 1..current all fill), so aria-pressed={on} would announce three
             // pressed buttons for a rating of 3.
-            aria-label={`Rate ${n} of ${max}${current === n ? " (selected)" : ""}`}
+            aria-label={t(current === n ? "formRunner.rateAriaSelected" : "formRunner.rateAria", { n, max })}
             style={{
               width: 38,
               height: 38,
@@ -669,6 +678,8 @@ export function FormRenderer({
     );
   }
 
+  const t = useTranslations("mentorship.client");
+  const tAction = useTranslations("action");
   const [values, setValues] = useState<Record<string, unknown>>(initialResponses ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useSubmittingUntilServerAnswers(initialResponses);
@@ -804,7 +815,7 @@ export function FormRenderer({
         flushedRef.current = false;
         return;
       }
-      const errs = validateAll(schema.fields ?? [], values);
+      const errs = validateAll(schema.fields ?? [], values, t);
       // Set state for rendering; do NOT use it for the gate below.
       setErrors(errs);
       setSubmitError(null);
@@ -869,7 +880,7 @@ export function FormRenderer({
         setSubmitting(false);
       }
     },
-    [action, autosaveEnabled, cancelRetry, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, values],
+    [action, autosaveEnabled, cancelRetry, draftKey, flushSave, onSubmit, schema.fields, setSubmitting, t, values],
   );
 
   // Spec 131-B — "Saved Ns ago" indicator. Internal-only; we don't expose
@@ -878,13 +889,13 @@ export function FormRenderer({
   // a 1 s ticker for free — no extra timer needed here.
   const savedIndicator = useMemo(() => {
     if (!autosaveEnabled) return null;
-    if (saveState === "error") return failureMessage(saveFailure ?? "error");
-    if (saveState === "pending") return "Saving…";
-    if (lastSavedAt === null) return "Not saved yet";
+    if (saveState === "error") return failureMessage(saveFailure ?? "error", t);
+    if (saveState === "pending") return tAction("saving");
+    if (lastSavedAt === null) return t("formRunner.notSavedYet");
     const seconds = Math.max(0, Math.floor(((nowMs ?? lastSavedAt) - lastSavedAt) / 1000));
-    if (seconds < 1) return "Saved just now";
-    return `Saved ${seconds}s ago`;
-  }, [autosaveEnabled, lastSavedAt, saveFailure, saveState, nowMs]);
+    if (seconds < 1) return t("formRunner.savedJustNow");
+    return t("formRunner.savedAgo", { seconds });
+  }, [autosaveEnabled, lastSavedAt, saveFailure, saveState, nowMs, t, tAction]);
 
   return (
     <form
@@ -1071,7 +1082,7 @@ export function FormRenderer({
             opacity: submitting ? 0.7 : 1,
           }}
         >
-          {submitting ? "Submitting…" : submitLabel ?? "Submit"}
+          {submitting ? t("formRunner.submitting") : submitLabel ?? tAction("submit")}
         </button>
       </div>
     </form>

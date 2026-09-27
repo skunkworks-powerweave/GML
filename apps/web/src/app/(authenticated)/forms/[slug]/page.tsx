@@ -24,9 +24,9 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { getLocale, getTranslations } from "next-intl/server";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { notify } from "@gml/db/notify";
 import {
   feedbackForms,
   feedbackResponses,
@@ -44,6 +44,7 @@ import { recordAudit } from "@/lib/audit";
 import { assertSectionGate } from "@/lib/gates";
 import {
   validateResponses,
+  validationMessage,
   audienceAllows,
   type FormField,
   type FormFieldOption,
@@ -54,6 +55,8 @@ import { isUuid } from "@/lib/ids";
 import { formTitle, isQuarterlyForm, QUARTER_AFTER } from "@/lib/forms/quarterly";
 import { parseFormSchema } from "@/lib/forms/schema";
 import { getDeviceType } from "@/lib/device";
+import { notifyLocalized } from "@/lib/notify-localized";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import type { RoleName } from "@gml/shared/auth/roles";
 import { FormRenderer } from "@/components/forms/FormRenderer";
 // Spec 133 — Mobile runner is a drop-in replacement for FormRenderer when
@@ -64,7 +67,10 @@ import { MobileFormRunner } from "@/components/forms/MobileFormRunner";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Feedback form" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("mentorship");
+  return { title: t("form.metaTitle") };
+}
 
 // ---------------------------------------------------------------------------
 // Slug parsing — `${kind}-${audience}-${version}`.
@@ -333,9 +339,11 @@ export async function submitFormAction(formData: FormData): Promise<void> {
 
   const errors = validateResponses((schema.fields ?? []) as FormField[], responses);
   if (errors.length > 0) {
+    // In the submitter's language: the runner shows it to them as it comes.
+    const tClient = await getTranslations("mentorship.client");
     const summary = errors
       .slice(0, 3)
-      .map((e) => e.message)
+      .map((e) => validationMessage(e, tClient))
       .join(" ");
     // KEEP THE PAIRING. This redirect used to drop it, so the page came back
     // with no pairingId and the corrected resubmission was refused as
@@ -493,8 +501,9 @@ export async function submitFormAction(formData: FormData): Promise<void> {
  *
  * NOTHING THE SECTION PASSWORD GUARDS goes into the row -- no names, no
  * answers: /inbox has no gate (see logMeetingAction). And nothing here can
- * fail the submission, which has already been saved: notify() never throws,
- * and a failed lookup is logged and dropped.
+ * fail the submission, which has already been saved: notifyLocalized() never
+ * throws, and a failed lookup is logged and dropped. Each row is in its
+ * recipient's language (lib/notify-localized.ts).
  */
 async function notifyFinalSubmitted(
   pairing: { mentorId: string; teacherId: string },
@@ -515,14 +524,14 @@ async function notifyFinalSubmitted(
     // an account deleted between the lookup above and that INSERT (a foreign
     // key violation) would cost everyone else their notice.
     for (const userId of recipients) {
-      await notify(
+      await notifyLocalized(
         db,
+        "mentorship",
         [
           {
             userId,
             kind: "pairing.final_submitted",
-            subject: "Final (Q4) feedback was submitted on a mentorship pairing",
-            body: null,
+            text: (t) => ({ subject: t("notifications.finalSubmitted"), body: null }),
             entityType: "mentor_pairing",
             entityId: pairingId,
           },
@@ -576,6 +585,8 @@ export default async function FormRunnerPage({
   // The validator's own summary, echoed back by the ?error=invalid redirect.
   // Rendered as text inside JSX, so it cannot inject markup.
   const errorDetail = readParam(sp.detail);
+  const t = await getTranslations("mentorship");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
 
   const parsed = parseSlug(slug);
   if (!parsed) return <NotFoundShell slug={slug} />;
@@ -649,8 +660,8 @@ export default async function FormRunnerPage({
     const quarter = sanitizeContextValue("quarter", readParam(sp.quarter)) ?? String(pairing.currentQuarter ?? 1);
     aboutLine =
       sessionRole === "teacher"
-        ? `With your mentor ${mentor?.name ?? "—"} · Q${quarter}`
-        : `About ${mentee?.name ?? "—"} · Q${quarter}`;
+        ? t("form.aboutMentor", { name: mentor?.name ?? "—", quarter })
+        : t("form.aboutMentee", { name: mentee?.name ?? "—", quarter });
   }
 
   // THE DRAFT FOR THIS PAIRING. Selected by user+template alone, a mentor's
@@ -747,7 +758,7 @@ export default async function FormRunnerPage({
 
   // The four seeded mentor forms carry no title; the fallback used to be
   // "baseline · mentor". lib/forms/quarterly.ts formTitle.
-  const title = formTitle(schema, parsed.kind, parsed.audience);
+  const title = formTitle(schema, parsed.kind, parsed.audience, t, await getLocale());
   const hindiTitle = schema.hindiTitle;
   const description = schema.description;
 
@@ -761,10 +772,10 @@ export default async function FormRunnerPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 6, textDecoration: "none" }}
         >
-          {pairingId ? "← Pairing" : "← Forms"}
+          {pairingId ? t("form.backToPairing") : t("form.backToForms")}
         </Link>
         <div className="label">
-          Form · {parsed.kind.replace("_", " ")} · {parsed.audience}
+          {t("form.eyebrow", { kind: parsed.kind, audience: parsed.audience })}
         </div>
         <h1 style={{ fontFamily: "var(--serif)", fontSize: 26, marginTop: 4, lineHeight: 1.2 }}>
           {title}
@@ -811,25 +822,25 @@ export default async function FormRunnerPage({
           </span>
           {draft ? (
             <span className="chip chip-lichen">
-              Draft loaded · saved{" "}
-              <span className="mono">
-                {new Date(draft.updatedAt).toLocaleString("en-IN", {
+              {t.rich("form.draftLoaded", {
+                date: new Date(draft.updatedAt).toLocaleString(intl, {
                   dateStyle: "medium",
                   timeStyle: "short",
-                })}
-              </span>
+                }),
+                when: (chunks) => <span className="mono">{chunks}</span>,
+              })}
             </span>
           ) : (
-            <span className="chip">No draft yet</span>
+            <span className="chip">{t("form.noDraft")}</span>
           )}
         </div>
         {priorSubmittedAt && isQuarterlyForm(form.schema) ? (
           // Sending a quarter's form again replaces the record rather than
           // filing a second one (submitFormAction); nothing used to say so.
           <p data-testid="form-already-sent" style={{ marginTop: 8, fontSize: 13, color: "var(--ink-2)" }}>
-            You already sent this form on{" "}
-            {new Date(priorSubmittedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}. Sending
-            it again replaces your earlier answers.
+            {t("form.alreadySent", {
+              date: new Date(priorSubmittedAt).toLocaleString(intl, { dateStyle: "medium", timeStyle: "short" }),
+            })}
           </p>
         ) : null}
       </div>
@@ -864,40 +875,38 @@ export default async function FormRunnerPage({
                 {/* Pointed at /inbox, which has no feedback-form card: the
                     advice was a dead end. The pairing pages and /forms both
                     carry per-pairing links now. */}
-                This form has to be opened for a specific mentorship pairing so we
-                can attach your answers to it. Choose the pairing from{" "}
-                <Link href="/mentorship" style={{ color: "var(--indigo)" }}>
-                  Mentorship
-                </Link>{" "}
-                or pick the name under the form on{" "}
-                <Link href="/forms" style={{ color: "var(--indigo)" }}>
-                  Forms
-                </Link>
-                .
+                {t.rich("form.errors.missingPairing", {
+                  mentorship: (chunks) => (
+                    <Link href="/mentorship" style={{ color: "var(--indigo)" }}>
+                      {chunks}
+                    </Link>
+                  ),
+                  forms: (chunks) => (
+                    <Link href="/forms" style={{ color: "var(--indigo)" }}>
+                      {chunks}
+                    </Link>
+                  ),
+                })}
               </>
             ) : error === "wrong_audience" ? (
-              <>
-                This form is not meant for your role, so it cannot be submitted from
-                your account. If you think that is wrong, contact your programme
-                administrator.
-              </>
+              <>{t("form.errors.wrongAudience")}</>
             ) : error === "pairing_closed" ? (
-              <>This pairing is complete, so its record is closed and no more forms can be filed for it. Nothing was saved.</>
+              <>{t("form.errors.pairingClosed")}</>
             ) : error === "form_broken" ? (
-              <>This form&apos;s definition is broken, so it cannot be submitted. Please tell your programme administrator.</>
+              <>{t("form.errors.formBroken")}</>
             ) : error === "invalid" ? (
               <>
-                <strong>Your answers could not be saved.</strong>
+                <strong>{t("form.errors.invalid")}</strong>
                 {errorDetail ? (
                   <div style={{ marginTop: 6 }}>{errorDetail}</div>
                 ) : (
                   <div style={{ marginTop: 6 }}>
-                    Please check the required questions and try again.
+                    {t("form.errors.invalidHelp")}
                   </div>
                 )}
               </>
             ) : (
-              <>That submission could not be completed. Please try again.</>
+              <>{t("form.errors.unknown")}</>
             )}
           </div>
         ) : null}
@@ -951,9 +960,7 @@ export default async function FormRunnerPage({
             lineHeight: 1.5,
           }}
         >
-          Your responses are saved as you type (draft) and only sealed into the
-          record when you press <em>Submit</em>. Until then you can navigate
-          away and return without losing what you typed.
+          {t.rich("form.footer", { em: (chunks) => <em>{chunks}</em> })}
         </footer>
       </div>
     </div>
@@ -965,17 +972,16 @@ export default async function FormRunnerPage({
 // submit, rather than an HTTP 500 for everyone who opens the form.
 // ---------------------------------------------------------------------------
 
-function BrokenFormShell({ slug }: { slug: string }) {
+async function BrokenFormShell({ slug }: { slug: string }) {
+  const t = await getTranslations("mentorship");
   return (
     <div className="page-body" style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }} role="alert">
-      <div className="label">Form unavailable</div>
+      <div className="label">{t("form.broken.eyebrow")}</div>
       <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
-        This form cannot be shown right now.
+        {t("form.broken.title")}
       </h1>
       <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 8 }}>
-        The definition of <code className="mono">{slug}</code> is not one the form runner can draw.
-        Nothing you have already submitted is affected. Please let your programme administrator
-        know so they can correct it in Admin → Forms.
+        {t.rich("form.broken.body", { slug, code: (chunks) => <code className="mono">{chunks}</code> })}
       </p>
     </div>
   );
@@ -985,21 +991,25 @@ function BrokenFormShell({ slug }: { slug: string }) {
 // In-route 404 — keeps the global error boundary out of it.
 // ---------------------------------------------------------------------------
 
-function NotFoundShell({ slug }: { slug: string }) {
+async function NotFoundShell({ slug }: { slug: string }) {
+  const t = await getTranslations("mentorship");
   return (
     <div className="page-body" style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }}>
-      <div className="label">Form not found</div>
+      <div className="label">{t("form.notFound.eyebrow")}</div>
       <h1 className="serif" style={{ fontSize: 26, marginTop: 6 }}>
-        No active form matches this URL.
+        {t("form.notFound.title")}
       </h1>
       <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 8 }}>
-        Slug <code className="mono">{slug}</code> doesn&apos;t resolve to any
-        active <code className="mono">feedback_forms</code> row. Head back to
-        your{" "}
-        <Link href="/forms" style={{ color: "var(--indigo)" }}>
-          forms
-        </Link>{" "}
-        and open the form from there.
+        {t.rich("form.notFound.body", {
+          slug,
+          code: (chunks) => <code className="mono">{chunks}</code>,
+          table: (chunks) => <code className="mono">{chunks}</code>,
+          link: (chunks) => (
+            <Link href="/forms" style={{ color: "var(--indigo)" }}>
+              {chunks}
+            </Link>
+          ),
+        })}
       </p>
     </div>
   );

@@ -28,8 +28,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { and, eq, notInArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
-import { notify } from "@gml/db/notify";
 import { mentorPairings, mentorMeetings, mentors, teachers, videoSubmissions } from "@gml/db/schema";
+import { notifyLocalized } from "@/lib/notify-localized";
 import { auth } from "@/auth";
 import { requireRole } from "@/lib/guards";
 import { hasAnyRole } from "@gml/shared/auth/roles";
@@ -49,9 +49,12 @@ async function pairingParties(pairing: { mentorId: string; teacherId: string }) 
   return { mentor: m ?? null, mentee: t ?? null };
 }
 
-/** "Thu 2 Oct, 10:30 am", in the programme's timezone. */
-function meetingWhen(d: Date): string {
-  return d.toLocaleString("en-IN", {
+/**
+ * "Thu 2 Oct, 10:30 am", in the programme's timezone and in the language of
+ * `intl` -- the Intl tag of the notification's RECIPIENT (notifyLocalized).
+ */
+function meetingWhen(d: Date, intl: string): string {
+  return d.toLocaleString(intl, {
     timeZone: "Asia/Kolkata",
     weekday: "short",
     day: "numeric",
@@ -177,16 +180,22 @@ export async function logMeetingAction(formData: FormData): Promise<void> {
   // as its body put the pairing roster and the meeting record in front of a
   // borrowed session that never entered the password. The row opens the
   // (gated) pairing page, which shows both.
+  //
+  // IN EACH RECIPIENT'S LANGUAGE, date included: the row is read by the person
+  // it is addressed to, not by whoever logged the meeting.
   const parties = await pairingParties(pairing);
-  await notify(
+  await notifyLocalized(
     db,
+    "mentorship",
     [parties.mentor?.userId, parties.mentee?.userId]
       .filter((u): u is string => Boolean(u))
       .map((userId) => ({
         userId,
         kind: "meeting.scheduled",
-        subject: `A mentorship meeting was logged for ${meetingWhen(scheduledAt)}`,
-        body: null,
+        text: (t, intl) => ({
+          subject: t("notifications.meetingLogged", { when: meetingWhen(scheduledAt, intl) }),
+          body: null,
+        }),
         entityType: "mentor_pairing",
         entityId: pairingId,
       })),
@@ -289,14 +298,17 @@ export async function cancelMeetingAction(formData: FormData): Promise<void> {
   }
 
   const parties = await pairingParties(pairing);
-  await notify(
+  await notifyLocalized(
     db,
+    "mentorship",
     [parties.mentor?.userId, parties.mentee?.userId]
       .filter((u): u is string => Boolean(u))
       .map((userId) => ({
         userId,
         kind: "meeting.cancelled",
-        subject: `Mentorship meeting ${meetingWhen(new Date(meeting.scheduledAt))} cancelled`,
+        text: (t, intl) => ({
+          subject: t("notifications.meetingCancelled", { when: meetingWhen(new Date(meeting.scheduledAt), intl) }),
+        }),
         entityType: "mentor_pairing",
         entityId: pairingId,
       })),
