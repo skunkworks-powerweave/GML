@@ -7,15 +7,20 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import { resources, resourceSubjects, subjects } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
+import { enumLabel, present, repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Reading" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("resource.metaTitle") };
+}
 
 export default async function RepoResourceDetailPage({
   params,
@@ -46,9 +51,11 @@ export default async function RepoResourceDetailPage({
     .where(eq(resourceSubjects.resourceId, id));
 
   const tags: string[] = Array.isArray(res.tags) ? res.tags : [];
+  const t = await getTranslations("repo");
+  const kindLabel = enumLabel(t, "resourceKind", res.kind);
 
   const updatedLabel = res.updatedAt
-    ? new Date(res.updatedAt).toLocaleDateString("en-IN", {
+    ? new Date(res.updatedAt).toLocaleDateString(await repoIntlLocale(), {
         day: "numeric",
         month: "short",
         year: "numeric",
@@ -64,7 +71,7 @@ export default async function RepoResourceDetailPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
-          ← Reading material
+          {t("resource.back")}
         </Link>
         <div
           style={{
@@ -76,7 +83,7 @@ export default async function RepoResourceDetailPage({
         >
           <div>
             <div className="label">
-              {res.kind}{" "}
+              {kindLabel}{" "}
               <span
                 className="mono"
                 style={{ textTransform: "none", letterSpacing: 0, color: "var(--ink-3)" }}
@@ -88,9 +95,14 @@ export default async function RepoResourceDetailPage({
               {res.name}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-              {res.pages ? `${res.pages} pages · ` : ""}
-              {res.owner ? `maintained by ${res.owner} · ` : ""}
-              last updated <span className="mono">{updatedLabel}</span>.
+              {t.rich("resource.summary", {
+                hasPages: present(res.pages),
+                pages: res.pages ?? 0,
+                hasOwner: present(res.owner),
+                owner: res.owner ?? "",
+                updated: updatedLabel,
+                mono: (chunks) => <span className="mono">{chunks}</span>,
+              })}
             </p>
           </div>
 
@@ -109,7 +121,7 @@ export default async function RepoResourceDetailPage({
                 className="btn btn-primary"
                 style={{ textDecoration: "none" }}
               >
-                View PDF
+                {t("resource.viewPdf")}
               </Link>
             ) : null}
             {res.externalUrl ? (
@@ -120,7 +132,7 @@ export default async function RepoResourceDetailPage({
                 className="btn"
                 style={{ textDecoration: "none" }}
               >
-                Open external link
+                {t("resource.external")}
               </a>
             ) : null}
           </div>
@@ -134,7 +146,7 @@ export default async function RepoResourceDetailPage({
         className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]"
         style={{ padding: 0 }}
       >
-        <SectionCard title="About this document">
+        <SectionCard title={t("resource.aboutTitle")}>
           <div
             style={{
               padding: "8px 18px 16px",
@@ -144,33 +156,35 @@ export default async function RepoResourceDetailPage({
             }}
           >
             <p>
-              {res.kind}
-              {res.owner ? ` maintained by ${res.owner}` : ""}. Used by teachers in their lesson
-              preparation and tagged with {subjectCount} subject
-              {subjectCount === 1 ? "" : "s"}.
+              {t("resource.about", {
+                kind: kindLabel,
+                hasOwner: present(res.owner),
+                owner: res.owner ?? "",
+                count: subjectCount,
+              })}
             </p>
             <p style={{ color: "var(--ink-3)", fontSize: 12, fontStyle: "italic" }}>
-              Full document preview opens in the in-browser viewer via the buttons above.
+              {t("resource.previewNote")}
             </p>
           </div>
         </SectionCard>
 
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <SectionCard title="Details">
+          <SectionCard title={t("common.details")}>
             <div style={{ padding: "0 14px 8px" }}>
-              <KVRow label="Kind">
-                <Chip>{res.kind}</Chip>
+              <KVRow label={t("common.kind")}>
+                <Chip>{kindLabel}</Chip>
               </KVRow>
-              <KVRow label="Owner">
+              <KVRow label={t("common.owner")}>
                 {res.owner ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
               </KVRow>
-              <KVRow label="Pages">
+              <KVRow label={t("common.pages")}>
                 {res.pages ?? <span style={{ color: "var(--ink-4)" }}>—</span>}
               </KVRow>
-              <KVRow label="Updated">
+              <KVRow label={t("common.updated")}>
                 <span style={{ fontFamily: "var(--mono)" }}>{updatedLabel}</span>
               </KVRow>
-              <KVRow label="Subjects">
+              <KVRow label={t("common.subjects")}>
                 {subjectRows.length === 0 ? (
                   <span style={{ color: "var(--ink-4)" }}>—</span>
                 ) : (
@@ -183,11 +197,11 @@ export default async function RepoResourceDetailPage({
                   )
                 )}
               </KVRow>
-              <KVRow label="Tags">
+              <KVRow label={t("resource.tags")}>
                 {tags.length === 0 ? (
                   <span style={{ color: "var(--ink-4)" }}>—</span>
                 ) : (
-                  tags.map((t) => <Chip key={t}>{t}</Chip>)
+                  tags.map((tag) => <Chip key={tag}>{tag}</Chip>)
                 )}
               </KVRow>
             </div>

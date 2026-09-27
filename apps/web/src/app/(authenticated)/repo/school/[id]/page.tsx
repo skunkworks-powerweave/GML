@@ -5,6 +5,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@gml/db";
 import {
@@ -20,10 +21,14 @@ import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
+import { districtLabel, enumLabel, type RepoTranslator } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "School" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("school.metaTitle") };
+}
 
 const READ_ROLES = new Set([
   "super_admin",
@@ -33,10 +38,11 @@ const READ_ROLES = new Set([
   "teacher",
 ]);
 
-const DISTRICT_CHIP: Record<string, { kind: string; label: string }> = {
-  leh: { kind: "chip-indigo", label: "Leh" },
-  kargil: { kind: "chip-saffron", label: "Kargil" },
-  kgl: { kind: "chip-saffron", label: "Kargil" },
+// The label is the district's name in the viewer's language (repo.district.*).
+const DISTRICT_CHIP: Record<string, { kind: string }> = {
+  leh: { kind: "chip-indigo" },
+  kargil: { kind: "chip-saffron" },
+  kgl: { kind: "chip-saffron" },
 };
 
 const STAGE_CHIP: Record<string, string> = {
@@ -45,21 +51,20 @@ const STAGE_CHIP: Record<string, string> = {
   High: "chip-saffron",
 };
 
-const SESSION_STATUS_CHIP: Record<string, { kind: string; label: string }> = {
-  planned: { kind: "", label: "Planned" },
-  in_progress: { kind: "chip-saffron", label: "In progress" },
-  complete: { kind: "chip-lichen", label: "Complete" },
-  cancelled: { kind: "", label: "Cancelled" },
+// The label is repo.sessionStatus.<status>, in the viewer's language.
+const SESSION_STATUS_CHIP: Record<string, { kind: string }> = {
+  planned: { kind: "" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  cancelled: { kind: "" },
 };
 
-function districtChipFor(code: string | null | undefined, name: string | null | undefined) {
+function districtChipFor(t: RepoTranslator, code: string | null | undefined, name: string | null | undefined) {
   const key = (code ?? name ?? "").toLowerCase();
-  return (
-    DISTRICT_CHIP[key] ?? {
-      kind: "",
-      label: name ?? code ?? "—",
-    }
-  );
+  const known = DISTRICT_CHIP[key];
+  return known
+    ? { kind: known.kind, label: districtLabel(t, key) }
+    : { kind: "", label: name ?? code ?? "—" };
 }
 
 function initialsOf(name: string): string {
@@ -82,6 +87,7 @@ export default async function RepoSchoolDetailPage({
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
+  const t = await getTranslations("repo");
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
@@ -155,7 +161,7 @@ export default async function RepoSchoolDetailPage({
     .orderBy(desc(classroomSessions.scheduledDate), desc(classroomSessions.scheduledTime))
     .limit(12);
 
-  const districtChip = districtChipFor(school.districtCode, school.districtName);
+  const districtChip = districtChipFor(t, school.districtCode, school.districtName);
 
   // Spec 137 — device-aware MobileDetailFrame adoption. The mobile chrome
   // wraps the existing two-column desktop body with a thin back-arrow header.
@@ -170,7 +176,7 @@ export default async function RepoSchoolDetailPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, display: "inline-flex" }}
         >
-          ← Schools
+          {t("school.back")}
         </Link>
         <div
           style={{
@@ -182,14 +188,20 @@ export default async function RepoSchoolDetailPage({
         >
           <div>
             <div className="label">
-              School · <span className="mono" style={{ textTransform: "none" }}>{school.code}</span>
+              {t.rich("school.label", {
+                code: school.code,
+                mono: (chunks) => (
+                  <span className="mono" style={{ textTransform: "none" }}>
+                    {chunks}
+                  </span>
+                ),
+              })}
             </div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>
               {school.name}
             </h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
-              {school.zoneName ?? "—"}, {districtChip.label} district. Government school under
-              SCERT Ladakh, partnered with the programme since 2024.
+              {t("school.intro", { zone: school.zoneName ?? "—", district: districtChip.label })}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -208,22 +220,22 @@ export default async function RepoSchoolDetailPage({
         {/* Left column — Classes + Recent sessions */}
         <div style={{ display: "grid", gap: 16 }}>
           <SectionCard
-            title={`Classes (${classRows.length})`}
-            sub="Tap to drill into a grade"
+            title={t("school.classesTitle", { count: classRows.length })}
+            sub={t("school.classesSub")}
           >
             {classRows.length === 0 ? (
               <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
-                No classes recorded for this school yet.
+                {t("school.noClasses")}
               </div>
             ) : (
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Grade</th>
-                    <th>Stage</th>
-                    <th>Students</th>
-                    <th>Sections</th>
-                    <th>Class teacher</th>
+                    <th>{t("common.grade")}</th>
+                    <th>{t("common.stage")}</th>
+                    <th>{t("common.students")}</th>
+                    <th>{t("common.sections")}</th>
+                    <th>{t("common.classTeacher")}</th>
                     <th />
                   </tr>
                 </thead>
@@ -232,9 +244,9 @@ export default async function RepoSchoolDetailPage({
                     const stageKind = STAGE_CHIP[c.stage] ?? "";
                     return (
                       <tr key={c.id}>
-                        <td style={{ fontWeight: 500 }}>Grade {c.grade}</td>
+                        <td style={{ fontWeight: 500 }}>{t("common.gradeN", { grade: c.grade })}</td>
                         <td>
-                          <span className={`chip ${stageKind}`}>{c.stage}</span>
+                          <span className={`chip ${stageKind}`}>{enumLabel(t, "stage", c.stage)}</span>
                         </td>
                         <td className="mono" style={{ fontSize: 12 }}>
                           {c.studentsCount}
@@ -264,30 +276,31 @@ export default async function RepoSchoolDetailPage({
           </SectionCard>
 
           <SectionCard
-            title={`Sessions (${sessionRows.length})`}
-            sub="Most recent first"
+            title={t("school.sessionsTitle", { count: sessionRows.length })}
+            sub={t("common.mostRecentFirst")}
           >
             {sessionRows.length === 0 ? (
               <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
-                No sessions recorded for this school yet.
+                {t("school.noSessions")}
               </div>
             ) : (
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Grade</th>
-                    <th>Subject</th>
-                    <th>Topic</th>
-                    <th>Teacher</th>
-                    <th>Status</th>
+                    <th>{t("common.date")}</th>
+                    <th>{t("common.time")}</th>
+                    <th>{t("common.grade")}</th>
+                    <th>{t("common.subject")}</th>
+                    <th>{t("common.topic")}</th>
+                    <th>{t("common.teacher")}</th>
+                    <th>{t("common.status")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sessionRows.map((s) => {
                     const statusInfo =
                       SESSION_STATUS_CHIP[s.status] ?? SESSION_STATUS_CHIP.planned;
+                    const statusText = enumLabel(t, "sessionStatus", SESSION_STATUS_CHIP[s.status] ? s.status : "planned");
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>
@@ -316,7 +329,7 @@ export default async function RepoSchoolDetailPage({
                           ) : null}
                         </td>
                         <td>
-                          <span className={`chip ${statusInfo.kind}`}>{statusInfo.label}</span>
+                          <span className={`chip ${statusInfo.kind}`}>{statusText}</span>
                         </td>
                       </tr>
                     );
@@ -329,27 +342,27 @@ export default async function RepoSchoolDetailPage({
 
         {/* Right column — Details + Teachers list */}
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <SectionCard title="Details">
+          <SectionCard title={t("common.details")}>
             <div style={{ padding: "0 14px 8px" }}>
-              <KVRow label="Code">
+              <KVRow label={t("common.code")}>
                 <span className="mono">{school.code}</span>
               </KVRow>
-              <KVRow label="Zone">
+              <KVRow label={t("common.zone")}>
                 <span className={`chip ${districtChip.kind}`}>{school.zoneName ?? "—"}</span>
               </KVRow>
-              <KVRow label="District">{districtChip.label}</KVRow>
-              <KVRow label="Teachers">{teacherRows.length}</KVRow>
-              <KVRow label="Classes">{classRows.length}</KVRow>
-              <KVRow label="Sessions logged">{sessionRows.length}</KVRow>
-              <KVRow label="Principal">{school.headTeacherName ?? "—"}</KVRow>
-              <KVRow label="Onboarded">
+              <KVRow label={t("common.district")}>{districtChip.label}</KVRow>
+              <KVRow label={t("common.teachers")}>{teacherRows.length}</KVRow>
+              <KVRow label={t("common.classes")}>{classRows.length}</KVRow>
+              <KVRow label={t("common.sessionsLogged")}>{sessionRows.length}</KVRow>
+              <KVRow label={t("school.principal")}>{school.headTeacherName ?? "—"}</KVRow>
+              <KVRow label={t("school.onboarded")}>
                 <span className="mono">
                   {school.createdAt
                     ? new Date(school.createdAt).toISOString().slice(0, 10)
                     : "—"}
                 </span>
               </KVRow>
-              <KVRow label="Learners">
+              <KVRow label={t("common.learners")}>
                 <Link
                   // /repo/school/<id>/learners has never existed -- the only learners
                   // sub-route is under /repo/class/<id>. /repo/students already takes a
@@ -362,26 +375,26 @@ export default async function RepoSchoolDetailPage({
                     fontWeight: 500,
                   }}
                 >
-                  View roster →
+                  {t("school.viewRoster")}
                 </Link>
               </KVRow>
             </div>
           </SectionCard>
 
           <SectionCard
-            title={`Teachers (${teacherRows.length})`}
-            sub="At this school"
+            title={t("school.teachersTitle", { count: teacherRows.length })}
+            sub={t("school.teachersSub")}
           >
             {teacherRows.length === 0 ? (
               <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
-                No teachers on roster yet.
+                {t("school.noTeachers")}
               </div>
             ) : (
               <div style={{ padding: 4 }}>
-                {teacherRows.map((t, i) => (
+                {teacherRows.map((tc, i) => (
                   <Link
-                    key={t.id}
-                    href={`/repo/teacher/${t.id}`}
+                    key={tc.id}
+                    href={`/repo/teacher/${tc.id}`}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -406,12 +419,12 @@ export default async function RepoSchoolDetailPage({
                         fontWeight: 600,
                       }}
                     >
-                      {initialsOf(t.fullName)}
+                      {initialsOf(tc.fullName)}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 500 }}>
-                        {t.fullName}
-                        {t.hindiName ? (
+                        {tc.fullName}
+                        {tc.hindiName ? (
                           <span
                             className="deva"
                             style={{
@@ -421,13 +434,14 @@ export default async function RepoSchoolDetailPage({
                               fontSize: 12,
                             }}
                           >
-                            {t.hindiName}
+                            {tc.hindiName}
                           </span>
                         ) : null}
                       </div>
                       <div style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                        {t.subjectSpecialism ?? "—"}
-                        {t.joinedPhase ? ` · Phase ${t.joinedPhase}` : ""}
+                        {tc.joinedPhase
+                          ? t("school.teacherPhase", { subject: tc.subjectSpecialism ?? "—", phase: tc.joinedPhase })
+                          : (tc.subjectSpecialism ?? "—")}
                       </div>
                     </div>
                     <span

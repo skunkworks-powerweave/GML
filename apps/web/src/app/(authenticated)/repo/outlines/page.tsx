@@ -8,6 +8,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { courseOutlines, subjects, teachers } from "@gml/db/schema";
@@ -15,16 +16,21 @@ import { courseOutlines, subjects, teachers } from "@gml/db/schema";
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
+import { enumLabel } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Course outlines" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("outlines.metaTitle") };
+}
 
-const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
-  planned: { kind: "chip-ink", label: "Planned" },
-  in_progress: { kind: "chip-saffron", label: "In progress" },
-  complete: { kind: "chip-lichen", label: "Complete" },
-  archived: { kind: "", label: "Archived" },
+// The label is repo.outlineStatus.<status>, in the viewer's language.
+const STATUS_CHIP: Record<string, { kind: string }> = {
+  planned: { kind: "chip-ink" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  archived: { kind: "" },
 };
 
 const STATUS_VALUES = new Set(["planned", "in_progress", "complete", "archived"]);
@@ -42,6 +48,8 @@ export default async function RepoOutlinesIndexPage({
   searchParams: SearchParams;
 }) {
   const sp = await searchParams;
+  const t = await getTranslations("repo");
+  const statusLabel = (status: string) => enumLabel(t, "outlineStatus", STATUS_CHIP[status] ? status : "planned");
 
   const gradeParsed = Number(sp.grade);
   const gradeFilter =
@@ -94,11 +102,10 @@ export default async function RepoOutlinesIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
-        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Course outlines</h1>
+        <div className="label">{t("common.repository")}</div>
+        <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("outlines.title")}</h1>
         <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-          Term-level units per subject × grade. Each outline holds the learning outcomes, weekly lessons and the
-          sessions delivered against it.
+          {t("outlines.intro")}
         </p>
       </div>
       <div className="page-body" style={{ display: "grid", gap: 16 }}>
@@ -111,27 +118,27 @@ export default async function RepoOutlinesIndexPage({
           {/* Spec 158 — name search input. Submits alongside grade/term/
               status so a single Apply call refreshes the URL state. */}
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Name
+            {t("common.name")}
             <input
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search outlines by name"
-              title="Search outlines by name"
+              aria-label={t("outlines.searchLabel")}
+              title={t("outlines.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
           </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Grade
+            {t("common.grade")}
             <select
               name="grade"
               defaultValue={gradeFilter === null ? "" : String(gradeFilter)}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
             >
-              <option value="">All</option>
+              <option value="">{t("common.all")}</option>
               {Array.from({ length: 12 }, (_, i) => i + 1).map((g) => (
                 <option key={g} value={g}>
                   {g}
@@ -140,14 +147,14 @@ export default async function RepoOutlinesIndexPage({
             </select>
           </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Term
+            {t("common.term")}
             <select
               name="term"
               defaultValue={termFilter === null ? "" : String(termFilter)}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
             >
-              <option value="">All</option>
+              <option value="">{t("common.all")}</option>
               {[1, 2, 3, 4, 5, 6].map((t) => (
                 <option key={t} value={t}>
                   {t}
@@ -156,23 +163,23 @@ export default async function RepoOutlinesIndexPage({
             </select>
           </label>
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Status
+            {t("common.status")}
             <select
               name="status"
               defaultValue={statusFilter ?? ""}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12 }}
             >
-              <option value="">All</option>
-              {Object.entries(STATUS_CHIP).map(([v, info]) => (
+              <option value="">{t("common.all")}</option>
+              {Object.keys(STATUS_CHIP).map((v) => (
                 <option key={v} value={v}>
-                  {info.label}
+                  {statusLabel(v)}
                 </option>
               ))}
             </select>
           </label>
           <button type="submit" className="btn btn-sm">
-            Apply
+            {t("common.apply")}
           </button>
           {(gradeFilter !== null || termFilter !== null || statusFilter !== null || qFilter) ? (
             <Link
@@ -180,18 +187,18 @@ export default async function RepoOutlinesIndexPage({
               className="btn btn-sm"
               style={{ textDecoration: "none" }}
             >
-              Clear
+              {t("common.clear")}
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{rows.length} shown</span>
+            <span className="chip">{t("common.shown", { count: rows.length })}</span>
           </div>
         </form>
         {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="outlines"
-            emptyMessage="No outlines match this filter."
+            emptyMessage={t("outlines.empty")}
             items={rows.map((o) => {
               const chip = STATUS_CHIP[o.status] ?? STATUS_CHIP.planned;
               return {
@@ -199,13 +206,15 @@ export default async function RepoOutlinesIndexPage({
                 primary: o.name,
                 hindi: o.ownerHindi ?? null,
                 href: `/repo/outline/${o.id}`,
-                chip: { label: chip.label, kind: chip.kind },
+                chip: { label: statusLabel(o.status), kind: chip.kind },
                 secondary: [
-                  { label: "Subject", value: o.subjectName ?? "—" },
+                  { label: t("common.subject"), value: o.subjectName ?? "—" },
                   {
-                    value: `Grade ${o.grade} · Term ${o.term} · ${o.sessionsCount} sessions${o.weeks ? ` · ${o.weeks} weeks` : ""}`,
+                    value: o.weeks
+                      ? t("outlines.cardMetaWeeks", { grade: o.grade, term: o.term, sessions: o.sessionsCount, weeks: o.weeks })
+                      : t("outlines.cardMeta", { grade: o.grade, term: o.term, sessions: o.sessionsCount }),
                   },
-                  o.ownerName ? { label: "Owner", value: o.ownerName } : { value: "—" },
+                  o.ownerName ? { label: t("common.owner"), value: o.ownerName } : { value: "—" },
                 ],
               };
             })}
@@ -214,21 +223,21 @@ export default async function RepoOutlinesIndexPage({
         <div className="card card-hi" style={device === "mobile" ? { display: "none", overflow: "hidden" } : { overflow: "hidden" }} aria-hidden={device === "mobile"}>
           {rows.length === 0 ? (
             <div style={{ padding: 32, textAlign: "center", color: "var(--ink-3)" }}>
-              No outlines match this filter.
+              {t("outlines.empty")}
             </div>
           ) : (
             <table className="t">
               <thead>
                 <tr>
-                  <th>Outline</th>
-                  <th>Subject</th>
-                  <th>Grade</th>
-                  <th>Term</th>
-                  <th>Sessions</th>
-                  <th>Weeks</th>
-                  <th>Owner</th>
-                  <th>Status</th>
-                  <th aria-label="open" />
+                  <th>{t("common.outline")}</th>
+                  <th>{t("common.subject")}</th>
+                  <th>{t("common.grade")}</th>
+                  <th>{t("common.term")}</th>
+                  <th>{t("common.sessions")}</th>
+                  <th>{t("common.weeks")}</th>
+                  <th>{t("common.owner")}</th>
+                  <th>{t("common.status")}</th>
+                  <th aria-label={t("outlines.openColumn")} />
                 </tr>
               </thead>
               <tbody>
@@ -269,13 +278,13 @@ export default async function RepoOutlinesIndexPage({
                         )}
                       </td>
                       <td>
-                        <span className={`chip ${chip.kind}`.trim()}>{chip.label}</span>
+                        <span className={`chip ${chip.kind}`.trim()}>{statusLabel(o.status)}</span>
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <Link
                           href={`/repo/outline/${o.id}`}
                           style={{ fontSize: 12, color: "var(--ink-3)", textDecoration: "none" }}
-                          aria-label={`Open ${o.name}`}
+                          aria-label={t("common.openRecord", { name: o.name })}
                         >
                           ›
                         </Link>

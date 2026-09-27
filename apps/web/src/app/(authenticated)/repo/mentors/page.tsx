@@ -10,6 +10,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings } from "@gml/db/schema";
@@ -21,7 +22,10 @@ import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Mentors" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("mentors.metaTitle") };
+}
 
 // Base-location chip palette. Leh maps to indigo-soft, Kargil maps to saffron-soft.
 // Renders as `.chip .chip-indigo` / `.chip .chip-saffron` via globals.css utilities.
@@ -44,6 +48,7 @@ export default async function RepoMentorsIndexPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const t = await getTranslations("repo");
 
   const sp = await searchParams;
   // Spec 158 — name search on mentors.name.
@@ -98,12 +103,12 @@ export default async function RepoMentorsIndexPage({
   return (
     <div>
       <div className="page-header">
-        <div className="label">Repository</div>
+        <div className="label">{t("common.repository")}</div>
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
           <div>
-            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Mentors</h1>
+            <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("mentors.title")}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-              Master mentors carrying 5 mentees each through quarterly progress checks.
+              {t("mentors.intro")}
             </p>
           </div>
           {/* Spec 160 — CSV export link. Surfaces only for super_admin and
@@ -113,10 +118,10 @@ export default async function RepoMentorsIndexPage({
               href="/api/admin/data/mentors/export"
               className="btn btn-primary btn-sm"
               style={{ textDecoration: "none", whiteSpace: "nowrap" }}
-              title="Download all mentors as CSV — admin only, audited"
+              title={t("mentors.exportTitle")}
               data-testid="mentors-csv-export"
             >
-              Download CSV
+              {t("mentors.export")}
             </a>
           ) : null}
         </div>
@@ -131,35 +136,35 @@ export default async function RepoMentorsIndexPage({
           style={{ padding: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
         >
           <label className="label" style={{ paddingLeft: 0, paddingTop: 0 }}>
-            Name
+            {t("common.name")}
             <input
               type="search"
               name="q"
               defaultValue={qFilter ?? ""}
-              aria-label="Search mentors by name"
-              title="Search mentors by name"
+              aria-label={t("mentors.searchLabel")}
+              title={t("mentors.searchLabel")}
               maxLength={SEARCH_Q_MAX}
               className="text"
               style={{ marginLeft: 6, padding: "5px 10px", fontSize: 12, minWidth: 160 }}
             />
           </label>
           <button type="submit" className="btn btn-sm">
-            Search
+            {t("common.search")}
           </button>
           {qFilter ? (
             <Link href="/repo/mentors" className="btn btn-sm" style={{ textDecoration: "none" }}>
-              Clear
+              {t("common.clear")}
             </Link>
           ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <span className="chip">{rows.length} shown</span>
+            <span className="chip">{t("common.shown", { count: rows.length })}</span>
           </div>
         </form>
         {/* Spec 138 — mobile branch: card list. Desktop keeps the table. */}
         {device === "mobile" ? (
           <MobileRepoCardList
             testIdSuffix="mentors"
-            emptyMessage="No mentors yet."
+            emptyMessage={t("mentors.empty")}
             items={rows.map((m) => {
               const base = m.baseLocation ?? "";
               const chipKind = BASE_CHIP[base] ?? "";
@@ -173,9 +178,9 @@ export default async function RepoMentorsIndexPage({
                 href: `/repo/mentor/${m.id}`,
                 chip: base ? { label: base, kind: chipKind } : null,
                 secondary: [
-                  { label: "Expertise", value: expertise || "—" },
+                  { label: t("common.expertise"), value: expertise || "—" },
                   {
-                    value: `${menteeCount.get(m.id) ?? 0} mentees`,
+                    value: t("mentors.menteeCount", { count: menteeCount.get(m.id) ?? 0 }),
                   },
                 ],
               };
@@ -186,18 +191,18 @@ export default async function RepoMentorsIndexPage({
           <table className="t">
             <thead>
               <tr>
-                <th>Name</th>
+                <th>{t("common.name")}</th>
                 <th className="deva" style={{ fontFamily: "var(--deva)" }}>नाम</th>
-                <th>Expertise</th>
-                <th>Based in</th>
-                <th>Mentees</th>
+                <th>{t("common.expertise")}</th>
+                <th>{t("common.basedIn")}</th>
+                <th>{t("common.mentees")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ padding: 32, color: "var(--ink-3)", textAlign: "center" }}>
-                    No mentors yet.
+                    {t("mentors.empty")}
                   </td>
                 </tr>
               ) : (

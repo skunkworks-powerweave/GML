@@ -6,6 +6,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, schools, subjects, sessions, teachers } from "@gml/db/schema";
@@ -13,10 +14,14 @@ import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
+import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Class" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("class.metaTitle") };
+}
 
 // Stage chip kinds — map to the new `.chip` utility class variants in globals.css.
 // The `bg` field is the underlying CSS var the chip-* class resolves to (kept here
@@ -28,11 +33,12 @@ const STAGE_CHIP: Record<string, { kind: string; bg: string }> = {
   High: { kind: "chip-saffron", bg: "var(--saffron-soft)" },
 };
 
-const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
-  planned: { kind: "", label: "Planned" },
-  in_progress: { kind: "chip-saffron", label: "In progress" },
-  complete: { kind: "chip-lichen", label: "Complete" },
-  cancelled: { kind: "chip-rust", label: "Cancelled" },
+// The label is repo.sessionStatus.<status>, in the viewer's language.
+const STATUS_CHIP: Record<string, { kind: string }> = {
+  planned: { kind: "" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  cancelled: { kind: "chip-rust" },
 };
 
 export default async function RepoClassDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -41,6 +47,8 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
   const session = await auth();
   const role = session?.user?.role ?? "teacher";
   const canSeeRoster = role === "super_admin" || role === "programme_admin";
+  const t = await getTranslations("repo");
+  const intl = await repoIntlLocale();
 
   const [cls] = await db.select().from(classes).where(eq(classes.id, id)).limit(1);
   if (!cls) notFound();
@@ -87,7 +95,9 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
   // ← link) so users keep their place in the repo tree.
   const device = await getDeviceType();
   const mobileBackHref = school ? `/repo/school/${school.id}` : "/repo";
-  const mobileTitle = `Grade ${cls.grade}${school?.code ? ` · ${school.code}` : ""}`;
+  const mobileTitle = school?.code
+    ? t("class.mobileTitle", { grade: cls.grade, code: school.code })
+    : t("common.gradeN", { grade: cls.grade });
 
   const body = (
     <div>
@@ -97,15 +107,19 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, display: "inline-flex" }}
         >
-          ← {school?.code ?? "Repository"}
+          ← {school?.code ?? t("common.repository")}
         </Link>
         <div>
-          <div className="label">Class · {school?.code ?? "—"}</div>
-          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Grade {cls.grade}</h1>
+          <div className="label">{t("class.label", { code: school?.code ?? "—" })}</div>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("common.gradeN", { grade: cls.grade })}</h1>
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            {cls.studentsCount} students across {cls.sectionsCount} section
-            {cls.sectionsCount > 1 ? "s" : ""}
-            {cls.classTeacherName ? `. Class teacher ${cls.classTeacherName}.` : "."}
+            {cls.classTeacherName
+              ? t("class.summaryTeacher", {
+                  students: cls.studentsCount,
+                  sections: cls.sectionsCount,
+                  teacher: cls.classTeacherName,
+                })
+              : t("class.summary", { students: cls.studentsCount, sections: cls.sectionsCount })}
           </p>
         </div>
       </div>
@@ -116,18 +130,18 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
       <section className="page-body grid grid-cols-1 items-start gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div style={{ display: "grid", gap: 16 }}>
           {/* Subjects taught at this grade */}
-          <SectionCard title={`Subjects (${subjectRows.length})`} sub="Taught at this grade">
+          <SectionCard title={t("class.subjectsTitle", { count: subjectRows.length })} sub={t("class.subjectsSub")}>
             {subjectRows.length === 0 ? (
               <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
-                No subjects mapped to this grade yet.
+                {t("class.noSubjects")}
               </div>
             ) : (
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Subject</th>
-                    <th>Grades covered</th>
-                    <th>Code</th>
+                    <th>{t("common.subject")}</th>
+                    <th>{t("common.gradesCovered")}</th>
+                    <th>{t("common.code")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -164,30 +178,31 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
           </SectionCard>
 
           {/* Sessions held in this class */}
-          <SectionCard title={`Sessions held (${sessionRows.length})`} sub="Most recent first">
+          <SectionCard title={t("class.sessionsTitle", { count: sessionRows.length })} sub={t("common.mostRecentFirst")}>
             {sessionRows.length === 0 ? (
               <div style={{ padding: 18, color: "var(--ink-3)", fontSize: 13 }}>
-                No classroom sessions logged yet.
+                {t("class.noSessions")}
               </div>
             ) : (
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Subject</th>
-                    <th>Topic</th>
-                    <th>Teacher</th>
-                    <th>Status</th>
+                    <th>{t("common.date")}</th>
+                    <th>{t("common.time")}</th>
+                    <th>{t("common.subject")}</th>
+                    <th>{t("common.topic")}</th>
+                    <th>{t("common.teacher")}</th>
+                    <th>{t("common.status")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sessionRows.map((s) => {
                     const pill = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
+                    const pillLabel = enumLabel(t, "sessionStatus", STATUS_CHIP[s.status] ? s.status : "planned");
                     return (
                       <tr key={s.id}>
                         <td className="mono" style={{ fontSize: 12 }}>
-                          {new Date(`${s.scheduledDate}T00:00:00`).toLocaleDateString("en-IN", {
+                          {new Date(`${s.scheduledDate}T00:00:00`).toLocaleDateString(intl, {
                             day: "numeric",
                             month: "short",
                           })}
@@ -213,7 +228,7 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                           ) : null}
                         </td>
                         <td>
-                          <span className={`chip ${pill.kind}`}>{pill.label}</span>
+                          <span className={`chip ${pill.kind}`}>{pillLabel}</span>
                         </td>
                       </tr>
                     );
@@ -226,9 +241,9 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
 
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
           {/* Details KV */}
-          <SectionCard title="Details">
+          <SectionCard title={t("common.details")}>
             <div style={{ padding: "0 14px 8px" }}>
-              <KVRow label="School">
+              <KVRow label={t("common.school")}>
                 {school ? (
                   <Link
                     href={`/repo/school/${school.id}`}
@@ -240,16 +255,16 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                   "—"
                 )}
               </KVRow>
-              <KVRow label="Grade">{cls.grade}</KVRow>
-              <KVRow label="Stage">
-                <span className={`chip ${stage.kind}`}>{cls.stage}</span>
+              <KVRow label={t("common.grade")}>{cls.grade}</KVRow>
+              <KVRow label={t("common.stage")}>
+                <span className={`chip ${stage.kind}`}>{enumLabel(t, "stage", cls.stage)}</span>
               </KVRow>
-              <KVRow label="Students">{cls.studentsCount}</KVRow>
-              <KVRow label="Sections">{cls.sectionsCount}</KVRow>
-              <KVRow label="Class teacher">{cls.classTeacherName ?? "—"}</KVRow>
-              <KVRow label="Status">
+              <KVRow label={t("common.students")}>{cls.studentsCount}</KVRow>
+              <KVRow label={t("common.sections")}>{cls.sectionsCount}</KVRow>
+              <KVRow label={t("common.classTeacher")}>{cls.classTeacherName ?? "—"}</KVRow>
+              <KVRow label={t("common.status")}>
                 <span className={`chip ${cls.active ? "chip-lichen" : ""}`}>
-                  {cls.active ? "Active" : "Inactive"}
+                  {cls.active ? t("common.active") : t("common.inactive")}
                 </span>
               </KVRow>
             </div>
@@ -268,12 +283,12 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                 display: "block",
               }}
             >
-              <div className="label">Roster · PII (audited)</div>
+              <div className="label">{t("class.rosterLabel")}</div>
               <div style={{ fontWeight: 500, marginTop: 4, fontSize: 14 }}>
-                View learners ({cls.studentsCount}) →
+                {t("class.viewLearners", { count: cls.studentsCount })}
               </div>
               <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
-                Opening this list is recorded in the audit log.
+                {t("class.rosterAudited")}
               </div>
             </Link>
           ) : (
@@ -287,7 +302,7 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
                 color: "var(--ink-3)",
               }}
             >
-              Full learner roster restricted (PII). Programme admins only.
+              {t("class.rosterRestricted")}
             </div>
           )}
         </div>

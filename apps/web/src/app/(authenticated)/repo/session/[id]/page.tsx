@@ -5,12 +5,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { linkedCycle } from "@/lib/gated-reads";
 import { observationAccess } from "@/lib/visibility";
+import { enumLabel } from "@/components/repo/repo-i18n";
 import { db } from "@gml/db";
 import {
   sessions,
@@ -24,7 +26,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Session" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("session.metaTitle") };
+}
 
 const ALLOWED_ROLES = new Set([
   "super_admin",
@@ -34,11 +39,12 @@ const ALLOWED_ROLES = new Set([
   "teacher",
 ]);
 
-const STATUS_CHIP: Record<string, { kind: string; label: string }> = {
-  planned: { kind: "", label: "Planned" },
-  in_progress: { kind: "chip-saffron", label: "In progress" },
-  complete: { kind: "chip-lichen", label: "Complete" },
-  cancelled: { kind: "", label: "Cancelled" },
+// The label is repo.sessionStatus.<status>, in the viewer's language.
+const STATUS_CHIP: Record<string, { kind: string }> = {
+  planned: { kind: "" },
+  in_progress: { kind: "chip-saffron" },
+  complete: { kind: "chip-lichen" },
+  cancelled: { kind: "" },
 };
 
 function fmtAttendance(attended: number, total: number): string {
@@ -97,7 +103,19 @@ export default async function RepoSessionPage({
     ? await linkedCycle(db, await observationAccess(db, actor), s.observationCycleId)
     : null;
 
+  const t = await getTranslations("repo");
   const statusChip = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
+  const statusLabel = enumLabel(t, "sessionStatus", STATUS_CHIP[s.status] ? s.status : "planned");
+  const mono = (chunks: React.ReactNode) => <span className="mono">{chunks}</span>;
+  const bold = (chunks: React.ReactNode) => <b>{chunks}</b>;
+  const when = `${s.scheduledDate}${s.scheduledTime ? ` ${s.scheduledTime}` : ""}`;
+  const metaArgs = {
+    school: school?.code ?? "—",
+    grade: cls?.grade ?? "—",
+    subject: subject?.name ?? "—",
+    when,
+    mono,
+  };
 
   return (
     <div>
@@ -108,7 +126,7 @@ export default async function RepoSessionPage({
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8, textDecoration: "none" }}
         >
-          ← Sessions
+          {t("session.back")}
         </Link>
         <div
           style={{
@@ -121,25 +139,29 @@ export default async function RepoSessionPage({
         >
           <div>
             <div className="label">
-              Session · <span className="mono" style={{ textTransform: "none" }}>{s.id.slice(0, 8)}</span>
+              {t.rich("session.label", {
+                id: s.id.slice(0, 8),
+                mono: (chunks) => (
+                  <span className="mono" style={{ textTransform: "none" }}>
+                    {chunks}
+                  </span>
+                ),
+              })}
             </div>
             <h1 className="serif" style={{ fontSize: 26, marginTop: 4 }}>
-              {s.topic ?? lesson?.title ?? "Untitled session"}
+              {s.topic ?? lesson?.title ?? t("session.untitled")}
             </h1>
             <p style={{ color: "var(--ink-3)", fontSize: 13, marginTop: 4 }}>
-              {school?.code ?? "—"} · Grade {cls?.grade ?? "—"} · {subject?.name ?? "—"} ·{" "}
-              <span className="mono">
-                {s.scheduledDate}
-                {s.scheduledTime ? ` ${s.scheduledTime}` : ""}
-              </span>
-              {s.durationMin ? ` · ${s.durationMin} min` : ""}
+              {s.durationMin
+                ? t.rich("session.metaDuration", { ...metaArgs, minutes: s.durationMin })
+                : t.rich("session.meta", metaArgs)}
             </p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <span className={`chip ${statusChip.kind}`.trim()}>{statusChip.label}</span>
+            <span className={`chip ${statusChip.kind}`.trim()}>{statusLabel}</span>
             {s.observed ? (
               <span className="chip chip-saffron">
-                Observed{cycle?.code ? ` · ${cycle.code}` : ""}
+                {cycle?.code ? t("session.observedCode", { code: cycle.code }) : t("session.observed")}
               </span>
             ) : null}
           </div>
@@ -153,7 +175,7 @@ export default async function RepoSessionPage({
       <div className="page-body grid grid-cols-1 gap-[18px] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         {/* Left col: notes + linked cycle */}
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <SectionCard title="Lesson notes">
+          <SectionCard title={t("session.notesTitle")}>
             <div
               style={{
                 padding: "8px 18px 16px",
@@ -164,24 +186,32 @@ export default async function RepoSessionPage({
             >
               {s.topic ? (
                 <p style={{ margin: "8px 0" }}>
-                  <b>Topic</b> — {s.topic}
+                  {t.rich("session.notesTopic", { topic: s.topic, b: bold })}
                 </p>
               ) : null}
               {lesson ? (
                 <p style={{ margin: "8px 0" }}>
-                  <b>Curriculum lesson</b> — Lesson {lesson.sequence}: {lesson.title}
-                  {lesson.week ? ` (week ${lesson.week})` : ""}.
+                  {lesson.week
+                    ? t.rich("session.notesLessonWeek", {
+                        sequence: lesson.sequence,
+                        title: lesson.title,
+                        week: lesson.week,
+                        b: bold,
+                      })
+                    : t.rich("session.notesLesson", { sequence: lesson.sequence, title: lesson.title, b: bold })}
                 </p>
               ) : null}
               <p style={{ margin: "8px 0" }}>
-                <b>Attendance</b> —{" "}
                 {s.status === "complete"
-                  ? `${fmtAttendance(s.attendedCount, s.totalCount)} learners present`
-                  : "Attendance recorded on completion."}
+                  ? t.rich("session.notesAttendance", {
+                      attendance: fmtAttendance(s.attendedCount, s.totalCount),
+                      b: bold,
+                    })
+                  : t.rich("session.notesAttendancePending", { b: bold })}
               </p>
               {!s.topic && !lesson ? (
                 <p style={{ color: "var(--ink-3)", fontStyle: "italic", margin: "8px 0" }}>
-                  No lesson notes captured for this session.
+                  {t("session.noNotes")}
                 </p>
               ) : null}
             </div>
@@ -189,20 +219,18 @@ export default async function RepoSessionPage({
 
           {s.observed && cycle ? (
             <SectionCard
-              title="Linked observation cycle"
-              sub="Open in the Classroom Observation module"
+              title={t("session.cycleTitle")}
+              sub={t("session.cycleSub")}
             >
               <div style={{ padding: 14, fontSize: 13, color: "var(--ink-2)" }}>
-                This session was observed by the mentor. The full pre-form, video review, and
-                post-form are recorded against cycle{" "}
-                <span className="mono">{cycle.code}</span>.
+                {t.rich("session.cycleBody", { code: cycle.code, mono })}
                 <div style={{ marginTop: 10 }}>
                   <Link
                     href={`/observation/${cycle.id}`}
                     className="btn btn-sm"
                     style={{ textDecoration: "none" }}
                   >
-                    Open cycle {cycle.code} →
+                    {t("session.openCycle", { code: cycle.code })}
                   </Link>
                 </div>
               </div>
@@ -212,25 +240,25 @@ export default async function RepoSessionPage({
 
         {/* Right col: KV details */}
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <SectionCard title="Details">
+          <SectionCard title={t("common.details")}>
             <div style={{ padding: "0 14px 8px" }}>
-              <KVRow label="Session ID">
+              <KVRow label={t("session.sessionId")}>
                 <span className="mono" style={{ fontSize: 12 }}>{s.id}</span>
               </KVRow>
-              <KVRow label="School">
+              <KVRow label={t("common.school")}>
                 <RelLink href={`/repo/school/${s.schoolId}`}>
                   {school?.code} {school?.name}
                 </RelLink>
               </KVRow>
               {cls ? (
-                <KVRow label="Class">
-                  <RelLink href={`/repo/class/${cls.id}`}>Grade {cls.grade}</RelLink>
+                <KVRow label={t("common.class")}>
+                  <RelLink href={`/repo/class/${cls.id}`}>{t("common.gradeN", { grade: cls.grade })}</RelLink>
                 </KVRow>
               ) : null}
-              <KVRow label="Subject">
+              <KVRow label={t("common.subject")}>
                 <RelLink href={`/repo/subject/${s.subjectId}`}>{subject?.name ?? "—"}</RelLink>
               </KVRow>
-              <KVRow label="Teacher">
+              <KVRow label={t("common.teacher")}>
                 <RelLink href={`/repo/teacher/${s.teacherId}`}>
                   {teacher?.fullName ?? "—"}
                   {teacher?.hindiName ? (
@@ -247,27 +275,29 @@ export default async function RepoSessionPage({
                   ) : null}
                 </RelLink>
               </KVRow>
-              <KVRow label="Date">
+              <KVRow label={t("common.date")}>
                 <span className="mono" style={{ fontSize: 12 }}>
                   {s.scheduledDate}
                   {s.scheduledTime ? ` · ${s.scheduledTime}` : ""}
                 </span>
               </KVRow>
-              <KVRow label="Duration">{s.durationMin ? `${s.durationMin} min` : "—"}</KVRow>
-              <KVRow label="Status">
-                <span className={`chip ${statusChip.kind}`.trim()}>{statusChip.label}</span>
+              <KVRow label={t("session.duration")}>
+                {s.durationMin ? t("session.minutes", { minutes: s.durationMin }) : "—"}
               </KVRow>
-              <KVRow label="Attendance">{fmtAttendance(s.attendedCount, s.totalCount)}</KVRow>
+              <KVRow label={t("common.status")}>
+                <span className={`chip ${statusChip.kind}`.trim()}>{statusLabel}</span>
+              </KVRow>
+              <KVRow label={t("common.attendance")}>{fmtAttendance(s.attendedCount, s.totalCount)}</KVRow>
               {outline ? (
-                <KVRow label="Outline">
+                <KVRow label={t("common.outline")}>
                   <RelLink href={`/repo/outline/${outline.id}`}>{outline.name}</RelLink>
                 </KVRow>
               ) : null}
-              <KVRow label="Observed">
+              <KVRow label={t("session.observed")}>
                 {s.observed ? (
-                  <span className="chip chip-saffron">Yes</span>
+                  <span className="chip chip-saffron">{t("session.yes")}</span>
                 ) : (
-                  <span className="chip">No</span>
+                  <span className="chip">{t("session.no")}</span>
                 )}
               </KVRow>
             </div>

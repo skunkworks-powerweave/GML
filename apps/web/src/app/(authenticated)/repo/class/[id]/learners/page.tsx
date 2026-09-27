@@ -10,6 +10,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, learners, schools } from "@gml/db/schema";
@@ -19,7 +20,10 @@ import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = { title: "Class learners" };
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("repo");
+  return { title: t("learners.metaTitle") };
+}
 
 export default async function RepoClassLearnersPage({ params }: { params: Promise<{ id: string }> }) {
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
@@ -58,6 +62,8 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
     .orderBy(asc(learners.rollNumber), asc(learners.name))
     .limit(80);
 
+  const t = await getTranslations("repo");
+
   return (
     <div>
       <div className="page-header">
@@ -66,14 +72,17 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
           className="btn btn-sm btn-ghost"
           style={{ marginBottom: 8, marginLeft: -8 }}
         >
-          ← Grade {cls.grade}
+          {t("learners.back", { grade: cls.grade })}
         </Link>
         <div>
-          <div className="label">Roster · {school?.code ?? "—"} · Grade {cls.grade}</div>
-          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>Learners</h1>
+          <div className="label">{t("learners.label", { code: school?.code ?? "—", grade: cls.grade })}</div>
+          <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("learners.title")}</h1>
           <p style={{ color: "var(--ink-3)", marginTop: 4 }}>
-            {rows.length} of {cls.studentsCount} on record. PII access is logged: your view of
-            this page is recorded in audit_log under <code className="mono">learners.view</code>.
+            {t.rich("learners.intro", {
+              shown: rows.length,
+              total: cls.studentsCount,
+              code: (chunks) => <code className="mono">{chunks}</code>,
+            })}
           </p>
         </div>
       </div>
@@ -82,20 +91,20 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
         <div className="card card-hi" style={{ padding: 16 }}>
           {rows.length === 0 ? (
             <p style={{ fontSize: 12, color: "var(--ink-3)", padding: 20, textAlign: "center" }}>
-              No learners on record for this class.
+              {t("learners.empty")}
             </p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="t">
                 <thead>
                   <tr>
-                    <th>Roll</th>
-                    <th>Name</th>
-                    <th>Section</th>
-                    <th>Age</th>
-                    <th>Guardian</th>
-                    <th>Attendance</th>
-                    <th>Status</th>
+                    <th>{t("learners.roll")}</th>
+                    <th>{t("common.name")}</th>
+                    <th>{t("learners.section")}</th>
+                    <th>{t("common.age")}</th>
+                    <th>{t("common.guardian")}</th>
+                    <th>{t("common.attendance")}</th>
+                    <th>{t("common.status")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -127,7 +136,7 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
                         <td>
                           <span className={r.active ? "chip chip-lichen" : "chip"}>
                             <span className={r.active ? "dot dot-green" : "dot dot-gray"} />
-                            {r.active ? "Active" : "Inactive"}
+                            {r.active ? t("common.active") : t("common.inactive")}
                           </span>
                         </td>
                       </tr>
@@ -140,7 +149,7 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
         </div>
 
         <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 16, fontStyle: "italic" }}>
-          Showing first 80 learners. For larger rosters, export via /admin/data/learners.
+          {t("learners.footnote")}
         </p>
       </div>
     </div>
