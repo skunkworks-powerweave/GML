@@ -8,10 +8,17 @@
 // immediately. Fail-shape: when the row is missing (pre-bootstrap) we fall
 // back to the schema defaults (Goldenmile RTT / 2026-27) so the page never
 // renders a blank header.
+//
+// Copy is in the admin namespace (i18n/locales/<locale>/admin.json, index.*);
+// each data table's title is the grid's own, adminData.entities.<slug>.label
+// (admin/labels.ts). The programme name is data and is shown as the
+// administrator typed it.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { requireRole } from "@/lib/guards";
 import { ADMIN_ENTITIES } from "@/admin/registry";
+import { entityLabel } from "@/admin/labels";
 import { getSystemSettings } from "@/lib/system-settings";
 
 export const dynamic = "force-dynamic";
@@ -27,24 +34,28 @@ export default async function AdminIndexPage() {
   const settings = await getSystemSettings();
   const programmeName = settings?.programmeName ?? "Goldenmile RTT";
   const academicYear = settings?.academicYear ?? "2026-27";
+  const t = await getTranslations("admin");
+  const tData = await getTranslations("adminData");
+  // Role names as the users page shows them, not the enum codes.
+  const roleLabel = (role: string) => (t.has(`client.roles.${role}`) ? t(`client.roles.${role}`) : role);
 
   return (
     <main className="mx-auto max-w-4xl p-6">
       <header className="mb-6" data-testid="admin-home-header">
         <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          Admin · {academicYear}
+          {t("index.eyebrow", { year: academicYear })}
         </div>
         <h1 className="text-2xl font-semibold" data-testid="admin-programme-name">
           {programmeName}
         </h1>
         <p className="text-sm text-neutral-500">
-          No-code data management. Every change is logged to the audit trail.
+          {t("index.intro")}
         </p>
       </header>
 
       <section className="mb-8">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          Data
+          {t("index.data")}
         </h2>
         <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {entries.map(([slug, entity]) => (
@@ -53,9 +64,9 @@ export default async function AdminIndexPage() {
                 href={`/admin/data/${slug}`}
                 className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
               >
-                <div className="text-sm font-medium">{entity.label}</div>
+                <div className="text-sm font-medium">{entityLabel(tData, entity)}</div>
                 <div className="text-xs text-neutral-500">
-                  Slug: {slug} · roles: {entity.readRoles.join(", ")}
+                  {t("index.entityMeta", { slug, roles: entity.readRoles.map(roleLabel).join(", ") })}
                 </div>
               </Link>
             </li>
@@ -65,7 +76,7 @@ export default async function AdminIndexPage() {
 
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          System
+          {t("index.system")}
         </h2>
         <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
           <li>
@@ -73,9 +84,9 @@ export default async function AdminIndexPage() {
               href="/admin/users"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Users</div>
+              <div className="text-sm font-medium">{t("index.links.users.title")}</div>
               <div className="text-xs text-neutral-500">
-                Create accounts, set roles, deactivate &middot; programme_admin and above
+                {t("index.links.users.hint")}
               </div>
             </Link>
           </li>
@@ -84,9 +95,9 @@ export default async function AdminIndexPage() {
               href="/admin/audit"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Audit log</div>
+              <div className="text-sm font-medium">{t("index.links.audit.title")}</div>
               <div className="text-xs text-neutral-500">
-                Search every recorded action across the platform
+                {t("index.links.audit.hint")}
               </div>
             </Link>
           </li>
@@ -95,9 +106,9 @@ export default async function AdminIndexPage() {
               href="/admin/gates"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Section gates</div>
+              <div className="text-sm font-medium">{t("index.links.gates.title")}</div>
               <div className="text-xs text-neutral-500">
-                Rotate gate passwords · super_admin only
+                {t("index.links.gates.hint")}
               </div>
             </Link>
           </li>
@@ -111,9 +122,9 @@ export default async function AdminIndexPage() {
               href="/admin/forms"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Feedback forms</div>
+              <div className="text-sm font-medium">{t("index.links.forms.title")}</div>
               <div className="text-xs text-neutral-500">
-                Form templates and their schemas
+                {t("index.links.forms.hint")}
               </div>
             </Link>
           </li>
@@ -126,9 +137,9 @@ export default async function AdminIndexPage() {
               href="/admin/quizzes"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Quizzes</div>
+              <div className="text-sm font-medium">{t("index.links.quizzes.title")}</div>
               <div className="text-xs text-neutral-500">
-                Create a quiz and write its questions
+                {t("index.links.quizzes.hint")}
               </div>
             </Link>
           </li>
@@ -137,9 +148,9 @@ export default async function AdminIndexPage() {
               href="/admin/scorm"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">SCORM packages</div>
+              <div className="text-sm font-medium">{t("index.links.scorm.title")}</div>
               <div className="text-xs text-neutral-500">
-                SCORM 1.2 modules for RTT subjects · learners&apos; completion and scores
+                {t("index.links.scorm.hint")}
               </div>
             </Link>
           </li>
@@ -150,9 +161,9 @@ export default async function AdminIndexPage() {
               href="/admin/whatsapp-log"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">WhatsApp ingest log</div>
+              <div className="text-sm font-medium">{t("index.links.whatsappLog.title")}</div>
               <div className="text-xs text-neutral-500">
-                Incoming videos · unmatched submissions
+                {t("index.links.whatsappLog.hint")}
               </div>
             </Link>
           </li>
@@ -161,9 +172,9 @@ export default async function AdminIndexPage() {
               href="/admin/system-settings"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">System settings</div>
+              <div className="text-sm font-medium">{t("index.links.systemSettings.title")}</div>
               <div className="text-xs text-neutral-500">
-                Programme · video pipeline · notifications · backups — super_admin only
+                {t("index.links.systemSettings.hint")}
               </div>
             </Link>
           </li>
@@ -172,9 +183,9 @@ export default async function AdminIndexPage() {
               href="/admin/transcode-jobs"
               className="block rounded-md border border-neutral-200 bg-white p-3 hover:border-neutral-400"
             >
-              <div className="text-sm font-medium">Transcode jobs</div>
+              <div className="text-sm font-medium">{t("index.links.transcodeJobs.title")}</div>
               <div className="text-xs text-neutral-500">
-                Inspect the dead-letter queue · retry or drop failed transcodes
+                {t("index.links.transcodeJobs.hint")}
               </div>
             </Link>
           </li>

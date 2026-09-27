@@ -28,8 +28,14 @@
 // Audit anchor: every Retry / Drop call records an audit row so the
 // operator's decision is traceable. Same dotted-action convention
 // (transcode.retry_requested / transcode.dropped) used elsewhere.
+//
+// Copy is in the admin namespace (transcodeJobs.*): headings, filters,
+// buttons, messages, and the labels of the statuses and sources shown in the
+// chips. Queue and job names, ids and the errors a worker recorded are codes
+// and data, shown as stored.
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
 import { transcodeJobs, videoSubmissions } from "@gml/db/schema";
@@ -45,17 +51,22 @@ export const dynamic = "force-dynamic";
 const PAGE_LIMIT = 100;
 
 // Filter values accepted via ?filter=<x>. Anything else falls through to
-// 'all'. The labels mirror the pill button captions.
+// 'all'. Each pill's caption is transcodeJobs.filters.<value>.
 const FILTERS = ["all", "failed", "in_progress", "queued", "recent"] as const;
 type FilterKey = (typeof FILTERS)[number];
 
-const FILTER_LABELS: Record<FilterKey, string> = {
-  all: "All",
-  failed: "Failed",
-  in_progress: "In progress",
-  queued: "Queued",
-  recent: "Recent (24h)",
-};
+// The ?error= codes the two actions (./actions.ts, ./state.ts) redirect back
+// with; each one's message is transcodeJobs.errors.<code>.
+const DLQ_ERROR_CODES = [
+  "missing_job_id",
+  "job_not_found",
+  "not_retriable_status",
+  "not_droppable_status",
+  "not_failed_attempt",
+  "not_latest_attempt",
+  "job_live",
+  "submission_not_failed",
+] as const;
 
 // Status → chip class. Aligns with the convention in /admin/whatsapp-log
 // (lichen=ok, saffron=in-flight, rust=failure, indigo=human-decided).
@@ -138,6 +149,13 @@ export default async function TranscodeJobsAdminPage({
   searchParams: Promise<{ filter?: string; error?: string }>;
 }) {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("admin");
+  /** An enum value's label, or the value itself when it has none. */
+  const label = (group: "jobStatus" | "source" | "videoStatus", value: string) =>
+    t.has(`transcodeJobs.${group}.${value}`) ? t(`transcodeJobs.${group}.${value}`) : value;
+  const jobStatusLabel = (status: string) => label("jobStatus", status);
+  const sourceLabel = (source: string) => label("source", source);
+  const videoStatusLabel = (status: string) => label("videoStatus", status);
 
   const sp = await searchParams;
   const filter = resolveFilter(sp.filter);
@@ -147,21 +165,11 @@ export default async function TranscodeJobsAdminPage({
   // `{ filter?: string }` — so an operator who clicked Retry on a job that had
   // since succeeded was returned to an unchanged page with no message, and no
   // way to tell that from the click not registering. They would click again.
-  const DLQ_ERRORS: Record<string, string> = {
-    missing_job_id: "That action arrived without a job id. Try again from the table.",
-    job_not_found: "That job no longer exists — it may have been pruned.",
-    not_retriable_status:
-      "Only a failed job can be retried. This one has since changed state; reload to see its current status.",
-    not_droppable_status:
-      "Only a failed job can be dropped. Reload to see its current status.",
-    not_failed_attempt: "Only a failed attempt can be retried or dropped. Reload to see its current status.",
-    not_latest_attempt:
-      "That was an older attempt of this video. Only its latest attempt can be retried or dropped.",
-    job_live: "That video already has a transcode queued or running. Reload to see its current status.",
-    submission_not_failed:
-      "That video is no longer failed — it has been retried or has become ready since. Reload to see it.",
-  };
-  const dlqError = sp.error ? lookupOwn(DLQ_ERRORS, sp.error) ?? "That action could not be completed." : null;
+  // Only the map's own codes count (lookupOwn): ?error=__proto__ is unknown.
+  const DLQ_ERRORS: Record<string, string> = Object.fromEntries(
+    DLQ_ERROR_CODES.map((code) => [code, t(`transcodeJobs.errors.${code}`)]),
+  );
+  const dlqError = sp.error ? lookupOwn(DLQ_ERRORS, sp.error) ?? t("transcodeJobs.errors.unknown") : null;
 
   // Audit the surface view itself — DLQ inspection is a programme-admin
   // oversight tool, same as /admin/whatsapp-log.
@@ -253,14 +261,9 @@ export default async function TranscodeJobsAdminPage({
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
       <header>
-        <h1 className="text-2xl font-semibold">Transcode jobs</h1>
+        <h1 className="text-2xl font-semibold">{t("transcodeJobs.title")}</h1>
         <p className="text-sm text-neutral-500">
-          Inspect and operate the ffmpeg → HLS 480p pipeline. Failed
-          rows are listed first; click Retry to re-enqueue a job onto
-          the queue, or Drop to bury it without retry. Each attempt is its
-          own row; only a video&apos;s latest attempt, while the video is
-          failed, can be retried or dropped. Every action is logged to the
-          audit trail.
+          {t("transcodeJobs.intro")}
         </p>
       </header>
 
@@ -285,36 +288,35 @@ export default async function TranscodeJobsAdminPage({
             color: "var(--ink-2)",
           }}
         >
-          <strong>Live queue depth unavailable (the database is unreachable).</strong>{" "}
-          The historical job table below is still accurate.
+          {t.rich("transcodeJobs.dbDown", { strong: (chunks) => <strong>{chunks}</strong> })}
         </div>
       ) : null}
 
       <section
-        aria-label="transcode queue depth"
+        aria-label={t("transcodeJobs.depth.label")}
         className="rounded-lg border border-neutral-200 bg-white p-3 text-sm"
         data-testid="dlq-depth-strip"
       >
         {depth === null ? (
           <span className="text-neutral-500">
-            Live queue depth unavailable (Redis unreachable).
+            {t("transcodeJobs.depth.unavailable")}
           </span>
         ) : (
           <dl className="flex flex-wrap items-center gap-4 text-xs">
             <div className="flex items-center gap-1">
-              <dt className="font-medium text-neutral-500">Waiting</dt>
+              <dt className="font-medium text-neutral-500">{t("transcodeJobs.depth.waiting")}</dt>
               <dd className="font-mono">{depth.waiting}</dd>
             </div>
             <div className="flex items-center gap-1">
-              <dt className="font-medium text-neutral-500">Active</dt>
+              <dt className="font-medium text-neutral-500">{t("transcodeJobs.depth.active")}</dt>
               <dd className="font-mono">{depth.active}</dd>
             </div>
             <div className="flex items-center gap-1">
-              <dt className="font-medium text-neutral-500">Delayed</dt>
+              <dt className="font-medium text-neutral-500">{t("transcodeJobs.depth.delayed")}</dt>
               <dd className="font-mono">{depth.delayed}</dd>
             </div>
             <div className="flex items-center gap-1">
-              <dt className="font-medium text-rust">Failed (DLQ)</dt>
+              <dt className="font-medium text-rust">{t("transcodeJobs.depth.failed")}</dt>
               <dd className="font-mono font-semibold">{depth.failed}</dd>
             </div>
           </dl>
@@ -322,27 +324,25 @@ export default async function TranscodeJobsAdminPage({
       </section>
 
       <section
-        aria-label="dead jobs"
+        aria-label={t("transcodeJobs.dead.label")}
         data-testid="dlq-dead-jobs"
         className="rounded-lg border border-neutral-200 bg-white p-3 text-sm"
       >
-        <h2 className="font-semibold">Dead jobs, every queue ({dead.length})</h2>
+        <h2 className="font-semibold">{t("transcodeJobs.dead.heading", { count: dead.length })}</h2>
         <p className="text-xs text-neutral-500">
-          Jobs whose attempts are exhausted, with the error the queue recorded. To
-          retry a dead transcode, use Retry on the video&apos;s latest failed
-          attempt below. A dead retention sweep runs again the next day by itself.
+          {t("transcodeJobs.dead.intro")}
         </p>
         {dead.length === 0 ? (
-          <p className="mt-2 text-xs text-neutral-500">None.</p>
+          <p className="mt-2 text-xs text-neutral-500">{t("transcodeJobs.dead.none")}</p>
         ) : (
           <table className="mt-2 w-full text-xs">
             <thead className="text-left uppercase tracking-wide text-neutral-500">
               <tr>
-                <th className="py-1 pr-3">Queue</th>
-                <th className="py-1 pr-3">Job</th>
-                <th className="py-1 pr-3">Attempts</th>
-                <th className="py-1 pr-3">Died</th>
-                <th className="py-1">Last error</th>
+                <th className="py-1 pr-3">{t("transcodeJobs.dead.columns.queue")}</th>
+                <th className="py-1 pr-3">{t("transcodeJobs.dead.columns.job")}</th>
+                <th className="py-1 pr-3">{t("transcodeJobs.dead.columns.attempts")}</th>
+                <th className="py-1 pr-3">{t("transcodeJobs.dead.columns.died")}</th>
+                <th className="py-1">{t("transcodeJobs.dead.columns.lastError")}</th>
               </tr>
             </thead>
             <tbody>
@@ -383,7 +383,7 @@ export default async function TranscodeJobsAdminPage({
       </section>
 
       <nav
-        aria-label="Filter transcode jobs"
+        aria-label={t("transcodeJobs.filters.label")}
         className="flex flex-wrap gap-2"
         data-testid="dlq-filter-pills"
       >
@@ -401,7 +401,7 @@ export default async function TranscodeJobsAdminPage({
               }`}
               aria-current={active ? "page" : undefined}
             >
-              {FILTER_LABELS[f]}
+              {t(`transcodeJobs.filters.${f}`)}
             </Link>
           );
         })}
@@ -411,21 +411,21 @@ export default async function TranscodeJobsAdminPage({
         <table className="w-full text-sm">
           <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
             <tr>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2">Submission</th>
-              <th className="px-3 py-2">Source</th>
-              <th className="px-3 py-2">Video now</th>
-              <th className="px-3 py-2">Error</th>
-              <th className="px-3 py-2">Attempts</th>
-              <th className="px-3 py-2">Updated</th>
-              <th className="px-3 py-2">Actions</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.status")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.submission")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.source")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.videoNow")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.error")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.attempts")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.updated")}</th>
+              <th className="px-3 py-2">{t("transcodeJobs.columns.actions")}</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
-                  No transcode jobs match the current filter.
+                  {t("transcodeJobs.empty")}
                 </td>
               </tr>
             ) : (
@@ -441,7 +441,7 @@ export default async function TranscodeJobsAdminPage({
                 return (
                   <tr key={r.jobId} data-job-id={r.jobId} className="border-t border-neutral-100">
                     <td className="px-3 py-2 text-xs">
-                      <span className={STATUS_CHIP[r.status] ?? "chip"}>{r.status}</span>
+                      <span className={STATUS_CHIP[r.status] ?? "chip"}>{jobStatusLabel(r.status)}</span>
                     </td>
                     <td className="px-3 py-2 text-xs">
                       <Link
@@ -452,10 +452,10 @@ export default async function TranscodeJobsAdminPage({
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      <span className="chip">{r.source}</span>
+                      <span className="chip">{sourceLabel(r.source)}</span>
                     </td>
                     <td className="px-3 py-2 text-xs" data-testid="dlq-video-status">
-                      {state?.status ?? "—"}
+                      {state?.status ? videoStatusLabel(state.status) : "—"}
                     </td>
                     <td className="px-3 py-2 text-xs" title={errorShort}>
                       {errorPreview}
@@ -474,7 +474,7 @@ export default async function TranscodeJobsAdminPage({
                               className="rounded-md border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
                               data-testid="dlq-retry-button"
                             >
-                              Retry
+                              {t("transcodeJobs.retry")}
                             </button>
                           </form>
                         ) : null}
@@ -486,13 +486,13 @@ export default async function TranscodeJobsAdminPage({
                               className="rounded-md border border-rust px-2 py-1 text-xs text-rust hover:bg-neutral-50"
                               data-testid="dlq-drop-button"
                             >
-                              Drop
+                              {t("transcodeJobs.drop")}
                             </button>
                           </form>
                         ) : null}
                         {!canRetry && !canDrop ? (
                           <span className="text-neutral-400">
-                            {superseded ? "superseded by a later attempt" : "—"}
+                            {superseded ? t("transcodeJobs.superseded") : "—"}
                           </span>
                         ) : null}
                       </div>
@@ -506,13 +506,14 @@ export default async function TranscodeJobsAdminPage({
       </div>
 
       <p className="text-xs text-neutral-400">
-        Showing the most recent {PAGE_LIMIT} transcode jobs. Errors are
-        truncated to 60 characters; hover to see the full text. For the
-        full audit history (retries, drops, worker errors) see{" "}
-        <Link href="/admin/audit" className="underline">
-          /admin/audit
-        </Link>
-        .
+        {t.rich("transcodeJobs.footer", {
+          limit: PAGE_LIMIT,
+          link: (chunks) => (
+            <Link href="/admin/audit" className="underline">
+              {chunks}
+            </Link>
+          ),
+        })}
       </p>
     </main>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   setRoleAction,
   setActiveAction,
@@ -9,6 +10,7 @@ import {
   type UserActionState,
 } from "./actions";
 import type { RoleName } from "@gml/shared/auth/roles";
+import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 
 type Props = {
   user: {
@@ -91,6 +93,7 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
     undefined,
   );
   const [showPw, setShowPw] = useState(false);
+  const t = useTranslations("admin.client");
 
   // Mirrors the server's rule so the UI does not offer buttons that will be
   // refused. The server enforces it regardless -- this is courtesy, not a
@@ -131,13 +134,13 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
           {roleLabel}
         </span>
         {user.deleted ? (
-          <span style={{ fontSize: 11, color: "var(--danger, #b91c1c)" }}>deleted</span>
+          <span style={{ fontSize: 11, color: "var(--danger, #b91c1c)" }}>{t("userRow.deleted")}</span>
         ) : !user.active ? (
-          <span style={{ fontSize: 11, color: "var(--danger, #b91c1c)" }}>deactivated</span>
+          <span style={{ fontSize: 11, color: "var(--danger, #b91c1c)" }}>{t("userRow.deactivated")}</span>
         ) : null}
-        {isSelf ? <span style={{ fontSize: 11, color: "var(--ink-3)" }}>(you)</span> : null}
+        {isSelf ? <span style={{ fontSize: 11, color: "var(--ink-3)" }}>{t("userRow.you")}</span> : null}
         <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: "auto" }}>
-          {user.lastSeenAt ? `last seen ${user.lastSeenAt.slice(0, 10)}` : "never signed in"}
+          {user.lastSeenAt ? t("userRow.lastSeen", { date: user.lastSeenAt.slice(0, 10) }) : t("userRow.neverSignedIn")}
         </span>
       </div>
 
@@ -154,12 +157,12 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
             <select name="role" defaultValue={user.role} style={control}>
               {assignable.map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {t(`roles.${r}`)}
                 </option>
               ))}
             </select>
             <button type="submit" disabled={rolePending} style={{ ...control, cursor: "pointer" }}>
-              {rolePending ? "Saving…" : "Set role"}
+              {rolePending ? t("userRow.saving") : t("userRow.setRole")}
             </button>
           </form>
 
@@ -176,7 +179,7 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
               disabled={activePending}
               style={{ ...control, cursor: "pointer" }}
             >
-              {activePending ? "Saving…" : user.active ? "Deactivate" : "Reactivate"}
+              {activePending ? t("userRow.saving") : user.active ? t("userRow.deactivate") : t("userRow.reactivate")}
             </button>
           </form>
 
@@ -185,14 +188,12 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
             onClick={() => setShowPw((v) => !v)}
             style={{ ...control, cursor: "pointer" }}
           >
-            {showPw ? "Cancel" : "Set password"}
+            {showPw ? t("userRow.cancel") : t("userRow.setPassword")}
           </button>
         </div>
       ) : (
         <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-          {isSelf
-            ? "Change your own password in Settings. Another administrator must change your role."
-            : "Only a super admin can manage administrator accounts."}
+          {isSelf ? t("userRow.selfHint") : t("userRow.adminOnlyHint")}
         </span>
       )}
 
@@ -211,14 +212,14 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
             required
             minLength={8}
             autoComplete="off"
-            placeholder="New password (8+ characters)"
+            placeholder={t("userRow.newPassword", { min: MIN_PASSWORD_LENGTH })}
             style={{ ...control, minWidth: 260 }}
           />
           <button type="submit" disabled={pwPending} style={{ ...control, cursor: "pointer" }}>
-            {pwPending ? "Saving…" : "Save password"}
+            {pwPending ? t("userRow.saving") : t("userRow.savePassword")}
           </button>
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            Signs them out everywhere.
+            {t("userRow.signsOut")}
           </span>
         </form>
       ) : null}
@@ -241,15 +242,15 @@ export function UserRow({ user, roleLabel, actorRole, isSelf }: Props) {
             name="phone"
             type="tel"
             defaultValue={user.phone ?? ""}
-            placeholder="WhatsApp number"
+            placeholder={t("userRow.phonePlaceholder")}
             autoComplete="off"
             style={{ ...control, minWidth: 180 }}
           />
           <button type="submit" disabled={phonePending} style={{ ...control, cursor: "pointer" }}>
-            {phonePending ? "Saving…" : "Save number"}
+            {phonePending ? t("userRow.saving") : t("userRow.saveNumber")}
           </button>
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            Gate passwords are shared to it, and videos sent from it on WhatsApp are filed under this person.
+            {t("userRow.phoneHint")}
           </span>
         </form>
       ) : null}

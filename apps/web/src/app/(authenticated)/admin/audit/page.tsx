@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getLocale, getTranslations } from "next-intl/server";
 import { desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { auditLog, users } from "@gml/db/schema";
@@ -6,8 +7,14 @@ import { requireRole } from "@/lib/guards";
 import { AUDIT_EXPORT_ROW_CAP } from "@/admin/audit-export";
 import { recentAuditActions } from "@/admin/audit-lookups";
 import { istDayRange } from "@/admin/dates";
+import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 
 export const dynamic = "force-dynamic";
+
+// Headings, filters, buttons and messages are in the admin namespace
+// (audit.*). What the log records -- action names (auth.sign_in, ...),
+// entity types, ids, addresses, metadata -- are codes and data, shown as
+// stored.
 
 const PAGE_SIZE = 50;
 
@@ -17,6 +24,8 @@ export default async function AuditViewer({
   searchParams: Promise<{ action?: string; user?: string; page?: string; from?: string; to?: string }>;
 }) {
   await requireRole(["programme_admin", "super_admin"]);
+  const t = await getTranslations("admin");
+  const intl = INTL_LOCALE[normalizeLocale(await getLocale())];
   const sp = await searchParams;
   const page = Math.max(0, Number(sp.page ?? 0));
 
@@ -156,9 +165,9 @@ export default async function AuditViewer({
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-6">
       <header>
-        <h1 className="text-2xl font-semibold">Audit log</h1>
+        <h1 className="text-2xl font-semibold">{t("audit.title")}</h1>
         <p className="text-sm text-neutral-500">
-          Append-only record of every protected view, edit, upload, and gate event.
+          {t("audit.intro")}
         </p>
       </header>
 
@@ -168,41 +177,43 @@ export default async function AuditViewer({
           data-testid="audit-user-filter-rejected"
           className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"
         >
-          The user filter was ignored — no account matches <code>{sp.user}</code>. Enter the
-          address shown in the User column, or click a name there.
+          {t.rich("audit.userFilterRejected", {
+            value: sp.user ?? "",
+            code: (chunks) => <code>{chunks}</code>,
+          })}
         </p>
       ) : null}
 
       <form method="get" className="flex flex-wrap items-end gap-3 rounded-lg border border-neutral-200 bg-white p-4 text-sm">
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">Action</span>
+          <span className="text-xs text-neutral-500">{t("audit.filters.action")}</span>
           <select name="action" defaultValue={sp.action ?? ""} className="rounded-md border border-neutral-300 px-2 py-1">
-            <option value="">any</option>
+            <option value="">{t("audit.filters.any")}</option>
             {actionOptions.map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">User (email or id)</span>
+          <span className="text-xs text-neutral-500">{t("audit.filters.user")}</span>
           <input name="user" defaultValue={sp.user ?? ""} className="rounded-md border border-neutral-300 px-2 py-1" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">From</span>
+          <span className="text-xs text-neutral-500">{t("audit.filters.from")}</span>
           <input type="date" name="from" defaultValue={fromDay ? sp.from : ""} className="rounded-md border border-neutral-300 px-2 py-1" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">To</span>
+          <span className="text-xs text-neutral-500">{t("audit.filters.to")}</span>
           <input type="date" name="to" defaultValue={toDay ? sp.to : ""} className="rounded-md border border-neutral-300 px-2 py-1" />
         </label>
-        <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">Filter</button>
+        <button type="submit" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white">{t("audit.filters.submit")}</button>
         {exportTooLarge ? (
           <span
             role="status"
             data-testid="audit-export-too-large"
             className="ml-auto text-xs text-amber-800"
           >
-            More than {AUDIT_EXPORT_ROW_CAP.toLocaleString("en-IN")} events match — narrow From/To to export.
+            {t("audit.exportTooLarge", { cap: AUDIT_EXPORT_ROW_CAP.toLocaleString(intl) })}
           </span>
         ) : (
           <Link
@@ -210,7 +221,7 @@ export default async function AuditViewer({
             download
             className="ml-auto rounded-md border border-neutral-300 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50"
           >
-            Export CSV
+            {t("audit.exportCsv")}
           </Link>
         )}
       </form>
@@ -219,19 +230,19 @@ export default async function AuditViewer({
         <table className="w-full text-sm">
           <thead className="bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
             <tr>
-              <th className="px-3 py-2">When</th>
-              <th className="px-3 py-2">User</th>
-              <th className="px-3 py-2">Action</th>
-              <th className="px-3 py-2">Entity</th>
-              <th className="px-3 py-2">IP</th>
-              <th className="px-3 py-2">Metadata</th>
+              <th className="px-3 py-2">{t("audit.columns.when")}</th>
+              <th className="px-3 py-2">{t("audit.columns.user")}</th>
+              <th className="px-3 py-2">{t("audit.columns.action")}</th>
+              <th className="px-3 py-2">{t("audit.columns.entity")}</th>
+              <th className="px-3 py-2">{t("audit.columns.ip")}</th>
+              <th className="px-3 py-2">{t("audit.columns.metadata")}</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-6 text-center text-neutral-500">
-                  No events.
+                  {t("audit.empty")}
                 </td>
               </tr>
             ) : (
@@ -261,13 +272,13 @@ export default async function AuditViewer({
       </div>
 
       <nav className="flex items-center justify-between text-sm">
-        <span className="text-xs text-neutral-500">Page {page + 1}</span>
+        <span className="text-xs text-neutral-500">{t("audit.page", { page: page + 1 })}</span>
         <div className="flex gap-2">
           {page > 0 ? (
-            <a href={withParams({ page: String(page - 1) })} className="rounded-md border border-neutral-300 px-3 py-1">← Prev</a>
+            <a href={withParams({ page: String(page - 1) })} className="rounded-md border border-neutral-300 px-3 py-1">{t("audit.prev")}</a>
           ) : null}
           {rows.length === PAGE_SIZE ? (
-            <a href={withParams({ page: String(page + 1) })} className="rounded-md border border-neutral-300 px-3 py-1">Next →</a>
+            <a href={withParams({ page: String(page + 1) })} className="rounded-md border border-neutral-300 px-3 py-1">{t("audit.next")}</a>
           ) : null}
         </div>
       </nav>

@@ -16,6 +16,7 @@
 // dashboard tells the truth without a stats table.
 
 import { and, desc, inArray, sql } from "drizzle-orm";
+import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import {
   sectionGates,
@@ -30,23 +31,12 @@ import { RotateControls } from "./rotate-controls";
 export const dynamic = "force-dynamic";
 
 // Mirror the section_gate_slug enum from packages/db/src/schema/enums.ts.
-// Order matches the JSX prototype card order.
-const GATES: { slug: string; label: string; description: string }[] = [
-  {
-    slug: "observation",
-    label: "Classroom Observation",
-    description: "Gates /observation/* — observer + mentor + admin only.",
-  },
-  {
-    slug: "mentorship",
-    label: "Mentorship",
-    description: "Gates /mentorship/* — mentor + admin only.",
-  },
-  {
-    slug: "admin",
-    label: "Audit log",
-    description: "Gates /admin/audit — the append-only record of every mutation.",
-  },
+// Order matches the JSX prototype card order. Each card's name and
+// description are admin.gates.cards.<slug>.{label,description}.
+const GATES: { slug: string }[] = [
+  { slug: "observation" },
+  { slug: "mentorship" },
+  { slug: "admin" },
 ];
 
 // `tkt` and `ttt` are DELIBERATELY ABSENT, though they remain members of the
@@ -65,6 +55,7 @@ const GATES: { slug: string; label: string; description: string }[] = [
 
 export default async function AdminGatesPage() {
   await requireRole(["super_admin"]);
+  const t = await getTranslations("admin");
 
   // SM-9 view-side audit — record that an admin opened the rotation surface.
   // The audit_log query downstream is a normal SELECT, no PII.
@@ -121,6 +112,8 @@ export default async function AdminGatesPage() {
   const attemptsBySlug = new Map(attemptRows.map((r) => [r.slug ?? "", r]));
   const rows = GATES.map((g) => ({
     ...g,
+    label: t(`gates.cards.${g.slug}.label`),
+    description: t(`gates.cards.${g.slug}.description`),
     latest: latestBySlug.get(g.slug),
     activeGrants: Number(grantsBySlug.get(g.slug) ?? 0),
     attempts30d: Number(attemptsBySlug.get(g.slug)?.attempts30d ?? 0),
@@ -149,7 +142,11 @@ export default async function AdminGatesPage() {
     .filter((c) => Boolean(c.phone))
     .map((c) => ({
       id: c.id,
-      label: `${c.name ?? c.email} · ${c.role}`,
+      label: t("gates.recipient", {
+        name: c.name ?? c.email,
+        // The role as the users page names it, not the enum code.
+        role: t.has(`client.roles.${c.role}`) ? t(`client.roles.${c.role}`) : c.role,
+      }),
     }));
 
   // Pull the rotator email for each gate's "last rotated by" line.
@@ -175,14 +172,11 @@ export default async function AdminGatesPage() {
     <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
       <header>
         <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          System
+          {t("gates.eyebrow")}
         </div>
-        <h1 className="mt-1 font-serif text-2xl">Section gates</h1>
+        <h1 className="mt-1 font-serif text-2xl">{t("gates.title")}</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Rotating codes restrict access to sensitive sections even after
-          login. Rotate every 30 days; share over a secure channel only.
-          Each rotation invalidates every active grant for the slug — every
-          authorised user must re-enter the new password.
+          {t("gates.intro")}
         </p>
       </header>
 
@@ -208,35 +202,35 @@ export default async function AdminGatesPage() {
               <dl className="grid grid-cols-2 gap-2 text-xs">
                 <div>
                   <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-                    Last rotated
+                    {t("gates.lastRotated")}
                   </dt>
                   <dd className="font-mono">
                     {g.latest?.rotatedAt
                       ? g.latest.rotatedAt.toISOString().slice(0, 10)
-                      : "never"}
+                      : t("gates.never")}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-                    Version
+                    {t("gates.version")}
                   </dt>
                   <dd className="font-mono">v{g.latest?.version ?? 1}</dd>
                 </div>
                 <div>
                   <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-                    Active grants
+                    {t("gates.activeGrants")}
                   </dt>
                   <dd>{g.activeGrants}</dd>
                 </div>
                 <div>
                   <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-                    Attempts (30d)
+                    {t("gates.attempts30d")}
                   </dt>
                   <dd>{g.attempts30d}</dd>
                 </div>
                 <div className="col-span-2">
                   <dt className="text-[10px] uppercase tracking-wide text-neutral-500">
-                    Failures (30d) · rotated by
+                    {t("gates.failuresRotatedBy")}
                   </dt>
                   <dd
                     className={

@@ -1,17 +1,19 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { useTranslations } from "next-intl";
 import { createUserAction, type UserActionState } from "./actions";
 import type { RoleName } from "@gml/shared/auth/roles";
 
 type Person = { id: string; name: string };
 
-const ROLE_OPTIONS: { value: RoleName; label: string; adminOnly?: boolean }[] = [
-  { value: "teacher", label: "Teacher" },
-  { value: "observer", label: "Observer" },
-  { value: "mentor", label: "Mentor" },
-  { value: "programme_admin", label: "Programme admin", adminOnly: true },
-  { value: "super_admin", label: "Super admin", adminOnly: true },
+// Labels are admin.client.roles.<value>.
+const ROLE_OPTIONS: { value: RoleName; adminOnly?: boolean }[] = [
+  { value: "teacher" },
+  { value: "observer" },
+  { value: "mentor" },
+  { value: "programme_admin", adminOnly: true },
+  { value: "super_admin", adminOnly: true },
 ];
 
 const field: React.CSSProperties = {
@@ -53,6 +55,7 @@ export function CreateUserForm({
   );
   const [password, setPassword] = useState("");
   const [linkKind, setLinkKind] = useState<"" | "teacher" | "mentor">("");
+  const t = useTranslations("admin.client");
 
   // The list is filtered here for convenience only. The action re-checks what
   // the caller is allowed to assign, because a select element is trivially
@@ -64,24 +67,24 @@ export function CreateUserForm({
     <form action={formAction} style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span style={labelText}>Email</span>
+          <span style={labelText}>{t("createUser.email")}</span>
           <input name="email" type="email" required autoComplete="off" style={field} />
         </label>
 
         <label style={{ display: "grid", gap: 4 }}>
-          <span style={labelText}>Full name</span>
+          <span style={labelText}>{t("createUser.fullName")}</span>
           <input name="name" type="text" autoComplete="off" style={field} />
         </label>
 
         <label style={{ display: "grid", gap: 4 }}>
-          <span style={labelText}>Role</span>
+          <span style={labelText}>{t("createUser.role")}</span>
           <select name="role" required defaultValue="" style={field}>
             <option value="" disabled>
-              Choose…
+              {t("createUser.choose")}
             </option>
             {roles.map((r) => (
               <option key={r.value} value={r.value}>
-                {r.label}
+                {t(`roles.${r.value}`)}
               </option>
             ))}
           </select>
@@ -90,7 +93,7 @@ export function CreateUserForm({
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span style={labelText}>Initial password</span>
+          <span style={labelText}>{t("createUser.initialPassword")}</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input
               name="password"
@@ -115,7 +118,7 @@ export function CreateUserForm({
                 cursor: "pointer",
               }}
             >
-              Generate
+              {t("createUser.generate")}
             </button>
           </div>
           {/* Shown as plain text on purpose: the administrator has to read it
@@ -124,29 +127,29 @@ export function CreateUserForm({
               only the hash, and the audit row records that a password was set,
               never the value. */}
           <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
-            Shown so you can pass it on. Ask them to change it in Settings.
+            {t("createUser.passwordHint")}
           </span>
         </label>
 
         <label style={{ display: "grid", gap: 4 }}>
-          <span style={labelText}>Link to</span>
+          <span style={labelText}>{t("createUser.linkTo")}</span>
           <select
             name="linkKind"
             value={linkKind}
             onChange={(e) => setLinkKind(e.target.value as "" | "teacher" | "mentor")}
             style={field}
           >
-            <option value="">Nobody yet</option>
-            <option value="teacher">A teacher record</option>
-            <option value="mentor">A mentor record</option>
+            <option value="">{t("createUser.linkNobody")}</option>
+            <option value="teacher">{t("createUser.linkTeacher")}</option>
+            <option value="mentor">{t("createUser.linkMentor")}</option>
           </select>
         </label>
 
         {linkKind ? (
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={labelText}>{linkKind === "teacher" ? "Teacher" : "Mentor"}</span>
+            <span style={labelText}>{t(`roles.${linkKind}`)}</span>
             <select name="linkId" defaultValue="" style={field}>
-              <option value="">Choose…</option>
+              <option value="">{t("createUser.choose")}</option>
               {people.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -183,7 +186,7 @@ export function CreateUserForm({
             opacity: pending ? 0.6 : 1,
           }}
         >
-          {pending ? "Creating…" : "Create account"}
+          {pending ? t("createUser.creating") : t("createUser.submit")}
         </button>
       </div>
     </form>
