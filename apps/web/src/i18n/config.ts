@@ -201,6 +201,27 @@ export function loadMessages(locale: Locale): MessageBundle {
 }
 
 /**
+ * The part of the bundle a browser needs: the chrome namespaces whole, and of
+ * each page namespace only its `client` subtree -- the strings "use client"
+ * components read. This is what the layouts hand NextIntlClientProvider, and
+ * it is serialized into the page for every visitor, so it stays small: the
+ * interface is fully translated, and shipping all of it (every page's copy, in
+ * Devanagari or Tibetan at three bytes a character) to a phone on a slow
+ * network would cost hundreds of kilobytes per first load for text only the
+ * server renders. A client component that reads a key outside
+ * `<namespace>.client` fails its test (the harness provides exactly this).
+ */
+export function clientMessages(locale: Locale): MessageBundle {
+  const all = loadMessages(locale);
+  const out: MessageBundle = {};
+  for (const [namespace, value] of Object.entries(all)) {
+    if (!(PAGE_NAMESPACES as readonly string[]).includes(namespace)) out[namespace] = value;
+    else if (value.client !== undefined) out[namespace] = { client: value.client };
+  }
+  return out;
+}
+
+/**
  * Map of locale → CSS font-family override. Hindi gets the Devanagari stack
  * (`--deva`), Bhoti the Tibetan stack (`--tib`), both backed by the faces
  * app/layout.tsx self-hosts; English keeps the default sans.

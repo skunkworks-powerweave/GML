@@ -15,7 +15,7 @@ import AntiDownloadGuard from "@/components/AntiDownloadGuard";
 import { FTUXTour } from "@/components/ftux/FTUXTour";
 import { HelpPanel } from "@/components/help/HelpPanel";
 import QuickFind from "@/components/quickfind/QuickFind";
-import { loadMessages, LOCALE_FONT_FAMILY, LOCALE_HTML_LANG } from "@/i18n/config";
+import { clientMessages, LOCALE_FONT_FAMILY, LOCALE_HTML_LANG } from "@/i18n/config";
 import { viewerPrefs } from "@/i18n/resolve";
 import {
   loadNavCounts,
@@ -85,7 +85,8 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   // the tour is not mounted -- or every user would get it over every page for
   // the length of a database outage.
   const { locale, prefs: prefRow, failed: prefsFailed } = await viewerPrefs();
-  const messages = loadMessages(locale);
+  // Only what client components read (see clientMessages in i18n/config).
+  const messages = clientMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];
   const htmlLang = LOCALE_HTML_LANG[locale];
   const ftuxSeenAt = prefRow?.ftuxSeenAt ? prefRow.ftuxSeenAt.toISOString() : null;

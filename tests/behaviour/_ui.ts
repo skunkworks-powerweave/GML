@@ -19,7 +19,8 @@
 // test:
 //   - next-intl/server   getTranslations() needs Next's request scope. The stub
 //                        reads the app's own locale bundles through the app's
-//                        own loadMessages(), so the strings are the real ones.
+//                        own loadMessages(), so the strings are the real ones. (Client providers get
+//                        clientMessages(), exactly as the layouts do.)
 //   - next/headers       cookies() / headers() need a request. The stub serves
 //                        whatever the test put in `request`.
 //   - next/font/google   a build-time transform; outside `next build` it throws.
@@ -60,7 +61,7 @@
 
 import { createRequire, registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
-import { loadMessages } from "../../apps/web/src/i18n/config.ts";
+import { clientMessages } from "../../apps/web/src/i18n/config.ts";
 
 const WEB_URL = new URL("../../apps/web/", import.meta.url);
 const SRC_DIR = fileURLToPath(new URL("src/", WEB_URL));
@@ -180,7 +181,7 @@ function inIntl(element: unknown): unknown {
   const locale = request.locale;
   return h(
     NextIntlClientProvider as never,
-    { locale, messages: loadMessages(locale), timeZone: "Asia/Kolkata", onError: failOnIntlError },
+    { locale, messages: clientMessages(locale), timeZone: "Asia/Kolkata", onError: failOnIntlError },
     element as never,
   );
 }
@@ -247,7 +248,7 @@ function intlContext(locale: RequestState["locale"]): { ctx: { _currentValue: un
   const { IntlProvider } = webRequire("next-intl") as { IntlProvider: (p: Record<string, unknown>) => unknown };
   const el = mount(IntlProvider, {
     locale,
-    messages: loadMessages(locale),
+    messages: clientMessages(locale),
     timeZone: "Asia/Kolkata",
     onError: failOnIntlError,
     children: null,
@@ -270,7 +271,7 @@ export async function withIntl(child: unknown, locale: RequestState["locale"]): 
   // rendered here formats a date.
   return h(
     NextIntlClientProvider as never,
-    { locale, messages: loadMessages(locale), timeZone: "Asia/Kolkata", onError: failOnIntlError },
+    { locale, messages: clientMessages(locale), timeZone: "Asia/Kolkata", onError: failOnIntlError },
     child as never,
   );
 }

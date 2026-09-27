@@ -154,3 +154,22 @@ test("every message formats in every language (the bundle the app really loads)"
     assert.deepEqual(failures, [], `${locale}: messages that do not format`);
   }
 });
+
+test("the browser gets the chrome and each page namespace's client strings, nothing else", async () => {
+  // clientMessages is what the layouts hand NextIntlClientProvider, and it is
+  // serialized into every page: server-only copy must not ride along.
+  const { clientMessages } = await import("../../apps/web/src/i18n/config.ts");
+  for (const locale of LOCALES) {
+    const all = loadMessages(locale);
+    const sent = clientMessages(locale);
+    for (const ns of Object.keys(all)) {
+      if ((PAGE_NAMESPACES as readonly string[]).includes(ns)) {
+        const tree = all[ns] as Tree;
+        if (tree.client === undefined) assert.equal(sent[ns], undefined, `${locale}: ${ns} has no client strings to send`);
+        else assert.deepEqual(sent[ns], { client: tree.client }, `${locale}: only ${ns}.client is sent`);
+      } else {
+        assert.deepEqual(sent[ns], all[ns], `${locale}: the chrome namespace ${ns} is sent whole`);
+      }
+    }
+  }
+});

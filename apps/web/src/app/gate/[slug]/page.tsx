@@ -11,7 +11,7 @@
 
 import { getTranslations } from "next-intl/server";
 import { NextIntlClientProvider } from "next-intl";
-import { loadMessages, LOCALE_FONT_FAMILY } from "@/i18n/config";
+import { clientMessages, LOCALE_FONT_FAMILY } from "@/i18n/config";
 import { resolveUiLocale } from "@/i18n/resolve";
 import { GateForm } from "./gate-form";
 
@@ -50,7 +50,8 @@ export default async function GatePage({
   // nothing saved and Hindi picked at sign-in the gate was English under
   // lang="hi".
   const locale = await resolveUiLocale();
-  const messages = loadMessages(locale);
+  // Only what client components read (see clientMessages in i18n/config).
+  const messages = clientMessages(locale);
   const fontFamily = LOCALE_FONT_FAMILY[locale];
 
   const tGate = await getTranslations({ locale, namespace: "gate" });

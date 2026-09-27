@@ -20,7 +20,7 @@
 
 import { createRequire, registerHooks } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadMessages } from "../../apps/web/src/i18n/config.ts";
+import { clientMessages } from "../../apps/web/src/i18n/config.ts";
 
 const WEB_URL = new URL("../../apps/web/", import.meta.url);
 const SRC_DIR = fileURLToPath(new URL("src/", WEB_URL));
@@ -116,7 +116,7 @@ export function renderSync(element: unknown): string {
   return ReactDOMServer.renderToStaticMarkup(
     React.createElement(
       NextIntlClientProvider as never,
-      { locale, messages: loadMessages(locale), timeZone: "Asia/Kolkata", onError: fail },
+      { locale, messages: clientMessages(locale), timeZone: "Asia/Kolkata", onError: fail },
       element as never,
     ),
   );
