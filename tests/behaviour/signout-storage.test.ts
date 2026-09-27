@@ -67,7 +67,8 @@ async function withBrowser(
 
 async function signOutClick(): Promise<Click> {
   const { SignOutButton } = await import("../../apps/web/src/components/nav/SignOutButton.tsx");
-  const tree = mount(SignOutButton as never, { children: "Sign out" } as never).tree as unknown as {
+  // intl: the "discard unsaved answers?" question is home.client.signOut.
+  const tree = mount(SignOutButton as never, { children: "Sign out" } as never, { intl: "en" }).tree as unknown as {
     props: { onClick: (e: Click) => void };
   };
   const e = click();

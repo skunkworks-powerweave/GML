@@ -122,9 +122,14 @@ test("spec 168 — UploadModal accepts videoDefaultQuality and renders an explai
     /data-testid="upload-quality-explainer"/,
     `${UPLOAD_MODAL} must render a data-testid="upload-quality-explainer" so the governance test + future e2e tests can anchor on the wire-through`,
   );
+  // The explainer is video.client.modal.browserIntro, in the user's
+  // language; the quality is its {quality} argument.
+  // (t.rich: the quality is set in bold inside the sentence.)
+  assert.ok(src.includes('t.rich("modal.browserIntro"'), `${UPLOAD_MODAL} must render the browser-upload explainer`);
+  assert.match(message("video.client.modal.browserIntro"), /<strong>\{quality\} HLS<\/strong>/);
   assert.match(
     src,
-    /\{videoDefaultQuality\s*\?\?\s*"480p"\}/,
+    /quality:\s*videoDefaultQuality\s*\?\?\s*"480p"/,
     `${UPLOAD_MODAL} must default to "480p" when videoDefaultQuality is null so a pre-bootstrap deployment still renders sensible copy`,
   );
 });
@@ -310,13 +315,20 @@ test("spec 168 — transcode-jobs page declares redisUnavailable and renders a b
     /data-testid="dlq-redis-down-banner"/,
     `${TRANSCODE_JOBS} must render a data-testid="dlq-redis-down-banner" so the test + future e2e can verify the failure surface`,
   );
+  // The banner's words are admin.transcodeJobs.dbDown (bold lead-in, so the
+  // page renders it with t.rich, which readsKey() does not recognise).
   assert.match(
     src,
+    /\bt\.rich\(\s*"transcodeJobs\.dbDown"/,
+    `${TRANSCODE_JOBS} must render the banner's copy from admin.transcodeJobs.dbDown`,
+  );
+  assert.match(
+    message("admin.transcodeJobs.dbDown"),
     /Live queue depth unavailable/,
     `${TRANSCODE_JOBS} must surface the literal "Live queue depth unavailable" phrase — the banner's whole point is to make this obvious to a triaging operator`,
   );
   assert.match(
-    src,
+    message("admin.transcodeJobs.dbDown"),
     /historical job table below is still accurate/,
     `${TRANSCODE_JOBS} must point the operator at the historical table — without that nudge an operator might assume the whole page is broken and reload uselessly`,
   );

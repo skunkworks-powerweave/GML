@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -171,27 +172,30 @@ test("spec 131 — FormRenderer renders savedIndicator in a top-of-card flex row
 // Was: "uses the literal 'Save failed — retrying…' error copy". That copy was
 // the defect -- nothing retried, and an expired session got the same words.
 // The error branch now says what is actually happening (retrying, or sign in
-// again, and that the answers are kept on the device); the messages live in
-// draft-resilience.ts and are executed by tests/behaviour/ui-form-autosave.test.ts.
+// again, and that the answers are kept on the device); draft-resilience.ts
+// picks the message for the failure, the words are in the translation bundle
+// (mentorship.client.formRunner.failure), and both are executed by
+// tests/behaviour/ui-form-autosave.test.ts.
 test("spec 131 — FormRenderer's error copy comes from the failure it describes", () => {
   const src = read(RENDERER_PATH);
-  assert.match(src, /failureMessage\(saveFailure \?\? "error"\)/);
+  assert.match(src, /failureMessage\(saveFailure \?\? "error", t\)/);
   assert.doesNotMatch(src, /Save failed — retrying…/, "a promise of a retry nothing performs");
   const helper = read("apps/web/src/components/forms/draft-resilience.ts");
-  assert.match(helper, /sign in again/);
-  assert.match(helper, /kept on this device/);
+  assert.match(helper, /`formRunner\.failure\.\$\{kind\}`/, "the message is the one for this kind of failure");
+  assert.match(message("mentorship.client.formRunner.failure.expired"), /sign in again/);
+  assert.match(message("mentorship.client.formRunner.failure.expired"), /kept on this device/);
+  assert.doesNotMatch(JSON.stringify(message("mentorship.client.formRunner.failure")), /Save failed — retrying…/);
 });
 
 test("spec 131 — FormRenderer keeps 'Saved Ns ago' copy + var(--rust) error color", () => {
   const src = read(RENDERER_PATH);
-  // The N-seconds-ago template literal is what gives the ticker its
-  // live appearance. Spec 072's prior test asserts the same pattern;
-  // we re-affirm here so a regression breaks 131 too.
-  assert.match(
-    src,
-    /Saved \$\{seconds\}s ago/,
-    "FormRenderer must render the 'Saved Ns ago' template literal so the ticker stays live",
-  );
+  // The N-seconds-ago message is what gives the ticker its live appearance:
+  // the renderer passes the live `seconds` into it, and the English bundle
+  // says "Saved {seconds}s ago". Spec 072's prior test asserts the same
+  // pattern; we re-affirm here so a regression breaks 131 too.
+  assert.ok(readsKey(src, "formRunner.savedAgo"), "FormRenderer must render the 'Saved Ns ago' message");
+  assert.match(src, /t\("formRunner\.savedAgo", \{ seconds \}\)/, "with the live seconds count, so the ticker stays live");
+  assert.equal(message("mentorship.client.formRunner.savedAgo"), "Saved {seconds}s ago");
   // The error branch must paint the indicator in var(--rust); the
   // happy path uses var(--ink-3).
   assert.match(

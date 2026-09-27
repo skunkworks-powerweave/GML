@@ -42,9 +42,10 @@ test("importing the upload module does not load the browser Supabase client", as
     chunkBytes: 6 * 1024 * 1024,
     supabase: { url: "", anonKey: "" },
     onProgress: () => undefined,
-    onError: (m) => void errors.push(m),
+    onError: (code) => void errors.push(code),
     onSuccess: () => undefined,
   });
-  assert.match(errors[0] ?? "", /not configured/);
+  // A code; the tray says it from the bundle (video.client.upload.error.not_configured).
+  assert.deepEqual(errors, ["not_configured"]);
   assert.equal(loaded(), false);
 });

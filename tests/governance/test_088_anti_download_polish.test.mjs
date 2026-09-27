@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -111,7 +112,10 @@ test("spec 088: AntiDownloadGuard wires the three keydown deterrents (save / pri
 test("spec 088: AntiDownloadGuard surfaces the 'Screenshots are logged' toast via createPortal", () => {
   const src = read(GUARD_PATH);
   assert.match(src, /createPortal/);
-  assert.match(src, /Screenshots are logged\./);
+  // The toast reads home.client.antiDownload.screenshotsLogged, in the
+  // user's language.
+  assert.ok(readsKey(src, "screenshotsLogged"), "the toast reads home.client.antiDownload.screenshotsLogged");
+  assert.equal(message("home.client.antiDownload.screenshotsLogged"), "Screenshots are logged.");
 });
 
 test("spec 088: AntiDownloadGuard runs the DevTools heuristic with sessionStorage throttle", () => {

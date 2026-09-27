@@ -25,7 +25,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, closeAppDb, type TestUser } from "./_server-actions.js";
-import { render, renderSync, withAppRouter, h } from "./_ui.js";
+import { render, withAppRouter, h } from "./_ui.js";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 import { needsDatabase } from "./_harness.js";
 import { observationWorld } from "./_observation-world.js";
 
@@ -118,7 +119,8 @@ test("SubmittedForms escapes answers and hides internal keys", async () => {
   const { SubmittedForms } = await import(
     "../../apps/web/src/app/(authenticated)/observation/[cycleId]/SubmittedForms.tsx"
   );
-  const html = renderSync(
+  // An async server component now: it reads the reader's language.
+  const html = await render(
     h(SubmittedForms, {
       forms: [
         {
@@ -141,6 +143,12 @@ test("SubmittedForms escapes answers and hides internal keys", async () => {
 
 test("the form view drops templates, labels known fields, skips __ keys and joins lists", async () => {
   const { submittedFormView } = await import("../../apps/web/src/lib/observation/forms.ts");
+  // The words come from the reader's bundle; the page passes its translator.
+  const en = loadMessages("en").observation as unknown as {
+    stages: Record<string, { title: string }>;
+    fields: Record<string, { label: string }>;
+  };
+  const labels = { title: (k: string) => en.stages[k]!.title, field: (n: string) => en.fields[n]!.label };
   const at = new Date("2026-09-24T10:00:00Z");
   const view = submittedFormView(
     [
@@ -148,7 +156,7 @@ test("the form view drops templates, labels known fields, skips __ keys and join
       { id: "p", kind: "post", responses: { whatWorked: "yes", __csrf: "no", extra: ["a", "b"] }, submittedAt: at, submittedByUserId: "u1", submitterName: "T" },
       { id: "o", kind: "observer", responses: { narrativeComments: "fine" }, submittedAt: at, submittedByUserId: "u2", submitterName: "O" },
     ],
-    { teacherUserId: "u1" },
+    { teacherUserId: "u1", labels },
   );
   assert.deepEqual(view.map((f) => f.kind), ["observer", "post"], "templates dropped, stage order kept");
   const post = view.find((f) => f.kind === "post")!;

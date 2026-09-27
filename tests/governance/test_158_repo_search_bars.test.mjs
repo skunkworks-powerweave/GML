@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -153,11 +154,13 @@ for (const [label, path, column, ariaLabel] of ALL_PAGES) {
       /type="search"\s+name="q"/,
       `${path} must render an <input type="search" name="q"> so the URL param key matches the SearchParams field`,
     );
+    // The label is repo.<page>.searchLabel, in the viewer's language.
     assert.match(
       src,
-      new RegExp(`aria-label="${ariaLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`),
+      new RegExp(`aria-label=\\{t\\w*\\("${label}\\.searchLabel"\\)\\}`),
       `${path} input must carry aria-label="${ariaLabel}" so screen-reader users know what the field searches`,
     );
+    assert.equal(message(`repo.${label}.searchLabel`), ariaLabel);
     assert.match(
       src,
       /maxLength\s*=\s*\{\s*SEARCH_Q_MAX\s*\}/,

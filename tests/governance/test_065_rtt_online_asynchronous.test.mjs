@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const PAGE = "apps/web/src/app/(authenticated)/rtt/online/asynchronous/page.tsx";
@@ -40,7 +41,9 @@ test("spec 065 — subject tab strip with All pill + searchParams.subject (AC-5)
   const src = read(PAGE);
   assert.match(src, /searchParams/);
   assert.match(src, /\bsubject\b/);
-  assert.match(src, /["']All["']/, "must render an All pill");
+  // The pill's label is the rtt namespace's (read by key).
+  assert.ok(readsKey(src, "common.all"), "must render an All pill (rtt.common.all)");
+  assert.equal(message("rtt.common.all"), "All");
 });
 
 test("spec 065 — 3-column responsive card grid (AC-6)", () => {
@@ -65,7 +68,10 @@ test("spec 065 — GML design tokens used inline (AC-7)", () => {
 
 test("spec 065 — empty-state copy (AC-8)", () => {
   const src = read(PAGE);
-  assert.match(src, /No async content yet/);
+  assert.ok(readsKey(src, "async.empty"), "the empty state reads rtt.async.empty");
+  assert.match(src, /t\.rich\(\s*"async\.emptyFor"/, "and rtt.async.emptyFor when a subject is chosen");
+  assert.match(message("rtt.async.empty"), /No async content yet/);
+  assert.match(message("rtt.async.emptyFor"), /No async content yet/);
 });
 
 test("spec 065 — pulls external-link + google_drive videos and external-URL resources (FR-005)", () => {

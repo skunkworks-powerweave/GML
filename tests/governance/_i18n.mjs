@@ -27,9 +27,9 @@ export function message(path, locale = "en") {
 
 /**
  * Does `src` read `key` through a translator -- t("key"), tLogin('key'),
- * t(`key`) -- with or without arguments?
+ * t(`key`), t.rich("key", …) -- with or without arguments?
  */
 export function readsKey(src, key) {
   const k = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\bt\\w*\\(\\s*["'\`]${k}["'\`]`).test(src);
+  return new RegExp(`\\bt\\w*(?:\\.(?:rich|markup|raw))?\\(\\s*["'\`]${k}["'\`]`).test(src);
 }

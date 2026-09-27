@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -41,10 +42,16 @@ test("Spec 048: detail page renders KV details and a 1.6fr / 1fr grid (matches J
   // 1.6fr / 1fr from 768 px; one column on a phone (F11: the inline template
   // this pinned held at every width). Rendered in ui-phone-layout.test.ts.
   assert.match(src, /grid-cols-1\b[^"]*md:grid-cols-\[minmax\(0,1\.6fr\)_minmax\(0,1fr\)\]/);
-  assert.match(src, /Class teacher/);
-  assert.match(src, /Stage/);
-  assert.match(src, /Sections/);
-  assert.match(src, /Students/);
+  // The KV labels are in the repo namespace, read by key.
+  for (const [key, label] of [
+    ["common.classTeacher", "Class teacher"],
+    ["common.stage", "Stage"],
+    ["common.sections", "Sections"],
+    ["common.students", "Students"],
+  ]) {
+    assert.ok(src.includes(`<KVRow label={t("${key}")}>`), `KV row ${label} (repo.${key})`);
+    assert.equal(message(`repo.${key}`), label);
+  }
 });
 
 test("Spec 048: stage chip maps Primary/Middle/High to lichen/indigo/saffron", () => {

@@ -104,7 +104,7 @@ async function driving(body: (routerCalls: string[], unhandled: unknown[]) => Pr
 
 async function tray() {
   const { UploadProgress } = await import("../../apps/web/src/components/video/UploadProgress.tsx");
-  const m = mount(UploadProgress as (p: unknown) => unknown, { contextType: "generic" });
+  const m = mount(UploadProgress as (p: unknown) => unknown, { contextType: "generic" }, { intl: "en" });
   const els = () => hostElements(m.rerender());
   const choose = async () => {
     const input = els().find((el) => el.type === "input")!;
@@ -196,7 +196,7 @@ async function withMobileRunner(
   try {
     await driving(async (routerCalls, unhandled) => {
       const { MobileUploadRunner } = await import("../../apps/web/src/components/video/MobileUploadRunner.tsx");
-      const m = mount(MobileUploadRunner as (p: unknown) => unknown, {});
+      const m = mount(MobileUploadRunner as (p: unknown) => unknown, {}, { intl: "en" });
       const els = () => hostElements(m.rerender());
       const screen = () => textOf(els().find((el) => el.props["data-testid"] === "mobile-upload-runner") ?? null);
       const pick = async (file: typeof FILE) => {

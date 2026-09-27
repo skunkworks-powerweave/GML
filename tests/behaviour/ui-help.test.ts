@@ -10,6 +10,11 @@ import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const USER = { id: "u1", name: "Tsering Dolma", email: "t@example.org", role: "teacher" as const };
 
+/** A tour step's English copy: FTUX_TOURS names each step's key under home.client.tour.steps. */
+type TourCopy = { title: string; body: string; bodyWithoutWhatsApp?: string };
+const tourCopy = (key: string): TourCopy =>
+  ((loadMessages("en").home as unknown as { client: { tour: { steps: Record<string, TourCopy> } } }).client.tour.steps)[key]!;
+
 /** Click a mounted component's control and report the help-open events it fired. */
 function clickAndCollect(onClick: () => void, eventName: string): Array<{ topic?: string | null }> {
   return withFakeWindow((win) => {
@@ -57,6 +62,11 @@ test("D5: the top bar's help button opens the shared help panel", async () => {
 
 test("D5: nothing the old mobile sheet said was lost when it became the panel", async () => {
   const { HELP, HELP_GROUPS, searchHelp } = await import("../../apps/web/src/lib/help.ts");
+  // The articles' words are in the help bundle, in the reader's language
+  // (help.entries.<slug>); the English is checked here.
+  const entries = (loadMessages("en").help as unknown as { entries: Record<string, { title: string; short: string; long?: string }> })
+    .entries;
+  const text = (k: string) => entries[k]!;
   const grouped = new Set(HELP_GROUPS.flatMap((g) => g.keys));
   for (const [needle, why] of [
     [/bottom tabs/i, "how to move around on a phone"],
@@ -65,11 +75,11 @@ test("D5: nothing the old mobile sheet said was lost when it became the panel", 
     [/confidential/i, "the confidentiality rule"],
     [/sign-in link/i, "what to do about a forgotten password"],
   ] as const) {
-    const hits = Object.entries(HELP).filter(([, e]) => needle.test(`${e.title} ${e.short} ${e.long ?? ""}`));
+    const hits = Object.keys(HELP).filter((k) => needle.test(`${text(k).title} ${text(k).short} ${text(k).long ?? ""}`));
     assert.ok(hits.length > 0, `the help dictionary must still explain ${why}`);
-    assert.ok(hits.some(([k]) => grouped.has(k)), `the entry for ${why} must be listed in a HELP_GROUPS bucket so the browse view shows it`);
+    assert.ok(hits.some((k) => grouped.has(k)), `the entry for ${why} must be listed in a HELP_GROUPS bucket so the browse view shows it`);
   }
-  assert.ok(searchHelp("forgot").length > 0, "a locked-out teacher searching 'forgot' must find the sign-in help");
+  assert.ok(searchHelp("forgot", text).length > 0, "a locked-out teacher searching 'forgot' must find the sign-in help");
 });
 
 function sourceFiles(dir: string): string[] {
@@ -88,7 +98,13 @@ test("D5: the first-run tour promises only help affordances that exist", async (
     sourceFiles(SRC_DIR)
       .filter((f) => !f.includes(join("components", "help")))
       .filter((f) => new RegExp(`<${component}[\\s>]`).test(readFileSync(f, "utf8"))).length;
-  const bodies = Object.values(FTUX_TOURS as Record<string, Array<{ body: string }>>).flat().map((s) => s.body);
+  // The copy is in the bundle now (home.client.tour.steps.<key>): read the
+  // English every step shows, the WhatsApp-free variant included.
+  const bodies = Object.values(FTUX_TOURS as Record<string, Array<{ key: string }>>)
+    .flat()
+    .flatMap((s) => [tourCopy(s.key).body, tourCopy(s.key).bodyWithoutWhatsApp])
+    .filter((b): b is string => typeof b === "string");
+  assert.ok(bodies.length > 0, "every step has its copy in the bundle");
   if (callSites("HelpTip") === 0) {
     for (const b of bodies) assert.ok(!/underline/i.test(b), `tour copy promises underlined help words, but no page renders a HelpTip: "${b}"`);
   }
@@ -152,7 +168,7 @@ test("F128: on a phone with no tour target, the caption and its Next button are 
   for (const [vw, vh] of [[320, 640], [360, 780], [375, 812], [390, 844], [412, 915], [1280, 800]] as const) {
     const env = tourAt(vw, vh, {});
     try {
-      const m = mount(FTUXTour as (p: unknown) => unknown, { role: "mentor", ftuxSeenAt: null }, { effects: true });
+      const m = mount(FTUXTour as (p: unknown) => unknown, { role: "mentor", ftuxSeenAt: null }, { effects: true, intl: "en" });
       m.rerender();
       assertInside(caption(m.tree).style, vw, vh, `${vw}x${vh}, step 1`);
       m.unmount();
@@ -169,7 +185,7 @@ test("F128: a target at the bottom right (the ? FAB) keeps the caption on screen
     const fab = { left: vw - 58, top: vh - 128, width: 44, height: 44 };
     const env = tourAt(vw, vh, { [steps[steps.length - 1].target]: fab });
     try {
-      const m = mount(FTUXTour as (p: unknown) => unknown, { role: "mentor", ftuxSeenAt: null }, { effects: true });
+      const m = mount(FTUXTour as (p: unknown) => unknown, { role: "mentor", ftuxSeenAt: null }, { effects: true, intl: "en" });
       for (let s = 1; s < steps.length; s += 1) {
         caption(m.tree).next!();
         m.rerender(); // the step changes; its effect measures the target
@@ -226,9 +242,9 @@ test("every first-run tour points only at navigation its own role has", async ()
     for (const s of steps) {
       const anchor = s.target.match(/data-help-anchor='([^']+)'/)?.[1];
       if (anchor === "topbar-help") continue;
-      assert.ok(anchor && anchors.has(anchor), `${role}: "${s.title}" points at ${anchor}, which that role's navigation lacks`);
+      assert.ok(anchor && anchors.has(anchor), `${role}: "${tourCopy(s.key).title}" points at ${anchor}, which that role's navigation lacks`);
     }
   }
-  const mentorReview = FTUX_TOURS.mentor.find((s) => /review/i.test(s.title));
+  const mentorReview = FTUX_TOURS.mentor.find((s) => /review/i.test(tourCopy(s.key).title));
   assert.match(mentorReview?.target ?? "", /nav-teach-back/, "the mentor's review step points at the review queue");
 });

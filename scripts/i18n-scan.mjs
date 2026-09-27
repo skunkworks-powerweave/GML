@@ -136,7 +136,7 @@ function exempt(node) {
       const name = ts.isCallExpression(p) ? calleeName(p) : ts.isIdentifier(p.expression) ? p.expression.text : "";
       if (/^console\./.test(name)) return "console";
       if (/^(Error|TypeError|RangeError|URL|URLSearchParams|RegExp|Date|Intl\.\w+)$/.test(name)) return "ctor";
-      if (/^(t|t\w*|useTranslations|getTranslations|redirect|notFound|permanentRedirect|revalidatePath|revalidateTag|require|import|cn|clsx|cx|encodeURIComponent|decodeURIComponent|fetch|headers\.get|cookies\.get|searchParams\.get|get|getAll|has|set|append|delete|startsWith|endsWith|includes|split|replace|replaceAll|match|test|indexOf|join|padStart|padEnd|toLocaleString|toLocaleDateString|toLocaleTimeString|localeCompare|querySelector|querySelectorAll|getItem|setItem|removeItem|addEventListener|removeEventListener|dispatchEvent|matchMedia|audit|logAudit|writeAudit|recordAudit|sql|eq|ne|like|ilike|assertEnv|requireRole|requireApiRole|assertSectionGate|withSpan|log|warn|error|info|debug|fail|json|jsonError|apiError|NextResponse\.json|Response\.json|\w+\.(get|set|has|delete|append|startsWith|endsWith|includes|split|replace|match|test|join|push|localeCompare|toLocaleString|toLocaleDateString|querySelector|getAttribute|setAttribute|closest))$/.test(name))
+      if (/^(t|t\w*|t\w*\.(rich|markup|raw|has)|useTranslations|getTranslations|redirect|notFound|permanentRedirect|revalidatePath|revalidateTag|require|import|cn|clsx|cx|encodeURIComponent|decodeURIComponent|fetch|headers\.get|cookies\.get|searchParams\.get|get|getAll|has|set|append|delete|startsWith|endsWith|includes|split|replace|replaceAll|match|test|indexOf|join|padStart|padEnd|toLocaleString|toLocaleDateString|toLocaleTimeString|localeCompare|querySelector|querySelectorAll|getItem|setItem|removeItem|addEventListener|removeEventListener|dispatchEvent|matchMedia|audit|logAudit|writeAudit|recordAudit|sql|eq|ne|like|ilike|assertEnv|requireRole|requireApiRole|assertSectionGate|withSpan|log|warn|error|info|debug|fail|json|jsonError|apiError|NextResponse\.json|Response\.json|\w+\.(get|set|has|delete|append|startsWith|endsWith|includes|split|replace|match|test|join|push|localeCompare|toLocaleString|toLocaleDateString|querySelector|getAttribute|setAttribute|closest))$/.test(name))
         return "call";
     }
     if (ts.isThrowStatement(p)) return "throw";
@@ -168,7 +168,10 @@ function propName(node) {
 function scan(file) {
   const src = readFileSync(file, "utf8");
   const lines = src.split(/\r?\n/);
-  const ignored = (line) => /i18n-ignore/.test(lines[line] ?? "") || /i18n-ignore/.test(lines[line - 1] ?? "");
+  // On the line itself, or a comment line of its own just above it. A comment
+  // trailing some other statement covers that statement only.
+  const ignored = (line) =>
+    /i18n-ignore/.test(lines[line] ?? "") || /^\s*(\/\/|\/\*|\{\s*\/\*|\*).*i18n-ignore/.test(lines[line - 1] ?? "");
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const found = [];
   const add = (node, kind, text) => {

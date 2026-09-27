@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -50,10 +51,20 @@ test("spec 053: routes query Drizzle against mentors + mentorPairings", () => {
 
 test("spec 053: index ports JSX columns Name / नाम / Expertise / Based in / Mentees", () => {
   const src = read(INDEX);
-  for (const header of [">Name<", ">नाम<", ">Expertise<", ">Based in<", ">Mentees<"]) {
-    assert.ok(src.includes(header), `index must render header ${header}`);
+  // The headers are in the repo namespace, read by key; नाम (the Hindi-name
+  // column) is the same in every language.
+  assert.ok(src.includes(">नाम<"), "index must render header >नाम<");
+  for (const [key, header] of [
+    ["common.name", "Name"],
+    ["common.expertise", "Expertise"],
+    ["common.basedIn", "Based in"],
+    ["common.mentees", "Mentees"],
+  ]) {
+    assert.ok(src.includes(`<th>{t("${key}")}</th>`), `index must render header >${header}<`);
+    assert.equal(message(`repo.${key}`), header);
   }
-  assert.match(src, /Master mentors carrying 5 mentees each through quarterly progress checks\./);
+  assert.ok(src.includes(`{t("mentors.intro")}`), "the page reads repo.mentors.intro");
+  assert.match(message("repo.mentors.intro"), /Master mentors carrying 5 mentees each through quarterly progress checks\./);
 });
 
 test("spec 053: Hindi name renders only when present (SM-7) using Devanagari font", () => {

@@ -47,7 +47,7 @@ async function searchWith(reply: Reply | Reply[], q = "Tsering"): Promise<{ html
   };
   const { default: QuickFind } = await import("../../apps/web/src/components/quickfind/QuickFind.tsx");
   const { QUICKFIND_OPEN_EVENT } = await import("../../apps/web/src/components/quickfind/events.ts");
-  const m = mount(QuickFind as (p: { userId: string }) => unknown, { userId: "u-quickfind" }, { effects: true, client: true });
+  const m = mount(QuickFind as (p: { userId: string }) => unknown, { userId: "u-quickfind" }, { effects: true, client: true, intl: "en" });
   try {
     win.dispatchEvent(new Event(QUICKFIND_OPEN_EVENT));
     const overlay = () => (m.rerender() as unknown as { children: unknown }).children;

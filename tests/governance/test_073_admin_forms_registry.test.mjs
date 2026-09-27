@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -24,10 +25,12 @@ test("spec 073 — index page is server component gated to admin roles", () => {
   assert.match(src, /requireRole\(\["programme_admin", "super_admin"\]\)/);
   assert.match(src, /from "@gml\/db"/);
   assert.match(src, /feedbackForms/);
-  // Page header copy ported 1:1 from forms.jsx
-  assert.match(src, /Programme forms/);
+  // Page header copy ported 1:1 from forms.jsx, now read from the bundle.
+  assert.ok(readsKey(src, "forms.title"));
+  assert.equal(message("adminData.forms.title"), "Programme forms");
+  assert.ok(readsKey(src, "forms.intro"));
   assert.match(
-    src,
+    message("adminData.forms.intro"),
     /Forms are defined as JSON schemas — admins compose them; teachers and mentors fill/,
   );
 });
@@ -61,7 +64,8 @@ test("spec 073 — parts file is a client component with textarea + Save button"
   assert.match(src, /method:\s*"PUT"/);
   // Schema parse check + invalid-JSON path
   assert.match(src, /JSON\.parse\(text\)/);
-  assert.match(src, /Schema does not parse/);
+  assert.ok(readsKey(src, "formEditor.previewError"));
+  assert.match(message("adminData.client.formEditor.previewError"), /Schema does not parse/);
 });
 
 test("spec 073 — API route is role-gated, validates JSON, bumps version, audits", () => {

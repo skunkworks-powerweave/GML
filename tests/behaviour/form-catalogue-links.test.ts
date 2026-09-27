@@ -46,7 +46,10 @@ test("the chooser is capped, and the overflow goes to the pairing list", () => {
   assert.ok(links.slice(0, MAX_PAIRING_LINKS).every((l) => l.href.includes("?pairingId=")));
   const more = links[MAX_PAIRING_LINKS]!;
   assert.equal(more.href, "/mentorship", "every pairing page carries its own per-quarter form links");
-  assert.match(more.label ?? "", new RegExp(String(many.length)));
+  // The page words it ("All 10 pairings…", mentorship.forms.links.all) from
+  // what the link says it is: the pairing list, for this many pairings.
+  assert.equal(more.kind, "all");
+  assert.equal(more.count, many.length);
 });
 
 test("a single pairing links straight to its form", () => {
@@ -73,4 +76,11 @@ test("pairing ids are URL-encoded into the link", () => {
   const odd: PairingChoice = { id: "a b&c", label: "x", active: true };
   const [l] = formCatalogueLinks(SLUG, { isAdmin: false, pairings: [odd] });
   assert.equal(l!.href, `/forms/${SLUG}?pairingId=a%20b%26c`);
+});
+
+test("among several, a pairing that is not active is marked so, its label still the name", () => {
+  const links = formCatalogueLinks(SLUG, { isAdmin: false, pairings: [pairing(1), pairing(2, false)] });
+  assert.deepEqual(links.map((l) => l.label), ["Mentee 1", "Mentee 2"], "the name is data; the page adds \"(not active)\"");
+  assert.deepEqual(links.map((l) => Boolean(l.inactive)), [false, true]);
+  assert.ok(links.every((l) => l.kind === "pairing"));
 });

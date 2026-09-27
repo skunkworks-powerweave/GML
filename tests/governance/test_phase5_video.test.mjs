@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -113,7 +114,9 @@ test("ExternalEmbed handles youtube / drive / vimeo + shows warning", () => {
   assert.match(src, /youtube\.com/);
   assert.match(src, /drive\.google\.com/);
   assert.match(src, /vimeo\.com/);
-  assert.match(src, /not download-gated/);
+  // The warning is video.externalEmbed.badge, in the viewer's language.
+  assert.ok(readsKey(src, "externalEmbed.badge"), "the embed shows its not-download-gated warning");
+  assert.match(message("video.externalEmbed.badge"), /not download-gated/);
 });
 
 // Spec 045 — upload progress UI

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -27,7 +28,12 @@ test("barrel + registry expose resources + resource-subjects slugs", () => {
 
 test("admin entity for resources requires at least one source (file_key or external_url)", () => {
   const src = read("apps/web/src/admin/entities/resources.ts");
-  assert.match(src, /resource must have either a file_key or an external_url/);
+  // The refusal names its message key; the words are in the bundle.
+  assert.match(src, /message: "validation\.resourceSource"/);
+  assert.equal(
+    message("adminData.validation.resourceSource"),
+    "resource must have either a file_key or an external_url",
+  );
 });
 
 test("migration 0007 exists with both resources tables", () => {

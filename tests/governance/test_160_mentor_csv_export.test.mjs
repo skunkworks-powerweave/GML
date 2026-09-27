@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -289,12 +290,14 @@ test("spec 160 — /repo/mentors page renders a Download CSV anchor pointing at 
   // The button label MUST be the documented "Download CSV" string —
   // matches the audit-closure spec language and is what operators look
   // for. (The /repo/students page uses "Export CSV"; the audit closure
-  // explicitly asked for "Download CSV" here.)
+  // explicitly asked for "Download CSV" here.) The label is
+  // repo.mentors.export, in the viewer's language.
   assert.match(
     src,
-    />\s*Download CSV\s*</,
+    />\s*\{t\("mentors\.export"\)\}\s*</,
     'mentors/page.tsx anchor label must be "Download CSV" — matches the audit-closure spec language',
   );
+  assert.equal(message("repo.mentors.export"), "Download CSV");
   // The data-testid carries the integration-test hook so future
   // Playwright suites can scrape the element without fragile selectors.
   assert.match(
@@ -318,7 +321,7 @@ test("spec 160 — /repo/mentors page gates the Download CSV button on super_adm
   // gate the derivation is dead code and the button leaks.
   assert.match(
     src,
-    /\{canExport\s*\?[\s\S]{0,1500}Download CSV/,
+    /\{canExport\s*\?[\s\S]{0,1500}t\("mentors\.export"\)/,
     "mentors/page.tsx must wrap the Download CSV anchor in a `{canExport ? ... : null}` ternary so the button only renders for allowed roles",
   );
 });

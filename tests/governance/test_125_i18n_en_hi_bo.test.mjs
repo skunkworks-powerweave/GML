@@ -133,7 +133,11 @@ test("spec 125 — authenticated layout reads user_prefs.uiLanguage and provides
   assert.match(resolver, /userPrefs/, "the resolver must query user_prefs (the locale source of truth)");
   assert.match(resolver, /normalizeLocale\(row\.uiLanguage\)/, "the resolver must normalise user_prefs.uiLanguage");
   assert.match(read("apps/web/src/i18n/request.ts"), /resolveUiLocale\(\)/, "the request config (every string) must use the same resolver");
-  assert.match(src, /loadMessages/, "authenticated layout must call loadMessages for the resolved locale");
+  // clientMessages, not loadMessages: since 2a1ff99 the provider gets the
+  // chrome and each page namespace's client subtree only (loadMessages merges
+  // the English fallback; clientMessages is built on it). This assertion was
+  // left pinning the old call and failed from that commit on.
+  assert.match(src, /clientMessages\(locale\)/, "authenticated layout must hand the provider clientMessages for the resolved locale");
 });
 
 // 2026-09 freeze (fix brief D_ui #2). The layout computed LOCALE_HTML_LANG and
@@ -167,10 +171,14 @@ test("spec 125 — Sidebar is an async server component with translated section 
   assert.match(src, /from\s+["']next-intl\/server["']/);
   assert.match(src, /getTranslations/);
   assert.match(src, /export async function Sidebar/);
-  // Section and item key maps must be present so adding a new nav row is a
-  // pure-data change (no JSX-level edits to the sidebar).
-  assert.match(src, /SECTION_KEY/, "Sidebar must keep a SECTION_KEY map");
-  assert.match(src, /ITEM_KEY/, "Sidebar must keep an ITEM_KEY map");
+  // Adding a nav row is a pure-data change (no JSX-level edits to the
+  // sidebar): each section and item in config/nav.ts names its own key, and
+  // the sidebar translates exactly that. (It kept id-keyed SECTION_KEY /
+  // ITEM_KEY maps with an English fallback, which an item missing from them
+  // rendered in every locale.)
+  assert.match(src, /tSection\(section\.section\)/, "Sidebar must translate each heading by its navSection key");
+  assert.match(src, /tNav\(item\.labelKey\)/, "Sidebar must translate each item by its own nav key");
+  assert.doesNotMatch(src, /item\.label\b/, "no English fallback label");
 });
 
 test("spec 125 — BottomTabs is an async server component with translated mobile tab labels", () => {
@@ -178,7 +186,8 @@ test("spec 125 — BottomTabs is an async server component with translated mobil
   assert.match(src, /from\s+["']next-intl\/server["']/);
   assert.match(src, /getTranslations/);
   assert.match(src, /export async function BottomTabs/);
-  assert.match(src, /TAB_KEY/, "BottomTabs must map mobile tab ids to nav.* keys");
+  assert.match(src, /tNav\(tab\.labelKey\)/, "BottomTabs must translate each tab by its own nav.* key");
+  assert.doesNotMatch(src, /tab\.label\b/, "no English fallback label");
 });
 
 test("spec 125 — gate/[slug] page is a server component that reads user_prefs + emits a NextIntlClientProvider", () => {

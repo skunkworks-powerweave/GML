@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -145,8 +146,11 @@ test("spec 141 — gate actions.ts imports recordAudit and declares SERVICE_UNAV
   const src = read(GATE_PATH);
   assert.match(src, /import\s*\{\s*recordAudit\s*\}\s*from\s*"@\/lib\/audit"/);
   // The generic outage copy lives in one named constant so it can't
-  // accidentally diverge from the auth-side string.
-  assert.match(src, /SERVICE_UNAVAILABLE\s*=\s*"Service temporarily unavailable\."/);
+  // accidentally diverge from the auth-side string. The constant is the
+  // message's key; the words are home.gate.serviceUnavailable, in the user's
+  // language.
+  assert.match(src, /SERVICE_UNAVAILABLE\s*=\s*"serviceUnavailable"/);
+  assert.equal(message("home.gate.serviceUnavailable"), "Service temporarily unavailable.");
 });
 
 test("spec 141 — verifyGate emits gate.attempt.success on the success path", () => {
@@ -183,7 +187,7 @@ test("spec 141 — verifyGate rate-limit Redis-down branch FAILS CLOSED and audi
   assert.ok(severeBlock, "redis-down metadata block must exist");
   assert.match(severeBlock[1], /severity:\s*"SEVERE"/);
   // Generic outage response — no leak of the failure mode to the user.
-  assert.match(src, /error:\s*SERVICE_UNAVAILABLE/);
+  assert.match(src, /error:\s*t\(SERVICE_UNAVAILABLE\)/);
   // The old fail-open rationale comment is gone.
   const code = stripComments(src);
   assert.doesNotMatch(

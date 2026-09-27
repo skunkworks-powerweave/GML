@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -131,16 +132,21 @@ test("spec 087: view page 404s when fileKey is null (no PDF to serve)", () => {
 });
 
 test("spec 087: view page renders the SM-4 disclosure footer verbatim", () => {
+  // The footer is repo.view.footer, in the viewer's language; the English
+  // words are pinned here.
   const src = read(PAGE_PATH);
-  assert.match(src, /PDF viewing is logged/);
-  assert.match(src, /confidential/);
-  assert.match(src, /do not redistribute/);
-  assert.match(src, /deterrent,\s*not DRM/);
+  assert.ok(readsKey(src, "view.footer"), "the view page reads repo.view.footer");
+  const footer = message("repo.view.footer");
+  assert.match(footer, /PDF viewing is logged/);
+  assert.match(footer, /confidential/);
+  assert.match(footer, /do not redistribute/);
+  assert.match(footer, /deterrent,\s*not DRM/);
 });
 
 test("spec 087: resource detail page (spec 055) now labels the button 'View PDF', not 'Download PDF'", () => {
   const src = read(DETAIL_PATH);
-  assert.match(src, />\s*View PDF\s*</);
+  assert.ok(readsKey(src, "resource.viewPdf"), "the button reads repo.resource.viewPdf");
+  assert.equal(message("repo.resource.viewPdf"), "View PDF");
   assert.ok(
     !/>\s*Download PDF\s*</.test(src),
     "detail page must not still say 'Download PDF' (viewer is in-browser only)",

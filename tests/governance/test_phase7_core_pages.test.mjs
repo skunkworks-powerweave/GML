@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -75,7 +76,12 @@ test("Hindi name renders alongside English name where relevant", () => {
 
 test("videos library has WhatsApp ingest log + Upload buttons", () => {
   const src = read("apps/web/src/app/(authenticated)/videos/page.tsx");
-  assert.match(src, /WhatsApp ingest log/);
-  assert.match(src, /Upload/);
-  assert.match(src, /watermarked per viewer/i);
+  // The words are in the bundle (video.library.*), in the viewer's language.
+  assert.ok(readsKey(src, "library.whatsappLog"), "the WhatsApp ingest log button");
+  assert.equal(message("video.library.whatsappLog"), "WhatsApp ingest log");
+  assert.match(src, /<UploadModal\b/, "the Upload button (UploadModal's trigger)");
+  assert.equal(message("video.client.modal.trigger"), "Upload");
+  assert.ok(readsKey(src, "library.intro") && readsKey(src, "library.introWithWhatsapp"));
+  assert.match(message("video.library.intro"), /watermarked per viewer/i);
+  assert.match(message("video.library.introWithWhatsapp"), /watermarked per viewer/i);
 });

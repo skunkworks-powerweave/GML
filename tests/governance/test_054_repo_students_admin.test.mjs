@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -62,10 +63,19 @@ test("route renders the JSX prototype layout (PII warning + table columns)", () 
   const src = read(ROUTE);
   // saffron-soft PII warning card
   assert.match(src, /var\(--saffron-soft\)/);
-  assert.match(src, /Bulk export is audited/);
-  // table column headers per JSX line 954
-  for (const col of ["Name", "Class", "School", "Age", "Guardian", "Attendance"]) {
-    assert.match(src, new RegExp(`>${col}<`));
+  assert.ok(src.includes(`{t("students.piiWarning")}`), "the PII warning reads repo.students.piiWarning");
+  assert.match(message("repo.students.piiWarning"), /Bulk export is audited/);
+  // table column headers per JSX line 954 (repo namespace, read by key)
+  for (const [key, col] of [
+    ["common.name", "Name"],
+    ["common.class", "Class"],
+    ["common.school", "School"],
+    ["common.age", "Age"],
+    ["common.guardian", "Guardian"],
+    ["common.attendance", "Attendance"],
+  ]) {
+    assert.ok(src.includes(`<th>{t("${key}")}</th>`), `column ${col}`);
+    assert.equal(message(`repo.${key}`), col);
   }
   // attendance >90 highlight per JSX line 966
   assert.match(src, /var\(--lichen\)/);

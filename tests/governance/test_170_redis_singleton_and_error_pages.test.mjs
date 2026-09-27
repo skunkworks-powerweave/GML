@@ -54,6 +54,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -366,10 +367,20 @@ test("spec 170 — forbidden/page.tsx renders a distinct variant per reason", ()
 
   // Each variant keeps its own copy, so a future contributor cannot collapse
   // two of them into one shared message and lose the distinction that made
-  // this page worth building.
-  assert.match(src, /Too many sign-in attempts/, "rate_limited copy");
-  assert.match(src, /Email-based actions/, "email_unavailable copy");
-  assert.match(src, /Your session has ended/, "session_expired copy");
+  // this page worth building. The copy is home.forbidden.<variant>, in the
+  // reader's language; each reason maps to its own variant.
+  const variants = [
+    ["rate_limited", "rateLimited", /Too many sign-in attempts/],
+    ["email_unavailable", "emailUnavailable", /Email-based actions/],
+    ["session_expired", "sessionExpired", /Your session has ended/],
+  ];
+  for (const [reason, key, copy] of variants) {
+    assert.match(src, new RegExp(`${reason}:\\s*\\{\\s*key:\\s*"${key}"`), `${reason} reads home.forbidden.${key}`);
+    assert.match(message(`home.forbidden.${key}.message`), copy, `${reason} copy`);
+  }
+  assert.match(src, /t\(`\$\{copy\.key\}\.message`\)/, "the message is the variant's own");
+  const messages = variants.map(([, key]) => message(`home.forbidden.${key}.message`));
+  assert.equal(new Set(messages).size, messages.length, "no two variants share a message");
 });
 
 test("spec 170 — forbidden/page.tsx does no session lookup", () => {

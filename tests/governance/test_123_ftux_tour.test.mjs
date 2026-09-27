@@ -25,6 +25,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -226,11 +227,11 @@ test("spec 123 — globals.css declares the ftux selectors + the pulse keyframes
 
 test("spec 123 — Settings form renders a Replay tour button that PUTs ftuxSeenAt: null", () => {
   const src = read(SETTINGS_FORM);
-  assert.match(
-    src,
-    /Replay tour/,
-    "Settings form must include a 'Replay tour' affordance",
-  );
+  // The row label and the button read home.client.settingsForm.replayTour /
+  // .replay.idle, in the user's language.
+  assert.ok(readsKey(src, "replayTour") && readsKey(src, "idle"), "Settings form must include a 'Replay tour' affordance");
+  assert.equal(message("home.client.settingsForm.replayTour"), "Replay tour");
+  assert.match(message("home.client.settingsForm.replay.idle"), /^Replay tour/);
   assert.match(
     src,
     /ftuxSeenAt:\s*null/,

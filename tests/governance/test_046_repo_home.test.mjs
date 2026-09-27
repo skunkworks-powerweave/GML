@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -56,10 +57,20 @@ test("Spec 046: this-week sessions table queries scheduled_date with between()",
 });
 
 test("Spec 046: renders the 5 stat labels from RepoHome JSX", () => {
+  // The labels come from the repo namespace (repo.home.stats.*), in the
+  // viewer's language; the English words are the prototype's.
   const src = read(ROUTE);
-  for (const label of ["Schools", "Classes", "Subjects", "Sessions logged", "Resources"]) {
-    assert.match(src, new RegExp(`label="${label}"`), `must render Stat "${label}"`);
+  for (const [key, label] of [
+    ["schools", "Schools"],
+    ["classes", "Classes"],
+    ["subjects", "Subjects"],
+    ["sessions", "Sessions logged"],
+    ["resources", "Resources"],
+  ]) {
+    assert.match(src, new RegExp(`<StatCard label=\\{t\\("home\\.stats\\.${key}"\\)\\}`), `must render Stat "${label}"`);
+    assert.equal(message(`repo.home.stats.${key}`), label);
   }
+  assert.ok(readsKey(src, "home.stats.schoolsHint"));
 });
 
 test("Spec 046: Browse sidebar lists all 8 entities with correct slugs", () => {

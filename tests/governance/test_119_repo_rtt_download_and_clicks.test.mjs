@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -59,12 +60,13 @@ test("spec 119 — plan.md follows the CREATED/EDITED/MIGRATED contract", () => 
 
 test("spec 119 — /repo/resource/[id] still labels the CTA 'View PDF' (not 'Download')", () => {
   const src = read(RESOURCE_DETAIL);
-  // The CTA text is the load-bearing piece. It must say View PDF...
-  assert.match(
-    src,
-    />\s*View PDF\s*</,
+  // The CTA text is the load-bearing piece. It must say View PDF (the button
+  // reads repo.resource.viewPdf, in the viewer's language)...
+  assert.ok(
+    readsKey(src, "resource.viewPdf"),
     "resource detail must render a 'View PDF' button — SM-4 forbids 'Download' framing",
   );
+  assert.equal(message("repo.resource.viewPdf"), "View PDF");
   // ...and must not silently revert to 'Download PDF'.
   assert.ok(
     !/>\s*Download PDF\s*</.test(src),
@@ -93,8 +95,9 @@ test("spec 119 — /repo/resource/[id] carries a spec 119 SM-4 ratification comm
 
 test("spec 119 — /rtt/subject/[id] renders a header-level 'Resume' Link", () => {
   const src = read(RTT_SUBJECT);
-  // The literal CTA text…
-  assert.match(src, />\s*Resume\s*</, "rtt subject page must render a 'Resume' button");
+  // The CTA text, from the rtt namespace (read by key)…
+  assert.ok(readsKey(src, "subject.resume"), "rtt subject page must render a 'Resume' button (rtt.subject.resume)");
+  assert.equal(message("rtt.subject.resume"), "Resume");
   // …and the link href must compute from the first-module sequence (anchor jump).
   assert.match(
     src,
@@ -155,9 +158,11 @@ test("spec 119 — /rtt/subject/[id] session rows do NOT link to /repo/session/<
 
 test("spec 119 — /rtt/subject/[id] session rows render a Join/Watch action button", () => {
   const src = read(RTT_SUBJECT);
-  // Both literals must be present; the row picks one based on scheduledAt vs now.
-  assert.match(src, /["']Join["']/, "session row must render the 'Join' label for upcoming sessions");
-  assert.match(src, /["']Watch["']/, "session row must render the 'Watch' label for past sessions");
+  // Both labels must be read; the row picks one based on scheduledAt vs now.
+  assert.ok(readsKey(src, "subject.join"), "session row must render the 'Join' label for upcoming sessions");
+  assert.ok(readsKey(src, "subject.watch"), "session row must render the 'Watch' label for past sessions");
+  assert.equal(message("rtt.subject.join"), "Join");
+  assert.equal(message("rtt.subject.watch"), "Watch");
   // The picker uses scheduledAt — verify the comparison is there so the
   // label is not hard-coded one way or the other.
   assert.match(
@@ -201,24 +206,23 @@ test("spec 119 — /rtt/subject/[id] Assessment card lists the subject's own qui
     "no fixed quiz slug: a slug names one quiz bound to one subject",
   );
   assert.match(src, /listSubjectAssessments\(/, "the card must list the quizzes bound to this subject");
-  // The card must render the literal section title.
-  assert.match(
-    src,
-    />\s*Assessment\s*</,
-    "right column must include the 'Assessment' card heading",
-  );
+  // The card must render its section title (rtt.subject.assessment).
+  assert.ok(readsKey(src, "subject.assessment"), "right column must include the 'Assessment' card heading");
+  assert.equal(message("rtt.subject.assessment"), "Assessment");
 });
 
 test("spec 119 — /rtt/subject/[id] only promises lesson expansion when it renders lessons", () => {
   const src = read(RTT_SUBJECT);
   // The subtitle said "Click a module to expand its lessons." over static
   // server-rendered divs, and the page never queried rtt_lessons at all.
-  if (/expand its lessons/.test(src)) {
+  // The words are rtt.subject.modulesExpand now; the page reads it by key.
+  assert.match(message("rtt.subject.modulesExpand"), /expand its lessons/);
+  if (readsKey(src, "subject.modulesExpand")) {
     assert.match(src, /\.from\(rttLessons\)/, "the page promises lessons, so it must read rtt_lessons");
     assert.match(src, /<details\b/, "the promised expansion must be a real disclosure element");
     assert.match(
       src,
-      /lessons\.length\s*>\s*0\s*\?\s*"Click a module to expand its lessons\."/,
+      /lessons\.length\s*>\s*0\s*\?\s*t\("subject\.modulesExpand"\)/,
       "the expansion copy must be conditional on there being lessons to expand",
     );
   }

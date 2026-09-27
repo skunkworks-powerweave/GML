@@ -24,7 +24,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { signIn, closeAppDb } from "./_server-actions.js";
-import { render, renderSync, h, withAppRouter } from "./_ui.js";
+import { render, h, withAppRouter } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { observationWorld } from "./_observation-world.js";
 
@@ -47,7 +47,9 @@ const DIVIDER_X = 280; // the dashed line between the KARGIL and LEH labels
 
 test("each marker names its school and sits, coloured, under its own district", async () => {
   const { FieldMapSection } = await import("../../apps/web/src/app/(authenticated)/dashboard/FieldMap.tsx");
-  const html = renderSync(
+  // render, not renderSync: the section is an async server component now (it
+  // reads its copy with getTranslations).
+  const html = await render(
     h(FieldMapSection, {
       schools: [
         // Leh, although its code starts "GMS-K".

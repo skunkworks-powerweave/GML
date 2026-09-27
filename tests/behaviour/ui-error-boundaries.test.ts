@@ -29,11 +29,18 @@ for (const [name, load] of BOUNDARIES) {
   test(`F130: ${name} — "Try again" re-fetches the failed segment (unstable_retry), not only re-renders it`, async () => {
     const { default: Boundary } = await load();
     const calls: string[] = [];
-    const m = mount(Boundary as (p: unknown) => unknown, {
-      error: Object.assign(new Error("x"), { digest: "d1" }),
-      reset: () => calls.push("reset"),
-      unstable_retry: () => calls.push("unstable_retry"),
-    });
+    // intl: the two in-app boundaries read their copy with useTranslations
+    // (the root layout and the authenticated layout provide it); global-error
+    // carries its own and ignores the provider.
+    const m = mount(
+      Boundary as (p: unknown) => unknown,
+      {
+        error: Object.assign(new Error("x"), { digest: "d1" }),
+        reset: () => calls.push("reset"),
+        unstable_retry: () => calls.push("unstable_retry"),
+      },
+      { intl: "en" },
+    );
     const button = hostElements(m.tree).find((el) => el.type === "button" && textOf(el).includes("Try again"));
     assert.ok(button, `${name} must offer Try again`);
     (button.props.onClick as () => void)();

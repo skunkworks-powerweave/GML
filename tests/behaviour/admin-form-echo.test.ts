@@ -27,7 +27,19 @@ import { needsDatabase, withClient, tag } from "./_harness.js";
 import { actAs, fixture, form } from "./_admin-fixture.js";
 
 const skip = needsDatabase();
-const rowForm = () => import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/row-form.tsx");
+// RowForm is handed the entity's words by the page (admin/labels.ts
+// rowFormText, in the viewer's language); here it gets the English ones the
+// same way.
+const rowForm = async () => {
+  const { RowForm: Form } = await import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/row-form.tsx");
+  const { rowFormText } = await import("../../apps/web/src/admin/labels.ts");
+  const { ADMIN_ENTITIES } = await import("../../apps/web/src/admin/registry.ts");
+  const { getTranslations } = await import("next-intl/server");
+  const t = (await getTranslations("adminData")) as never;
+  const RowForm = (props: { entitySlug: string } & Record<string, unknown>) =>
+    h(Form as never, { text: rowFormText(t, ADMIN_ENTITIES[props.entitySlug]!), ...props } as never);
+  return { RowForm };
+};
 const actions = () => import("../../apps/web/src/app/(authenticated)/admin/data/[entity]/actions.ts");
 
 /**

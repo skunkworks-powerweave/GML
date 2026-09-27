@@ -110,7 +110,7 @@ async function open(browser: Browser) {
   const { mount, hostElements } = await import("./_ui.js");
   const { HlsPlayer } = await import("../../apps/web/src/components/video/HlsPlayer.tsx");
   const video = new FakeVideo(browser.nativeHls);
-  const m = mount(HlsPlayer as (p: unknown) => unknown, { src: SRC, watermark: "Teacher · now", videoId: "v1" }, { effects: true });
+  const m = mount(HlsPlayer as (p: unknown) => unknown, { src: SRC, watermark: "Teacher · now", videoId: "v1" }, { effects: true, intl: "en" });
   const el = hostElements(m.tree).find((e) => e.type === "video")!;
   (el.props.ref as { current: unknown }).current = video;
   m.rerender(); // the effect runs again, now with an element
@@ -181,7 +181,9 @@ test("a browser that can play HLS neither way: one message naming the browser, a
 });
 
 test("Chrome, signed out mid-video: hls.js's 401 reaches the viewer once, announced, with no rebuild loop", async (t) => {
-  const { PLAYBACK_FAILURE_MESSAGES } = await import("../../apps/web/src/lib/video/playback-recovery.ts");
+  const { loadMessages } = await import("../../apps/web/src/i18n/config.ts");
+  // The player says it from the bundle: video.client.player.failure.signed_out.
+  const signedOut = (loadMessages("en").video as { client: { player: { failure: Record<string, string> } } }).client.player.failure.signed_out!;
   const { m } = await open(CHROME);
   try {
     t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -198,7 +200,7 @@ test("Chrome, signed out mid-video: hls.js's 401 reaches the viewer once, announ
     assert.ok(hls.destroyed);
     const shown = await overlay(m.rerender());
     assert.equal(shown?.role, "alert");
-    assert.match(shown?.text ?? "", new RegExp(PLAYBACK_FAILURE_MESSAGES.signed_out.slice(0, 20)));
+    assert.match(shown?.text ?? "", new RegExp(signedOut.slice(0, 20)));
   } finally {
     m.unmount();
   }

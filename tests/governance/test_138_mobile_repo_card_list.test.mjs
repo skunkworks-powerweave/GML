@@ -74,9 +74,11 @@ test("spec 138 — plan.md follows the CREATED/EDITED/MIGRATED contract", () => 
 test("spec 138 — MobileRepoCardList.tsx exists and exports MobileRepoCardList", () => {
   assert.ok(existsSync(resolve(root, COMPONENT_PATH)), `${COMPONENT_PATH} must exist`);
   const src = read(COMPONENT_PATH);
+  // Async: its own two strings (the default empty state, each card's "Open
+  // <name>") come from getTranslations("repo").
   assert.match(
     src,
-    /export function MobileRepoCardList/,
+    /export (async )?function MobileRepoCardList/,
     "MobileRepoCardList must be a named export so server pages can import it",
   );
 });

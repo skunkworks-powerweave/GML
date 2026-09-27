@@ -94,7 +94,7 @@ test("a picked quiz option differs from an unpicked one in more than colour (des
   const { QuizRunner } = await import("../../apps/web/src/components/quiz/QuizRunner.tsx");
   const { MobileQuizRunner } = await import("../../apps/web/src/components/quiz/MobileQuizRunner.tsx");
   for (const [name, Runner] of [["QuizRunner", QuizRunner], ["MobileQuizRunner", MobileQuizRunner]] as const) {
-    const m = mount(Runner as (p: unknown) => unknown, { slug: "s", title: "T", questions: QUESTIONS, submitAction: noop });
+    const m = mount(Runner as (p: unknown) => unknown, { slug: "s", title: "T", questions: QUESTIONS, submitAction: noop }, { intl: "en" });
     const options = () => hostElements(m.tree).filter((el) => el.type === "button" && /^[A-D](Apple|Bat|Cat|Dog)$/.test(textOf(el)));
     assert.equal(options().length, 4, `${name}: four options`);
     const before = options().map(shape);
@@ -152,7 +152,7 @@ test("the quiz countdown is not read out every second: the timer is not a live r
     const m = mount(
       Runner as (p: unknown) => unknown,
       { slug: "s", title: "T", questions: QUESTIONS, timeLimitSeconds: LIMIT, submitAction: async () => void submits++ },
-      { effects: true },
+      { effects: true, intl: "en" },
     );
     try {
       const timer = () => {
@@ -201,7 +201,7 @@ test("the quiz countdown is not read out every second: the timer is not a live r
   const m = mount(
     QuizRunner as (p: unknown) => unknown,
     { slug: "s", title: "T", questions: QUESTIONS, timeLimitSeconds: 180, submitAction: noop },
-    { effects: true },
+    { effects: true, intl: "en" },
   );
   try {
     const said = new Set<string>();
@@ -384,8 +384,13 @@ test("every RTT and quiz page has its own title", { skip }, async () => {
   ];
   const seen = new Map<string, string>();
   for (const r of routes) {
-    const mod = (await import(`${APP}/${r}`)) as { metadata?: { title?: unknown } };
-    const title = mod.metadata?.title;
+    // A static title, or one generateMetadata() writes in the viewer's
+    // language (the fake request's: English here).
+    const mod = (await import(`${APP}/${r}`)) as {
+      metadata?: { title?: unknown };
+      generateMetadata?: () => Promise<{ title?: unknown }>;
+    };
+    const title = mod.metadata?.title ?? (await mod.generateMetadata?.())?.title;
     assert.equal(typeof title, "string", `${r} exports a metadata title`);
     const t = (title as string).trim();
     assert.ok(t.length > 0 && t !== root.title.default, `${r}: "${t}" names the page`);

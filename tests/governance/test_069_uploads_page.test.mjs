@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const PAGE = "apps/web/src/app/(authenticated)/uploads/page.tsx";
@@ -50,9 +51,14 @@ test("069 — queries video_submissions filtered by submittedByUserId + joins fi
 // the page and checks the promise is gone.
 test("069 — ports the explainer cards (WhatsApp PRIMARY + browser)", () => {
   const src = read(PAGE);
-  assert.match(src, /Forward via WhatsApp/);
-  assert.match(src, /Upload here/);
+  // The card titles are in the bundle (video.uploads.cards.*), in the user's
+  // language; the page reads them.
+  assert.ok(readsKey(src, "uploads.cards.whatsappTitle"));
+  assert.equal(message("video.uploads.cards.whatsappTitle"), "Forward via WhatsApp");
+  assert.ok(readsKey(src, "uploads.cards.uploadTitle"));
+  assert.equal(message("video.uploads.cards.uploadTitle"), "Upload here");
   assert.doesNotMatch(src, /title: "Record in-app"/);
+  assert.doesNotMatch(JSON.stringify(message("video.uploads")), /Record in-app/);
   // The number comes from the ENVIRONMENT, not from this file.
   //
   // The old assertions pinned the literal `+91 90600 22013` and
@@ -92,20 +98,29 @@ test("069 — hosts the <UploadProgress /> tray, bound to what the page says the
 
 test("069 — table shows the six prototype columns + reuses the STATE_LABEL idiom", () => {
   const src = read(PAGE);
-  for (const header of ["File", "Source", "Linked to", "Size", "State", "Date"]) {
-    assert.ok(src.includes(`"${header}"`), `column header ${header} must appear`);
+  // The headers are video.uploads.recent.col.*, in the user's language; the
+  // page reads each column's key in this order.
+  assert.match(src, /\["file", "source", "linked", "size", "state", "date"\]/);
+  assert.match(src, /t\(`uploads\.recent\.col\.\$\{h\}`\)/);
+  const cols = message("video.uploads.recent.col");
+  for (const [key, header] of [["file", "File"], ["source", "Source"], ["linked", "Linked to"], ["size", "Size"], ["state", "State"], ["date", "Date"]]) {
+    assert.equal(cols[key], header, `column header ${header} must appear`);
   }
-  // Status pill maps mirror /videos (spec 067).
-  assert.match(src, /STATE_LABEL/);
+  // Status pill labels mirror /videos (spec 067): the one shared mapping,
+  // lib/video/labels.ts (video.status.*), on both pages.
+  assert.match(src, /statusLabel\(t, r\.status\)/);
+  assert.match(read("apps/web/src/app/(authenticated)/videos/page.tsx"), /statusLabel\(t, v\.status\)/);
   // NOTE: a /STATE_BG/ assertion used to live here. The constant it matched was
   // dead code -- its own comment said it was "kept for the governance test
   // idiom" while claiming a use it did not have. The regex passed for months
   // against an unused symbol. Asserting the rendered state labels below is the
   // part that actually describes the page.
-  // Source pill map.
-  assert.match(src, /SOURCE_LABEL/);
+  // Source pill labels (video.uploads.source.*).
+  assert.match(src, /SOURCE_LABELLED/);
+  assert.match(src, /t\(`uploads\.source\.\$\{r\.source\}`\)/);
   // Empty state copy.
-  assert.match(src, /haven&apos;t uploaded anything yet|haven't uploaded anything yet/);
+  assert.ok(readsKey(src, "uploads.recent.empty"));
+  assert.match(message("video.uploads.recent.empty"), /haven't uploaded anything yet/);
   // Ready-only rows link to /videos/[id].
   assert.match(src, /href=\{`\/videos\/\$\{r\.id\}`\}/);
 });

@@ -22,8 +22,21 @@
 
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const recovery = () => import("../../apps/web/src/lib/video/playback-recovery.ts");
+
+/**
+ * What the viewer is told for a reason the policy gave up for, in English: the
+ * module reports the reason, and the player says it from the bundle
+ * (video.client.player.failure.<reason>).
+ */
+function failureMessage(reason: string): string {
+  const video = loadMessages("en").video as { client: { player: { failure: Record<string, string> } } };
+  const text = video.client.player.failure[reason];
+  assert.ok(text, `no message for ${reason}`);
+  return text;
+}
 
 // ── The policy ───────────────────────────────────────────────────────────────
 
@@ -137,7 +150,7 @@ function hooksFor(policy: unknown, probeStatus: number) {
       src: "/api/media/playlist/v1",
       refreshSrc: async () => `/api/media/playlist/v1?r=${++n}`,
       onSource: () => undefined,
-      onFail: (m: string) => void failures.push(m),
+      onFail: (reason: string) => void failures.push(reason),
       resumeAt: { current: 0 },
       policy: policy as never,
       probe: async (url: string) => {
@@ -150,27 +163,27 @@ function hooksFor(policy: unknown, probeStatus: number) {
 
 test("native player, signed out: one probe, the sign-in message, and no reload loop", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { attachNative, createPlaybackRecovery, PLAYBACK_FAILURE_MESSAGES } = await recovery();
+  const { attachNative, createPlaybackRecovery } = await recovery();
   const video = new FakeVideo();
   const h = hooksFor(createPlaybackRecovery(), 401);
   const detach = attachNative(video, h.hooks);
   await drain(t);
   detach();
   assert.ok(video.srcSets + video.loads <= 2, `the element was reloaded ${video.srcSets + video.loads} times`);
-  assert.deepEqual(h.failures, [PLAYBACK_FAILURE_MESSAGES.signed_out]);
-  assert.match(PLAYBACK_FAILURE_MESSAGES.signed_out, /sign in/i);
+  assert.deepEqual(h.failures, ["signed_out"]);
+  assert.match(failureMessage("signed_out"), /sign in/i);
 });
 
 test("native player, Storage down (playlist fine, media failing): a few spaced re-signs, then a message", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { attachNative, createPlaybackRecovery, PLAYBACK_FAILURE_MESSAGES } = await recovery();
+  const { attachNative, createPlaybackRecovery } = await recovery();
   const video = new FakeVideo();
   const h = hooksFor(createPlaybackRecovery(), 200);
   const detach = attachNative(video, h.hooks);
   await drain(t);
   detach();
   assert.ok(video.srcSets <= 4, `re-signed ${video.srcSets - 1} times`);
-  assert.deepEqual(h.failures, [PLAYBACK_FAILURE_MESSAGES.generic]);
+  assert.deepEqual(h.failures, ["generic"]);
 });
 
 class FakeHls {
@@ -211,7 +224,7 @@ async function runHls(t: { mock: typeof mock }, data: unknown) {
       src,
       refreshSrc: async () => `/api/media/playlist/v1?r=${++n}`,
       onSource: (next) => attach(next),
-      onFail: (m) => void failures.push(m),
+      onFail: (reason) => void failures.push(reason),
       resumeAt: { current: 0 },
       policy,
     });
@@ -224,18 +237,16 @@ async function runHls(t: { mock: typeof mock }, data: unknown) {
 
 test("hls.js, signed out mid-video: the playlist's 401 ends it with the sign-in message, no rebuild loop", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
   const r = await runHls(t, { fatal: true, type: "networkError", details: "manifestLoadError", response: { code: 401 } });
   assert.equal(r.instances, 1, `rebuilt ${r.instances - 1} times`);
-  assert.deepEqual(r.failures, [PLAYBACK_FAILURE_MESSAGES.signed_out]);
+  assert.deepEqual(r.failures, ["signed_out"]);
 });
 
 test("hls.js, output missing (502): at most one re-sign, then 'not available'", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
   const r = await runHls(t, { fatal: true, type: "networkError", details: "manifestLoadError", response: { code: 502 } });
   assert.ok(r.instances <= 2, `rebuilt ${r.instances - 1} times`);
-  assert.deepEqual(r.failures, [PLAYBACK_FAILURE_MESSAGES.unavailable]);
+  assert.deepEqual(r.failures, ["unavailable"]);
 });
 
 test("HlsPlayer loads with this module and renders its video element", async () => {
@@ -250,10 +261,9 @@ test("HlsPlayer loads with this module and renders its video element", async () 
 
 test("hls.js, segments failing: bounded re-signs, then a message", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
   const r = await runHls(t, { fatal: true, type: "networkError", details: "fragLoadError", response: { code: 400 } });
   assert.ok(r.instances <= 4, `rebuilt ${r.instances - 1} times`);
-  assert.deepEqual(r.failures, [PLAYBACK_FAILURE_MESSAGES.generic]);
+  assert.deepEqual(r.failures, ["generic"]);
 });
 
 // ── What the viewer is shown ─────────────────────────────────────────────────
@@ -270,7 +280,7 @@ async function playerFailing(t: { mock: typeof mock }, status: number) {
   globalThis.fetch = (async () => ({ status })) as never;
   const video = Object.assign(new FakeVideo(), { canPlayType: () => "maybe", playbackRate: 1 });
   try {
-    const m = mount(HlsPlayer as (p: unknown) => unknown, { src: "/api/media/playlist/v1", watermark: "Mentor · now", videoId: "v1" }, { effects: true });
+    const m = mount(HlsPlayer as (p: unknown) => unknown, { src: "/api/media/playlist/v1", watermark: "Mentor · now", videoId: "v1" }, { effects: true, intl: "en" });
     const el = hostElements(m.tree).find((e) => e.type === "video")!;
     (el.props.ref as { current: unknown }).current = video;
     m.rerender(); // the effect runs again, now with an element
@@ -288,15 +298,13 @@ async function playerFailing(t: { mock: typeof mock }, status: number) {
 }
 
 test("signed out: the player says so and links to sign-in, back to this video", async (t) => {
-  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
   const shown = await playerFailing(t, 401);
-  assert.match(shown.text, new RegExp(PLAYBACK_FAILURE_MESSAGES.signed_out.slice(0, 20)));
+  assert.match(shown.text, new RegExp(failureMessage("signed_out").slice(0, 20)));
   assert.deepEqual(shown.links, [{ href: `/login?from=${encodeURIComponent("/videos/v1")}`, text: "Sign in" }]);
 });
 
 test("any other failure: the message, and no sign-in link", async (t) => {
-  const { PLAYBACK_FAILURE_MESSAGES } = await recovery();
   const shown = await playerFailing(t, 404);
-  assert.match(shown.text, new RegExp(PLAYBACK_FAILURE_MESSAGES.no_access.slice(0, 20)));
+  assert.match(shown.text, new RegExp(failureMessage("no_access").slice(0, 20)));
   assert.deepEqual(shown.links, []);
 });

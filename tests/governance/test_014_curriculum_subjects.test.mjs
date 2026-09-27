@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -34,7 +35,9 @@ test("admin registry has curriculum `subjects` entity at slug `subjects`", () =>
 test("admin entity has uppercase-code validator + grades cross-check", () => {
   const src = read("apps/web/src/admin/entities/subjects.ts");
   assert.match(src, /\[A-Z\]\[A-Z0-9_-\]\*/);
-  assert.match(src, /grades_min must be ≤ grades_max/);
+  // The refusal names its message key; the words are in the bundle.
+  assert.match(src, /message: "validation\.gradesOrder"/);
+  assert.equal(message("adminData.validation.gradesOrder"), "grades_min must be ≤ grades_max");
 });
 
 test("migration 0002 exists with `subjects` CREATE TABLE", () => {

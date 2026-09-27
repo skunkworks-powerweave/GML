@@ -27,6 +27,7 @@ import { signIn, closeAppDb } from "./_server-actions.js";
 import { render, renderSync, h, withAppRouter, withIntl, decodeEntities } from "./_ui.js";
 import { needsDatabase } from "./_harness.js";
 import { observationWorld } from "./_observation-world.js";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const skip = needsDatabase();
 after(async () => {
@@ -65,8 +66,10 @@ test("the sign-in page offers an email link only where email works, and names RT
 });
 
 test("help expands RTT as the programme does", async () => {
-  const { HELP } = await import("../../apps/web/src/lib/help.ts");
-  const rtt = `${HELP.rtt!.title} ${HELP.rtt!.short} ${HELP.rtt!.long ?? ""}`;
+  // The help articles are in the help bundle (help.entries.<slug>).
+  const { rtt: entry } = (loadMessages("en").help as unknown as { entries: Record<string, { title: string; short: string; long?: string }> })
+    .entries;
+  const rtt = `${entry!.title} ${entry!.short} ${entry!.long ?? ""}`;
   assert.doesNotMatch(rtt, /Recruit,? Train/i, rtt);
   assert.match(rtt, /Refresher Teacher Training/);
 });

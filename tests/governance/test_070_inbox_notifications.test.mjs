@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -76,16 +77,19 @@ test("Spec 070: entity href map covers cycle / video / meeting / quiz", () => {
 });
 
 test("Spec 070: date grouping labels (Today / Yesterday / This week / Older) present", () => {
+  // The labels are home.inbox.bucket.<bucket>, in the reader's language.
   const src = read(ROUTE);
-  for (const label of ["Today", "Yesterday", "This week", "Older"]) {
-    assert.match(src, new RegExp(label), `bucket label "${label}" must appear in source`);
+  assert.match(src, /t\(`bucket\.\$\{bucket\}`\)/, "each bucket heading reads home.inbox.bucket.<bucket>");
+  for (const [bucket, label] of [["today", "Today"], ["yesterday", "Yesterday"], ["week", "This week"], ["older", "Older"]]) {
+    assert.equal(message(`home.inbox.bucket.${bucket}`), label, `bucket label "${label}"`);
   }
 });
 
 test("Spec 070: filter tabs render All + Unread chips", () => {
   const src = read(ROUTE);
-  assert.match(src, />\s*All\s*</);
-  assert.match(src, />\s*Unread/);
+  assert.ok(readsKey(src, "filterAll") && readsKey(src, "filterUnread"), "the tabs read home.inbox.filterAll / filterUnread");
+  assert.equal(message("home.inbox.filterAll"), "All");
+  assert.equal(message("home.inbox.filterUnread"), "Unread");
   assert.match(src, /href="\/inbox"/);
   assert.match(src, /href="\/inbox\?filter=unread"/);
 });
@@ -94,7 +98,8 @@ test("Spec 070: Mark all read button POSTs to /api/notifications/mark-read", () 
   const src = read(ROUTE);
   assert.match(src, /action="\/api\/notifications\/mark-read"/);
   assert.match(src, /method="post"/);
-  assert.match(src, /Mark all read/);
+  assert.ok(readsKey(src, "markAllRead"), "the button reads home.inbox.markAllRead");
+  assert.equal(message("home.inbox.markAllRead"), "Mark all read");
 });
 
 test("Spec 070: unread vs read visual treatment uses var(--card-hi) / var(--paper-2)", () => {

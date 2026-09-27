@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { needsDatabase, DATABASE_URL } from "./_harness.js";
 import { render, request, resetRequest, withAppRouter } from "./_ui.js";
 import { envelope, route, SECRET, signed, videoMessage, withEnv, withWorld, type World } from "./_whatsapp.js";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 const skip = needsDatabase();
 
@@ -144,13 +145,17 @@ async function renderUploads(ua: string): Promise<string> {
 }
 
 test("F129: the help panel's caption example is a code the webhook links", { skip }, async () => {
-  const { HELP } = await import("../../apps/web/src/lib/help.ts");
-  const text = HELP.whatsapp_ingest!.long;
-  assert.doesNotMatch(text, /#c\d{4}/, "'#c2026-XXX' has never been a caption the webhook understands");
-  const example = text.match(/OBS-\d{4}-\d{3}/)?.[0];
-  assert.ok(example, `the help must show the cycle code in the form cycles carry (OBS-<year>-<NNN>): ${text}`);
-  // And the cycle help must describe the same code.
-  assert.match(HELP.cycle!.long, /OBS-\d{4}-\d{3}/);
+  // The help articles are in the help bundle (help.entries.<slug>), in
+  // every language; the code a teacher is told to send is the same in each.
+  for (const locale of ["en", "hi", "bo"] as const) {
+    const HELP = (loadMessages(locale).help as unknown as { entries: Record<string, { long: string }> }).entries;
+    const text = HELP.whatsapp_ingest!.long;
+    assert.doesNotMatch(text, /#c\d{4}/, "'#c2026-XXX' has never been a caption the webhook understands");
+    const example = text.match(/OBS-\d{4}-\d{3}/)?.[0];
+    assert.ok(example, `${locale}: the help must show the cycle code in the form cycles carry (OBS-<year>-<NNN>): ${text}`);
+    // And the cycle help must describe the same code.
+    assert.match(HELP.cycle!.long, /OBS-\d{4}-\d{3}/);
+  }
   await withEnv(CONFIGURED, () =>
     withWorld(async (w) => {
       // The teacher sends her own code in the form the help shows.

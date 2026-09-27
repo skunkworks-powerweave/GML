@@ -187,7 +187,7 @@ test("the phone form's progress dots mark the current step and are 24 px targets
       { name: "b", label: "B", kind: "text" },
     ],
   };
-  const m = mount(MobileFormRunner as (p: unknown) => unknown, { schema, onSubmit: async () => undefined });
+  const m = mount(MobileFormRunner as (p: unknown) => unknown, { schema, onSubmit: async () => undefined }, { intl: "en" });
   const dots = () => hostElements(m.rerender()).filter((el) => String(el.props["data-testid"] ?? "").startsWith("mobile-progress-dot-"));
   const current = () => dots().map((d) => d.props["aria-current"] ?? null);
 
@@ -233,8 +233,13 @@ test("every mentorship, forms and inbox page has its own title", { skip }, async
   ];
   const seen = new Map<string, string>();
   for (const r of routes) {
-    const mod = (await import(`${APP}/${r}`)) as { metadata?: { title?: unknown } };
-    const title = mod.metadata?.title;
+    // A static `metadata`, or -- for a title in the reader's language --
+    // `generateMetadata()` (English here: the fake request's locale).
+    const mod = (await import(`${APP}/${r}`)) as {
+      metadata?: { title?: unknown };
+      generateMetadata?: () => Promise<{ title?: unknown }>;
+    };
+    const title = mod.metadata?.title ?? (await mod.generateMetadata?.())?.title;
     assert.equal(typeof title, "string", `${r} exports a metadata title`);
     const t = (title as string).trim();
     assert.ok(t.length > 0 && t !== root.title.default, `${r}: "${t}" names the page`);

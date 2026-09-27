@@ -88,7 +88,7 @@ async function mountRunner(which: Runner, opts: MountOpts = {}) {
       serverSavedAt: opts.serverSavedAt ?? null,
       action: async () => undefined,
     },
-    { effects: opts.effects },
+    { effects: opts.effects, intl: "en" },
   );
   // The textarea is drawn by a child component (TextArea / BigTextArea), which
   // mount() leaves unexpanded; its element carries the runner's onChange.
@@ -307,7 +307,7 @@ test("FormRenderer (callback submit): a save started while onSubmit ran is not r
       serverSavedAt: null,
       onSubmit: () => new Promise<void>((done) => (finishSubmit = done)),
     },
-    { effects: true },
+    { effects: true, intl: "en" },
   );
   try {
     const form = hostElements(m.rerender()).find((el) => el.type === "form")!;

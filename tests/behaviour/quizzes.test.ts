@@ -17,7 +17,8 @@ import { randomInt, randomUUID } from "node:crypto";
 import { registerHooks } from "node:module";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { h, render, renderSync, openingTags, attr, React, hostElements, textOf, withAppRouter } from "./_ui.js";
+import { h, render, renderSync, openingTags, attr, React, hostElements, textOf, withAppRouter, mount, webRequire } from "./_ui.js";
+import { clientMessages } from "../../apps/web/src/i18n/config.ts";
 import { needsDatabase, withClient, tag, DATABASE_URL } from "./_harness.js";
 
 const skip = needsDatabase();
@@ -675,9 +676,29 @@ test("F37: an administrator can set the attempt cap in the quiz editor", { skip 
 // is the same minimal hook dispatcher with effects recorded, so a test can run
 // them and then drive setInterval and Date with node:test's mock timers.
 
+/**
+ * next-intl's context for the runners' useTranslations(): the app's real
+ * English client bundle, taken from the real IntlProvider as _ui.ts's
+ * mount({ intl }) does. A missing key throws.
+ */
+function englishIntl(): { ctx: { _currentValue: unknown }; value: unknown } {
+  const { IntlProvider } = webRequire("next-intl") as { IntlProvider: (p: Record<string, unknown>) => unknown };
+  const el = mount(IntlProvider, {
+    locale: "en",
+    messages: clientMessages("en"),
+    timeZone: "Asia/Kolkata",
+    onError: (e: Error) => {
+      throw e;
+    },
+    children: null,
+  }).tree as unknown as { type: { _context?: { _currentValue: unknown }; _currentValue: unknown }; props: { value: unknown } };
+  return { ctx: el.type._context ?? el.type, value: el.props.value };
+}
+
 function mountLive<P>(component: (props: P) => unknown, props: P) {
   const internals = (React as unknown as Record<string, { H: unknown } | undefined>)
     .__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE!;
+  const intl = englishIntl();
   const slots: unknown[] = [];
   const effects: Array<{ fn: () => unknown; deps?: unknown[]; ran?: unknown[] | true; cleanup?: unknown }> = [];
   let cursor = 0;
@@ -713,12 +734,15 @@ function mountLive<P>(component: (props: P) => unknown, props: P) {
   let tree: unknown;
   const render = () => {
     const previous = internals.H;
+    const previousIntl = intl.ctx._currentValue;
     internals.H = dispatcher;
+    intl.ctx._currentValue = intl.value;
     cursor = 0;
     try {
       tree = component(props);
     } finally {
       internals.H = previous;
+      intl.ctx._currentValue = previousIntl;
     }
     // Commit: run each effect whose deps changed (all of them, the first time).
     for (const e of effects) {

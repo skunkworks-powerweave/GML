@@ -35,6 +35,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -444,10 +445,12 @@ test("spec 162 — both actions validate row.jobStatus === 'failed' before mutat
   assert.ok(locked.length >= 2, "both actions must read the submission's state under a row lock, in their transaction");
   const refused = src.match(/redirect\(`\$\{DLQ_PATH\}\?error=\$\{refusal\}`\)/g) ?? [];
   assert.ok(refused.length >= 2, "both actions must redirect a refusal back with its error code");
-  // Every code refusalFor() can return has a message on the page.
+  // Every code refusalFor() can return has a message on the page: the page
+  // lists the code, and the admin bundle explains it (transcodeJobs.errors).
   const page = read(PAGE_PATH);
   for (const code of ["not_failed_attempt", "not_latest_attempt", "job_live", "submission_not_failed"]) {
-    assert.match(page, new RegExp(`${code}:`), `the page must explain ?error=${code}`);
+    assert.match(page, new RegExp(`"${code}"`), `the page must explain ?error=${code}`);
+    assert.ok(message(`admin.transcodeJobs.errors.${code}`), `admin.transcodeJobs.errors.${code} must say what ?error=${code} means`);
   }
 });
 
@@ -529,12 +532,13 @@ test("spec 162 — /admin index page links to /admin/transcode-jobs", () => {
     /href="\/admin\/transcode-jobs"/,
     "admin index must link to /admin/transcode-jobs so operators can navigate to the DLQ surface",
   );
-  // The label must read meaningfully (not generic "Page X" boilerplate).
-  assert.match(
-    src,
-    />\s*Transcode jobs\s*</,
+  // The label must read meaningfully (not generic "Page X" boilerplate). It
+  // is admin.index.links.transcodeJobs.title in the bundle.
+  assert.ok(
+    readsKey(src, "index.links.transcodeJobs.title"),
     "admin index link must display the label 'Transcode jobs'",
   );
+  assert.equal(message("admin.index.links.transcodeJobs.title"), "Transcode jobs");
 });
 
 // ---------- Hygiene ----------

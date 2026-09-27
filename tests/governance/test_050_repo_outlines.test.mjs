@@ -3,9 +3,19 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
+
+/**
+ * The page's copy is in the repo namespace: `src` reads repo.<key>, and the
+ * English bundle holds the prototype's words there.
+ */
+function readsCopy(src, key, english, what) {
+  assert.ok(readsKey(src, key), `${what} missing (repo.${key})`);
+  assert.equal(message(`repo.${key}`), english, `repo.${key}`);
+}
 
 const INDEX = "apps/web/src/app/(authenticated)/repo/outlines/page.tsx";
 const DETAIL = "apps/web/src/app/(authenticated)/repo/outline/[id]/page.tsx";
@@ -32,14 +42,18 @@ test("050 — index queries courseOutlines joined to subjects + teachers", () =>
 test("050 — index renders the JSX prototype's table columns + serif h1", () => {
   const src = read(INDEX);
   assert.match(src, /font-family:\s*"var\(--serif\)"|fontFamily:\s*"var\(--serif\)"/);
-  assert.match(src, /Course outlines/);
-  assert.match(src, /Outline/);
-  assert.match(src, /Subject/);
-  assert.match(src, /Grade/);
-  assert.match(src, /Term/);
-  assert.match(src, /Sessions/);
-  assert.match(src, /Weeks/);
-  assert.match(src, /Status/);
+  readsCopy(src, "outlines.title", "Course outlines", "the h1");
+  for (const [key, col] of [
+    ["common.outline", "Outline"],
+    ["common.subject", "Subject"],
+    ["common.grade", "Grade"],
+    ["common.term", "Term"],
+    ["common.sessions", "Sessions"],
+    ["common.weeks", "Weeks"],
+    ["common.status", "Status"],
+  ]) {
+    readsCopy(src, key, col, `column ${col}`);
+  }
 });
 
 test("050 — status pill lookup covers all four schema-allowed states", () => {
@@ -64,11 +78,11 @@ test("050 — detail page loads outline + lessons + sessions + readings", () => 
 
 test("050 — detail renders learning outcomes, lessons table, sessions, details + readings sidebar", () => {
   const src = read(DETAIL);
-  assert.match(src, /Learning outcomes/);
-  assert.match(src, /Lessons \(/);
-  assert.match(src, /Sessions delivered/);
-  assert.match(src, /Details/);
-  assert.match(src, /Reading material/);
+  readsCopy(src, "outline.outcomesTitle", "Learning outcomes", "the outcomes card");
+  readsCopy(src, "outline.lessonsTitle", "Lessons ({count})", "the lessons card");
+  readsCopy(src, "outline.sessionsTitle", "Sessions delivered against this outline ({count})", "the sessions card");
+  readsCopy(src, "common.details", "Details", "the details card");
+  readsCopy(src, "common.readingMaterial", "Reading material", "the readings card");
   // Two-column grid 1.6fr / 1fr (matches JSX prototype) from 768 px; one
   // column on a phone (F11: the inline template this pinned held at every
   // width). Rendered at both widths in ui-phone-layout.test.ts.

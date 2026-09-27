@@ -71,12 +71,16 @@ async function withSettingsForm(
   const previous = AppRouterContext._currentValue;
   AppRouterContext._currentValue = (withAppRouter(null, router) as { props: { value: unknown } }).props.value;
   try {
-    const m = mount(SettingsForm as (p: unknown) => unknown, {
-      initial: { ...DEFAULTS, ...initial },
-      email: "audit-x@gml.local",
-      roleLabel: "Observer",
-      roleChipKind: "",
-    });
+    const m = mount(
+      SettingsForm as (p: unknown) => unknown,
+      {
+        initial: { ...DEFAULTS, ...initial },
+        email: "audit-x@gml.local",
+        roleLabel: "Observer",
+        roleChipKind: "",
+      },
+      { intl: "en" },
+    );
     await body({ m, puts, router });
   } finally {
     globalThis.fetch = realFetch;
@@ -116,7 +120,7 @@ test("F125: the tap's save is not sent a second time when the debounce fires", {
     const m = mount(
       SettingsForm as (p: unknown) => unknown,
       { initial: DEFAULTS, email: "x@gml.local", roleLabel: "Observer", roleChipKind: "" },
-      { effects: true },
+      { effects: true, intl: "en" },
     );
     try {
       clickText(m, "हिन्दी");
@@ -135,7 +139,7 @@ test("F125: a change still inside the debounce window is sent when the page is l
     const m = mount(
       SettingsForm as (p: unknown) => unknown,
       { initial: DEFAULTS, email: "x@gml.local", roleLabel: "Observer", roleChipKind: "" },
-      { effects: true },
+      { effects: true, intl: "en" },
     );
     const toggle = allElements(m.tree).find((e) => e.props.label === "High contrast");
     assert.ok(toggle, "the High contrast row must render");
@@ -186,7 +190,7 @@ test("F127: saving High contrast re-renders the page so it applies at once", { s
     const m = mount(
       SettingsForm as (p: unknown) => unknown,
       { initial: DEFAULTS, email: "x@gml.local", roleLabel: "Observer", roleChipKind: "" },
-      { effects: true },
+      { effects: true, intl: "en" },
     );
     try {
       const toggle = allElements(m.tree).find((e) => e.props.label === "High contrast");

@@ -35,9 +35,22 @@ import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import "./_ui.js"; // installs the @/ alias and the @/lib/supabase/browser stub
 import { TEST_ACCESS_TOKEN, testTokens } from "./_stubs/supabase-browser.ts";
+import { loadMessages } from "../../apps/web/src/i18n/config.ts";
 
 // Imported inside the helper: test files compile to CommonJS, which has no top-level await.
 const tusUpload = () => import("../../apps/web/src/lib/video/tus-upload.ts");
+
+/**
+ * What the teacher reads for an upload failure, in English. The module reports
+ * a code; the tray and the phone flow say it from the bundle
+ * (video.client.upload.error.<code>), so that is what these tests read.
+ */
+function uploadMessage(code: string): string {
+  const video = loadMessages("en").video as { client: { upload: { error: Record<string, string> } } };
+  const text = video.client.upload.error[code];
+  assert.ok(text, `no message for the upload error code ${code}`);
+  return text;
+}
 
 // The same tus-js-client instance tus-upload.ts loads, resolved from apps/web.
 const tus = createRequire(new URL("../../apps/web/package.json", import.meta.url))("tus-js-client") as {
@@ -185,7 +198,7 @@ function upload(
         chunkBytes,
         supabase: { url: storageUrl, anonKey: "publishable-key" },
         onProgress: () => undefined,
-        onError: (message) => resolve({ ok: false, message }),
+        onError: (code) => resolve({ ok: false, message: uploadMessage(code) }),
         onSuccess: () => resolve({ ok: true }),
       }),
     );
@@ -454,14 +467,16 @@ const response = (status: number, body: string) => ({ getStatus: () => status, g
 const UPLOAD_URL = "http://127.0.0.1:55321/storage/v1/upload/resumable/dmlkZW9zLW9yaWdpbmFs413LzQwMTAx401";
 
 test("a dropped connection is reported as one, with how to resume -- whatever digits the upload id contains", async () => {
-  const { uploadErrorMessage } = await tusUpload();
+  const { uploadErrorCode } = await tusUpload();
+  const uploadErrorMessage = (err: unknown) => uploadMessage(uploadErrorCode(err));
   const dropped = new DetailedError("tus: failed to upload chunk at offset 6291456", { toString: () => "[object ProgressEvent]" }, request("PATCH", UPLOAD_URL), null);
   assert.match(uploadErrorMessage(dropped), /connection dropped/i);
   assert.match(uploadErrorMessage(dropped), /same file to resume/i, "resuming is the point of tus on a 2G link; the teacher must be told it is possible");
 });
 
 test("the classification reads the response, not the text of the URL", async () => {
-  const { uploadErrorMessage } = await tusUpload();
+  const { uploadErrorCode } = await tusUpload();
+  const uploadErrorMessage = (err: unknown) => uploadMessage(uploadErrorCode(err));
   const at = (status: number, body: string) =>
     uploadErrorMessage(new DetailedError("tus: unexpected response while uploading chunk", null, request("PATCH", UPLOAD_URL), response(status, body)));
   assert.match(at(413, "Payload too large"), /too large/i);

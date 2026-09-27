@@ -234,8 +234,14 @@ test("every observation, video, repository and dashboard page has its own title"
   ];
   const seen = new Map<string, string>();
   for (const r of routes) {
-    const mod = (await import(`${APP}/${r}`)) as { metadata?: { title?: unknown } };
-    const title = mod.metadata?.title;
+    // A page whose title is in the viewer's language exports generateMetadata
+    // (it reads the translations) instead of a static metadata object; the
+    // English one (the fake request's default locale) is checked here.
+    const mod = (await import(`${APP}/${r}`)) as {
+      metadata?: { title?: unknown };
+      generateMetadata?: () => Promise<{ title?: unknown }>;
+    };
+    const title = mod.metadata?.title ?? (await mod.generateMetadata?.())?.title;
     assert.equal(typeof title, "string", `${r} exports a metadata title`);
     const t = (title as string).trim();
     assert.ok(t.length > 0 && t !== root.title.default, `${r}: "${t}" names the page`);

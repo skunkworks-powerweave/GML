@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message, readsKey } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -165,11 +166,14 @@ test("spec 132 — HlsPlayer.tsx exposes a quality select with auto / 480p / 720
   // No programme setting turns 720p off -- the worker never encodes it -- so
   // the pin is now the true reason (F13). tests/behaviour/video-copy.test.ts
   // checks the rendered tooltip against the heights the worker encodes.
+  // The words are in the bundle (video.client.player.notProduced), in the
+  // viewer's language; the option reads them.
   assert.match(
     src,
-    /<option value="720p"\s+disabled\s+title="Not produced: videos stream at up to 480p"/,
+    /<option value="720p"\s+disabled\s+title=\{t\("player\.notProduced"\)\}/,
     "the 720p option must carry a tooltip saying why: it is not produced",
   );
+  assert.equal(message("video.client.player.notProduced"), "Not produced: videos stream at up to 480p");
   // The handler must flip hls.currentLevel (-1 for auto, else the chosen rendition).
   assert.match(
     src,
@@ -278,10 +282,16 @@ test("spec 132 — UploadModal surfaces the WhatsApp path with Copy phone button
     "Copy phone button must use the Clipboard API",
   );
   // The three caption codes (OBS / TB / MM) must be documented inline so a
-  // first-time teacher can see them without leaving the modal.
-  assert.match(src, /OBS-/, "WhatsApp instructions must mention the OBS-<code> caption format");
-  assert.match(src, /TB-/, "WhatsApp instructions must mention the TB-<uuid> caption format");
-  assert.match(src, /MM-/, "WhatsApp instructions must mention the MM-<uuid> caption format");
+  // first-time teacher can see them without leaving the modal. The sentences
+  // are in the bundle (video.client.modal.caption.*); the codes in them are
+  // what the webhook reads and stay as they are in every language.
+  for (const [key, code] of [["obs", "OBS-"], ["tb", "TB-"], ["mm", "MM-"]]) {
+    // t.rich: the code sits in a <code> tag inside the sentence.
+    assert.ok(src.includes(`t.rich("modal.caption.${key}"`), `WhatsApp instructions must show the ${code} caption format`);
+    for (const locale of ["en", "hi", "bo"]) {
+      assert.ok(message(`video.client.modal.caption.${key}`, locale).includes(code), `${locale}: the ${code} code is shown as the webhook reads it`);
+    }
+  }
 });
 
 test("spec 132 — UploadModal renders a proper dialog with aria attrs", () => {
@@ -299,9 +309,10 @@ test("spec 132 — UploadModal renders a proper dialog with aria attrs", () => {
   );
   assert.match(
     src,
-    /aria-label="Upload a video"/,
+    /aria-label=\{t\("modal\.dialog"\)\}/,
     "UploadModal panel must carry an aria-label so it's discoverable",
   );
+  assert.equal(message("video.client.modal.dialog"), "Upload a video");
 });
 
 test("spec 132 — videos/page.tsx imports UploadModal and renders it in the header", () => {

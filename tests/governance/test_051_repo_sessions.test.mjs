@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { message } from "./_i18n.mjs";
 
 const root = resolve(fileURLToPath(import.meta.url), "..", "..", "..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
@@ -36,8 +37,15 @@ test("spec 051 — index uses force-dynamic + auth gate + role redirect", () => 
 
 test("spec 051 — index renders the 4 filter tabs (All / Planned / Today / Complete)", () => {
   const src = read(INDEX);
-  for (const label of ["All", "Planned", "Today", "Complete"]) {
-    assert.ok(src.includes(`l: "${label}"`), `filter tab "${label}" must be present`);
+  // The tab labels are in the repo namespace (repo.sessions.tabs.*).
+  for (const [key, label] of [
+    ["all", "All"],
+    ["planned", "Planned"],
+    ["today", "Today"],
+    ["complete", "Complete"],
+  ]) {
+    assert.ok(src.includes(`l: t("sessions.tabs.${key}")`), `filter tab "${label}" must be present`);
+    assert.equal(message(`repo.sessions.tabs.${key}`), label);
   }
 });
 
@@ -78,18 +86,24 @@ test("spec 051 — detail uses force-dynamic + auth gate + role redirect + notFo
 
 test("spec 051 — detail renders KV rows in spec'd order", () => {
   const src = read(DETAIL);
-  for (const label of [
-    "Session ID",
-    "School",
-    "Subject",
-    "Teacher",
-    "Date",
-    "Duration",
-    "Status",
-    "Attendance",
-    "Observed",
+  // The labels are in the repo namespace, read by key, in this order.
+  let at = -1;
+  for (const [key, label] of [
+    ["session.sessionId", "Session ID"],
+    ["common.school", "School"],
+    ["common.subject", "Subject"],
+    ["common.teacher", "Teacher"],
+    ["common.date", "Date"],
+    ["session.duration", "Duration"],
+    ["common.status", "Status"],
+    ["common.attendance", "Attendance"],
+    ["session.observed", "Observed"],
   ]) {
-    assert.ok(src.includes(`label="${label}"`), `KV row "${label}" must be present`);
+    const i = src.indexOf(`label={t("${key}")}`);
+    assert.ok(i >= 0, `KV row "${label}" must be present`);
+    assert.ok(i > at, `KV row "${label}" is in the spec'd order`);
+    at = i;
+    assert.equal(message(`repo.${key}`), label);
   }
 });
 

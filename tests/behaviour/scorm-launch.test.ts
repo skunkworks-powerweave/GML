@@ -183,7 +183,7 @@ function fakeFrame(win: Record<string, unknown>) {
 
 /** Render the player and attach its iframe, as React's commit would. */
 function attached(ScormPlayer: (p: never) => unknown, props: unknown, win: Record<string, unknown>) {
-  const m = mount(ScormPlayer, props as never, { effects: true });
+  const m = mount(ScormPlayer, props as never, { effects: true, intl: "en" });
   const iframe = hostElements(m.tree).find((e) => e.type === "iframe");
   assert.ok(iframe, "the frame is part of the page");
   const frame = fakeFrame(win);
@@ -199,7 +199,7 @@ test("the player installs window.API before the frame navigates, sandboxes it, a
     const props = { packageId: "p-1", src: "/api/scorm/content/p-1/index.html", title: "Reading", backHref: "/rtt/subject/s", init: INIT };
     // What the server sends: a frame with NOTHING to load, so the SCO cannot
     // start before the page has hydrated and installed the API.
-    const first = mount(ScormPlayer, props, { effects: true });
+    const first = mount(ScormPlayer, props, { effects: true, intl: "en" });
     const bare = hostElements(first.tree).find((e) => e.type === "iframe");
     assert.equal(bare?.props.src, undefined, "no src is rendered");
     assert.equal(b.win.API, undefined, "no API until the frame is attached");
