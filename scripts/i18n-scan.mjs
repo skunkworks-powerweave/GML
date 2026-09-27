@@ -3,7 +3,7 @@
 // the translation bundles (apps/web/src/i18n/locales). Such text shows in
 // English whatever language the user picked.
 //
-//   node scripts/i18n-scan.mjs                   scan apps/web/src/{app,components}
+//   node scripts/i18n-scan.mjs                   scan apps/web/src/{app,components,admin,config,lib}
 //   node scripts/i18n-scan.mjs <path> [<path>…]  scan those files or folders
 //   node scripts/i18n-scan.mjs --json …          one JSON object per finding
 //
@@ -42,7 +42,9 @@ const ts = createRequire(join(WEB, "package.json"))("typescript");
 const args = process.argv.slice(2);
 const json = args.includes("--json");
 const targets = args.filter((a) => a !== "--json");
-const roots = targets.length ? targets.map((t) => resolve(t)) : [join(WEB, "src", "app"), join(WEB, "src", "components")];
+const roots = targets.length
+  ? targets.map((t) => resolve(t))
+  : ["app", "components", "admin", "config", "lib"].map((d) => join(WEB, "src", d));
 
 // API routes answer machines (JSON codes), not people.
 const SKIP_DIR = /[\\/](api|node_modules|\.next)([\\/]|$)/;

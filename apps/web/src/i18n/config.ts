@@ -35,6 +35,7 @@ import enRepo from "./locales/en/repo.json";
 import enAdmin from "./locales/en/admin.json";
 import enAdminData from "./locales/en/adminData.json";
 import enVideo from "./locales/en/video.json";
+import enHelp from "./locales/en/help.json";
 import hiHome from "./locales/hi/home.json";
 import hiObservation from "./locales/hi/observation.json";
 import hiMentorship from "./locales/hi/mentorship.json";
@@ -43,6 +44,7 @@ import hiRepo from "./locales/hi/repo.json";
 import hiAdmin from "./locales/hi/admin.json";
 import hiAdminData from "./locales/hi/adminData.json";
 import hiVideo from "./locales/hi/video.json";
+import hiHelp from "./locales/hi/help.json";
 import boHome from "./locales/bo/home.json";
 import boObservation from "./locales/bo/observation.json";
 import boMentorship from "./locales/bo/mentorship.json";
@@ -51,6 +53,7 @@ import boRepo from "./locales/bo/repo.json";
 import boAdmin from "./locales/bo/admin.json";
 import boAdminData from "./locales/bo/adminData.json";
 import boVideo from "./locales/bo/video.json";
+import boHelp from "./locales/bo/help.json";
 
 export const SUPPORTED_LOCALES = ["en", "hi", "bo"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
@@ -92,12 +95,12 @@ type MessageNamespace = Record<string, MessageValue>;
 type MessageBundle = Record<string, MessageNamespace>;
 
 /** The page namespaces, per locale; see the imports above. */
-export const PAGE_NAMESPACES = ["home","observation","mentorship","rtt","repo","admin","adminData","video"] as const;
+export const PAGE_NAMESPACES = ["home","observation","mentorship","rtt","repo","admin","adminData","video","help"] as const;
 
 const PAGE_MESSAGES: Record<Locale, MessageBundle> = {
-  en: { home: enHome, observation: enObservation, mentorship: enMentorship, rtt: enRtt, repo: enRepo, admin: enAdmin, adminData: enAdminData, video: enVideo } as MessageBundle,
-  hi: { home: hiHome, observation: hiObservation, mentorship: hiMentorship, rtt: hiRtt, repo: hiRepo, admin: hiAdmin, adminData: hiAdminData, video: hiVideo } as MessageBundle,
-  bo: { home: boHome, observation: boObservation, mentorship: boMentorship, rtt: boRtt, repo: boRepo, admin: boAdmin, adminData: boAdminData, video: boVideo } as MessageBundle,
+  en: { home: enHome, observation: enObservation, mentorship: enMentorship, rtt: enRtt, repo: enRepo, admin: enAdmin, adminData: enAdminData, video: enVideo, help: enHelp } as MessageBundle,
+  hi: { home: hiHome, observation: hiObservation, mentorship: hiMentorship, rtt: hiRtt, repo: hiRepo, admin: hiAdmin, adminData: hiAdminData, video: hiVideo, help: hiHelp } as MessageBundle,
+  bo: { home: boHome, observation: boObservation, mentorship: boMentorship, rtt: boRtt, repo: boRepo, admin: boAdmin, adminData: boAdminData, video: boVideo, help: boHelp } as MessageBundle,
 };
 
 const MESSAGES: Record<Locale, MessageBundle> = {
@@ -213,6 +216,20 @@ export const LOCALE_FONT_FAMILY: Record<Locale, string | undefined> = {
   en: undefined,
   hi: "var(--deva)",
   bo: "var(--tib)",
+};
+
+/**
+ * The Intl locale for dates and numbers in each interface language, in India:
+ * "27 Sept 2026" in English, "27 सित॰ 2026" in Hindi, Tibetan month and
+ * numerals in Bhoti. Pass it wherever a date is formatted --
+ * `d.toLocaleDateString(INTL_LOCALE[await getLocale()], …)` on the server,
+ * `INTL_LOCALE[useLocale() as Locale]` in a client component -- instead of a
+ * hard-coded "en-IN", which showed English months to everyone.
+ */
+export const INTL_LOCALE: Record<Locale, string> = {
+  en: "en-IN",
+  hi: "hi-IN",
+  bo: "bo-IN",
 };
 
 /** ISO language code used for the `<html lang>` attribute. */
