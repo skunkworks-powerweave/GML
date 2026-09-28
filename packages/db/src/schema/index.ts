@@ -22,3 +22,5 @@ export * from "./systemSettings";
 export * from "./jobs";
 export * from "./rateLimits";
 export * from "./scorm";
+export * from "./grading";
+export * from "./teaching";

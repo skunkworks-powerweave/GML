@@ -268,6 +268,19 @@ script; no account acts), `entity_type` is `host_job`. A dry run, and an
 |---|---|---|
 | `demo_data.purged` | `--apply` removed the seed's fictional rows | `cycles` (`id`, `code` each), `pairings`, `teachers`, `mentors` (ids), `schools` (`id`, `code` each), `counts` (`cycles`, `pairings`, `teachers`, `mentors`, `schools`, `templates`, `unlinked_sessions`, `unowned_outlines`), `kept` (how many candidates of each kind it kept for real work) |
 
+## approval.* — the approvals queue (`lib/approvals`, `/approvals`)
+
+One queue for everything that needs a decision: a teacher's lesson plans,
+sessions (with attendance) and marks, teach-backs, observation sign-off, and
+account requests. `entity_type` is the item type (`session`, `lesson_plan`,
+`assessment`, `teach_back`, `observation_signoff`, `account_request`) and
+`entity_id` the item; `user_id` is who acted.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `approval.submitted` | An item was sent for approval and its pending request recorded | `approvalId` |
+| `approval.decided` | An approver approved, requested changes or rejected a pending request | `approvalId`, `decision` ("approved" / "changes_requested" / "rejected") |
+
 ## Deferred prefixes (reserved but not yet wired)
 
 These prefixes have docs / specs but no live `recordAudit` call sites

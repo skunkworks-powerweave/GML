@@ -37,7 +37,16 @@
     "allTables": "All tables",
     "users": "Users",
     "primary": "Main navigation",
-    "menu": "Menu"
+    "menu": "Menu",
+    "classes": "My classes",
+    "students": "My students",
+    "lessonPlans": "Lesson plans",
+    "teachingSessions": "My sessions",
+    "marks": "Marks",
+    "progress": "My progress",
+    "approvals": "Approvals",
+    "attendanceMarking": "Mark attendance",
+    "grading": "Grading"
   },
   "navSection": {
     "programme": "Programme",
@@ -47,7 +56,8 @@
     "data": "Data",
     "system": "System",
     "resources": "Resources",
-    "yourAccount": "Your account"
+    "yourAccount": "Your account",
+    "myTeaching": "My teaching"
   },
   "crumb": {
     "dashboard": "Dashboard",

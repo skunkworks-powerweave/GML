@@ -57,7 +57,7 @@ export const systemSettings = pgTable(
       .$type<string[]>()
       .notNull()
       .default(
-        sql`'["helpdesk.ticket","cycle.assigned","cycle.complete","video.transcoded","meeting.scheduled","meeting.cancelled","pairing.final_submitted"]'::jsonb`,
+        sql`'["helpdesk.ticket","cycle.assigned","cycle.complete","video.transcoded","meeting.scheduled","meeting.cancelled","pairing.final_submitted","approval"]'::jsonb`,
       ),
     backupRetentionDays: integer("backup_retention_days").notNull().default(14),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

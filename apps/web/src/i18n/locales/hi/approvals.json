@@ -1,0 +1,16 @@
+{
+  "kinds": {
+    "lesson_plan": "पाठ योजना",
+    "session": "सत्र",
+    "assessment": "अंक",
+    "teach_back": "टीच-बैक",
+    "observation_signoff": "अवलोकन हस्ताक्षर",
+    "account_request": "खाता अनुरोध"
+  },
+  "notify": {
+    "submitted": "{kind} स्वीकृति की प्रतीक्षा में: {title}",
+    "approved": "{kind} स्वीकृत: {title}",
+    "changes_requested": "{kind} में बदलाव ज़रूरी: {title}",
+    "rejected": "{kind} स्वीकृत नहीं: {title}"
+  }
+}

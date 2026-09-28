@@ -1,0 +1,16 @@
+{
+  "kinds": {
+    "lesson_plan": "Lesson plan",
+    "session": "Session",
+    "assessment": "Marks",
+    "teach_back": "Teach-back",
+    "observation_signoff": "Observation sign-off",
+    "account_request": "Account request"
+  },
+  "notify": {
+    "submitted": "{kind} waiting for approval: {title}",
+    "approved": "{kind} approved: {title}",
+    "changes_requested": "{kind} needs changes: {title}",
+    "rejected": "{kind} not approved: {title}"
+  }
+}

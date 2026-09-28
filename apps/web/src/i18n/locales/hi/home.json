@@ -149,7 +149,12 @@
       "mentor_pairing": "जोड़ी",
       "pairing": "जोड़ी",
       "quiz": "क्विज़",
-      "session": "सत्र"
+      "session": "सत्र",
+      "approval": "स्वीकृति",
+      "lesson_plan": "पाठ योजना",
+      "assessment": "अंक",
+      "teach_back": "टीच-बैक",
+      "observation_signoff": "अवलोकन हस्ताक्षर"
     },
     "kind": {
       "helpdeskTicket": "सहायता अनुरोध",
@@ -161,7 +166,8 @@
       "meetingCancelled": "बैठक रद्द",
       "pairingFinalSubmitted": "अंतिम फ़ीडबैक मिला",
       "digestWeekly": "साप्ताहिक सारांश",
-      "quizDue": "क्विज़ बकाया"
+      "quizDue": "क्विज़ बकाया",
+      "approval": "स्वीकृतियाँ"
     }
   },
   "quickFind": {

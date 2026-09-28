@@ -89,4 +89,6 @@ export const attendanceStatusEnum = pgEnum("attendance_status", [
   "present",
   "absent",
   "excused",
+  // Migration 0043: teachers mark students late, admins mark teachers late.
+  "late",
 ]);

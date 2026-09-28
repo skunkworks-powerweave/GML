@@ -149,7 +149,12 @@
       "mentor_pairing": "Pairing",
       "pairing": "Pairing",
       "quiz": "Quiz",
-      "session": "Session"
+      "session": "Session",
+      "approval": "Approval",
+      "lesson_plan": "Lesson plan",
+      "assessment": "Marks",
+      "teach_back": "Teach-back",
+      "observation_signoff": "Observation sign-off"
     },
     "kind": {
       "helpdeskTicket": "Help request",
@@ -161,7 +166,8 @@
       "meetingCancelled": "Meeting cancelled",
       "pairingFinalSubmitted": "Final feedback in",
       "digestWeekly": "Weekly digest",
-      "quizDue": "Quiz due"
+      "quizDue": "Quiz due",
+      "approval": "Approvals"
     }
   },
   "quickFind": {

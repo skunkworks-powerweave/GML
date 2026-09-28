@@ -1,0 +1,16 @@
+{
+  "kinds": {
+    "lesson_plan": "སློབ་ཁྲིད་འཆར་གཞི།",
+    "session": "དུས་ཚོད།",
+    "assessment": "ཐོབ་སྐར།",
+    "teach_back": "ཕྱིར་སློབ།",
+    "observation_signoff": "བལྟ་ཞིབ་མིང་རྟགས།",
+    "account_request": "རྩིས་ཐོའི་རེ་ཞུ།"
+  },
+  "notify": {
+    "submitted": "{kind} ཆོག་མཆན་སྒུག་བཞིན། {title}",
+    "approved": "{kind} ཆོག་མཆན་ཐོབ་ཟིན། {title}",
+    "changes_requested": "{kind} ལ་བཟོ་བཅོས་དགོས། {title}",
+    "rejected": "{kind} ཆོག་མཆན་མ་ཐོབ། {title}"
+  }
+}

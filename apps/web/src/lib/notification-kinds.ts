@@ -50,6 +50,8 @@ export const NOTIFICATION_CATEGORIES = [
   { key: "meeting.cancelled" },
   { key: "pairing.final_submitted" },
   { key: "digest.weekly" },
+  // Something waits on an approver, or an approver decided (lib/approvals).
+  { key: "approval" },
 ] as const satisfies ReadonlyArray<{ key: string }>;
 
 export type NotificationKind = (typeof NOTIFICATION_CATEGORIES)[number]["key"];

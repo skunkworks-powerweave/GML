@@ -29,6 +29,7 @@ import { sql } from "drizzle-orm";
 import { users } from "./identity";
 import { subjects } from "./subjects";
 import { rttSubjects } from "./rtt";
+import { gradingScales } from "./grading";
 
 export const quizzes = pgTable(
   "quizzes",
@@ -42,6 +43,9 @@ export const quizzes = pgTable(
     subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "restrict" }),
     rttSubjectId: uuid("rtt_subject_id").references(() => rttSubjects.id, { onDelete: "restrict" }),
     passThreshold: smallint("pass_threshold").notNull().default(60),
+    // Migration 0043: the scale a result's grade comes from (NULL = the default
+    // quiz scale, if any). Pass/fail still comes from passThreshold.
+    gradingScaleId: uuid("grading_scale_id").references(() => gradingScales.id, { onDelete: "set null" }),
     // Spec 159 — Workflow Run 15 audit-closure MISS: optional time limit on
     // the quiz attempt. NULL = untimed (the default for every legacy quiz);
     // a positive integer = number of seconds the learner has to submit

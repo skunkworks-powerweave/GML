@@ -64,8 +64,14 @@ const KIND_KEY: Record<string, string> = {
   "pairing.final_submitted": "pairingFinalSubmitted",
   "digest.weekly": "digestWeekly",
   "quiz.due": "quizDue",
+  approval: "approval",
 };
 const ENTITY_TYPES = new Set([
+  "approval",
+  "lesson_plan",
+  "assessment",
+  "teach_back",
+  "observation_signoff",
   "cycle",
   "observation_cycle",
   "video",

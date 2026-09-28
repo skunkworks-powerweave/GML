@@ -37,7 +37,16 @@
     "allTables": "सभी तालिकाएँ",
     "users": "उपयोगकर्ता",
     "primary": "मुख्य नेविगेशन",
-    "menu": "मेनू"
+    "menu": "मेनू",
+    "classes": "मेरी कक्षाएँ",
+    "students": "मेरे विद्यार्थी",
+    "lessonPlans": "पाठ योजनाएँ",
+    "teachingSessions": "मेरे सत्र",
+    "marks": "अंक",
+    "progress": "मेरी प्रगति",
+    "approvals": "स्वीकृतियाँ",
+    "attendanceMarking": "उपस्थिति दर्ज करें",
+    "grading": "ग्रेडिंग"
   },
   "navSection": {
     "programme": "कार्यक्रम",
@@ -47,7 +56,8 @@
     "data": "डेटा",
     "system": "सिस्टम",
     "resources": "संसाधन",
-    "yourAccount": "आपका खाता"
+    "yourAccount": "आपका खाता",
+    "myTeaching": "मेरा शिक्षण"
   },
   "crumb": {
     "dashboard": "डैशबोर्ड",

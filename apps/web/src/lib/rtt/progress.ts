@@ -23,6 +23,7 @@
 import { and, asc, count, desc, eq, inArray, max, or, sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
+  attendanceStatusEnum,
   phases,
   quizSubmissions,
   quizzes,
@@ -67,7 +68,8 @@ export async function doneItems(
   return { lessons, readings };
 }
 
-export type AttendanceStatus = "present" | "absent" | "excused";
+/** From the enum itself, so a new status (0043 added "late") cannot drift from it. */
+export type AttendanceStatus = (typeof attendanceStatusEnum.enumValues)[number];
 
 /**
  * `userId`'s attendance on the given sessions, through her teachers row. A
