@@ -61,7 +61,30 @@ export async function notify(db: AnyDb, rows: NotificationInput[], opts: { exclu
     const inserted = await db.insert(notifications).values(values).returning({ id: notifications.id });
     return inserted.length;
   } catch (err) {
+    // One recipient whose users row is gone (deleted after the recipients were
+    // chosen) made the foreign key refuse the whole statement, and nobody was
+    // told. Retry row by row so only that recipient is skipped.
+    if (values.length > 1 && isForeignKeyViolation(err)) {
+      let written = 0;
+      for (const value of values) {
+        try {
+          await db.insert(notifications).values(value);
+          written++;
+        } catch (rowErr) {
+          if (!isForeignKeyViolation(rowErr)) {
+            console.error("[notify] failed to write a notification", { kind: value.kind, err: rowErr });
+          }
+        }
+      }
+      return written;
+    }
     console.error("[notify] failed to write notifications", { kinds: [...new Set(values.map((v) => v.kind))], err });
     return 0;
   }
+}
+
+/** Postgres 23503: the row points at something that does not exist. */
+function isForeignKeyViolation(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "23503" || e?.cause?.code === "23503";
 }
