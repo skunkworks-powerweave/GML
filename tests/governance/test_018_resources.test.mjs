@@ -30,10 +30,9 @@ test("admin entity for resources requires at least one source (file_key or exter
   const src = read("apps/web/src/admin/entities/resources.ts");
   // The refusal names its message key; the words are in the bundle.
   assert.match(src, /message: "validation\.resourceSource"/);
-  assert.equal(
-    message("adminData.validation.resourceSource"),
-    "resource must have either a file_key or an external_url",
-  );
+  // Said as the form now offers it: the PDF is uploaded, not a pasted key
+  // (tests/behaviour/admin-platform-pdf-upload.test.ts).
+  assert.equal(message("adminData.validation.resourceSource"), "Upload a PDF or give a web link.");
 });
 
 test("migration 0007 exists with both resources tables", () => {

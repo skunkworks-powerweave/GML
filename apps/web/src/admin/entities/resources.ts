@@ -2,6 +2,15 @@ import { z } from "zod";
 import { resources } from "@gml/db/schema";
 import type { AdminEntity } from "../types";
 
+// Reading material: a PDF in Storage (the `pdfs` bucket, which
+// /api/media/pdf/[id] streams to the watermarked viewer) or a web link.
+//
+// The PDF is UPLOADED from the form: the file picker sends it to
+// /api/admin/data/resources/upload, which checks it is a PDF, stores it and
+// fills in the key (fields.fileKey.upload). The key used to be a text box an
+// administrator had to paste a Storage object name into -- after putting the
+// file there some other way, which nothing in the product offered. A CSV can
+// still carry a key, and a web link still works on its own.
 export const resourcesEntity: AdminEntity = {
   slug: "resources",
   table: resources,
@@ -28,5 +37,8 @@ export const resourcesEntity: AdminEntity = {
     path: ["fileKey"],
   }),
   formFields: ["name", "kind", "owner", "pages", "fileKey", "externalUrl", "tags", "active"],
+  fields: {
+    fileKey: { upload: "pdf" },
+  },
   describeRow: (r) => `resource:${r.name ?? r.id}`,
 };

@@ -29,6 +29,7 @@ import {
   updateRowAction,
   type AdminActionState,
 } from "./actions";
+import { PdfUploadField } from "./pdf-upload-field";
 
 type Option = { id: string; label: string };
 
@@ -138,7 +139,11 @@ export function RowForm({
               <span className="text-[10px] text-neutral-500">{t("rowForm.commaList")}</span>
             ) : null}
             {help ? <span className="text-[10px] text-neutral-500">{help}</span> : null}
-            {Array.isArray(refs) ? (
+            {entity.fields?.[field]?.upload === "pdf" ? (
+              // An uploaded file's key: a picker that uploads, not a box to
+              // paste a Storage key into (./pdf-upload-field.tsx).
+              <PdfUploadField entitySlug={entitySlug} field={field} initial={initial} invalid={Boolean(fieldError)} />
+            ) : Array.isArray(refs) ? (
               // A foreign key, picked by name. The option VALUE is still the
               // row's UUID, so the server sees exactly what it always did.
               <select

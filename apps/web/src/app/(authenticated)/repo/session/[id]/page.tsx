@@ -12,6 +12,7 @@ import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { linkedCycle } from "@/lib/gated-reads";
 import { observationAccess } from "@/lib/visibility";
+import { mayOpenSession, repoScope } from "@/lib/teaching/visibility";
 import { enumLabel } from "@/components/repo/repo-i18n";
 import { db } from "@gml/db";
 import {
@@ -68,6 +69,9 @@ export default async function RepoSessionPage({
 
   const [s] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
   if (!s) notFound();
+  // A teacher opens her own sessions only; a colleague's answers 404
+  // (lib/teaching/visibility.ts). Other roles are unchanged.
+  if (!mayOpenSession(await repoScope(db, actor), s)) notFound();
 
   const [school] = await db.select().from(schools).where(eq(schools.id, s.schoolId)).limit(1);
   const [cls] = await db.select().from(classes).where(eq(classes.id, s.classId)).limit(1);
@@ -159,6 +163,11 @@ export default async function RepoSessionPage({
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span className={`chip ${statusChip.kind}`.trim()}>{statusLabel}</span>
+            {/* A session a teacher entered is visible before a programme
+                admin approves it, labelled as such (design: "Before approval"). */}
+            {s.approvalStatus !== "approved" ? (
+              <span className="chip chip-saffron">{enumLabel(t, "approval", s.approvalStatus)}</span>
+            ) : null}
             {s.observed ? (
               <span className="chip chip-saffron">
                 {cycle?.code ? t("session.observedCode", { code: cycle.code }) : t("session.observed")}

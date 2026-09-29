@@ -1,6 +1,6 @@
 // Spec 104 — Seed orchestrator.
 //
-// Runs all five seed scripts in dependency order, in-process (no child
+// Runs all six seed scripts in dependency order, in-process (no child
 // processes — each script's `main()` is exported and invoked here). This is
 // the single command operators run on a fresh deployment to populate
 // everything (districts, schools, teachers, mentors, pairings, cycles, plus
@@ -18,6 +18,9 @@
 //   3. seed_forms_mentee      — 4 mentee-audience feedback templates
 //   4. seed_forms_observation — 3 observation templates onto OBS-2026-001
 //   5. seed_forms_misc        — school-visit + endline forms
+//   6. seed_grading           — the default grade scales (student, quiz,
+//                               observation) and the default observation
+//                               rubric, by name; never over an admin's edits
 //
 // Idempotent: every sub-script gates inserts on natural keys, so re-running
 // `seed:all` against a populated database is a fast no-op.
@@ -35,6 +38,7 @@ import { main as seedFormsMentor } from "./seed_forms_mentor.js";
 import { main as seedFormsMentee } from "./seed_forms_mentee.js";
 import { main as seedFormsObservation } from "./seed_forms_observation.js";
 import { main as seedFormsMisc } from "./seed_forms_misc.js";
+import { main as seedGrading } from "./seed_grading.js";
 
 interface Phase {
   name: string;
@@ -47,6 +51,7 @@ const PHASES: Phase[] = [
   { name: "seed_forms_mentee", run: seedFormsMentee },
   { name: "seed_forms_observation", run: seedFormsObservation },
   { name: "seed_forms_misc", run: seedFormsMisc },
+  { name: "seed_grading", run: seedGrading },
 ];
 
 async function main(): Promise<void> {

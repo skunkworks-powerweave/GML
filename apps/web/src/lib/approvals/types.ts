@@ -29,6 +29,13 @@ export type ApprovalHandler = {
   /** Roles that may decide this kind of item at all. */
   deciderRoles: readonly RoleName[];
   /**
+   * The decisions this kind of item takes, when not all three: a teach-back is
+   * approved or sent back, never rejected; an account request is approved or
+   * rejected, never sent back. decideApproval refuses any other, and the
+   * decision form offers only these (decisionsFor in ./index.ts).
+   */
+  decisions?: readonly ApprovalDecision[];
+  /**
    * May `actor` submit this item? Owner checks live here (a teacher submits
    * her own session only). Return false to refuse.
    */

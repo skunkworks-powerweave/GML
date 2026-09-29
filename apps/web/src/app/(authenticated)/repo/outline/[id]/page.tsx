@@ -4,12 +4,15 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
-import { asc, eq, inArray, desc } from "drizzle-orm";
+import { and, asc, eq, inArray, desc } from "drizzle-orm";
 import { db } from "@gml/db";
 import { uuidOrNotFound } from "@/lib/ids";
 import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
+import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { mayOpenOutline, repoScope, sessionsWhere } from "@/lib/teaching/visibility";
 import {
   courseOutlines,
   outlineLessons,
@@ -46,9 +49,16 @@ const SESSION_STATUS_CHIP: Record<string, string> = {
 export default async function RepoOutlineDetailPage({ params }: { params: Promise<{ id: string }> }) {
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
+  const actor = actorFrom(await auth());
+  if (!actor) redirect("/login");
 
   const [outline] = await db.select().from(courseOutlines).where(eq(courseOutlines.id, id)).limit(1);
   if (!outline) notFound();
+  // A teacher opens an approved programme outline or her own plan; another
+  // teacher's plan (and a programme outline not yet approved) answers 404, and
+  // the sessions listed under it are her own (lib/teaching/visibility.ts).
+  const scope = await repoScope(db, actor);
+  if (!mayOpenOutline(scope, outline)) notFound();
 
   const [subject] = await db.select().from(subjects).where(eq(subjects.id, outline.subjectId)).limit(1);
   const owner = outline.ownerTeacherId
@@ -81,7 +91,7 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
         .from(classroomSessions)
         .leftJoin(schools, eq(classroomSessions.schoolId, schools.id))
         .leftJoin(teachers, eq(classroomSessions.teacherId, teachers.id))
-        .where(inArray(classroomSessions.outlineLessonId, lessonIds))
+        .where(and(inArray(classroomSessions.outlineLessonId, lessonIds), sessionsWhere(scope)))
         .orderBy(desc(classroomSessions.scheduledDate))
         .limit(20)
     : [];
@@ -132,6 +142,13 @@ export default async function RepoOutlineDetailPage({ params }: { params: Promis
                 })
               : t("outline.summary", { sessions: outline.sessionsCount, grade: outline.grade, term: outline.term })}
           </p>
+          {/* A teacher's plan is visible before a programme admin approves
+              it, labelled as such (design: "Before approval"). */}
+          {outline.approvalStatus !== "approved" ? (
+            <div style={{ marginTop: 8 }}>
+              <span className="chip chip-saffron">{enumLabel(t, "approval", outline.approvalStatus)}</span>
+            </div>
+          ) : null}
         </div>
       </div>
 

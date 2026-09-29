@@ -170,7 +170,7 @@ test("migrate.ts asks for TLS", async () => {
   ]);
 });
 
-for (const seed of ["seed", "seed_forms_mentor", "seed_forms_mentee", "seed_forms_observation", "seed_forms_misc"]) {
+for (const seed of ["seed", "seed_forms_mentor", "seed_forms_mentee", "seed_forms_observation", "seed_forms_misc", "seed_grading"]) {
   test(`${seed}.ts main() asks for TLS (seed_all.ts runs it on every deploy)`, async () => {
     await assertAsksForTls(`packages/db/src/scripts/${seed}.ts`, () =>
       callExport(`packages/db/src/scripts/${seed}.ts`, "main"),

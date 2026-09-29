@@ -39,8 +39,10 @@ import {
   quizResults,
   scormResults,
   STAFF_ROW_LIMIT,
+  type AttendanceStatus,
   type StaffFilter,
 } from "@/lib/rtt/progress";
+import { isAttendanceStatus } from "@/lib/rtt/attendance";
 import { formatDuration, statusChip, statusLabel } from "@/lib/scorm/format";
 
 export const dynamic = "force-dynamic";
@@ -50,8 +52,11 @@ export async function generateMetadata(): Promise<Metadata> {
   return { title: t("progress.metaTitle") };
 }
 
-const STATUS_CHIP: Record<string, string> = {
+// Every attendance_status, "late" included (migration 0043): the record's type
+// makes a status without a chip a compile error.
+const STATUS_CHIP: Record<AttendanceStatus, string> = {
   present: "chip chip-lichen",
+  late: "chip chip-saffron",
   absent: "chip chip-rust",
   excused: "chip",
 };
@@ -71,9 +76,9 @@ export default async function RttProgressPage({
   const intl = INTL_LOCALE[(await getLocale()) as Locale];
   const fmtDate = (d: Date | null) =>
     d ? new Date(d).toLocaleDateString(intl, { day: "numeric", month: "short", year: "numeric" }) : t("common.unscheduled");
-  // attendance_status (present / absent / excused) -> its label.
-  const attendanceLabel = (status: string) =>
-    ["present", "absent", "excused"].includes(status) ? t(`attendance.${status}`) : status;
+  // attendance_status -> its label (rtt.attendance.<status>), from the enum
+  // itself: a hard-coded list here showed a "late" mark as the raw value.
+  const attendanceLabel = (status: string) => (isAttendanceStatus(status) ? t(`attendance.${status}`) : status);
   const subjectId = isUuid(sp.subject) ? sp.subject : null;
 
   const isAdmin = actor.role === "programme_admin" || actor.role === "super_admin";
@@ -338,7 +343,7 @@ export default async function RttProgressPage({
                     </td>
                     <td className="mono" style={{ fontSize: 12 }}>{fmtDate(r.scheduledAt)}</td>
                     <td>
-                      <span className={STATUS_CHIP[r.status] ?? "chip"}>{attendanceLabel(r.status)}</span>
+                      <span className={STATUS_CHIP[r.status]}>{attendanceLabel(r.status)}</span>
                     </td>
                   </tr>
                 ))}

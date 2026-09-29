@@ -21,6 +21,8 @@ import {
   classes,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { andAlso, outlinesWhere, repoScope, sessionsWhere } from "@/lib/teaching/visibility";
 import { uuidOrNotFound } from "@/lib/ids";
 import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 
@@ -55,6 +57,15 @@ export default async function RepoSubjectDetailPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  // The subject is reference data and stays visible to everyone. For a
+  // teacher, what hangs off it is her own: approved programme outlines and her
+  // plans, her sessions -- and no list of the other teachers who teach it
+  // (lib/teaching/visibility.ts). Other roles: as before.
+  const scope = await repoScope(db, actor);
+  const ownOutlines = outlinesWhere(scope);
+  const ownSessions = sessionsWhere(scope);
   const t = await getTranslations("repo");
   const intl = await repoIntlLocale();
 
@@ -80,7 +91,7 @@ export default async function RepoSubjectDetailPage({
         status: courseOutlines.status,
       })
       .from(courseOutlines)
-      .where(eq(courseOutlines.subjectId, id))
+      .where(and(eq(courseOutlines.subjectId, id), ownOutlines))
       .orderBy(asc(courseOutlines.grade), asc(courseOutlines.term)),
     db
       .select({
@@ -97,7 +108,7 @@ export default async function RepoSubjectDetailPage({
       .leftJoin(classes, eq(classroomSessions.classId, classes.id))
       .leftJoin(schools, eq(classroomSessions.schoolId, schools.id))
       .leftJoin(teachers, eq(classroomSessions.teacherId, teachers.id))
-      .where(eq(classroomSessions.subjectId, id))
+      .where(and(eq(classroomSessions.subjectId, id), ownSessions))
       .orderBy(desc(classroomSessions.scheduledDate))
       .limit(8),
     db
@@ -114,28 +125,31 @@ export default async function RepoSubjectDetailPage({
       .where(and(eq(resourceSubjects.subjectId, id), eq(resources.active, true)))
       .orderBy(desc(resources.updatedAt))
       .limit(40),
-    db
-      .select({
-        id: teachers.id,
-        fullName: teachers.fullName,
-        hindiName: teachers.hindiName,
-        schoolCode: schools.code,
-        sessionsCount: sql<number>`COUNT(${classroomSessions.id})::int`.as("sessions_count"),
-      })
-      .from(classroomSessions)
-      .innerJoin(teachers, eq(classroomSessions.teacherId, teachers.id))
-      .leftJoin(schools, eq(teachers.schoolId, schools.id))
-      .where(eq(classroomSessions.subjectId, id))
-      .groupBy(teachers.id, teachers.fullName, teachers.hindiName, schools.code)
-      .orderBy(desc(sql`COUNT(${classroomSessions.id})`))
-      .limit(12),
+    // Who else teaches it is not a teacher's to read: not queried for her.
+    scope.own
+      ? []
+      : db
+          .select({
+            id: teachers.id,
+            fullName: teachers.fullName,
+            hindiName: teachers.hindiName,
+            schoolCode: schools.code,
+            sessionsCount: sql<number>`COUNT(${classroomSessions.id})::int`.as("sessions_count"),
+          })
+          .from(classroomSessions)
+          .innerJoin(teachers, eq(classroomSessions.teacherId, teachers.id))
+          .leftJoin(schools, eq(teachers.schoolId, schools.id))
+          .where(eq(classroomSessions.subjectId, id))
+          .groupBy(teachers.id, teachers.fullName, teachers.hindiName, schools.code)
+          .orderBy(desc(sql`COUNT(${classroomSessions.id})`))
+          .limit(12),
   ]);
 
   // Total counts (separate from the 8/40-row preview slices above).
   const totalsRows = await db
     .select({
-      outlinesTotal: sql<number>`(SELECT COUNT(*)::int FROM ${courseOutlines} WHERE ${courseOutlines.subjectId} = ${id})`,
-      sessionsTotal: sql<number>`(SELECT COUNT(*)::int FROM ${classroomSessions} WHERE ${classroomSessions.subjectId} = ${id})`,
+      outlinesTotal: sql<number>`(SELECT COUNT(*)::int FROM ${courseOutlines} WHERE ${courseOutlines.subjectId} = ${id}${andAlso(ownOutlines)})`,
+      sessionsTotal: sql<number>`(SELECT COUNT(*)::int FROM ${classroomSessions} WHERE ${classroomSessions.subjectId} = ${id}${andAlso(ownSessions)})`,
       readingsTotal: sql<number>`(SELECT COUNT(*)::int FROM ${resourceSubjects} WHERE ${resourceSubjects.subjectId} = ${id})`,
     })
     .from(subjects)
@@ -283,7 +297,9 @@ export default async function RepoSubjectDetailPage({
         </SectionCard>
 
         {/* Recent sessions */}
-        <SectionCard title={t("subject.recentTitle", { count: sessionsTotal })}>
+        <SectionCard
+          title={scope.own ? t("own.sessionsTitle", { count: sessionsTotal }) : t("subject.recentTitle", { count: sessionsTotal })}
+        >
           <table className="t">
             <thead>
               <tr>
@@ -349,7 +365,11 @@ export default async function RepoSubjectDetailPage({
         </SectionCard>
 
         {/* Two-column: Readings + Teachers */}
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <section
+          className={
+            scope.own ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"
+          }
+        >
           <SectionCard title={t("subject.readingTitle", { count: readingsTotal })}>
             <table className="t">
               <thead>
@@ -405,72 +425,74 @@ export default async function RepoSubjectDetailPage({
             </table>
           </SectionCard>
 
-          <SectionCard
-            title={t("subject.teachersTitle", { count: teacherRows.length })}
-            sub={t("subject.teachersSub")}
-          >
-            {teacherRows.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
-                {t("subject.noTeachers")}
-              </div>
-            ) : (
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 0,
-                }}
-              >
-                {teacherRows.map((tc) => (
-                  <li
-                    key={tc.id}
-                    style={{
-                      padding: "9px 14px",
-                      borderBottom: "1px solid var(--line)",
-                      fontSize: 13,
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 8,
-                      alignItems: "baseline",
-                    }}
-                  >
-                    <span>
-                      <span style={{ fontWeight: 500 }}>{tc.fullName}</span>
-                      {tc.hindiName ? (
-                        <span
-                          style={{
-                            fontFamily: "var(--deva)",
-                            color: "var(--ink-3)",
-                            marginLeft: 8,
-                            fontSize: 12,
-                          }}
-                        >
-                          {tc.hindiName}
-                        </span>
-                      ) : null}
-                      {tc.schoolCode ? (
-                        <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: 8 }}>
-                          · {tc.schoolCode}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span
-                      className="mono"
+          {scope.own ? null : (
+            <SectionCard
+              title={t("subject.teachersTitle", { count: teacherRows.length })}
+              sub={t("subject.teachersSub")}
+            >
+              {teacherRows.length === 0 ? (
+                <div style={{ padding: 24, fontSize: 13, color: "var(--ink-3)", textAlign: "center" }}>
+                  {t("subject.noTeachers")}
+                </div>
+              ) : (
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 0,
+                  }}
+                >
+                  {teacherRows.map((tc) => (
+                    <li
+                      key={tc.id}
                       style={{
-                        fontSize: 11,
-                        color: "var(--ink-3)",
+                        padding: "9px 14px",
+                        borderBottom: "1px solid var(--line)",
+                        fontSize: 13,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        alignItems: "baseline",
                       }}
                     >
-                      {t("subject.teacherSessions", { count: tc.sessionsCount })}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SectionCard>
+                      <span>
+                        <span style={{ fontWeight: 500 }}>{tc.fullName}</span>
+                        {tc.hindiName ? (
+                          <span
+                            style={{
+                              fontFamily: "var(--deva)",
+                              color: "var(--ink-3)",
+                              marginLeft: 8,
+                              fontSize: 12,
+                            }}
+                          >
+                            {tc.hindiName}
+                          </span>
+                        ) : null}
+                        {tc.schoolCode ? (
+                          <span style={{ fontSize: 11, color: "var(--ink-3)", marginLeft: 8 }}>
+                            · {tc.schoolCode}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span
+                        className="mono"
+                        style={{
+                          fontSize: 11,
+                          color: "var(--ink-3)",
+                        }}
+                      >
+                        {t("subject.teacherSessions", { count: tc.sessionsCount })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </SectionCard>
+          )}
         </section>
       </div>
     </div>

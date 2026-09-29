@@ -1,7 +1,9 @@
 // /repo/class/[id]/learners — PII-gated full roster (SM-9).
 //
 // Rules:
-//   1. requireRole(["super_admin","programme_admin"]) — anyone else → /forbidden
+//   1. requireRole(["super_admin","programme_admin"]) — anyone else → /forbidden,
+//      except a teacher: she reads the roster of a class she teaches, limited
+//      to her own students (lib/teaching/visibility.ts); any other class is 404
 //   2. recordAudit({action:"learners.view", ...}) fires BEFORE the DB read on every render
 //      so the audit row exists even if the SELECT later errors.
 //   3. The page reads learners.name + guardian + age + attendance% (the PII columns)
@@ -17,6 +19,9 @@ import { classes, learners, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { uuidOrNotFound } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
+import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { learnersWhere, mayOpenClass, repoScope } from "@/lib/teaching/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +35,15 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
   const id = uuidOrNotFound((await params).id);
 
   // SM-9 step 1: gate on role. Non-privileged callers never reach the audit hook OR the DB.
-  await requireRole(["super_admin", "programme_admin"]);
+  // A teacher is let through to the ownership check below, which answers 404
+  // for any class she does not teach before anything is read or audited.
+  const signedIn = await auth();
+  const actor = actorFrom(
+    signedIn?.user?.role === "teacher" ? signedIn : await requireRole(["super_admin", "programme_admin"]),
+  );
+  if (!actor) notFound();
+  const scope = await repoScope(db, actor);
+  if (!mayOpenClass(scope, id)) notFound();
 
   const [cls] = await db.select().from(classes).where(eq(classes.id, id)).limit(1);
   if (!cls) notFound();
@@ -58,7 +71,7 @@ export default async function RepoClassLearnersPage({ params }: { params: Promis
       active: learners.active,
     })
     .from(learners)
-    .where(and(eq(learners.classId, id), isNull(learners.deletedAt)))
+    .where(and(eq(learners.classId, id), isNull(learners.deletedAt), learnersWhere(scope, id)))
     .orderBy(asc(learners.rollNumber), asc(learners.name))
     .limit(80);
 

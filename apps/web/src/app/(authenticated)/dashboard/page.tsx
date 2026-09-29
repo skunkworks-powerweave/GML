@@ -68,6 +68,8 @@ import { countOpenAssessments } from "@/lib/rtt/assessments";
 import { pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 import { greetingKey, PROGRAMME_TIME_ZONE } from "./greeting";
 import { FieldMapSection } from "./FieldMap";
+// A teacher's own records (teaching-records design): the "My teaching" card.
+import { myTeachingCard } from "../teaching/_components/MyTeachingCard";
 
 export const dynamic = "force-dynamic";
 
@@ -877,6 +879,8 @@ export default async function DashboardPage() {
         </section>
 
         {showFieldMap ? <FieldMapSection schools={fieldMapSchools} /> : null}
+
+        {role === "teacher" ? await myTeachingCard(session.user.id) : null}
       </div>
     </div>
   );

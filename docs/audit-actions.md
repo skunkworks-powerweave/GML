@@ -150,20 +150,51 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | `admin.row.delete` | A single row was deleted (soft or hard, depending on the entity) | `entity`, `rowId`, `actorId` |
 | `admin.row.bulk_delete` | The bulk-select + delete affordance on a grid page deleted N rows in one transaction (spec 157) | `entity`, `actorId`, `rowIds` (array), `count` |
 
+## grading_scales.* / grading_bands.* / observation_rubrics.* / rubric_criteria.* / teacher_classes.* / assessments.* / quizzes.* / approvals.* / account_requests.* — the teaching-records data tables' CSV
+
+The data tables added for teaching records (`/admin/data/<slug>`, `apps/web/src/admin/entities/`) write their rows through `admin.row.*` above; their CSV import and export are audited per table, under the entity's `auditName` where its slug has a hyphen (`grading-scales` -> `grading_scales`). `entity_type` is the slug, `user_id` the administrator (`programme_admin` or `super_admin`). The students' attendance and marks tables are under `learners.*` below (SM-9). `approvals` and `account-requests` are read-only lists: they export, and every write, the import included, is refused.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `grading_scales.bulk_import` | A grade-scales CSV was imported (`/api/admin/data/grading-scales/import`); an `id` column updates those rows. `entity_type` `grading-scales` | `inserted`, `updated`, `skipped`, `updates` (per updated row, `changes` from/to), `updatesTruncated` (only past 200 updates) |
+| `grading_bands.bulk_import` | A grade-bands CSV was imported. `entity_type` `grading-bands` | `inserted`, `updated`, `skipped`, `updates`, `updatesTruncated` |
+| `observation_rubrics.bulk_import` | An observation-rubrics CSV was imported. `entity_type` `observation-rubrics` | `inserted`, `updated`, `skipped`, `updates`, `updatesTruncated` |
+| `rubric_criteria.bulk_import` | A rubric-criteria CSV was imported. `entity_type` `rubric-criteria` | `inserted`, `updated`, `skipped`, `updates`, `updatesTruncated` |
+| `teacher_classes.bulk_import` | A teachers' classes CSV was imported. `entity_type` `teacher-classes` | `inserted`, `updated`, `skipped`, `updates`, `updatesTruncated` |
+| `assessments.bulk_import` | A tests CSV was imported. `entity_type` `assessments` | `inserted`, `updated`, `skipped`, `updates`, `updatesTruncated` |
+| `quizzes.bulk_import` | A quizzes (settings) CSV was imported. `entity_type` `quizzes` | `inserted`, `updated`, `skipped`, `updates`, `updatesTruncated` |
+| `grading_scales.bulk_export` | The grade-scales CSV was downloaded (`/api/admin/data/grading-scales/export`). `entity_type` `grading-scales` | `rowCount`, `filename`, `truncated` |
+| `grading_bands.bulk_export` | The grade-bands CSV was downloaded. `entity_type` `grading-bands` | `rowCount`, `filename`, `truncated` |
+| `observation_rubrics.bulk_export` | The observation-rubrics CSV was downloaded. `entity_type` `observation-rubrics` | `rowCount`, `filename`, `truncated` |
+| `rubric_criteria.bulk_export` | The rubric-criteria CSV was downloaded. `entity_type` `rubric-criteria` | `rowCount`, `filename`, `truncated` |
+| `teacher_classes.bulk_export` | The teachers' classes CSV was downloaded. `entity_type` `teacher-classes` | `rowCount`, `filename`, `truncated` |
+| `assessments.bulk_export` | The tests CSV was downloaded. `entity_type` `assessments` | `rowCount`, `filename`, `truncated` |
+| `quizzes.bulk_export` | The quizzes (settings) CSV was downloaded. `entity_type` `quizzes` | `rowCount`, `filename`, `truncated` |
+| `approvals.bulk_export` | The approvals history CSV was downloaded (`/api/admin/data/approvals/export`). `entity_type` `approvals` | `rowCount`, `filename`, `truncated` |
+| `account_requests.bulk_export` | The account-requests CSV (names, addresses and phone numbers of applicants) was downloaded. `entity_type` `account-requests` | `rowCount`, `filename`, `truncated` |
+
 ## learners.* / mentors.* — SM-9 PII reads and bulk exports
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `learners.view` | A single class's learners list was rendered on `/repo/class/[id]/learners` (SM-9 — every learner-PII read writes an audit row) | `actorId`, `classId`, `rowCount` |
-| `learners.bulk_view` | The all-learners surface `/repo/students` rendered (multi-class scan) | `actorId`, `filterApplied`, `rowCount` |
+| `learners.view` | A single class's learners list was rendered on `/repo/class/[id]/learners` (SM-9 — every learner-PII read writes an audit row), by a `programme_admin` / `super_admin`, or by a teacher for a class she teaches (her own students only; any other class answers 404 and writes nothing). `entity_type` `class`, `entity_id` the class, `user_id` the reader | `route`, `schoolId`, `grade` |
+| `learners.bulk_view` | The all-learners surface `/repo/students` rendered (multi-class scan) — for a teacher, her own students only. `entity_type` `all`, `user_id` the reader | `piiAudited`, `rowCount`, `page`, `schoolFilter`, `qFilter` |
+| `learners.search` | `/repo/students` rendered with a name search (`?q=`); one row per reader, search and hour (deduplicated), beside that render's `learners.bulk_view` | `q`, `resultCount`, `__dedupKey` (the reader and search it deduplicates on) |
 | `learners.bulk_export` | A `super_admin` downloaded the learners CSV via `/api/admin/learners/export` (SM-9 bulk-export gate) | `actorId`, `rowCount`, `filterApplied` |
 | `mentors.bulk_export` | A `super_admin` downloaded the mentors CSV via `/api/admin/data/mentors/export` (spec 160) | `actorId`, `rowCount`, `filterApplied` |
+| `session_attendance.view` | The students' attendance data table `/admin/data/session-attendance` rendered (SM-9: its rows and pickers name children). `entity_type` `session-attendance`, `user_id` the reader | `rowCount`, `page`, `filters` (the filters applied), `skippedFilters` (those that could not apply) |
+| `assessment_marks.view` | The students' marks data table `/admin/data/assessment-marks` rendered (SM-9). `entity_type` `assessment-marks`, `user_id` the reader | `rowCount`, `page`, `filters`, `skippedFilters` |
+| `session_attendance.bulk_export` | A `programme_admin` or `super_admin` downloaded the students' attendance CSV (`/api/admin/data/session-attendance/export`). `entity_type` `session-attendance` | `rowCount`, `filename`, `truncated` |
+| `assessment_marks.bulk_export` | A `programme_admin` or `super_admin` downloaded the students' marks CSV (`/api/admin/data/assessment-marks/export`). `entity_type` `assessment-marks` | `rowCount`, `filename`, `truncated` |
+| `session_attendance.bulk_import` | A `programme_admin` or `super_admin` imported a students' attendance CSV; every row it adds or updates is stamped with the importer as `marked_by`. `entity_type` `session-attendance` | `inserted`, `updated`, `skipped`, `updates` (field names changed per updated row, never values), `updatesTruncated` (only past 200 updates) |
+| `assessment_marks.bulk_import` | A `programme_admin` or `super_admin` imported a students' marks CSV. `entity_type` `assessment-marks` | `inserted`, `updated`, `skipped`, `updates` (field names changed per updated row), `updatesTruncated` (only past 200 updates) |
 
 ## resource.* / video.* — media playback
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
 | `resource.pdf.view` | A PDF resource was opened: written when `/repo/resource/[id]/view` renders (spec 087), and again by `/api/media/pdf/[id]` each time the viewer fetches the file, before any byte is sent. `entity_type` `resource`, `entity_id` the resource id, `user_id` the viewer. The viewer's in-browser confirmation is its own action, `resource.view.client_ping` | `kind` (the resource's kind), `fileKey` (its Storage object key), `piiAudited` (false; the page render only) |
+| `resource.pdf.uploaded` | A `programme_admin` or `super_admin` uploaded a PDF from a resource's form in the data tables (`POST /api/admin/data/resources/upload`); it was checked (a whole PDF, at most 9 MiB) and stored in the `pdfs` bucket the viewer reads. The row the key is saved into is audited separately, as `admin.row.create` / `admin.row.update`, when the form is saved. Refused uploads store nothing and write nothing. `entity_type` `resource`, no `entity_id` (the row may not exist yet), `user_id` the admin | `fileKey` (the new Storage object key), `bytes`, `field` (the form field, `fileKey`) |
 | `resource.view.client_ping` | PdfViewer's one keepalive POST to `/api/audit/resource-view` when it first paints a document (spec 099): the viewer really rendered it, as against a page that rendered on the server and never loaded. `entity_type` `resource`, `entity_id` the resource id (not looked up), `user_id` the session user, never a viewer the client names. At most 30 per user per minute: over that the POST is refused with 429 and writes nothing, and nothing is written while the limiter is unavailable (503) | `beacon` (always true) |
 | `video.view` | A user landed on `/videos/[id]` and the HLS player started loading | `videoId`, `userId`, `quality` ("480p" / "720p") |
 | `video.context.attached` | The uploader attached one of her own unlinked (`generic`) videos to a cycle, meeting or quarterly slot from `/uploads`. `entity_type` `video_submission` | `contextType`, `contextId`, `quarter` (quarterly videos only, else null) |
@@ -176,7 +207,9 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 | `observation.pre_form.submitted` | The pre-cycle form was submitted by the teacher being observed | `cycleId`, `actorId` |
 | `observation.observer_form.submitted` | The observer (mentor / admin) submitted their observation notes | `cycleId`, `actorId` |
 | `observation.post_form.submitted` | The post-cycle reflection form was submitted by the teacher | `cycleId`, `actorId` |
-| `observation.signed_off` | The cycle was marked complete (all three forms submitted + sign-off) | `cycleId`, `actorId` |
+| `observation.signed_off` | The cycle was marked complete: its `observation_signoff` approval request was approved (Sign off on the cycle page, or `/approvals`), moving it post_submitted → complete. Written by the approval handler (`lib/observation/cycle-signoff.ts`); this row is the "signed by" record. `entity_type` `observation_cycle`, `user_id` the signer | `code`, `from`, `to`, `signedByUserId`, `signedAt` (ISO timestamp) |
+| `observation.cycle.sent_back` | The cycle's sign-off request was answered with changes requested or rejected (Send back on the cycle page, or `/approvals`), moving it post_submitted → observed so the teacher can revise her post-observation form. `entity_type` `observation_cycle`, `user_id` the approver; the comment itself is on the approvals row, not here | `code`, `from`, `to`, `decision` ("changes_requested" / "rejected"), `commentLength` |
+| `observation.scores.saved` | The observer (or a mentor / admin) saved the cycle's scored rubric: with the observer form, or revised afterwards while the cycle is observed or post_submitted. `entity_type` `observation_cycle`, `user_id` the scorer | `code`, `rubricId`, `criteria` (how many were scored), `total`, `max` |
 | `observation.note.added` | A free-text note was attached to the cycle outside the formal forms | `cycleId`, `actorId`, `noteId`, `bodyLength` |
 
 ## mentor.* / pairing.* — mentorship lifecycle (spec 061)
@@ -191,9 +224,19 @@ The webhook (`apps/web/src/app/api/webhooks/whatsapp/route.ts`) records each vid
 
 ## teach_back.* — teach-back review (spec 097)
 
+A teach-back is reviewed through the approvals queue (`lib/rtt/teach-back.ts`):
+the upload's completion sends it for review (`approval.submitted`), and the
+decision is an `approval.decided` row as well as the row below.
+
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `teach_back.reviewed` | A mentor / admin reviewed a teach-back submission and set its grade | `teachBackId`, `actorId`, `grade` |
+| `teach_back.reviewed` | A reviewer approved a teach-back or requested changes to it from `/rtt/teach-back` (`POST /api/teach-back/[id]/review`): a mentor for her own mentees only, an observer, a `programme_admin` or a `super_admin`. Only a playable clip, and only one no decision has been taken on. `entity_type` `video_submission`, `entity_id` the video, `user_id` the reviewer. A clip with no review request (sent by WhatsApp, finished by the upload reconciler, or from before requests existed) has one created on its teacher's behalf and decided in the same step | `approvalId`, `decision` ("approved" / "changes_requested"), `created` (true when this review created the request) |
+
+## rtt.* — RTT attendance (`/attendance`)
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `rtt.attendance.marked` | A `programme_admin` or `super_admin` saved teachers' attendance at an RTT session on `/attendance/[rttSessionId]` and at least one mark changed (a save that changes nothing writes nothing). Only teachers on the session's roster can be marked; each changed row records `marked_by_user_id` and `marked_at`. `entity_type` `rtt_session`, `entity_id` the session, `user_id` who marked | `changed` (rows written), `counts` (how many were set to each status: present / late / absent / excused), `allPresent` (true when "Mark all present" was pressed) |
 
 ## system_settings.* — platform-wide tunables (spec 124)
 
@@ -280,6 +323,80 @@ account requests. `entity_type` is the item type (`session`, `lesson_plan`,
 |---|---|---|
 | `approval.submitted` | An item was sent for approval and its pending request recorded | `approvalId` |
 | `approval.decided` | An approver approved, requested changes or rejected a pending request | `approvalId`, `decision` ("approved" / "changes_requested" / "rejected") |
+
+## account_request.* — "Request an account" (`/request-account`, `/approvals`, `lib/approvals/account-requests.ts`)
+
+`entity_type` is `account_request` and `entity_id` the request. The deciding
+rows are written alongside `approval.decided` (above), which records the
+queue's side of the same decision. No address, phone number or password is
+ever recorded here: the request row holds the person's details, and the
+initial password exists only on the approver's screen.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `account_request.submitted` | The public form recorded a request and its pending approval. `user_id` is null on purpose: the person has no account, and whoever may be signed in on that browser did not make it. A second request from an address that already has one waiting, a filled-in honeypot and a throttled request write nothing | `approvalId`, `requestedRole` ("teacher" / "mentor" / "observer") |
+| `account_request.approved` | A programme admin or super admin approved a request: the login (and, for a teacher, her teacher record at the requested school) was created and the approval recorded. `user_id` is the approver | `approvalId`, `role` (the role the login was given), `createdUserId` |
+| `account_request.rejected` | A programme admin or super admin rejected a request; the reason is on the request and the approval | `approvalId` |
+
+## grading.* — grade scales and observation rubrics (`/admin/grading`, `lib/grading/admin.ts`)
+
+Written by `lib/grading/admin.ts`, which a programme admin or super admin
+reaches from `/admin/grading` (and, for a quiz's scale, the admin quiz editor).
+`user_id` is the administrator. `entity_type` is `grading_scale`,
+`observation_rubric` or `quiz`, and `entity_id` that row. A refused change
+(a name in use, a scale still named by an assessment, a rubric already scored)
+writes nothing.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `grading.scale.saved` | A grade scale was created, renamed, had its bands replaced, or was switched on or off | `change` ("created" / "details" / "bands" / "activated" / "deactivated"), `appliesTo` ("student" / "quiz" / "observation"); with "bands" also `bands` (how many), `gaps` and `overlaps` (how many whole percentages 0-100 have no band / more than one); with "activated" / "deactivated" also `defaultCleared` (true when switching off the default left its kind with none) |
+| `grading.scale.default_set` | A scale became the default for what it grades; the previous default stopped being one in the same transaction | `appliesTo`, `previousId` (the scale that was the default, or null) |
+| `grading.scale.deleted` | A scale and its bands were deleted (only while nothing names it) | `name`, `appliesTo` |
+| `grading.rubric.saved` | An observation rubric was created, renamed or given another scale, had its criteria saved, or was switched on or off | `change` ("created" / "details" / "criteria" / "activated" / "deactivated"); with "created" / "details" also `gradingScaleId` (null = the default observation scale); with "criteria" also `criteria` (how many now), `added`, `removed`; with "activated" / "deactivated" also `defaultCleared` |
+| `grading.rubric.default_set` | A rubric became the one observers score new observations with | `previousId` (the previous default rubric, or null) |
+| `grading.rubric.deleted` | A rubric and its criteria were deleted (refused while any observation has been scored against it) | `name`, `criteria` (how many were deleted with it) |
+| `grading.quiz.scale_set` | The admin quiz editor chose the scale a quiz's results are graded with | `scaleId` (null = the default quiz scale) |
+
+## teaching.marks.* — a teacher's assessments and marks (`/teaching/marks`, `lib/grading/marks.ts`)
+
+Written by `lib/grading/marks.ts` for the teacher who owns the assessment
+(`user_id`); `entity_type` is `assessment` and `entity_id` the assessment.
+Sending it for approval is `approval.submitted`, above. A refused write (not
+her class or assessment, a student not on its roster, a pending or approved
+assessment) writes nothing.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `teaching.marks.assessment_saved` | A teacher created an assessment for one of her classes, or changed its details while it was still editable | `created` (true for a new one), `classId`, `subjectId`, `maxMarks` |
+| `teaching.marks.saved` | A teacher saved her students' marks on an editable assessment | `marked` (students with marks), `absent` (students marked absent), `cleared` (rows removed because the student was left blank) |
+
+## teaching.* — a teacher's own classes, students, lesson plans and sessions (`/teaching`, `lib/teaching/records.ts`)
+
+Written by the server actions under `app/(authenticated)/teaching/{classes,students,plans,sessions}`
+for the signed-in teacher (`user_id`), after they have checked the record is
+hers and, for a plan or session, still editable. A refused write (not her
+class, student, plan or session; a pending or approved record) writes nothing.
+Sending a plan or session for approval is `approval.submitted`, above. Learner
+names, ages and guardians are never written to metadata (SM-9): only ids and
+which fields changed.
+
+| Action | Fires when | Metadata captured |
+|---|---|---|
+| `teaching.class.linked` | A teacher added a class at her school to her list (`teacher_class` is the entity: her link); the school's grade row was reused or created | `classId`, `grade`, `section` (null = every section), `subjectId` (null = any subject), `classCreated` (true when the grade row was new) |
+| `teaching.class.unlinked` | A teacher removed one of her class links (`teacher_class`); the class, its students and its sessions stay | `classId`, `section` |
+| `teaching.student.created` | A teacher added a student to one of her classes (`learner`) | `classId`, `section` |
+| `teaching.student.updated` | A teacher changed one of her students (`learner`); nothing is written when nothing changed | `classId`, `changed` (the field names: name, rollNumber, age, guardian, section) |
+| `teaching.student.removed` | A teacher removed one of her students (`learner`): `deleted_at` is set, history stays | `classId` |
+| `teaching.students.viewed` | Learner names were rendered for a signed-in user (SM-9): `/teaching/students` (entity `teacher`, her teachers row) or a session's attendance list on `/teaching/sessions/[id]` (entity `session`) | `page` ("students" / "session"), `rowCount` |
+| `teaching.plan.created` | A teacher created a lesson plan (`course_outline` owned by her), from scratch or by starting from a programme outline | `subjectId`, `grade`, `term`; when started from a programme outline also `copiedFrom` (the outline) and `lessonCount` (lessons copied) |
+| `teaching.plan.updated` | A teacher changed an editable plan's details (`course_outline`) | `subjectId`, `grade`, `term` |
+| `teaching.plan.deleted` | A teacher deleted an editable plan and its lessons (`course_outline`) | `lessonCount` |
+| `teaching.lesson.saved` | A teacher added a lesson to an editable plan, or changed one (`outline_lesson`) | `outlineId`, `created` (true for a new lesson) |
+| `teaching.lesson.deleted` | A teacher deleted a lesson of an editable plan (`outline_lesson`); the rest are renumbered | `outlineId` |
+| `teaching.lesson.moved` | A teacher moved a lesson up or down (`outline_lesson`); a move past either end writes nothing | `outlineId`, `from`, `to` (sequence numbers) |
+| `teaching.session.created` | A teacher planned a session for one of her classes (`session`, a draft) | `classId`, `subjectId`, `scheduledDate` |
+| `teaching.session.updated` | A teacher changed an editable session (`session`) | `classId`, `subjectId`, `scheduledDate`, `status` |
+| `teaching.attendance.saved` | A teacher saved an editable session's attendance (`session`); the session's counts were recomputed in the same transaction | `present`, `absent`, `late`, `excused` (students marked each way), `attended` (present + late), `total` |
 
 ## Deferred prefixes (reserved but not yet wired)
 

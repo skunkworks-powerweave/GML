@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,6 +69,22 @@ test("proxy.ts matcher covers every authenticated segment, not six prefixes", ()
         `rather than rendering a half-page`,
     );
   }
+});
+
+test("POLICIES names every top-level segment under app/(authenticated)", () => {
+  // A fixed list goes stale: /teaching and /attendance arrived with no rule, so
+  // the proxy let a signed-out visitor through to the page guard and, worse,
+  // skipped the must-change-password redirect (it runs only for a matched
+  // policy) -- an account created with an initial password could use
+  // /teaching before choosing its own. Walk the tree instead. A `_folder` is a
+  // Next private folder, never a URL.
+  const src = read("apps/web/src/proxy.ts");
+  const dir = resolve(root, "apps/web/src/app/(authenticated)");
+  const missing = readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !d.name.startsWith("_"))
+    .map((d) => `/${d.name}`)
+    .filter((seg) => !src.includes(`prefix: "${seg}"`));
+  assert.deepEqual(missing, [], "every signed-in section needs a POLICIES rule");
 });
 
 test("proxy.ts does not decide section gates from a cookie", () => {

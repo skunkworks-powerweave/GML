@@ -116,6 +116,7 @@ export type SubjectProgressRow = {
   readingsTotal: number;
   quizzesPassed: number;
   quizzesTotal: number;
+  /** Sessions she attended: marked present, or late (lib/rtt/attendance.ts ATTENDED). */
   sessionsPresent: number;
   /** Sessions her attendance was taken at. */
   sessionsMarked: number;
@@ -155,7 +156,7 @@ export async function progressBySubject(db: Db, userId: string, subjectWhere?: S
         JOIN ${rttSessions} ON ${rttSessions.id} = ${rttAttendance.rttSessionId}
         JOIN ${teachers} ON ${teachers.id} = ${rttAttendance.teacherId}
         WHERE ${rttSessions.rttSubjectId} = ${s} AND ${teachers.userId} = ${userId}
-          AND ${rttAttendance.status} = 'present'`),
+          AND ${rttAttendance.status} IN ('present', 'late')`),
       sessionsMarked: int(sql`SELECT count(*) FROM ${rttAttendance}
         JOIN ${rttSessions} ON ${rttSessions.id} = ${rttAttendance.rttSessionId}
         JOIN ${teachers} ON ${teachers.id} = ${rttAttendance.teacherId}

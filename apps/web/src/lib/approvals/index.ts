@@ -21,7 +21,7 @@ import "server-only";
 // docs/superpowers/specs/2026-09-28-teaching-records-design.md.
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { approvals, users, type ApprovalDecision, type ApprovalItemType } from "@gml/db/schema";
+import { APPROVAL_DECISIONS, approvals, users, type ApprovalDecision, type ApprovalItemType } from "@gml/db/schema";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { recordAudit } from "@/lib/audit";
 import { notifyLocalized } from "@/lib/notify-localized";
@@ -34,7 +34,7 @@ export type { ItemSummary } from "./types";
 
 export type ApprovalResult =
   | { ok: true; approvalId: string }
-  | { ok: false; error: "not_allowed" | "already_pending" | "not_pending" | "comment_required" | "not_found" };
+  | { ok: false; error: "not_allowed" | "already_pending" | "not_pending" | "comment_required" | "not_found" | "decision_not_allowed" };
 
 /** The notification kind approvals write (lib/notification-kinds.ts). */
 const NOTIFY_KIND = "approval";
@@ -122,6 +122,7 @@ export async function decideApproval(
   const handler = APPROVAL_HANDLERS[row.itemType];
   if (!hasAnyRole(input.actor.role, handler.deciderRoles)) return { ok: false, error: "not_allowed" };
   if (handler.canDecide && !(await handler.canDecide(db, input.actor, row.itemId))) return { ok: false, error: "not_allowed" };
+  if (!decisionsFor(row.itemType).includes(input.decision)) return { ok: false, error: "decision_not_allowed" };
 
   const decided = await db.transaction(async (tx) => {
     const [updated] = await tx
@@ -159,6 +160,11 @@ export async function decideApproval(
     ]);
   }
   return { ok: true, approvalId: row.id };
+}
+
+/** The decisions an item of this type takes (all three unless its handler narrows them). */
+export function decisionsFor(type: ApprovalItemType): readonly ApprovalDecision[] {
+  return APPROVAL_HANDLERS[type].decisions ?? APPROVAL_DECISIONS;
 }
 
 /** The item types `actor` may decide. */

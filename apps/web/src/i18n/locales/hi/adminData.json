@@ -116,7 +116,8 @@
         "status": {
           "present": "उपस्थित",
           "absent": "अनुपस्थित",
-          "excused": "छूट प्राप्त"
+          "excused": "छूट प्राप्त",
+          "late": "देर से"
         }
       }
     },
@@ -257,7 +258,9 @@
         "grade": "कक्षा",
         "term": "टर्म",
         "weeks": "सप्ताह",
-        "status": "स्थिति"
+        "status": "स्थिति",
+        "ownerTeacherId": "ज़िम्मेदार शिक्षक",
+        "approvalStatus": "स्वीकृति"
       },
       "fields": {
         "sessionsCount": "सत्रों की संख्या",
@@ -270,7 +273,17 @@
           "in_progress": "जारी",
           "complete": "पूर्ण",
           "archived": "संग्रहीत"
+        },
+        "approvalStatus": {
+          "draft": "ड्राफ़्ट",
+          "pending": "स्वीकृति लंबित",
+          "approved": "स्वीकृत",
+          "changes_requested": "बदलाव ज़रूरी",
+          "rejected": "स्वीकृत नहीं"
         }
+      },
+      "help": {
+        "ownerTeacherId": "खाली: कार्यक्रम की रूपरेखा। शिक्षक की अपनी पाठ योजना में उसका नाम होता है।"
       }
     },
     "outline-lessons": {
@@ -280,6 +293,11 @@
         "sequence": "#",
         "title": "शीर्षक",
         "week": "सप्ताह"
+      },
+      "fields": {
+        "objectives": "उद्देश्य",
+        "activities": "गतिविधियाँ",
+        "materials": "सामग्री"
       }
     },
     "sessions": {
@@ -294,13 +312,16 @@
         "status": "स्थिति",
         "attendedCount": "उपस्थित",
         "totalCount": "कुल विद्यार्थी",
-        "observed": "अवलोकित"
+        "observed": "अवलोकित",
+        "section": "सेक्शन",
+        "approvalStatus": "स्वीकृति"
       },
       "fields": {
         "outlineLessonId": "रूपरेखा का पाठ",
         "scheduledTime": "निर्धारित घड़ी का समय",
         "durationMin": "अवधि (मिनट)",
-        "observationCycleId": "अवलोकन चक्र"
+        "observationCycleId": "अवलोकन चक्र",
+        "notes": "टिप्पणी"
       },
       "enum": {
         "status": {
@@ -308,7 +329,17 @@
           "in_progress": "जारी",
           "complete": "पूर्ण",
           "cancelled": "रद्द"
+        },
+        "approvalStatus": {
+          "draft": "ड्राफ़्ट",
+          "pending": "स्वीकृति लंबित",
+          "approved": "स्वीकृत",
+          "changes_requested": "बदलाव ज़रूरी",
+          "rejected": "स्वीकृत नहीं"
         }
+      },
+      "help": {
+        "section": "खाली: पूरी कक्षा।"
       }
     },
     "resources": {
@@ -321,7 +352,7 @@
         "active": "सक्रिय"
       },
       "fields": {
-        "fileKey": "फ़ाइल कुंजी",
+        "fileKey": "PDF फ़ाइल",
         "externalUrl": "बाहरी URL",
         "tags": "टैग"
       },
@@ -339,6 +370,9 @@
           "Rubric": "रूब्रिक",
           "Other": "अन्य"
         }
+      },
+      "help": {
+        "fileKey": "PDF यहाँ अपलोड करें, या इसे खाली छोड़कर नीचे वेब लिंक दें।"
       }
     },
     "resource-subjects": {
@@ -361,6 +395,232 @@
         "guardian": "अभिभावक",
         "attendancePct": "उपस्थिति %",
         "active": "सक्रिय"
+      }
+    },
+    "grading-scales": {
+      "label": "ग्रेड स्केल",
+      "columns": {
+        "name": "नाम",
+        "appliesTo": "किसके लिए",
+        "isDefault": "डिफ़ॉल्ट",
+        "active": "सक्रिय",
+        "description": "विवरण"
+      },
+      "help": {
+        "isDefault": "जब कोई परीक्षा, क्विज़ या रूब्रिक अपना स्केल नहीं बताता, तब यही लगता है। हर उपयोग के लिए एक डिफ़ॉल्ट।"
+      },
+      "enum": {
+        "appliesTo": {
+          "student": "विद्यार्थियों के परीक्षा अंक",
+          "quiz": "क्विज़",
+          "observation": "अवलोकन"
+        }
+      }
+    },
+    "grading-bands": {
+      "label": "ग्रेड श्रेणियाँ",
+      "columns": {
+        "scaleId": "स्केल",
+        "label": "ग्रेड",
+        "minPct": "से %",
+        "maxPct": "तक %",
+        "isPass": "उत्तीर्ण माना जाए",
+        "sequence": "क्रम"
+      },
+      "fields": {
+        "description": "विवरण"
+      },
+      "help": {
+        "minPct": "पूरे प्रतिशत। श्रेणी में 'से' और 'तक' दोनों शामिल हैं।"
+      }
+    },
+    "observation-rubrics": {
+      "label": "अवलोकन रूब्रिक (अंकों वाले)",
+      "columns": {
+        "name": "नाम",
+        "gradingScaleId": "ग्रेड स्केल",
+        "isDefault": "डिफ़ॉल्ट",
+        "active": "सक्रिय"
+      },
+      "fields": {
+        "description": "विवरण"
+      },
+      "help": {
+        "gradingScaleId": "अवलोकन का स्केल। खाली: अवलोकन का डिफ़ॉल्ट स्केल।"
+      }
+    },
+    "rubric-criteria": {
+      "label": "रूब्रिक के मानदंड",
+      "columns": {
+        "rubricId": "रूब्रिक",
+        "sequence": "#",
+        "title": "मानदंड",
+        "maxScore": "अधिकतम अंक"
+      },
+      "fields": {
+        "description": "हर स्तर कैसा दिखता है"
+      },
+      "help": {
+        "maxScore": "1 से 10 तक।"
+      }
+    },
+    "teacher-classes": {
+      "label": "शिक्षकों की कक्षाएँ",
+      "columns": {
+        "teacherId": "शिक्षक",
+        "classId": "कक्षा",
+        "section": "सेक्शन",
+        "subjectId": "विषय"
+      },
+      "help": {
+        "section": "खाली: पूरी कक्षा।",
+        "classId": "शिक्षक के अपने विद्यालय की कक्षा।"
+      }
+    },
+    "session-attendance": {
+      "label": "विद्यार्थियों की उपस्थिति (कक्षा सत्र)",
+      "columns": {
+        "sessionId": "सत्र",
+        "learnerId": "विद्यार्थी",
+        "status": "उपस्थिति",
+        "markedByUserId": "किसने दर्ज की",
+        "markedAt": "कब दर्ज की"
+      },
+      "enum": {
+        "status": {
+          "present": "उपस्थित",
+          "absent": "अनुपस्थित",
+          "excused": "छूट प्राप्त",
+          "late": "देर से"
+        }
+      }
+    },
+    "assessments": {
+      "label": "परीक्षाएँ (अंक)",
+      "columns": {
+        "title": "शीर्षक",
+        "teacherId": "शिक्षक",
+        "classId": "कक्षा",
+        "section": "सेक्शन",
+        "subjectId": "विषय",
+        "term": "टर्म",
+        "maxMarks": "पूर्णांक",
+        "assessedOn": "तारीख़",
+        "approvalStatus": "स्वीकृति"
+      },
+      "fields": {
+        "gradingScaleId": "ग्रेड स्केल"
+      },
+      "help": {
+        "gradingScaleId": "विद्यार्थियों के परीक्षा अंकों का स्केल। खाली: डिफ़ॉल्ट स्केल।",
+        "section": "खाली: पूरी कक्षा।"
+      },
+      "enum": {
+        "approvalStatus": {
+          "draft": "ड्राफ़्ट",
+          "pending": "स्वीकृति लंबित",
+          "approved": "स्वीकृत",
+          "changes_requested": "बदलाव ज़रूरी",
+          "rejected": "स्वीकृत नहीं"
+        }
+      }
+    },
+    "assessment-marks": {
+      "label": "विद्यार्थियों के अंक",
+      "columns": {
+        "assessmentId": "परीक्षा",
+        "learnerId": "विद्यार्थी",
+        "marks": "अंक",
+        "absent": "अनुपस्थित",
+        "remark": "टिप्पणी"
+      },
+      "help": {
+        "marks": "अनुपस्थित विद्यार्थी के लिए खाली छोड़ें।"
+      }
+    },
+    "quizzes": {
+      "label": "क्विज़ (सेटिंग्स)",
+      "columns": {
+        "title": "शीर्षक",
+        "slug": "पता",
+        "rttSubjectId": "RTT विषय",
+        "subjectId": "विद्यालय का विषय",
+        "passThreshold": "उत्तीर्ण अंक %",
+        "gradingScaleId": "ग्रेड स्केल",
+        "active": "सक्रिय"
+      },
+      "fields": {
+        "timeLimitSeconds": "समय सीमा (सेकंड)",
+        "maxAttempts": "अनुमत प्रयास"
+      },
+      "help": {
+        "slug": "/quizzes/ के बाद क्विज़ का वेब पता। छोटे अक्षर, अंक और हाइफ़न।",
+        "rttSubjectId": "RTT विषय या विद्यालय का विषय: दोनों में से एक।",
+        "gradingScaleId": "क्विज़ का स्केल। खाली: क्विज़ का डिफ़ॉल्ट स्केल।",
+        "timeLimitSeconds": "60 से 7200 तक। खाली: कोई समय सीमा नहीं।",
+        "maxAttempts": "1 से 20 तक। खाली: कोई सीमा नहीं।",
+        "active": "प्रश्न जुड़ने के बाद ही क्विज़ चालू हो सकता है (उन्हें व्यवस्थापन, क्विज़ में जोड़ें)।"
+      }
+    },
+    "approvals": {
+      "label": "स्वीकृतियाँ (इतिहास)",
+      "columns": {
+        "itemType": "मद",
+        "status": "स्थिति",
+        "submittedByUserId": "भेजने वाले",
+        "submittedAt": "भेजा गया",
+        "decidedByUserId": "निर्णय किसने लिया",
+        "decidedAt": "निर्णय कब",
+        "comment": "निर्णय पर टिप्पणी"
+      },
+      "fields": {
+        "itemId": "मद की ID",
+        "note": "नोट"
+      },
+      "enum": {
+        "itemType": {
+          "lesson_plan": "पाठ योजना",
+          "session": "सत्र",
+          "assessment": "अंक",
+          "teach_back": "टीच-बैक",
+          "observation_signoff": "अवलोकन हस्ताक्षर",
+          "account_request": "खाता अनुरोध"
+        },
+        "status": {
+          "pending": "लंबित",
+          "approved": "स्वीकृत",
+          "changes_requested": "बदलाव ज़रूरी",
+          "rejected": "स्वीकृत नहीं"
+        }
+      }
+    },
+    "account-requests": {
+      "label": "खाता अनुरोध",
+      "columns": {
+        "fullName": "नाम",
+        "email": "ईमेल",
+        "phone": "फ़ोन",
+        "schoolId": "विद्यालय",
+        "requestedRole": "माँगी गई भूमिका",
+        "status": "स्थिति",
+        "createdAt": "अनुरोध की तारीख़",
+        "decidedByUserId": "निर्णय किसने लिया",
+        "decisionReason": "कारण"
+      },
+      "fields": {
+        "message": "संदेश"
+      },
+      "enum": {
+        "requestedRole": {
+          "teacher": "शिक्षक",
+          "mentor": "मेंटर",
+          "observer": "अवलोकनकर्ता"
+        },
+        "status": {
+          "pending": "लंबित",
+          "approved": "स्वीकृत",
+          "rejected": "स्वीकृत नहीं"
+        }
       }
     }
   },
@@ -406,7 +666,11 @@
       "stillReferencedBy": "यह पंक्ति हटाई नहीं जा सकती क्योंकि {entity} के रिकॉर्ड अब भी इससे जुड़े हैं। पहले उन्हें हटाएँ या किसी और पंक्ति से जोड़ें।",
       "locked": "यह पंक्ति अपनी वर्तमान अवस्था में लॉक है और ग्रिड से हटाई नहीं जा सकती।",
       "unknown": "वह कार्रवाई पूरी नहीं हो सकी।"
-    }
+    },
+    "viewRow": "पंक्ति का विवरण",
+    "readOnly": "केवल देखने के लिए: आप यह तालिका देख सकते हैं, यहाँ बदल नहीं सकते।",
+    "emptyReadOnly": "अभी कोई पंक्ति नहीं।",
+    "view": "देखें"
   },
   "write": {
     "missingRowId": "पंक्ति की ID (rowId) नहीं दी गई",
@@ -416,14 +680,29 @@
   "validation": {
     "activeObserver": "कोई सक्रिय अवलोकनकर्ता खाता होना चाहिए",
     "phaseEndsBeforeStart": "कोई चरण अपने आरंभ से पहले समाप्त नहीं हो सकता",
-    "resourceSource": "संसाधन में file_key या external_url में से कोई एक होना चाहिए",
+    "resourceSource": "PDF अपलोड करें या वेब लिंक दें।",
     "httpLink": "http:// या https:// वाला लिंक होना चाहिए",
     "webLink": "वेब लिंक होना चाहिए, जैसे https://meet.google.com/abc-defg-hij",
     "districtOrZone": "ज़िला या ज़ोन में से एक चुनें, दोनों नहीं: ज़ोन पहले से अपने ज़िले में आता है।",
     "isoDate": "तारीख़ YYYY-MM-DD रूप में होनी चाहिए",
     "attendedWithinTotal": "attended_count, total_count से अधिक नहीं हो सकता",
     "uppercaseCode": "बड़े अक्षरों में कोड (जैसे ENG, MAT, EVS)",
-    "gradesOrder": "grades_min ≤ grades_max होना चाहिए"
+    "gradesOrder": "grades_min ≤ grades_max होना चाहिए",
+    "oneDefaultScale": "\"{name}\" इस उपयोग के लिए पहले से डिफ़ॉल्ट है: पहले उसे डिफ़ॉल्ट से हटाएँ",
+    "oneDefaultRubric": "\"{name}\" पहले से डिफ़ॉल्ट रूब्रिक है: पहले उसे डिफ़ॉल्ट से हटाएँ",
+    "bandRange": "'से %' से कम नहीं हो सकता",
+    "scaleFor": {
+      "student": "विद्यार्थियों के परीक्षा अंकों का स्केल होना चाहिए",
+      "quiz": "क्विज़ का स्केल होना चाहिए",
+      "observation": "अवलोकन का स्केल होना चाहिए"
+    },
+    "classAtTeachersSchool": "शिक्षक के अपने विद्यालय की कक्षा होनी चाहिए",
+    "learnerNotInClass": "उसी कक्षा (और सेक्शन) का विद्यार्थी होना चाहिए",
+    "marksOverMaximum": "परीक्षा के पूर्णांक {max} से अधिक नहीं हो सकते",
+    "absentNoMarks": "अनुपस्थित विद्यार्थी के लिए खाली छोड़ें",
+    "quizScope": "RTT विषय या विद्यालय का विषय चुनें: एक, दोनों नहीं",
+    "quizSlug": "केवल छोटे अक्षर, अंक और हाइफ़न, जैसे reading-1",
+    "quizNoQuestions": "प्रश्न जुड़ने के बाद ही क्विज़ चालू हो सकता है: पहले उन्हें व्यवस्थापन, क्विज़ में जोड़ें"
   },
   "zod": {
     "required": "आवश्यक",
@@ -463,7 +742,8 @@
   },
   "guard": {
     "cycleUndeletable": "यह चक्र \"{stage, select, nominated {नामांकित} pre_submitted {अवलोकन-पूर्व फॉर्म जमा} observed {अवलोकित} post_submitted {अवलोकन-पश्चात फॉर्म जमा} complete {पूर्ण} other {{stage}}}\" अवस्था में है और इसके अंतर्गत काम दर्ज है; इसे ग्रिड से हटाया नहीं जा सकता।",
-    "cycleFieldLocked": "यह चक्र \"{stage, select, nominated {नामांकित} pre_submitted {अवलोकन-पूर्व फॉर्म जमा} observed {अवलोकित} post_submitted {अवलोकन-पश्चात फॉर्म जमा} complete {पूर्ण} other {{stage}}}\" अवस्था में है: इसका {field, select, teacherId {शिक्षक} kind {प्रकार} other {अवलोकनकर्ता}} अब बदला नहीं जा सकता।"
+    "cycleFieldLocked": "यह चक्र \"{stage, select, nominated {नामांकित} pre_submitted {अवलोकन-पूर्व फॉर्म जमा} observed {अवलोकित} post_submitted {अवलोकन-पश्चात फॉर्म जमा} complete {पूर्ण} other {{stage}}}\" अवस्था में है: इसका {field, select, teacherId {शिक्षक} kind {प्रकार} other {अवलोकनकर्ता}} अब बदला नहीं जा सकता।",
+    "quizUndeletable": "क्विज़ डेटा तालिका से नहीं हटाया जाता: इससे हर शिक्षार्थी के प्रयास और परिणाम मिट जाएँगे। उसे वापस लेने के लिए सक्रिय को 'नहीं' करें।"
   },
   "references": {
     "classLabel": "{school} · कक्षा {grade}",
@@ -665,12 +945,14 @@
       "selected": "{count, plural, one {# पंक्ति चुनी गई} other {# पंक्तियाँ चुनी गईं}}",
       "clear": "चयन हटाएँ",
       "deleting": "हटा रहे हैं…",
-      "delete": "चुनी गई {count} हटाएँ"
+      "delete": "चुनी गई {count} हटाएँ",
+      "confirmWithEffects": "{count, plural, one {# चुनी गई पंक्ति हटाएँ?} other {# चुनी गई पंक्तियाँ हटाएँ?}}\n\n{effects}\n\nयह वापस नहीं लिया जा सकता।"
     },
     "deleteRow": {
       "rowFallback": "पंक्ति {id}",
       "confirm": "{target} हटाएँ? यह वापस नहीं लिया जा सकता।",
-      "deleting": "हटा रहे हैं…"
+      "deleting": "हटा रहे हैं…",
+      "confirmWithEffects": "{target} हटाएँ?\n\n{effects}\n\nयह वापस नहीं लिया जा सकता।"
     },
     "importCsv": {
       "open": "CSV आयात करें",
@@ -702,7 +984,9 @@
       "viewTitle": "{title} देखें",
       "view": "पंक्ति देखें",
       "yes": "हाँ",
-      "no": "नहीं"
+      "no": "नहीं",
+      "edit": "पंक्ति संपादित करें",
+      "emptyReadOnly": "अभी {entity} में कुछ नहीं।"
     },
     "formEditor": {
       "invalidJson": "JSON सही नहीं है: {error}",
@@ -754,6 +1038,76 @@
       "titleLabel": "शीर्षक (वैकल्पिक; अन्यथा पैकेज का अपना शीर्षक)",
       "sending": "अपलोड और जाँच हो रही है…",
       "submit": "पैकेज अपलोड करें"
+    },
+    "pdfUpload": {
+      "choose": "PDF चुनें",
+      "uploading": "अपलोड हो रहा है…",
+      "uploaded": "अपलोड हो गया: {name}। इसे रखने के लिए पंक्ति सहेजें।",
+      "current": "एक PDF रखी हुई है। बदलने के लिए दूसरी चुनें।",
+      "remove": "PDF हटाएँ",
+      "removed": "सहेजने पर PDF हट जाएगी।",
+      "errors": {
+        "not_pdf": "यह फ़ाइल PDF नहीं है।",
+        "too_large": "PDF {mb} MB से बड़ी है।",
+        "no_file": "पहले एक PDF फ़ाइल चुनें।",
+        "truncated": "PDF पूरी नहीं पहुँची। फिर कोशिश करें।",
+        "storage": "PDF रखी नहीं जा सकी। फिर कोशिश करें।",
+        "forbidden": "आप यहाँ फ़ाइलें अपलोड नहीं कर सकते।",
+        "unknown": "अपलोड नहीं हुआ। फिर कोशिश करें।"
+      }
     }
+  },
+  "deleteEffects": {
+    "alsoRemoves": "इसे हटाने से ये भी हट जाएँगे: {items}।",
+    "alsoUnlinks": "ये बने रहेंगे, पर इनका इससे जुड़ाव हट जाएगा: {items}।",
+    "removes": {
+      "teacher_classes": "शिक्षकों के कक्षा-जुड़ाव",
+      "form_drafts": "न भेजे गए फॉर्म ड्राफ़्ट",
+      "rtt_progress": "शिक्षकों के प्रगति के टिक",
+      "observation_scores": "रूब्रिक के अंक",
+      "resource_subjects": "पठन सामग्री पर विषय के टैग",
+      "session_attendance": "विद्यार्थियों की उपस्थिति",
+      "assessment_marks": "विद्यार्थियों के परीक्षा अंक",
+      "grading_bands": "ग्रेड श्रेणियाँ",
+      "rubric_criteria": "रूब्रिक के मानदंड",
+      "quiz_attempts": "शिक्षार्थियों के क्विज़ प्रयास",
+      "quiz_questions": "क्विज़ के प्रश्न",
+      "quiz_submissions": "शिक्षार्थियों के क्विज़ परिणाम"
+    },
+    "unlinks": {
+      "teachers": {
+        "current_phase_id": "वे शिक्षक जिनका वर्तमान चरण यही है"
+      },
+      "account_requests": {
+        "school_id": "इस विद्यालय वाले खाता अनुरोध"
+      },
+      "course_outlines": {
+        "owner_teacher_id": "उसकी पाठ योजनाएँ (बिना स्वामी के)"
+      },
+      "rtt_sessions": {
+        "rtt_module_id": "इस मॉड्यूल के RTT सत्र"
+      },
+      "sessions": {
+        "observation_cycle_id": "इससे जुड़े कक्षा सत्र",
+        "outline_lesson_id": "इस पाठ पर नियोजित कक्षा सत्र"
+      },
+      "observation_cycles": {
+        "subject_id": "इस विषय के अवलोकन चक्र",
+        "rubric_id": "इस रूब्रिक से अंकित अवलोकन चक्र"
+      },
+      "teacher_classes": {
+        "subject_id": "इस विषय के शिक्षक कक्षा-जुड़ाव"
+      },
+      "assessments": {
+        "grading_scale_id": "इस स्केल वाली परीक्षाएँ (वे डिफ़ॉल्ट स्केल लेंगी)"
+      },
+      "observation_rubrics": {
+        "grading_scale_id": "इस स्केल वाले रूब्रिक (वे डिफ़ॉल्ट स्केल लेंगे)"
+      },
+      "quizzes": {
+        "grading_scale_id": "इस स्केल वाले क्विज़ (वे डिफ़ॉल्ट स्केल लेंगे)"
+      }
+    },
+    "separator": "; "
   }
 }

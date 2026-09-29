@@ -4,13 +4,21 @@ import type { AdminEntity } from "../types";
 
 // Learners — actual children whom teachers teach. **PII-gated under SM-9.**
 // Generic admin grid will call recordAudit('learners.view') on every read.
-// mutateRoles tight to super_admin only; bulk export (spec 022) requires
-// super_admin too and emits `learners.bulk_export`.
+//
+// Programme admins add, edit and delete students (the product owner's
+// decision, 2026-09-28: "Programme admins can also write attendance and
+// students in the data tables"); until then only super_admin could, and the
+// grid offered programme_admin controls that led to /forbidden. Bulk export
+// (spec 022) still requires super_admin and emits `learners.bulk_export`:
+// a whole-table download of children's details is a different act from
+// keeping a class list up to date. Deleting a student also deletes her
+// attendance and test marks (their foreign keys cascade), and the delete's
+// confirmation says so (admin/delete-effects.ts).
 export const learnersEntity: AdminEntity = {
   slug: "learners",
   table: learners,
   readRoles: ["programme_admin", "super_admin"],
-  mutateRoles: ["super_admin"],
+  mutateRoles: ["programme_admin", "super_admin"],
   piiAudited: true,
   displayColumns: [
     { key: "name" },
@@ -40,5 +48,6 @@ export const learnersEntity: AdminEntity = {
   // A class list re-uploaded after a partial import (csv.ts); the roll number
   // tells two children of one name apart when both rows have it.
   duplicateKey: ["classId", "name", "rollNumber"],
+  writeStamp: ({ op }) => (op === "update" ? { updatedAt: new Date() } : {}),
   describeRow: (r) => `learner:${r.name ?? r.id}`,
 };

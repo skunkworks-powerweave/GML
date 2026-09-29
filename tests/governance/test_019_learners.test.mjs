@@ -28,10 +28,13 @@ test("AdminEntity type has `piiAudited` flag", () => {
   assert.match(src, /piiAudited\?\s*:\s*boolean/);
 });
 
-test("learners entity is piiAudited and super_admin-only mutate", () => {
+test("learners entity is piiAudited and written by programme_admin and super_admin", () => {
+  // The product owner's decision (2026-09-28, docs/superpowers/specs/
+  // 2026-09-28-teaching-records-design.md): programme admins write students
+  // in the data tables. The bulk export stays super_admin-only (test_022).
   const src = read("apps/web/src/admin/entities/learners.ts");
   assert.match(src, /piiAudited:\s*true/);
-  assert.match(src, /mutateRoles:\s*\["super_admin"\]/);
+  assert.match(src, /mutateRoles:\s*\["programme_admin", "super_admin"\]/);
 });
 
 test("SM-9 enforcement: admin page calls recordAudit when piiAudited", () => {

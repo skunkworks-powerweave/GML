@@ -33,12 +33,11 @@
 //
 // SM-9: learner rows are NOT exposed here. The endpoint only walks
 // teachers / schools / classes / subjects / outlines / observation cycles
-// / mentor pairings / classroom sessions. If a future spec adds learners,
-// the role gate documented in the spec body (super_admin/programme_admin)
-// belongs HERE, not in the client.
+// / mentor pairings / classroom sessions / reading material / RTT subjects.
+// If a future spec adds learners, the role gate documented in the spec body
+// (super_admin/programme_admin) belongs HERE, not in the client.
 //
-// PER-ACTOR SCOPING -- two of the eight branches are scoped, six are not, and
-// the split is deliberate. Observation cycles and mentor pairings come from
+// PER-ACTOR SCOPING. Observation cycles and mentor pairings come from
 // lib/gated-reads.ts under the caller's SectionAccess: nothing of either kind
 // unless the caller holds that section's gate grant, and then only the rows
 // cycleVisibilityFilter / pairingVisibilityFilter allow -- the same two
@@ -47,8 +46,17 @@
 // press Cmd+K, type "OBS", and read other teachers' cycle codes, topics and
 // real UUIDs, or type a colleague's name and get "Mentor X -> Teacher Y" with
 // the pairing UUID, without ever entering a section password (no /api prefix
-// is gated by proxy.ts). The other six branches mirror /repo, which is
-// programme-wide directory data by design, and stay unscoped.
+// is gated by proxy.ts). The other branches mirror /repo, which is
+// programme-wide directory data by design -- for staff.
+//
+// A TEACHER sees her own records only (lib/teaching/visibility.ts, the same
+// predicates the /repo pages use): herself, her school, the classes she
+// teaches, her sessions, approved programme outlines and her own plans. Other
+// teachers, their sessions, classes and plans never come back to her.
+// Reference data stays searchable for everyone: subjects, reading material
+// (resources) and RTT subjects -- those in the searcher's RTT scope
+// (lib/rtt/scope.ts): for a teacher, the programme-wide subjects and her own
+// district's and zone's.
 //
 // The words a result adds around its data ("Grade 3", "Mentor pairing",
 // "Observation · baseline") are home.quickFind.* in the caller's language;
@@ -65,6 +73,8 @@ import {
   subjects,
   courseOutlines,
   sessions,
+  resources,
+  rttSubjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom } from "@/lib/authz";
@@ -73,6 +83,9 @@ import { mentorshipAccess, observationAccess } from "@/lib/visibility";
 import { recordAudit } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 import { escapeIlike } from "@gml/shared/sql/ilike";
+import { classesWhere, outlinesWhere, repoScope, schoolsWhere, sessionsWhere, teachersWhere } from "@/lib/teaching/visibility";
+import { rttScope } from "@/lib/rtt/scope";
+import { enumLabel } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
 
@@ -97,7 +110,7 @@ const MAX_QUERY = 240;
 // out of a person's reach. audit-flood.test.ts bounds it from both sides.
 const QUICKFIND_LIMIT = 120;
 const QUICKFIND_WINDOW_MS = 60_000;
-const MAX_PER_KIND = 4; // 8 kinds × 4 ≈ 20-row cap after the flat merge.
+const MAX_PER_KIND = 4; // 10 kinds × 4, capped at 20 after the flat merge.
 const HARD_CAP = 20;
 
 export type QuickFindKind =
@@ -108,7 +121,9 @@ export type QuickFindKind =
   | "observation_cycle"
   | "mentor_pairing"
   | "outline"
-  | "session";
+  | "session"
+  | "resource"
+  | "rtt_subject";
 
 export type QuickFindResult = {
   kind: QuickFindKind;
@@ -183,9 +198,11 @@ export async function GET(req: Request) {
   // plus (when granted) the actor's teacher/mentor id round-trip, and QuickFind
   // calls this endpoint on every debounced keystroke (180ms) over Ladakhi
   // bandwidth.
-  const [observation, mentorship] = await Promise.all([
+  const [observation, mentorship, scope, rtt] = await Promise.all([
     observationAccess(db, actor),
     mentorshipAccess(db, actor),
+    repoScope(db, actor),
+    rttScope(db, actor),
   ]);
 
   // 1) Teachers — full_name ILIKE. School code joined for the sublabel.
@@ -198,7 +215,7 @@ export async function GET(req: Request) {
     })
     .from(teachers)
     .leftJoin(schools, eq(teachers.schoolId, schools.id))
-    .where(and(eq(teachers.active, true), ilike(teachers.fullName, pattern)))
+    .where(and(eq(teachers.active, true), ilike(teachers.fullName, pattern), teachersWhere(scope)))
     .orderBy(asc(teachers.fullName))
     .limit(MAX_PER_KIND);
   for (const r of teacherRows) {
@@ -223,6 +240,7 @@ export async function GET(req: Request) {
       and(
         eq(schools.active, true),
         or(ilike(schools.name, pattern), ilike(schools.code, pattern)),
+        schoolsWhere(scope),
       ),
     )
     .orderBy(asc(schools.code))
@@ -256,6 +274,7 @@ export async function GET(req: Request) {
           ilike(sql`'Grade ' || ${classes.grade}::text`, pattern),
           ilike(classes.classTeacherName, pattern),
         ),
+        classesWhere(scope),
       ),
     )
     .orderBy(asc(classes.grade))
@@ -335,7 +354,7 @@ export async function GET(req: Request) {
     })
     .from(courseOutlines)
     .leftJoin(subjects, eq(courseOutlines.subjectId, subjects.id))
-    .where(ilike(courseOutlines.name, pattern))
+    .where(and(ilike(courseOutlines.name, pattern), outlinesWhere(scope)))
     .orderBy(asc(courseOutlines.name))
     .limit(MAX_PER_KIND);
   for (const r of outlineRows) {
@@ -360,7 +379,7 @@ export async function GET(req: Request) {
     })
     .from(sessions)
     .leftJoin(subjects, eq(sessions.subjectId, subjects.id))
-    .where(ilike(sessions.topic, pattern))
+    .where(and(ilike(sessions.topic, pattern), sessionsWhere(scope)))
     .limit(MAX_PER_KIND);
   for (const r of sessionRows) {
     results.push({
@@ -369,6 +388,42 @@ export async function GET(req: Request) {
       label: r.topic ?? tKind("session"),
       sublabel: `${r.subjectName ?? ""} · ${r.scheduledDate ?? ""}`.trim(),
       href: `/repo/session/${r.id}`,
+    });
+  }
+
+  // 9) Reading material — name ILIKE. Reference data: the same for everyone.
+  const resourceRows = await db
+    .select({ id: resources.id, name: resources.name, kind: resources.kind })
+    .from(resources)
+    .where(and(eq(resources.active, true), ilike(resources.name, pattern)))
+    .orderBy(asc(resources.name))
+    .limit(MAX_PER_KIND);
+  const tRepo = await getTranslations("repo");
+  for (const r of resourceRows) {
+    results.push({
+      kind: "resource",
+      id: r.id,
+      label: r.name,
+      sublabel: enumLabel(tRepo, "resourceKind", r.kind),
+      href: `/repo/resource/${r.id}`,
+    });
+  }
+
+  // 10) RTT subjects — name OR code ILIKE, within the searcher's RTT scope
+  //     (a teacher: her own district and zone; staff: the programme).
+  const rttRows = await db
+    .select({ id: rttSubjects.id, name: rttSubjects.name, code: rttSubjects.code })
+    .from(rttSubjects)
+    .where(and(or(ilike(rttSubjects.name, pattern), ilike(rttSubjects.code, pattern)), rtt.subjectWhere))
+    .orderBy(asc(rttSubjects.name))
+    .limit(MAX_PER_KIND);
+  for (const r of rttRows) {
+    results.push({
+      kind: "rtt_subject",
+      id: r.id,
+      label: r.name,
+      sublabel: r.code ?? tKind("rttSubject"),
+      href: `/rtt/subject/${r.id}`,
     });
   }
 

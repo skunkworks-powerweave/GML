@@ -129,7 +129,11 @@ test("F97 quickfind: the longest value it searches, pasted whole, is found; one 
       const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
       const klass = await f.row("classes", { school_id: school, grade: 5, stage: "Primary" });
       const subject = await f.row("subjects", { name: `Subject ${t}`, code: t.slice(-12) });
-      const tch = await f.row("teachers", { school_id: school, full_name: `T ${t}` });
+      // The session is the searcher's own. A teacher's quick find returns her
+      // own sessions only (lib/teaching/visibility.ts; repo-privacy-quickfind),
+      // so a colleague's session -- as this was -- is no longer found at all.
+      const me = await teacher(f);
+      const tch = await f.row("teachers", { school_id: school, full_name: `T ${t}`, user_id: me });
       const session = await f.row("sessions", {
         school_id: school,
         class_id: klass,
@@ -138,7 +142,6 @@ test("F97 quickfind: the longest value it searches, pasted whole, is found; one 
         scheduled_date: "2026-09-01",
         topic,
       });
-      const me = await teacher(f);
 
       const res = await quickfind(topic);
       assert.equal(

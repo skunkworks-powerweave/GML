@@ -24,6 +24,7 @@ import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { mentorRoster } from "@/lib/gated-reads";
 import { mentorshipAccess } from "@/lib/visibility";
+import { mayOpenMentor, repoScope } from "@/lib/teaching/visibility";
 import { repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
@@ -63,9 +64,13 @@ export default async function RepoMentorDetailPage({
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
+  // A teacher opens her own mentor(s) only; any other mentor answers 404
+  // (lib/teaching/visibility.ts). Other roles are unchanged.
+  if (!(await mayOpenMentor(db, await repoScope(db, actor), id))) notFound();
 
   // The mentor's own profile -- name, base location, expertise -- is directory
-  // data and stays visible to any signed-in user, which is the point of /repo.
+  // data for staff, which is the point of /repo (a teacher reaches only her
+  // own mentor's, checked above).
   // THE PAIRING ROSTER IS NOT. It names mentees and their meeting history, and
   // this page sits OUTSIDE the mentorship section gate, so it was reproducing
   // the exact roster /mentorship protects to anyone who knew a mentor id. The

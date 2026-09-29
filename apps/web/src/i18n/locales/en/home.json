@@ -298,7 +298,7 @@
         },
         "observerTeachBack": {
           "title": "Teach-back reviews",
-          "body": "Teachers record themselves teaching an RTT lesson. Watch each one and mark it reviewed."
+          "body": "Teachers record themselves teaching an RTT lesson. Watch each one, then approve it or ask for changes."
         }
       }
     },
@@ -322,7 +322,9 @@
         "observationCycle": "Observation",
         "mentorPairing": "Mentor pairing",
         "outline": "Outline",
-        "session": "Session"
+        "session": "Session",
+        "resource": "Reading material",
+        "rttSubject": "RTT subject"
       },
       "refusal": {
         "unavailable": {

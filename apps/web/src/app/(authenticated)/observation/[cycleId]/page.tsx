@@ -6,6 +6,13 @@
 // real page did not — pre/observer/post form submit, sign-off CTA, add-note,
 // and the video-upload context handle. All status transitions go through
 // guarded server actions in ./actions.ts.
+//
+// Teaching records (2026-09-28): the observer scores the cycle's rubric on the
+// observer form (and can revise it until sign-off); everyone who can open the
+// cycle reads the scores, total, percentage and band. Sign-off is a decision
+// on the cycle's approval request: Sign off approves it, Send back returns the
+// post form to the teacher with a comment, and the request's state and the
+// approver's comment are shown here to everyone on the cycle.
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -32,11 +39,16 @@ import { whatsappPhoneForUsers } from "@/lib/env";
 import { lookupOwn } from "@/lib/lookup";
 import { MobileDetailFrame } from "@/components/shells";
 import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
+import { latestApprovals } from "@/lib/approvals";
+import { cycleScoreSummary, rubricFor } from "@/lib/observation/rubric";
+import { RubricFields, RubricScores } from "./Rubric";
 import {
   submitPreFormAction,
   submitObserverFormAction,
   submitPostFormAction,
   signOffCycleAction,
+  sendBackCycleAction,
+  saveScoresAction,
   addNoteAction,
 } from "./actions";
 
@@ -61,6 +73,10 @@ const CYCLE_STAGES = [
 // question it names.
 const CYCLE_ERRORS: Record<string, "warn" | "error"> = {
   invalid_form: "warn",
+  invalid_score: "warn",
+  comment_required: "warn",
+  comment_too_long: "warn",
+  not_allowed: "error",
   invalid_transition: "error",
   empty_note: "warn",
   note_too_long: "warn",
@@ -77,7 +93,7 @@ export default async function CycleDetailPage({
   searchParams,
 }: {
   params: Promise<{ cycleId: string }>;
-  searchParams?: Promise<{ error?: string; field?: string }>;
+  searchParams?: Promise<{ error?: string; field?: string; criterion?: string }>;
 }) {
   const { cycleId } = await params;
   const sp = (await searchParams) ?? {};
@@ -91,21 +107,6 @@ export default async function CycleDetailPage({
   const max = MAX_TEXT_LENGTH.toLocaleString(intl);
 
   const tone = error ? lookupOwn(CYCLE_ERRORS, error) : undefined;
-  const cycleError = !error
-    ? null
-    : !tone
-      ? { message: t("cycle.errors.unknown"), tone: "error" as const }
-      : {
-          message:
-            error === "invalid_form"
-              ? invalidField
-                ? t("cycle.errors.invalidFormField", { field: t(`fields.${invalidField}.label`), max })
-                : t("cycle.errors.invalidForm", { max })
-              : error === "note_too_long"
-                ? t("cycle.errors.note_too_long", { max })
-                : t(`cycle.errors.${error}`),
-          tone,
-        };
 
   // OWNERSHIP GATE. This page did not call auth() at all -- it was login-gated
   // only by the proxy policy and the (authenticated) layout, then loaded the
@@ -122,6 +123,37 @@ export default async function CycleDetailPage({
   const actor = actorFrom(session);
   if (!actor) redirect("/login");
   const cycle = await assertCanAccessCycle(actor, cycleId);
+
+  // The scored rubric: the one the observer scores with (the cycle's own, else
+  // the default), and the scores saved so far with their total and band.
+  const rubric = await rubricFor(db, cycle.rubricId);
+  const scoreSummary = await cycleScoreSummary(db, cycle);
+  // The sign-off request's latest state and the approver's comment.
+  const signOff = (await latestApprovals(db, "observation_signoff", [cycleId])).get(cycleId) ?? null;
+
+  // invalid_score names the criterion only when it is one of this rubric's:
+  // never the raw parameter.
+  const criterionParam = typeof sp.criterion === "string" ? sp.criterion.trim() : "";
+  const invalidCriterion = rubric?.criteria.find((c) => c.id === criterionParam) ?? null;
+  const cycleError = !error
+    ? null
+    : !tone
+      ? { message: t("cycle.errors.unknown"), tone: "error" as const }
+      : {
+          message:
+            error === "invalid_form"
+              ? invalidField
+                ? t("cycle.errors.invalidFormField", { field: t(`fields.${invalidField}.label`), max })
+                : t("cycle.errors.invalidForm", { max })
+              : error === "invalid_score"
+                ? invalidCriterion
+                  ? t("cycle.errors.invalidScoreCriterion", { criterion: invalidCriterion.title, max })
+                  : t("cycle.errors.invalidScore", { max })
+                : error === "note_too_long" || error === "comment_too_long"
+                  ? t(`cycle.errors.${error}`, { max })
+                  : t(`cycle.errors.${error}`),
+          tone,
+        };
 
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, cycle.teacherId)).limit(1);
   const [subject] = cycle.subjectId
@@ -194,6 +226,12 @@ export default async function CycleDetailPage({
   const canSignOff =
     cycle.status === "post_submitted" &&
     hasAnyRole(viewerRole, ["mentor", "programme_admin", "super_admin"]);
+  // saveScoresAction: observer, mentor, programme_admin, super_admin, from the
+  // observer form until sign-off.
+  const canReviseScores =
+    rubric !== null &&
+    (cycle.status === "observed" || cycle.status === "post_submitted") &&
+    hasAnyRole(viewerRole, ["observer", "mentor", "programme_admin", "super_admin"]);
   // SIGNED OFF IS CLOSED. Sign-off is the locking transition, so a complete
   // cycle offers no note form and no upload; addNoteAction refuses a note on
   // the server as well. The upload path's own refusal (beginUploadAction and
@@ -253,14 +291,8 @@ export default async function CycleDetailPage({
               : null}
           </p>
         </div>
-        {canSignOff ? (
-          <form action={signOffCycleAction}>
-            <input type="hidden" name="cycleId" value={cycleId} />
-            <SubmitButton className="btn btn-primary">
-              {t("cycle.signOff")}
-            </SubmitButton>
-          </form>
-        ) : null}
+        {/* The Sign off button that stood here is in the sign-off panel
+            below, beside Send back and with its comment. */}
       </header>
 
       {/* EVERY ?error= actions.ts CAN ISSUE.
@@ -291,6 +323,65 @@ export default async function CycleDetailPage({
         >
           {cycleError.message}
         </div>
+      ) : null}
+
+      {/* SIGN-OFF. The request's state, and the approver's comment, for
+          everyone on the cycle -- the teacher reads why it came back. The
+          controls for whoever may decide it: Sign off (a comment is
+          optional) and Send back (a comment is required). */}
+      {canSignOff || signOff ? (
+        <section className="card card-hi" style={{ padding: 16, marginBottom: 18 }} data-testid="signoff-panel">
+          <div className="label" style={{ marginBottom: 6 }}>{t("cycle.signoff.label")}</div>
+          {signOff ? (
+            <SignOffState
+              state={signOff}
+              cycleStatus={cycle.status}
+              intl={intl}
+              t={t}
+            />
+          ) : null}
+          {canSignOff ? (
+            <div className="grid grid-cols-1 gap-[14px] md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" style={{ marginTop: 10 }}>
+              <form action={signOffCycleAction} style={{ display: "grid", gap: 8 }}>
+                <input type="hidden" name="cycleId" value={cycleId} />
+                <label htmlFor="signoff-comment" className="label" style={{ fontSize: 11 }}>
+                  {t("cycle.signoff.commentLabel")}
+                </label>
+                <textarea
+                  id="signoff-comment"
+                  name="comment"
+                  rows={2}
+                  maxLength={MAX_TEXT_LENGTH}
+                  className="text"
+                  placeholder={t("cycle.signoff.commentPlaceholder")}
+                  style={{ fontSize: 13 }}
+                />
+                <div>
+                  <SubmitButton className="btn btn-primary btn-sm">{t("cycle.signOff")}</SubmitButton>
+                </div>
+              </form>
+              <form action={sendBackCycleAction} style={{ display: "grid", gap: 8 }}>
+                <input type="hidden" name="cycleId" value={cycleId} />
+                <label htmlFor="sendback-comment" className="label" style={{ fontSize: 11 }}>
+                  {t("cycle.signoff.sendBackLabel")}
+                </label>
+                <textarea
+                  id="sendback-comment"
+                  name="comment"
+                  rows={2}
+                  required
+                  maxLength={MAX_TEXT_LENGTH}
+                  className="text"
+                  placeholder={t("cycle.signoff.sendBackPlaceholder")}
+                  style={{ fontSize: 13 }}
+                />
+                <div>
+                  <SubmitButton className="btn btn-sm">{t("cycle.signoff.sendBack")}</SubmitButton>
+                </div>
+              </form>
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {/* Cycle Flow Diagram */}
@@ -343,6 +434,7 @@ export default async function CycleDetailPage({
             <form action={submitObserverFormAction} style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <input type="hidden" name="cycleId" value={cycleId} />
               <StageFields kind="observer" drafts={drafts} t={t} />
+              {rubric ? <RubricFields rubric={rubric} drafts={drafts} t={t} /> : null}
               <SubmitButton className="btn btn-primary btn-sm">
                 {t("cycle.submitObserver")}
               </SubmitButton>
@@ -421,6 +513,38 @@ export default async function CycleDetailPage({
           </div>
         </article>
       </section>
+
+      {/* THE SCORED RUBRIC. The scores, total, percentage and band, to everyone
+          who can open the cycle (the teacher too, for her own); and, until
+          sign-off, the observer's form to revise them. */}
+      {scoreSummary || canReviseScores ? (
+        <section className="card card-hi" style={{ marginTop: 18, padding: 16 }} data-testid="rubric-card">
+          <div className="label" style={{ marginBottom: 6 }}>
+            {t("cycle.rubric.label", { name: scoreSummary?.rubricName ?? rubric?.name ?? "" })}
+          </div>
+          <h2 className="serif" style={{ fontSize: 16, marginBottom: 12 }}>{t("cycle.rubric.title")}</h2>
+          {scoreSummary ? (
+            <RubricScores summary={scoreSummary} intl={intl} t={t} />
+          ) : (
+            <p style={{ fontSize: 12, color: "var(--ink-3)" }}>{t("cycle.rubric.none")}</p>
+          )}
+          {canReviseScores && rubric ? (
+            <details style={{ marginTop: 12 }} open={!scoreSummary}>
+              <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
+                {scoreSummary ? t("cycle.rubric.revise") : t("cycle.rubric.add")}
+              </summary>
+              <form action={saveScoresAction} style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                <input type="hidden" name="cycleId" value={cycleId} />
+                <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0 }}>{t("cycle.rubric.reviseHint")}</p>
+                <RubricFields rubric={rubric} current={scoreSummary} drafts={drafts} t={t} />
+                <div>
+                  <SubmitButton className="btn btn-primary btn-sm">{t("cycle.rubric.save")}</SubmitButton>
+                </div>
+              </form>
+            </details>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* APPEND a mentor note. Deliberately not an edit surface.
           This block used to pre-fill the textarea with the ENTIRE existing
@@ -507,6 +631,52 @@ export default async function CycleDetailPage({
     </MobileDetailFrame>
   ) : (
     body
+  );
+}
+
+// Where the cycle's sign-off request stands, and what the approver wrote.
+function SignOffState({
+  state,
+  cycleStatus,
+  intl,
+  t,
+}: {
+  state: { status: string; comment: string | null; decidedAt: Date | null; submittedAt: Date };
+  cycleStatus: string;
+  intl: string;
+  t: Translate;
+}) {
+  const date = (d: Date | null) =>
+    d ? d.toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" }) : "";
+  // A request decided before the cycle moved on again (sent back, then the
+  // post form resubmitted) is history: the new pending request is the latest.
+  const message =
+    state.status === "pending"
+      ? t("cycle.signoff.pending", { date: date(state.submittedAt) })
+      : state.status === "approved"
+        ? t("cycle.signoff.approved", { date: date(state.decidedAt) })
+        : t("cycle.signoff.sentBack", { date: date(state.decidedAt) });
+  const tone =
+    state.status === "approved" ? "chip chip-lichen" : state.status === "pending" ? "chip chip-saffron" : "chip chip-rust";
+  return (
+    <div data-testid="signoff-state" data-state={state.status}>
+      <p style={{ fontSize: 13, margin: 0 }}>
+        <span className={tone}>{t(`cycle.signoff.states.${state.status === "rejected" ? "changes_requested" : state.status}`)}</span>{" "}
+        {message}
+      </p>
+      {state.comment ? (
+        <blockquote
+          data-testid="signoff-comment"
+          style={{ margin: "8px 0 0", padding: "6px 10px", borderLeft: "2px solid var(--line)", fontSize: 13, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+        >
+          <span className="label" style={{ display: "block", fontSize: 11 }}>{t("cycle.signoff.commentHeading")}</span>
+          {state.comment}
+        </blockquote>
+      ) : null}
+      {cycleStatus === "observed" && state.status !== "pending" && state.status !== "approved" ? (
+        <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "6px 0 0" }}>{t("cycle.signoff.reviseHint")}</p>
+      ) : null}
+    </div>
   );
 }
 

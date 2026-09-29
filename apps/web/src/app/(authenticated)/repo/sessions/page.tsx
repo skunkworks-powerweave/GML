@@ -32,6 +32,8 @@ import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 import { enumLabel } from "@/components/repo/repo-i18n";
+import { actorFrom } from "@/lib/authz";
+import { repoScope, sessionsWhere } from "@/lib/teaching/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -98,6 +100,11 @@ export default async function RepoSessionsIndex({
   const session = await auth();
   const role = session?.user?.role;
   if (!role || !ALLOWED_ROLES.has(role)) redirect("/forbidden");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  // A teacher lists her own sessions only; every other role, every session
+  // (lib/teaching/visibility.ts). Applied to the list AND the tab counts.
+  const own = sessionsWhere(await repoScope(db, actor));
   const t = await getTranslations("repo");
   const statusLabel = (status: string) => enumLabel(t, "sessionStatus", STATUS_CHIP[status] ? status : "planned");
 
@@ -117,6 +124,7 @@ export default async function RepoSessionsIndex({
   // Build the WHERE clause server-side. We compare scheduled_date (date
   // column) against ISO yyyy-mm-dd strings — Postgres handles the cast.
   const conds: SQL[] = [];
+  if (own) conds.push(own);
   if (statusFilter !== "all") conds.push(eq(sessions.status, statusFilter));
   if (subjectFilter !== "all") conds.push(eq(sessions.subjectId, subjectFilter));
   if (fromFilter) conds.push(gte(sessions.scheduledDate, fromFilter));
@@ -131,6 +139,7 @@ export default async function RepoSessionsIndex({
       scheduledTime: sessions.scheduledTime,
       topic: sessions.topic,
       status: sessions.status,
+      approvalStatus: sessions.approvalStatus,
       attendedCount: sessions.attendedCount,
       totalCount: sessions.totalCount,
       observed: sessions.observed,
@@ -165,6 +174,7 @@ export default async function RepoSessionsIndex({
       n: sql<number>`count(*)::int`.as("n"),
     })
     .from(sessions)
+    .where(own)
     .groupBy(sessions.status);
   const totalSessions = statusCountRows.reduce((acc, r) => acc + r.n, 0);
   const countByStatus = (v: string) =>
@@ -335,6 +345,7 @@ export default async function RepoSessionsIndex({
                     }),
                   },
                   { label: t("common.teacher"), value: s.teacherName ?? "—" },
+                  ...(s.approvalStatus !== "approved" ? [{ value: enumLabel(t, "approval", s.approvalStatus) }] : []),
                 ],
               };
             })}
@@ -400,6 +411,11 @@ export default async function RepoSessionsIndex({
                       </td>
                       <td>
                         <span className={`chip ${statusInfo.kind}`.trim()}>{statusLabel(s.status)}</span>
+                        {s.approvalStatus !== "approved" ? (
+                          <span className="chip chip-saffron" style={{ marginLeft: 4 }}>
+                            {enumLabel(t, "approval", s.approvalStatus)}
+                          </span>
+                        ) : null}
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <Link

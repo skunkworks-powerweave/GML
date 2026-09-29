@@ -132,7 +132,8 @@
   "attendance": {
     "present": "Present",
     "absent": "Absent",
-    "excused": "Excused"
+    "excused": "Excused",
+    "late": "Late"
   },
   "sessionType": {
     "synchronous": "synchronous",
@@ -218,10 +219,15 @@
     "notTakenYet": "not taken yet",
     "allProgress": "All my RTT progress →",
     "teachBack": "Teach-back",
-    "teachBackIntro": "Record yourself teaching a lesson from this subject. Mentors and observers watch it and mark it reviewed.",
+    "teachBackIntro": "Record yourself teaching a lesson from this subject. Your mentor, an observer or a programme admin watches it and approves it or asks for changes, with feedback you will see here.",
     "sent": "Sent {date}",
     "uploadFirst": "Upload a teach-back video →",
-    "uploadAnother": "Upload another teach-back →"
+    "uploadAnother": "Upload another teach-back →",
+    "teachBackApproved": "Approved",
+    "teachBackChanges": "Changes requested",
+    "teachBackRejected": "Not approved",
+    "teachBackFeedback": "Feedback",
+    "teachBackFeedbackOn": "Feedback, {date}"
   },
   "teachBack": {
     "metaTitle": "Teach-back submissions",
@@ -230,7 +236,7 @@
     "duration": "{minutes}m {seconds}s",
     "eyebrow": "Refresher Teacher Training",
     "title": "Teach-back submissions",
-    "intro": "Expert-review queue for teacher self-recorded teach-back videos. Click a row to preview; mark reviewed once you have scored it. Pending submissions are saffron, reviewed are lichen.",
+    "intro": "Expert-review queue for teachers' self-recorded teach-back videos. Open one to watch it, then approve it or request changes, with written feedback the teacher reads on her subject page. Pending submissions are saffron, reviewed are lichen.",
     "allPending": "All pending review",
     "filterLabel": "Filter by review state",
     "tabPending": "Pending review",
@@ -251,7 +257,23 @@
     "alreadyReviewed": "Already reviewed",
     "failed": "This video failed to process. Ask a programme admin to retry it.",
     "waitReady": "Review opens once the video is ready (status: {status}).",
-    "markReviewed": "Mark reviewed"
+    "chipApproved": "approved",
+    "chipChanges": "changes requested",
+    "decisionRecorded": "Your decision is recorded, and the teacher has been told.",
+    "decidedBy": "{decision, select, approved {Approved} changes_requested {Changes requested} other {Not approved}} by {name} · {date}",
+    "unknownReviewer": "an unknown reviewer",
+    "feedback": "Feedback",
+    "feedbackLabel": "Feedback for the teacher",
+    "feedbackHint": "She reads this on her subject page. Required when you request changes.",
+    "approve": "Approve",
+    "requestChanges": "Request changes",
+    "notYourMentee": "Only this teacher's own mentor, an observer or a programme admin can review this teach-back.",
+    "error": {
+      "feedback_required": "Write the feedback the teacher needs before requesting changes.",
+      "already_reviewed": "This teach-back has already been reviewed.",
+      "not_allowed": "Only this teacher's own mentor, an observer or a programme admin can review this teach-back.",
+      "invalid_decision": "Choose Approve or Request changes."
+    }
   },
   "quiz": {
     "metaTitle": "Quiz",
@@ -420,6 +442,46 @@
       "unsaved": "Your progress is not saved yet. It will be sent again when you are back online, so keep this page open until then.",
       "finished": "You have finished this session. Your progress is recorded. <link>Back to the subject</link>",
       "noscript": "This module needs JavaScript to run and to record your progress."
+    }
+  },
+  "marking": {
+    "metaTitle": "Attendance",
+    "eyebrow": "Refresher Teacher Training",
+    "listTitle": "RTT attendance",
+    "intro": "Open an RTT session to see the teachers it is for, mark each one present, late, absent or excused, and save.",
+    "filterLabel": "Filter sessions",
+    "subject": "Subject",
+    "allSubjects": "All subjects",
+    "inactiveSubject": "{name} (inactive)",
+    "date": "Date",
+    "show": "Show",
+    "clear": "Clear",
+    "onDate": "Sessions on {date}",
+    "noneOnDate": "No RTT sessions on this day.",
+    "recent": "Recently held",
+    "noneRecent": "No sessions have been held yet.",
+    "upcoming": "Coming up",
+    "noneUpcoming": "No sessions coming up.",
+    "unscheduled": "Not yet dated",
+    "more": "Each list shows the first {limit} sessions. Choose a subject or a day to see others.",
+    "markedOf": "{marked} of {total} marked",
+    "back": "← All sessions",
+    "tally": "{present} present · {late} late · {absent} absent · {excused} excused · {unmarked} not marked",
+    "rosterTitle": "Teachers ({count})",
+    "rosterIntroPlace": "Every active teacher at a school in {place}, where this subject is taught.",
+    "rosterIntroWhole": "Every active teacher: this subject is taught across the whole programme.",
+    "noTeachers": "No active teacher works where this subject is taught.",
+    "markedBy": "Marked by {name}, {when}",
+    "someone": "an unknown account",
+    "notMarked": "Not marked yet",
+    "offRoster": "No longer on this roster",
+    "save": "Save attendance",
+    "allPresent": "Mark all present",
+    "allPresentHint": "Saves the choices above and marks everyone still unmarked present.",
+    "saved": "{count, plural, =0 {Saved. Nothing had changed.} one {Saved: # mark changed.} other {Saved: # marks changed.}}",
+    "error": {
+      "not_on_roster": "One of those teachers is not on this session's roster. Nothing was saved.",
+      "invalid": "That form could not be read. Nothing was saved."
     }
   }
 }

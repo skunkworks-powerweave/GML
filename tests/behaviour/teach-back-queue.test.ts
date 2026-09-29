@@ -63,6 +63,26 @@ async function world(prefix: string): Promise<World> {
     `INSERT INTO users (id, email, name, role) VALUES (gen_random_uuid(), $1, $2, 'teacher') RETURNING id`,
     [`${T}-t@example.test`, `Teacher ${T}`],
   );
+  // The mentor is the teacher's own (an active pairing): a mentor decides
+  // only her own mentees' teach-backs (lib/approvals/handlers/teach-back.ts).
+  const code = T.replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase();
+  const districtId = await one(`INSERT INTO districts (name, code) VALUES ($1, $2) RETURNING id`, [`D ${T}`, `D${code}`]);
+  const zoneId = await one(`INSERT INTO zones (district_id, name) VALUES ($1, $2) RETURNING id`, [districtId, `Z ${T}`]);
+  const schoolId = await one(`INSERT INTO schools (zone_id, name, code) VALUES ($1, $2, $3) RETURNING id`, [
+    zoneId,
+    `S ${T}`,
+    `S${code}`.slice(0, 16),
+  ]);
+  const teacherRowId = await one(`INSERT INTO teachers (user_id, school_id, full_name) VALUES ($1, $2, $3) RETURNING id`, [
+    teacherUserId,
+    schoolId,
+    `Teacher ${T}`,
+  ]);
+  const mentorRowId = await one(`INSERT INTO mentors (user_id, name) VALUES ($1, $2) RETURNING id`, [mentorId, `Mentor ${T}`]);
+  const pairingId = await one(
+    `INSERT INTO mentor_pairings (mentor_id, teacher_id, status) VALUES ($1, $2, 'active') RETURNING id`,
+    [mentorRowId, teacherRowId],
+  );
   const fileId = await one(
     `INSERT INTO files (bucket, object_key, mime_type, kind, status, owner_user_id)
      VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored', $2) RETURNING id`,
@@ -89,8 +109,20 @@ async function world(prefix: string): Promise<World> {
         [fileId, status, teacherUserId, `${T} clip`, createdAgo, reviewed, mentorId],
       ),
     cleanup: async () => {
+      await c.query(
+        `DELETE FROM approvals WHERE item_type = 'teach_back'
+            AND item_id IN (SELECT id FROM video_submissions WHERE submitted_by_user_id = $1)`,
+        [teacherUserId],
+      );
+      await c.query(`DELETE FROM notifications WHERE user_id = ANY($1::uuid[])`, [[mentorId, teacherUserId]]);
       await c.query(`DELETE FROM video_submissions WHERE submitted_by_user_id = $1`, [teacherUserId]);
       await c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+      await c.query(`DELETE FROM mentor_pairings WHERE id = $1`, [pairingId]);
+      await c.query(`DELETE FROM mentors WHERE id = $1`, [mentorRowId]);
+      await c.query(`DELETE FROM teachers WHERE id = $1`, [teacherRowId]);
+      await c.query(`DELETE FROM schools WHERE id = $1`, [schoolId]);
+      await c.query(`DELETE FROM zones WHERE id = $1`, [zoneId]);
+      await c.query(`DELETE FROM districts WHERE id = $1`, [districtId]);
       await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [[mentorId, teacherUserId]]);
       await c.end();
     },
@@ -295,11 +327,18 @@ test("the row chip shows review state: pending saffron, reviewed lichen, still-p
 // from the DLQ) never entered "Pending review" once it became playable. A
 // malformed id reached Postgres and came back a 500.
 
+// Review is now a decision (Approve / Request changes), posted as the pane's
+// form posts it; these tests approve.
 async function review(user: TestUser, id: string, accept = "application/json") {
   signIn(user);
   const { POST } = await import("../../apps/web/src/app/api/teach-back/[id]/review/route.ts");
+  const form = new URLSearchParams({ decision: "approved" });
   const res = await POST(
-    new Request(`http://x/api/teach-back/${id}/review`, { method: "POST", headers: { accept } }),
+    new Request(`http://x/api/teach-back/${id}/review`, {
+      method: "POST",
+      headers: { accept, "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+    }),
     { params: Promise.resolve({ id }) },
   );
   const body = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
@@ -375,7 +414,7 @@ test("a malformed id is a 400 and an unknown one a 404, not a 500", { skip }, as
   }
 });
 
-test("the review pane offers 'Mark reviewed' only for a clip that plays", { skip }, async () => {
+test("the review pane offers Approve / Request changes only for a clip that plays", { skip }, async () => {
   const w = await world("tbr");
   try {
     const processing = await w.clip({ status: "transcoding", createdAgo: "1 hour" });

@@ -19,20 +19,38 @@
 //
 //   2. submitObserverFormAction  observer | mentor | programme_admin | super_admin
 //        - INSERT observation_forms(cycleId, kind="observer", responses, ...)
+//          and, when a scored rubric applies (lib/observation/rubric.ts), a
+//          score per criterion into observation_scores, in the SAME
+//          transaction, with observation_cycles.rubric_id
 //        - transition status pre_submitted → observed
-//        - audit `observation.observer_form.submitted`
+//        - audit `observation.observer_form.submitted` (and
+//          `observation.scores.saved` when scored)
 //
 //   3. submitPostFormAction      teacher | mentor | observer | programme_admin | super_admin
 //        - INSERT observation_forms(cycleId, kind="post", responses, ...)
 //        - transition status observed → post_submitted
 //        - audit `observation.post_form.submitted`
+//        - send the cycle for sign-off: an observation_signoff approval
+//          request, submitted by whoever submitted the form (the teacher)
 //
 //   4. signOffCycleAction        mentor | programme_admin | super_admin
-//        - transition status post_submitted → complete
-//        - notify the cycle's other parties (`cycle.complete`)
-//        - audit `observation.signed_off` (cycle code + signer in metadata —
-//          this audit row IS the "signed by" record for v1; a dedicated
-//          observation_signoffs table is deferred behind a schema migration).
+//        - APPROVE the cycle's observation_signoff request (lib/observation/
+//          signoff.ts -> lib/approvals), optional comment; the handler moves
+//          post_submitted → complete, audits `observation.signed_off` (cycle
+//          code + signer in metadata: the "signed by" record) and notifies
+//          the cycle's other parties (`cycle.complete`)
+//        - a cycle at post_submitted with no request (from before sign-off
+//          went through the queue) gets one, decided in the same step
+//
+//   4b. sendBackCycleAction      mentor | programme_admin | super_admin
+//        - REQUEST CHANGES on the sign-off request, with a required comment:
+//          post_submitted → observed, so the teacher can revise her post form
+//        - audit `observation.cycle.sent_back`; the teacher is told why
+//
+//   4c. saveScoresAction         observer | mentor | programme_admin | super_admin
+//        - revise the scored rubric while the cycle is observed or
+//          post_submitted (never once it is complete)
+//        - audit `observation.scores.saved`
 //
 //   5. addNoteAction             observer | mentor | programme_admin | super_admin
 //        - APPEND to observation_cycles.remark ("[stamp] author (role): note"
@@ -45,17 +63,19 @@
 //      contextId={cycleId} />. The existing tus pipeline (spec 045) writes
 //      video_submissions.context_type/context_id on tusd post-finish.
 //
-// Each status transition flows through `transitionCycleStatus()` — a single
-// guarded helper that asserts the cycle's CURRENT status matches the expected
-// `from` value before flipping to `to`. If the precondition fails we redirect
-// back with `?error=invalid_transition` (logical 409) so a stale tab can't
-// move the cycle backwards through the funnel.
+// Each status transition is a single guarded UPDATE that asserts the cycle's
+// CURRENT status matches the expected `from` value before flipping to `to`:
+// submitFormAndTransition() below for the three forms, and
+// lib/observation/cycle-signoff.ts transitionCycleStatus() for the sign-off
+// decisions. If the precondition fails we redirect back with
+// `?error=invalid_transition` (logical 409) so a stale tab can't move the
+// cycle backwards through the funnel.
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actorFrom, assertCanAccessCycle } from "@/lib/authz";
 import { assertSectionGate } from "@/lib/gates";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { observationCycles, observationForms } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
@@ -64,7 +84,9 @@ import { parseStageResponses, type StageKind } from "@/lib/observation/forms";
 import { MAX_TEXT_LENGTH, normaliseLineBreaks } from "@/lib/forms/validate";
 import { formatNoteEntry } from "@/lib/observation/notes";
 import { isUuid } from "@/lib/ids";
-import { notifyCycleParties } from "@/lib/observation/notify";
+import { parseRubricScores, rubricFor, totals, writeScores, type CycleRubric, type ScoreInput } from "@/lib/observation/rubric";
+import { decideSignOff, requestSignOff } from "@/lib/observation/signoff";
+import type { Actor } from "@/lib/visibility";
 
 // Where the gate sends the user after they unlock: back to THIS cycle. Every
 // action here passed "/observation", so a grant lapsing (8 h, or a password
@@ -83,43 +105,6 @@ type CycleStatus =
   | "complete";
 
 // ---------------------------------------------------------------------------
-// transitionCycleStatus — guarded status flip used by all four transitions.
-//
-// Returns the cycle's code on success (so the audit row can carry it as
-// metadata for human-readable audit reading). On precondition failure
-// (cycle missing, or status != from), redirects back to the cycle page with
-// ?error=invalid_transition. The redirect throws, so callers never see a
-// false return.
-//
-// We rely on a single UPDATE ... WHERE id = ? AND status = ? ... RETURNING
-// instead of SELECT-then-UPDATE: this is a single atomic round-trip and the
-// `.returning` length tells us whether the precondition held (no TOCTOU
-// races if two reviewers click "Sign off" simultaneously).
-// ---------------------------------------------------------------------------
-
-async function transitionCycleStatus(
-  cycleId: string,
-  from: CycleStatus,
-  to: CycleStatus,
-): Promise<string> {
-  const updated = await db
-    .update(observationCycles)
-    .set({ status: to, updatedAt: new Date() })
-    .where(
-      and(
-        eq(observationCycles.id, cycleId),
-        eq(observationCycles.status, from),
-      ),
-    )
-    .returning({ code: observationCycles.code });
-
-  if (updated.length === 0) {
-    redirect(`/observation/${cycleId}?error=invalid_transition`);
-  }
-  return updated[0].code;
-}
-
-// ---------------------------------------------------------------------------
 // submitFormAndTransition — the form row and the status flip, ATOMICALLY.
 //
 // All three submit actions used to INSERT the observation_forms row and THEN
@@ -136,6 +121,10 @@ async function transitionCycleStatus(
 // Ordering the two inside one transaction fixes it in both directions: the
 // guarded UPDATE runs first, so a failed precondition means no row is written
 // at all, and a failure in the insert rolls the status back.
+//
+// The observer's rubric scores ride in the same transaction: a rubric total
+// with no observer form behind it, or an observed cycle whose scores were
+// lost, would be the same unaccountable record.
 // ---------------------------------------------------------------------------
 
 async function submitFormAndTransition(opts: {
@@ -145,6 +134,8 @@ async function submitFormAndTransition(opts: {
   userId: string;
   from: CycleStatus;
   to: CycleStatus;
+  /** The observer's scores, when a scored rubric applies. */
+  scores?: { rubricId: string; scores: ScoreInput[] } | null;
 }): Promise<string> {
   let code: string | null = null;
   try {
@@ -199,6 +190,15 @@ async function submitFormAndTransition(opts: {
           },
         });
 
+      if (opts.scores) {
+        await writeScores(tx, {
+          cycleId: opts.cycleId,
+          rubricId: opts.scores.rubricId,
+          scores: opts.scores.scores,
+          userId: opts.userId,
+        });
+      }
+
       return updated[0]!.code;
     });
   } catch (err) {
@@ -229,6 +229,31 @@ function stageResponses(kind: StageKind, cycleId: string, formData: FormData): R
     redirect(`/observation/${cycleId}?error=invalid_form&field=${encodeURIComponent(parsed.field)}`);
   }
   return parsed.responses;
+}
+
+// ---------------------------------------------------------------------------
+// Helper — the observer's rubric scores, validated, or a redirect naming the
+// criterion. Same place in the order as stageResponses(): after the ownership
+// check, before anything is written. Only a criterion id of THIS rubric is
+// echoed back, and the page names it only if it is one of the rubric's.
+// ---------------------------------------------------------------------------
+
+function rubricScores(rubric: CycleRubric, cycleId: string, formData: FormData): ScoreInput[] {
+  const parsed = parseRubricScores(rubric, formData);
+  if (!parsed.ok) {
+    redirect(`/observation/${cycleId}?error=invalid_score&criterion=${encodeURIComponent(parsed.criterionId)}`);
+  }
+  return parsed.scores;
+}
+
+/** A sign-off comment: trimmed, capped as every other answer, or a redirect. */
+function signOffComment(cycleId: string, formData: FormData): string | null {
+  const raw = formData.get("comment");
+  const comment = typeof raw === "string" ? normaliseLineBreaks(raw).trim() : "";
+  if (comment.length > MAX_TEXT_LENGTH) {
+    redirect(`/observation/${cycleId}?error=comment_too_long`);
+  }
+  return comment || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,9 +345,13 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
   // password is a hard product requirement; a gate that guards only the reading
   // of a page and none of the writing does not meet it.
   await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
-  await assertCanAccessCycle(actor, cycleId);
+  const cycle = await assertCanAccessCycle(actor, cycleId);
 
   const responses = stageResponses("observer", cycleId, formData);
+  // The scored rubric, when one applies: the cycle's own, else the default.
+  // None configured -> the narrative alone, as before scored rubrics.
+  const rubric = await rubricFor(db, cycle.rubricId);
+  const scores = rubric ? rubricScores(rubric, cycleId, formData) : null;
 
   const code = await submitFormAndTransition({
     cycleId,
@@ -331,6 +360,7 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
     userId,
     from: "pre_submitted",
     to: "observed",
+    scores: rubric && scores ? { rubricId: rubric.id, scores } : null,
   });
 
   void recordAudit({
@@ -338,6 +368,86 @@ export async function submitObserverFormAction(formData: FormData): Promise<void
     entityType: "observation_cycle",
     entityId: cycleId,
     metadata: { code, from: "pre_submitted", to: "observed" },
+  });
+  if (rubric && scores) {
+    void recordAudit({
+      action: "observation.scores.saved",
+      entityType: "observation_cycle",
+      entityId: cycleId,
+      metadata: { code, rubricId: rubric.id, criteria: scores.length, ...totals(rubric, scores) },
+    });
+  }
+
+  revalidatePath(`/observation/${cycleId}`);
+  redirect(`/observation/${cycleId}`);
+}
+
+// ---------------------------------------------------------------------------
+// 2b. saveScoresAction — the observer revises the rubric scores.
+//
+// Open from the observer form until sign-off: at observed and post_submitted
+// (a sign-off request may be waiting; the approver then reads the revised
+// scores). Refused once the cycle is complete -- in the guarded UPDATE, so a
+// sign-off landing between the check and the write cannot slip a score in.
+// ---------------------------------------------------------------------------
+
+export async function saveScoresAction(formData: FormData): Promise<void> {
+  const session = await requireRole([
+    "observer",
+    "mentor",
+    "programme_admin",
+    "super_admin",
+  ]);
+  const userId = session.user.id;
+
+  const cycleId = String(formData.get("cycleId") ?? "").trim();
+  if (!cycleId) redirect("/observation?error=invalid_cycle");
+
+  // OWNERSHIP GATE and SECTION GATE, as for every action in this file.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
+  const cycle = await assertCanAccessCycle(actor, cycleId);
+  if (cycle.status === "complete") {
+    redirect(`/observation/${cycleId}?error=cycle_locked`);
+  }
+  if (cycle.status !== "observed" && cycle.status !== "post_submitted") {
+    redirect(`/observation/${cycleId}?error=invalid_transition`);
+  }
+
+  const rubric = await rubricFor(db, cycle.rubricId);
+  if (!rubric) redirect(`/observation/${cycleId}?error=invalid_transition`);
+  const scores = rubricScores(rubric, cycleId, formData);
+
+  let code: string | null = null;
+  try {
+    code = await db.transaction(async (tx) => {
+      const [open] = await tx
+        .update(observationCycles)
+        .set({ updatedAt: new Date() })
+        .where(
+          and(
+            eq(observationCycles.id, cycleId),
+            inArray(observationCycles.status, ["observed", "post_submitted"]),
+          ),
+        )
+        .returning({ code: observationCycles.code });
+      if (!open) return null;
+      await writeScores(tx, { cycleId, rubricId: rubric.id, scores, userId });
+      return open.code;
+    });
+  } catch (err) {
+    console.error("[observation] saving scores failed", err);
+    redirect(`/observation/${cycleId}?error=submit_failed`);
+  }
+  // The cycle was signed off in between.
+  if (code === null) redirect(`/observation/${cycleId}?error=cycle_locked`);
+
+  void recordAudit({
+    action: "observation.scores.saved",
+    entityType: "observation_cycle",
+    entityId: cycleId,
+    metadata: { code, rubricId: rubric.id, criteria: scores.length, ...totals(rubric, scores) },
   });
 
   revalidatePath(`/observation/${cycleId}`);
@@ -397,18 +507,31 @@ export async function submitPostFormAction(formData: FormData): Promise<void> {
     metadata: { code, from: "observed", to: "post_submitted" },
   });
 
+  // SIGN-OFF GOES THROUGH THE APPROVALS QUEUE. The request is recorded after
+  // the form has committed: if it cannot be (one is already open), the form
+  // still stands, and the cycle can be signed off without one (Sign off
+  // creates and decides it in one step).
+  const requested = await requestSignOff(db, cycleId, actor);
+  if (!requested.ok && requested.error !== "already_pending") {
+    console.warn("[observation] the sign-off request was not recorded", { cycleId, error: requested.error });
+  }
+
   revalidatePath(`/observation/${cycleId}`);
   redirect(`/observation/${cycleId}`);
 }
 
 // ---------------------------------------------------------------------------
-// 4. signOffCycleAction — final mentor sign-off, locks the cycle.
+// 4. signOffCycleAction — the mentor or an administrator signs the cycle off,
+//    which locks it.
 //
-// The audit row IS the "signed by" record for v1 — metadata.signedByUserId
-// carries the actor, action="observation.signed_off" timestamps when, and the
-// audit log is append-only (SM-1). A dedicated `observation_signoffs` table
-// (with separate teacher + mentor signature rows) is deferred behind a
-// schema migration; documented under designDeviations.
+// Sign-off is a decision on the cycle's observation_signoff approval request
+// (lib/observation/signoff.ts), so it is the same decision whether taken here
+// or from /approvals: the handler moves post_submitted → complete in the
+// decision's transaction, and writes the audit row that IS the "signed by"
+// record -- action "observation.signed_off", metadata.signedByUserId and
+// signedAt (lib/observation/cycle-signoff.ts; audit_log is append-only,
+// SM-1) -- and tells the cycle's other parties. The approvals row keeps the
+// decision and its comment in the queue's history.
 // ---------------------------------------------------------------------------
 
 export async function signOffCycleAction(formData: FormData): Promise<void> {
@@ -417,7 +540,6 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
     "programme_admin",
     "super_admin",
   ]);
-  const signedByUserId = session.user.id;
 
   const cycleId = String(formData.get("cycleId") ?? "").trim();
   if (!cycleId) redirect("/observation?error=invalid_cycle");
@@ -440,27 +562,52 @@ export async function signOffCycleAction(formData: FormData): Promise<void> {
   await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
   await assertCanAccessCycle(actor, cycleId);
 
-  const code = await transitionCycleStatus(cycleId, "post_submitted", "complete");
-
-  void recordAudit({
-    action: "observation.signed_off",
-    entityType: "observation_cycle",
-    entityId: cycleId,
-    metadata: {
-      code,
-      from: "post_submitted",
-      to: "complete",
-      signedByUserId,
-      signedAt: new Date().toISOString(),
-    },
-  });
-
-  // Everyone else on the cycle hears that it closed; the settings page's
-  // "Cycle complete" toggle had no producer. Best-effort, after the commit.
-  await notifyCycleParties(db, "cycle.complete", cycleId, signedByUserId);
+  const comment = signOffComment(cycleId, formData);
+  await decide(cycleId, actor, "approved", comment);
 
   revalidatePath(`/observation/${cycleId}`);
   redirect(`/observation/${cycleId}`);
+}
+
+// ---------------------------------------------------------------------------
+// 4b. sendBackCycleAction — the approver sends the cycle back to the teacher,
+//     saying what to change: post_submitted → observed, and her post form is
+//     open again.
+// ---------------------------------------------------------------------------
+
+export async function sendBackCycleAction(formData: FormData): Promise<void> {
+  const session = await requireRole([
+    "mentor",
+    "programme_admin",
+    "super_admin",
+  ]);
+
+  const cycleId = String(formData.get("cycleId") ?? "").trim();
+  if (!cycleId) redirect("/observation?error=invalid_cycle");
+
+  // OWNERSHIP GATE and SECTION GATE, as for signOffCycleAction.
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  await assertSectionGate(actor.id, "observation", cyclePath(cycleId));
+  await assertCanAccessCycle(actor, cycleId);
+
+  const comment = signOffComment(cycleId, formData);
+  if (!comment) redirect(`/observation/${cycleId}?error=comment_required`);
+  await decide(cycleId, actor, "changes_requested", comment);
+
+  revalidatePath(`/observation/${cycleId}`);
+  redirect(`/observation/${cycleId}`);
+}
+
+/** Decide the cycle's sign-off request, or redirect back saying why not. */
+async function decide(
+  cycleId: string,
+  actor: Actor,
+  decision: "approved" | "changes_requested",
+  comment: string | null,
+): Promise<void> {
+  const result = await decideSignOff(db, { cycleId, actor, decision, comment });
+  if (!result.ok) redirect(`/observation/${cycleId}?error=${result.error}`);
 }
 
 // ---------------------------------------------------------------------------

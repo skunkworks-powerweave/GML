@@ -18,6 +18,8 @@ import {
   subjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { classesWhere, mayOpenSchool, repoScope, sessionsWhere, teachersWhere } from "@/lib/teaching/visibility";
 import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
@@ -91,6 +93,13 @@ export default async function RepoSchoolDetailPage({
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  // A teacher opens her own school only (another school answers 404), and on
+  // it sees herself, the classes she teaches and her own sessions -- not the
+  // school's teacher roster or colleagues' sessions (lib/teaching/visibility.ts).
+  const scope = await repoScope(db, actor);
+  if (!mayOpenSchool(scope, id)) notFound();
 
   const [school] = await db
     .select({
@@ -125,7 +134,7 @@ export default async function RepoSchoolDetailPage({
       classTeacherName: classes.classTeacherName,
     })
     .from(classes)
-    .where(and(eq(classes.schoolId, id), eq(classes.active, true)))
+    .where(and(eq(classes.schoolId, id), eq(classes.active, true), classesWhere(scope)))
     .orderBy(asc(classes.grade));
 
   const teacherRows = await db
@@ -137,7 +146,7 @@ export default async function RepoSchoolDetailPage({
       joinedPhase: teachers.joinedPhase,
     })
     .from(teachers)
-    .where(and(eq(teachers.schoolId, id), eq(teachers.active, true)))
+    .where(and(eq(teachers.schoolId, id), eq(teachers.active, true), teachersWhere(scope)))
     .orderBy(asc(teachers.fullName))
     .limit(50);
 
@@ -157,7 +166,7 @@ export default async function RepoSchoolDetailPage({
     .leftJoin(classes, eq(classroomSessions.classId, classes.id))
     .leftJoin(subjects, eq(classroomSessions.subjectId, subjects.id))
     .leftJoin(teachers, eq(classroomSessions.teacherId, teachers.id))
-    .where(eq(classroomSessions.schoolId, id))
+    .where(and(eq(classroomSessions.schoolId, id), sessionsWhere(scope)))
     .orderBy(desc(classroomSessions.scheduledDate), desc(classroomSessions.scheduledTime))
     .limit(12);
 

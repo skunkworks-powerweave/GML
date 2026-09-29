@@ -116,7 +116,8 @@
         "status": {
           "present": "present",
           "absent": "absent",
-          "excused": "excused"
+          "excused": "excused",
+          "late": "late"
         }
       }
     },
@@ -257,7 +258,9 @@
         "grade": "Grade",
         "term": "Term",
         "weeks": "Weeks",
-        "status": "Status"
+        "status": "Status",
+        "ownerTeacherId": "Owner teacher",
+        "approvalStatus": "Approval"
       },
       "fields": {
         "sessionsCount": "Sessions count",
@@ -270,7 +273,17 @@
           "in_progress": "in progress",
           "complete": "complete",
           "archived": "archived"
+        },
+        "approvalStatus": {
+          "draft": "draft",
+          "pending": "pending approval",
+          "approved": "approved",
+          "changes_requested": "changes requested",
+          "rejected": "not approved"
         }
+      },
+      "help": {
+        "ownerTeacherId": "Empty: the programme's outline. A teacher's own lesson plan names her."
       }
     },
     "outline-lessons": {
@@ -280,6 +293,11 @@
         "sequence": "#",
         "title": "Title",
         "week": "Week"
+      },
+      "fields": {
+        "objectives": "Objectives",
+        "activities": "Activities",
+        "materials": "Materials"
       }
     },
     "sessions": {
@@ -294,13 +312,16 @@
         "status": "Status",
         "attendedCount": "Present",
         "totalCount": "Roll",
-        "observed": "Observed"
+        "observed": "Observed",
+        "section": "Section",
+        "approvalStatus": "Approval"
       },
       "fields": {
         "outlineLessonId": "Outline lesson",
         "scheduledTime": "Scheduled time",
         "durationMin": "Duration min",
-        "observationCycleId": "Observation cycle"
+        "observationCycleId": "Observation cycle",
+        "notes": "Notes"
       },
       "enum": {
         "status": {
@@ -308,7 +329,17 @@
           "in_progress": "in progress",
           "complete": "complete",
           "cancelled": "cancelled"
+        },
+        "approvalStatus": {
+          "draft": "draft",
+          "pending": "pending approval",
+          "approved": "approved",
+          "changes_requested": "changes requested",
+          "rejected": "not approved"
         }
+      },
+      "help": {
+        "section": "Empty: the whole grade."
       }
     },
     "resources": {
@@ -321,7 +352,7 @@
         "active": "Active"
       },
       "fields": {
-        "fileKey": "File key",
+        "fileKey": "PDF file",
         "externalUrl": "External URL",
         "tags": "Tags"
       },
@@ -339,6 +370,9 @@
           "Rubric": "Rubric",
           "Other": "Other"
         }
+      },
+      "help": {
+        "fileKey": "Upload the PDF here, or leave it empty and give a web link below."
       }
     },
     "resource-subjects": {
@@ -361,6 +395,232 @@
         "guardian": "Guardian",
         "attendancePct": "Attend %",
         "active": "Active"
+      }
+    },
+    "grading-scales": {
+      "label": "Grade scales",
+      "columns": {
+        "name": "Name",
+        "appliesTo": "Used for",
+        "isDefault": "Default",
+        "active": "Active",
+        "description": "Description"
+      },
+      "help": {
+        "isDefault": "Used when a test, quiz or rubric names no scale of its own. One default for each use."
+      },
+      "enum": {
+        "appliesTo": {
+          "student": "students' test marks",
+          "quiz": "quizzes",
+          "observation": "observations"
+        }
+      }
+    },
+    "grading-bands": {
+      "label": "Grade bands",
+      "columns": {
+        "scaleId": "Scale",
+        "label": "Grade",
+        "minPct": "From %",
+        "maxPct": "To %",
+        "isPass": "Counts as a pass",
+        "sequence": "Order"
+      },
+      "fields": {
+        "description": "Description"
+      },
+      "help": {
+        "minPct": "Whole percentages. The band covers From to To, both included."
+      }
+    },
+    "observation-rubrics": {
+      "label": "Observation rubrics (scored)",
+      "columns": {
+        "name": "Name",
+        "gradingScaleId": "Grade scale",
+        "isDefault": "Default",
+        "active": "Active"
+      },
+      "fields": {
+        "description": "Description"
+      },
+      "help": {
+        "gradingScaleId": "A scale for observations. Empty: the default observation scale."
+      }
+    },
+    "rubric-criteria": {
+      "label": "Rubric criteria",
+      "columns": {
+        "rubricId": "Rubric",
+        "sequence": "#",
+        "title": "Criterion",
+        "maxScore": "Highest score"
+      },
+      "fields": {
+        "description": "What each level looks like"
+      },
+      "help": {
+        "maxScore": "From 1 to 10."
+      }
+    },
+    "teacher-classes": {
+      "label": "Teachers' classes",
+      "columns": {
+        "teacherId": "Teacher",
+        "classId": "Class",
+        "section": "Section",
+        "subjectId": "Subject"
+      },
+      "help": {
+        "section": "Empty: the whole grade.",
+        "classId": "A class at the teacher's own school."
+      }
+    },
+    "session-attendance": {
+      "label": "Students' attendance (classroom sessions)",
+      "columns": {
+        "sessionId": "Session",
+        "learnerId": "Student",
+        "status": "Attendance",
+        "markedByUserId": "Marked by",
+        "markedAt": "Marked at"
+      },
+      "enum": {
+        "status": {
+          "present": "present",
+          "absent": "absent",
+          "excused": "excused",
+          "late": "late"
+        }
+      }
+    },
+    "assessments": {
+      "label": "Tests (marks)",
+      "columns": {
+        "title": "Title",
+        "teacherId": "Teacher",
+        "classId": "Class",
+        "section": "Section",
+        "subjectId": "Subject",
+        "term": "Term",
+        "maxMarks": "Maximum marks",
+        "assessedOn": "Date",
+        "approvalStatus": "Approval"
+      },
+      "fields": {
+        "gradingScaleId": "Grade scale"
+      },
+      "help": {
+        "gradingScaleId": "A scale for students' test marks. Empty: the default one.",
+        "section": "Empty: the whole grade."
+      },
+      "enum": {
+        "approvalStatus": {
+          "draft": "draft",
+          "pending": "pending approval",
+          "approved": "approved",
+          "changes_requested": "changes requested",
+          "rejected": "not approved"
+        }
+      }
+    },
+    "assessment-marks": {
+      "label": "Students' marks",
+      "columns": {
+        "assessmentId": "Test",
+        "learnerId": "Student",
+        "marks": "Marks",
+        "absent": "Absent",
+        "remark": "Remark"
+      },
+      "help": {
+        "marks": "Leave empty for a student who was absent."
+      }
+    },
+    "quizzes": {
+      "label": "Quizzes (settings)",
+      "columns": {
+        "title": "Title",
+        "slug": "Address",
+        "rttSubjectId": "RTT subject",
+        "subjectId": "School subject",
+        "passThreshold": "Pass mark %",
+        "gradingScaleId": "Grade scale",
+        "active": "Active"
+      },
+      "fields": {
+        "timeLimitSeconds": "Time limit (seconds)",
+        "maxAttempts": "Attempts allowed"
+      },
+      "help": {
+        "slug": "The quiz's web address after /quizzes/. Lowercase letters, digits and hyphens.",
+        "rttSubjectId": "An RTT subject or a school subject: one of the two.",
+        "gradingScaleId": "A scale for quizzes. Empty: the default quiz scale.",
+        "timeLimitSeconds": "From 60 to 7200. Empty: no time limit.",
+        "maxAttempts": "From 1 to 20. Empty: no limit.",
+        "active": "A quiz can go live only once it has questions (add them under Admin, Quizzes)."
+      }
+    },
+    "approvals": {
+      "label": "Approvals (history)",
+      "columns": {
+        "itemType": "Item",
+        "status": "Status",
+        "submittedByUserId": "Sent by",
+        "submittedAt": "Sent",
+        "decidedByUserId": "Decided by",
+        "decidedAt": "Decided",
+        "comment": "Comment"
+      },
+      "fields": {
+        "itemId": "Item id",
+        "note": "Note"
+      },
+      "enum": {
+        "itemType": {
+          "lesson_plan": "lesson plan",
+          "session": "session",
+          "assessment": "marks",
+          "teach_back": "teach-back",
+          "observation_signoff": "observation sign-off",
+          "account_request": "account request"
+        },
+        "status": {
+          "pending": "pending",
+          "approved": "approved",
+          "changes_requested": "changes requested",
+          "rejected": "not approved"
+        }
+      }
+    },
+    "account-requests": {
+      "label": "Account requests",
+      "columns": {
+        "fullName": "Name",
+        "email": "Email",
+        "phone": "Phone",
+        "schoolId": "School",
+        "requestedRole": "Role asked for",
+        "status": "Status",
+        "createdAt": "Requested",
+        "decidedByUserId": "Decided by",
+        "decisionReason": "Reason"
+      },
+      "fields": {
+        "message": "Message"
+      },
+      "enum": {
+        "requestedRole": {
+          "teacher": "teacher",
+          "mentor": "mentor",
+          "observer": "observer"
+        },
+        "status": {
+          "pending": "pending",
+          "approved": "approved",
+          "rejected": "not approved"
+        }
       }
     }
   },
@@ -406,7 +666,11 @@
       "stillReferencedBy": "That row can't be deleted because {entity} records still reference it. Remove or reassign those first.",
       "locked": "That row is locked in its current state and cannot be deleted from the grid.",
       "unknown": "That action could not be completed."
-    }
+    },
+    "viewRow": "Row details",
+    "readOnly": "Read-only: you can see this table but not change it here.",
+    "emptyReadOnly": "No rows yet.",
+    "view": "View"
   },
   "write": {
     "missingRowId": "Missing rowId",
@@ -416,14 +680,29 @@
   "validation": {
     "activeObserver": "must be an active observer account",
     "phaseEndsBeforeStart": "A phase cannot end before it starts",
-    "resourceSource": "resource must have either a file_key or an external_url",
+    "resourceSource": "Upload a PDF or give a web link.",
     "httpLink": "Must be an http:// or https:// link",
     "webLink": "Must be a web link, e.g. https://meet.google.com/abc-defg-hij",
     "districtOrZone": "Choose a district or a zone, not both: a zone is already in its district.",
     "isoDate": "must be a date as YYYY-MM-DD",
     "attendedWithinTotal": "attended_count must not exceed total_count",
     "uppercaseCode": "Uppercase code (e.g. ENG, MAT, EVS)",
-    "gradesOrder": "grades_min must be ≤ grades_max"
+    "gradesOrder": "grades_min must be ≤ grades_max",
+    "oneDefaultScale": "\"{name}\" is already the default for this use: make it not the default first",
+    "oneDefaultRubric": "\"{name}\" is already the default rubric: make it not the default first",
+    "bandRange": "must be at least the From %",
+    "scaleFor": {
+      "student": "must be a scale for students' test marks",
+      "quiz": "must be a scale for quizzes",
+      "observation": "must be a scale for observations"
+    },
+    "classAtTeachersSchool": "must be a class at the teacher's own school",
+    "learnerNotInClass": "must be a student of that class (and section)",
+    "marksOverMaximum": "cannot be more than the test's maximum, {max}",
+    "absentNoMarks": "leave empty for a student marked absent",
+    "quizScope": "choose an RTT subject or a school subject: one, not both",
+    "quizSlug": "lowercase letters, digits and hyphens only, for example reading-1",
+    "quizNoQuestions": "a quiz can go live only once it has questions: add them under Admin, Quizzes first"
   },
   "zod": {
     "required": "Required",
@@ -463,7 +742,8 @@
   },
   "guard": {
     "cycleUndeletable": "This cycle is at stage \"{stage, select, nominated {nominated} pre_submitted {pre_submitted} observed {observed} post_submitted {post_submitted} complete {complete} other {{stage}}}\" and has work recorded under it; it cannot be deleted from the grid.",
-    "cycleFieldLocked": "This cycle is at stage \"{stage, select, nominated {nominated} pre_submitted {pre_submitted} observed {observed} post_submitted {post_submitted} complete {complete} other {{stage}}}\": its {field, select, teacherId {teacher} kind {kind} other {observer}} can no longer be changed."
+    "cycleFieldLocked": "This cycle is at stage \"{stage, select, nominated {nominated} pre_submitted {pre_submitted} observed {observed} post_submitted {post_submitted} complete {complete} other {{stage}}}\": its {field, select, teacherId {teacher} kind {kind} other {observer}} can no longer be changed.",
+    "quizUndeletable": "A quiz is not deleted from the data table: that would erase every learner's attempts and results. Set Active to No to withdraw it."
   },
   "references": {
     "classLabel": "{school} · Grade {grade}",
@@ -665,12 +945,14 @@
       "selected": "{count, plural, one {# row selected} other {# rows selected}}",
       "clear": "Clear selection",
       "deleting": "Deleting…",
-      "delete": "Delete {count} selected"
+      "delete": "Delete {count} selected",
+      "confirmWithEffects": "{count, plural, one {Delete # selected row?} other {Delete # selected rows?}}\n\n{effects}\n\nThis cannot be undone."
     },
     "deleteRow": {
       "rowFallback": "row {id}",
       "confirm": "Delete {target}? This cannot be undone.",
-      "deleting": "Deleting…"
+      "deleting": "Deleting…",
+      "confirmWithEffects": "Delete {target}?\n\n{effects}\n\nThis cannot be undone."
     },
     "importCsv": {
       "open": "Import CSV",
@@ -702,7 +984,9 @@
       "viewTitle": "View {title}",
       "view": "View row",
       "yes": "yes",
-      "no": "no"
+      "no": "no",
+      "edit": "Edit row",
+      "emptyReadOnly": "No {entity} yet."
     },
     "formEditor": {
       "invalidJson": "JSON does not parse: {error}",
@@ -754,6 +1038,76 @@
       "titleLabel": "Title (optional; the package's own title otherwise)",
       "sending": "Uploading and checking…",
       "submit": "Upload package"
+    },
+    "pdfUpload": {
+      "choose": "Choose a PDF",
+      "uploading": "Uploading…",
+      "uploaded": "Uploaded: {name}. Save the row to keep it.",
+      "current": "A PDF is stored. Choose another to replace it.",
+      "remove": "Remove the PDF",
+      "removed": "The PDF will be removed when you save.",
+      "errors": {
+        "not_pdf": "That file is not a PDF.",
+        "too_large": "The PDF is larger than {mb} MB.",
+        "no_file": "Choose a PDF file first.",
+        "truncated": "The PDF did not arrive whole. Try again.",
+        "storage": "The PDF could not be stored. Try again.",
+        "forbidden": "You cannot upload files here.",
+        "unknown": "The upload did not work. Try again."
+      }
     }
+  },
+  "deleteEffects": {
+    "alsoRemoves": "Deleting it also deletes: {items}.",
+    "alsoUnlinks": "These stay, but lose their link to it: {items}.",
+    "removes": {
+      "teacher_classes": "teachers' class links",
+      "form_drafts": "unsent form drafts",
+      "rtt_progress": "teachers' progress ticks",
+      "observation_scores": "rubric scores",
+      "resource_subjects": "subject tags on reading material",
+      "session_attendance": "students' attendance",
+      "assessment_marks": "students' test marks",
+      "grading_bands": "grade bands",
+      "rubric_criteria": "rubric criteria",
+      "quiz_attempts": "learners' quiz attempts",
+      "quiz_questions": "quiz questions",
+      "quiz_submissions": "learners' quiz results"
+    },
+    "unlinks": {
+      "teachers": {
+        "current_phase_id": "teachers whose current phase it is"
+      },
+      "account_requests": {
+        "school_id": "account requests naming it"
+      },
+      "course_outlines": {
+        "owner_teacher_id": "her lesson plans (left with no owner)"
+      },
+      "rtt_sessions": {
+        "rtt_module_id": "RTT sessions on it"
+      },
+      "sessions": {
+        "observation_cycle_id": "classroom sessions linked to it",
+        "outline_lesson_id": "classroom sessions planned on it"
+      },
+      "observation_cycles": {
+        "subject_id": "observation cycles on it",
+        "rubric_id": "observation cycles scored with it"
+      },
+      "teacher_classes": {
+        "subject_id": "teachers' class links for it"
+      },
+      "assessments": {
+        "grading_scale_id": "tests graded on it (they fall back to the default scale)"
+      },
+      "observation_rubrics": {
+        "grading_scale_id": "rubrics graded on it (they fall back to the default scale)"
+      },
+      "quizzes": {
+        "grading_scale_id": "quizzes graded on it (they fall back to the default scale)"
+      }
+    },
+    "separator": "; "
   }
 }

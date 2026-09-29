@@ -23,6 +23,13 @@ export type AdminColumn = {
   key: string;
   /** Optional formatter; defaults to JSON.stringify for non-primitives. */
   format?: (v: unknown) => string;
+  /**
+   * The values of a column that is shown but is not a form field, where it
+   * holds a fixed set (a record's approval state): its cells and its filter
+   * name them (`adminData.entities.<slug>.enum.<key>.<value>`), as a form
+   * enum's are. A form field's choices come from its zod schema instead.
+   */
+  choices?: readonly string[];
 };
 
 /**
@@ -42,6 +49,13 @@ export type AdminFieldMeta = {
    * the schema moves it (a phase's end is the end of that day).
    */
   input?: "date";
+  /**
+   * The field holds the Storage key of an uploaded file: the form offers a
+   * file picker that uploads to /api/admin/data/<slug>/upload and fills the
+   * key in (a resource's PDF). Only "pdf" exists; the route refuses any
+   * entity that declares none.
+   */
+  upload?: "pdf";
 };
 
 export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
@@ -71,6 +85,19 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
    * `recordAudit` after the DB fetch.
    */
   piiAudited?: boolean;
+  /**
+   * The prefix of the audit actions named after the entity (`<prefix>.view`
+   * for a piiAudited read, `<prefix>.bulk_export`, `<prefix>.bulk_import`),
+   * where the slug is not a valid action segment: docs/audit-actions.md
+   * allows lowercase letters and underscores only. Defaults to the slug.
+   */
+  auditName?: string;
+  /**
+   * Columns the server sets on every grid or CSV write, whatever was
+   * submitted: who marked a student's attendance, and when. Not form fields;
+   * merged into the create and the update after validation.
+   */
+  writeStamp?: (ctx: { userId: string; op: "create" | "update" }) => Record<string, unknown>;
   /**
    * The section whose password guards these rows everywhere, not only under
    * /observation or /mentorship. lib/visibility.ts: a surface that re-serves a

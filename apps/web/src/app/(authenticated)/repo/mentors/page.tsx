@@ -15,6 +15,8 @@ import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { mentorsWhere, repoScope } from "@/lib/teaching/visibility";
 // Spec 138 — mobile card-list fallback (desktop keeps the table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
@@ -48,6 +50,11 @@ export default async function RepoMentorsIndexPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  // A teacher sees her own mentor(s) only -- the ones she has a pairing with
+  // (lib/teaching/visibility.ts). Every other role sees every active mentor.
+  const own = mentorsWhere(await repoScope(db, actor));
   const t = await getTranslations("repo");
 
   const sp = await searchParams;
@@ -76,8 +83,8 @@ export default async function RepoMentorsIndexPage({
     .from(mentors)
     .where(
       qFilter
-        ? and(eq(mentors.active, true), ilike(mentors.name, `%${escapeIlike(qFilter)}%`))
-        : eq(mentors.active, true),
+        ? and(eq(mentors.active, true), own, ilike(mentors.name, `%${escapeIlike(qFilter)}%`))
+        : and(eq(mentors.active, true), own),
     )
     .orderBy(mentors.name)
     .limit(200);

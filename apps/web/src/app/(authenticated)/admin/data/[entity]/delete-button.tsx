@@ -19,9 +19,15 @@ type Props = {
   entitySlug: string;
   rowId: string;
   rowLabel?: string;
+  /**
+   * What else the delete deletes or unlinks, already in the viewer's
+   * language (admin/delete-effects.ts deleteWarning, on the server): said in
+   * the confirmation, before anything happens.
+   */
+  warning?: string;
 };
 
-export function DeleteRowButton({ entitySlug, rowId, rowLabel }: Props) {
+export function DeleteRowButton({ entitySlug, rowId, rowLabel, warning }: Props) {
   const [pending, startTransition] = useTransition();
   const t = useTranslations("adminData.client");
   const tAction = useTranslations("action");
@@ -30,7 +36,9 @@ export function DeleteRowButton({ entitySlug, rowId, rowLabel }: Props) {
     event.preventDefault();
     // rowLabel is the entity's describeRow ("school:GPS Chuchot"): data.
     const target = rowLabel ?? t("deleteRow.rowFallback", { id: rowId.slice(0, 8) });
-    const message = t("deleteRow.confirm", { target });
+    const message = warning
+      ? t("deleteRow.confirmWithEffects", { target, effects: warning })
+      : t("deleteRow.confirm", { target });
     if (typeof window !== "undefined" && !window.confirm(message)) {
       return;
     }

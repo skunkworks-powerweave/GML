@@ -17,6 +17,7 @@ import { actorFrom, isUuid } from "@/lib/authz";
 import { recordAudit } from "@/lib/audit";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { beginUpload, completeUpload } from "@/lib/video/upload";
+import { submitTeachBackUpload } from "@/lib/rtt/teach-back";
 import type { SupabaseBrowserConfig } from "@/lib/supabase/browser";
 import { assertContextAllowed, decodeTarget, lockedSection } from "./context";
 
@@ -167,6 +168,11 @@ export async function completeUploadAction(
     entityId: submissionId,
   });
 
+  // A teacher's teach-back goes to her mentor and the programme admins for
+  // review (lib/rtt/teach-back.ts). Nothing for any other upload, or for a
+  // retried confirmation of one already sent.
+  await submitTeachBackUpload(db, submissionId, { id: session.user.id, role: session.user.role });
+
   return { ok: true };
 }
 
@@ -224,6 +230,8 @@ export async function attachUploadAction(formData: FormData): Promise<void> {
     entityId: submissionId,
     metadata: { contextType, contextId, quarter },
   });
+  // Attached to a teach-back: sent for review, as an upload made for one is.
+  if (contextType === "teach_back") await submitTeachBackUpload(db, submissionId, actor);
   revalidatePath("/uploads");
   redirect("/uploads?attach=done");
 }

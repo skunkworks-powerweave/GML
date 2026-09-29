@@ -15,6 +15,7 @@ import { db } from "@gml/db";
 import { quizzes, quizQuestions, quizSubmissions } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { QuizSchemaEditor } from "./parts";
+import { quizGradingScale } from "./grading-scale";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +76,8 @@ export default async function AdminQuizDetailPage({ params }: Props) {
     })),
   };
   const pretty = JSON.stringify(exportShape, null, 2);
+  // Which scale grades its results (grading namespace).
+  const gradingScale = await quizGradingScale(row.id, row.gradingScaleId);
 
   return (
     <main style={{ maxWidth: 1280, margin: "0 auto", padding: "24px 28px" }}>
@@ -198,6 +201,7 @@ export default async function AdminQuizDetailPage({ params }: Props) {
           </p>
         ) : null}
         <QuizSchemaEditor quizId={row.id} initialJson={pretty} />
+        {gradingScale}
         <aside
           style={{
             background: "var(--paper-2)",

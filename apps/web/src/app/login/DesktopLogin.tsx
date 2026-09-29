@@ -266,6 +266,14 @@ export function DesktopLogin({ from, emailEnabled, linkError }: LoginShellProps)
             <EmailLinkForm />
           )}
 
+          {/* Someone without a login asks for one; a programme admin decides
+              it on /approvals. */}
+          <p style={{ marginTop: 18, fontSize: 13, textAlign: "center" }}>
+            <Link href="/request-account" data-testid="request-account-link">
+              {t("requestAccount.link")}
+            </Link>
+          </p>
+
           <div
             style={{
               marginTop: 28,

@@ -85,6 +85,15 @@ const POLICIES: PolicyRule[] = [
   { prefix: "/uploads", loggedIn: true },
   { prefix: "/inbox", loggedIn: true },
   { prefix: "/menu", loggedIn: true },
+  { prefix: "/approvals", loggedIn: true },
+  // Without these two the must-change-password redirect below never ran on
+  // them (it applies only to a matched policy): an account created with an
+  // initial password could keep records before choosing its own.
+  { prefix: "/teaching", loggedIn: true },
+  { prefix: "/attendance", loggedIn: true },
+  // PUBLIC, and so deliberately absent: /login (and /login/*), /auth/*, and
+  // /request-account -- "Request an account" is for someone with no login yet.
+  // A path with no rule here passes straight through (matchPolicy below).
 ];
 
 function matchPolicy(pathname: string): PolicyRule | undefined {

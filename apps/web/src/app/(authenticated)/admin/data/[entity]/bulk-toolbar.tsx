@@ -157,7 +157,14 @@ export function BulkSelectAllCheckbox() {
  * The "Delete N selected" button gates submit with window.confirm() then
  * posts bulkDeleteAction(entitySlug, ids[]).
  */
-export function BulkDeleteToolbar({ entitySlug }: { entitySlug: string }) {
+export function BulkDeleteToolbar({
+  entitySlug,
+  warning,
+}: {
+  entitySlug: string;
+  /** What else deleting these rows deletes or unlinks (admin/delete-effects.ts), translated. */
+  warning?: string;
+}) {
   const { selected, clear } = useSelectedRows();
   const [pending, startTransition] = useTransition();
   const t = useTranslations("adminData.client");
@@ -166,7 +173,7 @@ export function BulkDeleteToolbar({ entitySlug }: { entitySlug: string }) {
   if (count === 0) return null;
 
   const handleDelete = () => {
-    const message = t("bulk.confirm", { count });
+    const message = warning ? t("bulk.confirmWithEffects", { count, effects: warning }) : t("bulk.confirm", { count });
     if (typeof window !== "undefined" && !window.confirm(message)) {
       return;
     }

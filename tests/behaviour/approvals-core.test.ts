@@ -86,7 +86,12 @@ test("a teacher's session goes to the programme admin and back, and the record f
         { ok: false, error: "not_allowed" },
       );
       // The programme admin was told.
-      const told = await c.query(`SELECT subject, body FROM notifications WHERE user_id = $1 AND kind = 'approval'`, [w.padmin]);
+      // Filtered to this request: every submission from any suite running at
+      // the same time tells every active programme admin, this one included.
+      const told = await c.query(
+        `SELECT subject, body FROM notifications WHERE user_id = $1 AND kind = 'approval' AND entity_type = 'approval' AND entity_id = $2`,
+        [w.padmin, sent.ok ? sent.approvalId : null],
+      );
       assert.equal(told.rowCount, 1);
       assert.match(told.rows[0].subject, /Session waiting for approval: Fractions/);
       assert.equal(told.rows[0].body, "Please check the attendance");
