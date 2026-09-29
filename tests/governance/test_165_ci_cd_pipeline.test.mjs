@@ -6,7 +6,7 @@
 //   1. .github/workflows/test.yml (CREATED)
 //      — single GitHub Actions workflow `test-and-build`;
 //        triggers on push to main + pull_request (any branch);
-//        single ubuntu-latest job runs:
+//        single ubuntu job (now pinned to ubuntu-24.04) runs:
 //          checkout → pnpm setup → node 22 (cache: pnpm) →
 //          pnpm install --frozen-lockfile →
 //          pnpm test → pnpm build → pnpm -r typecheck →
@@ -90,10 +90,18 @@ test("spec 165 — workflow is structurally parseable as YAML (key markers prese
     /^jobs:\s*$/m,
     "workflow must declare a `jobs:` top-level key for the job block",
   );
+  // Pinned, not ubuntu-latest: that label moves to Ubuntu 26 from 19 October
+  // 2026, and the ffmpeg the transcode tests run comes from the image. A new
+  // image should arrive as a deliberate change to this line.
   assert.match(
     src,
+    /runs-on:\s*ubuntu-24\.04/,
+    "workflow jobs must declare `runs-on: ubuntu-24.04`",
+  );
+  assert.doesNotMatch(
+    src,
     /runs-on:\s*ubuntu-latest/,
-    "workflow job must declare `runs-on: ubuntu-latest` — the only supported CI runner per spec 165",
+    "no job may run on `ubuntu-latest` -- it moves to a new Ubuntu without a change here",
   );
 });
 
@@ -126,22 +134,25 @@ test("spec 165 — workflow triggers on both push (main) and pull_request", () =
 
 // ---------- (3) Setup actions: pnpm + node with cache ----------
 
-test("spec 165 — workflow uses pnpm/action-setup@v4 and actions/setup-node@v4", () => {
+// Bumped from v4 when GitHub deprecated the Node 20 action runtime: each v4 was
+// being forced onto Node 24 with a warning on every run. pnpm/action-setup stays
+// at v5 (Node 24, pnpm 10 bootstrap) until the repository moves to pnpm 11.
+test("spec 165 — workflow uses pnpm/action-setup@v5, actions/setup-node@v7 and actions/checkout@v7", () => {
   const src = read(WORKFLOW_PATH);
   assert.match(
     src,
-    /uses:\s*pnpm\/action-setup@v4/,
-    "workflow must use `pnpm/action-setup@v4` so the pnpm version is auto-detected from the packageManager field in package.json",
+    /uses:\s*pnpm\/action-setup@v5/,
+    "workflow must use `pnpm/action-setup@v5` so the pnpm version is auto-detected from the packageManager field in package.json",
   );
   assert.match(
     src,
-    /uses:\s*actions\/setup-node@v4/,
-    "workflow must use `actions/setup-node@v4` for Node 22 + pnpm caching",
+    /uses:\s*actions\/setup-node@v7/,
+    "workflow must use `actions/setup-node@v7` for Node 22 + pnpm caching",
   );
   assert.match(
     src,
-    /uses:\s*actions\/checkout@v4/,
-    "workflow must use `actions/checkout@v4` to pull the source before any other step",
+    /uses:\s*actions\/checkout@v7/,
+    "workflow must use `actions/checkout@v7` to pull the source before any other step",
   );
 });
 

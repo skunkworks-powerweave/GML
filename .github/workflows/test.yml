@@ -5,6 +5,14 @@
 # all -- so it had never executed once. It also ran `pnpm -r typecheck` at a
 # time when only packages/db defined a `typecheck` script, meaning the
 # application itself was never type-checked, and it never ran lint.
+#
+# The runner is pinned to ubuntu-24.04 rather than ubuntu-latest, which moves
+# to Ubuntu 26 from 19 October 2026. The ffmpeg this workflow installs, and
+# which the transcode tests exercise, comes from the image's apt, so moving
+# to a new image should be a change someone makes on purpose. pnpm/action-setup
+# is held at v5 (Node 24, pnpm 10 bootstrap): v6 bootstraps pnpm 11 and
+# self-updates to the packageManager pin, which is the wrong direction for a
+# pnpm 10 repository. Move to v6 together with pnpm 11.
 name: ci
 
 on:
@@ -19,14 +27,14 @@ concurrency:
 jobs:
   static:
     name: lint · typecheck · build · governance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # packages/db/src/client.ts builds a pg Pool at import time and now THROWS
       # on a missing DATABASE_URL rather than silently inventing one, so the
       # build needs a URL it will never dial.
       DATABASE_URL: postgres://build:build@127.0.0.1:5432/build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The runbook's first command is `./scripts/deploy.sh`, and the cron lines
       # run backup.sh and restore.sh the same way. Every script was once
@@ -39,8 +47,8 @@ jobs:
             test -x "$f" || { echo "::error::$f is not executable -- git update-index --chmod=+x $f"; exit 1; }
           done
 
-      - uses: pnpm/action-setup@v4        # version comes from packageManager
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v5        # version comes from packageManager
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -64,7 +72,7 @@ jobs:
 
   behaviour:
     name: behavioural tests (real Postgres)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A REAL DATABASE. The governance suite reads source files and regex-matches
     # their text; not one of its assertions can observe a runtime behaviour. This
     # job is where things are actually executed.
@@ -98,9 +106,9 @@ jobs:
       # that distinction.
       DATABASE_URL: postgres://gml:gml@127.0.0.1:5432/gml_ci?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -129,17 +137,17 @@ jobs:
 
   images:
     name: container images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
 
       # Building the images in CI catches the class of defect that produced a
       # worker container with no source code in it: a Dockerfile can only be
       # verified by building it. Load, don't push -- no registry credentials are
       # needed for a correctness gate.
       - name: Build app image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/app.Dockerfile
@@ -148,7 +156,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build worker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/worker.Dockerfile
@@ -159,7 +167,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build migrate image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/migrate.Dockerfile
