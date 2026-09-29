@@ -74,6 +74,20 @@ test("_post/012 turns on pairing.final_submitted, once, unless every kind is off
   });
 });
 
+// Teaching records: "approval" is new with lib/approvals, which tells approvers
+// something is waiting and tells the sender what was decided.
+test("_post/014 turns on approval, once, unless every kind is off", { skip }, async () => {
+  await withClient(async (c) => {
+    const file = "014_approval_notification_kind.sql";
+    assert.deepEqual(
+      sorted(await after(c, file, ["helpdesk.ticket", "meeting.scheduled"])),
+      ["approval", "helpdesk.ticket", "meeting.scheduled"],
+      "added, and a second run adds no duplicate",
+    );
+    assert.deepEqual(await after(c, file, []), [], "every kind switched off stays off");
+  });
+});
+
 test("the column default names every kind the application writes", { skip }, async () => {
   await withClient(async (c) => {
     const { rows } = await c.query(
@@ -81,7 +95,7 @@ test("the column default names every kind the application writes", { skip }, asy
         WHERE table_schema = 'public' AND table_name = 'system_settings' AND column_name = 'notifications_enabled'`,
     );
     const d = String(rows[0]!.d);
-    for (const kind of ["helpdesk.ticket", "cycle.assigned", "cycle.complete", "meeting.scheduled", "meeting.cancelled", "pairing.final_submitted"]) {
+    for (const kind of ["helpdesk.ticket", "cycle.assigned", "cycle.complete", "meeting.scheduled", "meeting.cancelled", "pairing.final_submitted", "approval"]) {
       assert.ok(d.includes(`"${kind}"`), `${kind} is on by default: ${d}`);
     }
   });

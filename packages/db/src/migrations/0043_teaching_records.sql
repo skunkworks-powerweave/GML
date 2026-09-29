@@ -198,8 +198,7 @@ CREATE UNIQUE INDEX "course_outlines_teacher_uq" ON "course_outlines" USING btre
 CREATE INDEX "course_outlines_owner_idx" ON "course_outlines" USING btree ("owner_teacher_id");--> statement-breakpoint
 CREATE INDEX "sessions_approval_idx" ON "sessions" USING btree ("approval_status");--> statement-breakpoint
 ALTER TABLE "course_outlines" ADD CONSTRAINT "course_outlines_approval_status_check" CHECK ("course_outlines"."approval_status" IN ('draft', 'pending', 'approved', 'changes_requested', 'rejected'));--> statement-breakpoint
-ALTER TABLE "sessions" ADD CONSTRAINT "sessions_approval_status_check" CHECK ("sessions"."approval_status" IN ('draft', 'pending', 'approved', 'changes_requested', 'rejected'));--> statement-breakpoint
--- Existing deployments store the enabled notification kinds explicitly, so the
--- new "approval" kind would stay switched off and approval messages would never
--- reach an inbox. Turn it on wherever the list does not have it yet.
-UPDATE "system_settings" SET "notifications_enabled" = "notifications_enabled" || '["approval"]'::jsonb WHERE NOT ("notifications_enabled" ? 'approval');
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_approval_status_check" CHECK ("sessions"."approval_status" IN ('draft', 'pending', 'approved', 'changes_requested', 'rejected'));
+-- Turning the new "approval" kind on in an existing deployment's settings row
+-- is _post/014_approval_notification_kind.sql: that lane runs after _post/012,
+-- which would otherwise set the column default back without it.
