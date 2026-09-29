@@ -36,6 +36,9 @@ import enAdmin from "./locales/en/admin.json";
 import enAdminData from "./locales/en/adminData.json";
 import enVideo from "./locales/en/video.json";
 import enHelp from "./locales/en/help.json";
+import enTeaching from "./locales/en/teaching.json";
+import enGrading from "./locales/en/grading.json";
+import enApprovals from "./locales/en/approvals.json";
 import hiHome from "./locales/hi/home.json";
 import hiObservation from "./locales/hi/observation.json";
 import hiMentorship from "./locales/hi/mentorship.json";
@@ -45,6 +48,9 @@ import hiAdmin from "./locales/hi/admin.json";
 import hiAdminData from "./locales/hi/adminData.json";
 import hiVideo from "./locales/hi/video.json";
 import hiHelp from "./locales/hi/help.json";
+import hiTeaching from "./locales/hi/teaching.json";
+import hiGrading from "./locales/hi/grading.json";
+import hiApprovals from "./locales/hi/approvals.json";
 import boHome from "./locales/bo/home.json";
 import boObservation from "./locales/bo/observation.json";
 import boMentorship from "./locales/bo/mentorship.json";
@@ -54,6 +60,9 @@ import boAdmin from "./locales/bo/admin.json";
 import boAdminData from "./locales/bo/adminData.json";
 import boVideo from "./locales/bo/video.json";
 import boHelp from "./locales/bo/help.json";
+import boTeaching from "./locales/bo/teaching.json";
+import boGrading from "./locales/bo/grading.json";
+import boApprovals from "./locales/bo/approvals.json";
 
 export const SUPPORTED_LOCALES = ["en", "hi", "bo"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
@@ -95,12 +104,12 @@ type MessageNamespace = Record<string, MessageValue>;
 type MessageBundle = Record<string, MessageNamespace>;
 
 /** The page namespaces, per locale; see the imports above. */
-export const PAGE_NAMESPACES = ["home","observation","mentorship","rtt","repo","admin","adminData","video","help"] as const;
+export const PAGE_NAMESPACES = ["home","observation","mentorship","rtt","repo","admin","adminData","video","help","teaching","grading","approvals"] as const;
 
 const PAGE_MESSAGES: Record<Locale, MessageBundle> = {
-  en: { home: enHome, observation: enObservation, mentorship: enMentorship, rtt: enRtt, repo: enRepo, admin: enAdmin, adminData: enAdminData, video: enVideo, help: enHelp } as MessageBundle,
-  hi: { home: hiHome, observation: hiObservation, mentorship: hiMentorship, rtt: hiRtt, repo: hiRepo, admin: hiAdmin, adminData: hiAdminData, video: hiVideo, help: hiHelp } as MessageBundle,
-  bo: { home: boHome, observation: boObservation, mentorship: boMentorship, rtt: boRtt, repo: boRepo, admin: boAdmin, adminData: boAdminData, video: boVideo, help: boHelp } as MessageBundle,
+  en: { home: enHome, observation: enObservation, mentorship: enMentorship, rtt: enRtt, repo: enRepo, admin: enAdmin, adminData: enAdminData, video: enVideo, help: enHelp, teaching: enTeaching, grading: enGrading, approvals: enApprovals } as MessageBundle,
+  hi: { home: hiHome, observation: hiObservation, mentorship: hiMentorship, rtt: hiRtt, repo: hiRepo, admin: hiAdmin, adminData: hiAdminData, video: hiVideo, help: hiHelp, teaching: hiTeaching, grading: hiGrading, approvals: hiApprovals } as MessageBundle,
+  bo: { home: boHome, observation: boObservation, mentorship: boMentorship, rtt: boRtt, repo: boRepo, admin: boAdmin, adminData: boAdminData, video: boVideo, help: boHelp, teaching: boTeaching, grading: boGrading, approvals: boApprovals } as MessageBundle,
 };
 
 const MESSAGES: Record<Locale, MessageBundle> = {

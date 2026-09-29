@@ -27,8 +27,9 @@
 // `getClaims()` verifies the access token's signature LOCALLY against the
 // project's JWKS (this project signs ES256; the key set is fetched once and
 // cached), so reading a session costs no network call and no database query --
-// the same performance the old JWT had. The one exception is an administrative
-// role claim, which is confirmed against public.users (see auth()).
+// the same performance the old JWT had. The exceptions are an administrative
+// role claim, which is confirmed against public.users, and a teacher, whose
+// teacher record must not be deactivated (see auth()).
 //
 // The claims themselves are minted by `public.custom_access_token_hook`
 // (packages/db/src/migrations/_post/004). GoTrue calls it on sign-in AND on
@@ -61,7 +62,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { users } from "@gml/db/schema";
+import { teachers, users } from "@gml/db/schema";
 import { isRoleName, type RoleName } from "@gml/shared/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { rateLimit, rateLimitRefund } from "@/lib/rate-limit";
@@ -126,13 +127,28 @@ export async function auth(): Promise<Session | null> {
   // at 10:00 kept /admin/users until their token expired, which was long
   // enough to create a replacement super_admin account and make the demotion
   // pointless. Administrators are a handful of people, so the price is one
-  // primary-key read per request for them and nothing for the teachers.
+  // primary-key read per request for them. (Teachers pay one read of their
+  // teacher record, below; mentors and observers nothing.)
   let effectiveRole: RoleName = role;
   if (ADMIN_ROLES.has(role)) {
     const current = await currentRole(id);
     if (!current) return null;
     effectiveRole = current;
   }
+
+  // A TEACHER WHOSE TEACHER RECORD IS DEACTIVATED IS SIGNED OUT, NOW.
+  //
+  // Deactivating a teacher happens on her teachers row (the data tables'
+  // Active), not on her login, and nothing read that row at sign-in or on a
+  // request: she kept every page, and the access-token hook -- which checks
+  // public.users only -- went on minting her tokens. So for the teacher role
+  // the row is read here, once per request (cached), and an inactive one ends
+  // the session exactly as an inactive account does: auth() answers null
+  // everywhere, so pages send her to /login and APIs answer 401, and
+  // signInWithPassword refuses her with the "inactive" message. A teacher
+  // account with NO teachers row, and every other role, is unaffected. The
+  // price is one indexed read per teacher request (teachers_user_id_uq).
+  if (effectiveRole === "teacher" && (await teacherRecordLocked(id))) return null;
 
   return {
     user: {
@@ -230,6 +246,44 @@ const currentRole = cache(async (id: string): Promise<RoleName | null> => {
 });
 
 /**
+ * Is this teacher account locked out by its teacher record? True when the
+ * account's teachers row (at most one: teachers_user_id_uq) exists and is
+ * inactive; false when it is active or there is none. A failed read is true:
+ * auth() fails closed, as currentRole does. Cached per request.
+ */
+const teacherRecordLocked = cache(async (id: string): Promise<boolean> => {
+  try {
+    const [row] = await db
+      .select({ active: teachers.active })
+      .from(teachers)
+      .where(eq(teachers.userId, id))
+      .limit(1);
+    return Boolean(row && !row.active);
+  } catch {
+    return true;
+  }
+});
+
+/**
+ * After a correct password: is this account a teacher whose teacher record is
+ * inactive? "locked", "open", or "unknown" when it could not be read (the
+ * sign-in is then refused as unavailable rather than let through).
+ */
+async function signInTeacherRecord(id: string): Promise<"locked" | "open" | "unknown"> {
+  try {
+    const [row] = await db
+      .select({ role: users.role, teacherActive: teachers.active })
+      .from(users)
+      .leftJoin(teachers, eq(teachers.userId, users.id))
+      .where(eq(users.id, id))
+      .limit(1);
+    return row?.role === "teacher" && row.teacherActive === false ? "locked" : "open";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * Why a password sign-in failed. A CODE, not a sentence: the login page renders
  * it in the user's language (login.error.* in the locale bundles), and the
  * English literals this used to return reached Hindi and Bhoti screens as-is.
@@ -264,7 +318,17 @@ export async function signInWithPassword(
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: signInErrorCode(error) };
     await refundSignIn(allowed);
-    return { error: null, userId: data.user?.id };
+    // The credentials were right, so the session exists: a teacher whose
+    // teacher record is deactivated is signed straight back out of it and
+    // told what an inactive account is told (see auth()). Like the hook's
+    // 403, this is only reachable with the correct password.
+    const userId = data.user?.id;
+    const record = userId ? await signInTeacherRecord(userId) : "open";
+    if (record !== "open") {
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      return { error: record === "locked" ? "inactive" : "unavailable" };
+    }
+    return { error: null, userId };
   } catch {
     return { error: "unavailable" };
   }

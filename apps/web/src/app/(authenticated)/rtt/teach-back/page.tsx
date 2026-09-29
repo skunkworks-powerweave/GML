@@ -3,7 +3,15 @@
 // /mentorship and /videos as the visual reference. Selection of the right-pane
 // preview is driven by ?id=<submissionId> so the route stays a pure server
 // component — every "open" hits the database fresh, which is exactly what a
-// reviewer wants when they're about to mark something reviewed.
+// reviewer wants when they're about to decide on something.
+//
+// REVIEW IS A DECISION WITH FEEDBACK. The pane's one "Mark reviewed" button
+// told the teacher nothing. It is now Approve or Request changes, with written
+// feedback (required to request changes) the teacher reads on her subject
+// page; the decision goes through the approvals queue (lib/rtt/teach-back.ts,
+// POST /api/teach-back/[id]/review). A mentor decides only her own mentees'
+// teach-backs: another teacher's is listed (the queue is programme-wide, as
+// the badge is) but its pane offers her no decision.
 
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -15,7 +23,9 @@ import { rttSubjects, videoSubmissions, teachers, users } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { INTL_LOCALE, type Locale } from "@/i18n/config";
 import { isUuid } from "@/lib/authz";
+import { latestApprovals } from "@/lib/approvals";
 import { parsePage } from "@/lib/observation/list";
+import { mayReviewTeachBack } from "@/lib/rtt/teach-back";
 import { isPendingTeachBackReview, pendingTeachBackReviewWhere } from "@/lib/video/pending-review";
 
 export const dynamic = "force-dynamic";
@@ -40,20 +50,34 @@ const READ_ROLES = new Set(["super_admin", "programme_admin", "mentor", "observe
 
 const PAGE_SIZE = 80;
 
+/** Refusals the review route sends a browser back with (?error=), each with a line under rtt.teachBack.error. */
+const REVIEW_ERRORS = new Set(["feedback_required", "already_reviewed", "not_allowed", "invalid_decision"]);
+
 // Keyed on REVIEW STATE, not on video_submissions.status. The keys used to be
 // looked up with the raw status, but review_pending / reviewed are statuses
 // nothing writes (review is reviewed_at since migration 0022), so every chip
 // fell through to neutral grey and a reviewed clip looked exactly like one
 // still owed a review -- on the All tab, where the dashboard to-do lands.
-const STATUS_CHIP: Record<"review_pending" | "reviewed", { bg: string; ink: string }> = {
+const STATUS_CHIP: Record<"review_pending" | "reviewed" | "changes", { bg: string; ink: string }> = {
   review_pending: { bg: "var(--saffron-soft)", ink: "var(--saffron)" },
   reviewed: { bg: "var(--lichen-soft)", ink: "var(--lichen)" },
+  changes: { bg: "var(--rust-soft)", ink: "var(--rust)" },
 };
 
 const NEUTRAL_CHIP = { bg: "var(--paper-2)", ink: "var(--ink-3)" };
 
-/** Reviewed, owed a review (the shared definition), or its pipeline status. */
-function chipFor(r: { status: string; reviewedAt: Date | null }, t: Translate) {
+/** A teach-back's latest review request (lib/approvals latestApprovals). */
+type Decision = { status: string; comment: string | null; decidedAt: Date | null };
+
+/**
+ * The decision taken, reviewed (a clip reviewed before decisions existed),
+ * owed a review (the shared definition), or its pipeline status.
+ */
+function chipFor(r: { status: string; reviewedAt: Date | null }, decision: Decision | undefined, t: Translate) {
+  if (decision?.status === "approved") return { ...STATUS_CHIP.reviewed, label: t("teachBack.chipApproved") };
+  if (decision?.status === "changes_requested" || decision?.status === "rejected") {
+    return { ...STATUS_CHIP.changes, label: t("teachBack.chipChanges") };
+  }
   if (r.reviewedAt !== null) return { ...STATUS_CHIP.reviewed, label: t("teachBack.chipReviewed") };
   if (isPendingTeachBackReview({ contextType: "teach_back", status: r.status, reviewedAt: r.reviewedAt })) {
     return { ...STATUS_CHIP.review_pending, label: t("teachBack.chipPending") };
@@ -98,6 +122,8 @@ type Row = {
   hlsKey: string | null;
   /** Null until a mentor/observer reviews it. Review is NOT a `status` value. */
   reviewedAt: Date | null;
+  /** Who reviewed it: the account's name, else its email. */
+  reviewedBy: string | null;
   teacherName: string | null;
   teacherHindi: string | null;
   teacherSubject: string | null;
@@ -108,11 +134,12 @@ type Row = {
 export default async function TeachBackQueuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ id?: string; status?: string; page?: string }>;
+  searchParams: Promise<{ id?: string; status?: string; page?: string; error?: string; reviewed?: string }>;
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
   if (!READ_ROLES.has(session.user.role)) redirect("/forbidden");
+  const actor = { id: session.user.id, role: session.user.role };
   const t = await getTranslations("rtt");
   const intl = INTL_LOCALE[(await getLocale()) as Locale];
 
@@ -180,6 +207,7 @@ export default async function TeachBackQueuePage({
         captionRaw: videoSubmissions.captionRaw,
         hlsKey: videoSubmissions.hlsMasterKey,
         reviewedAt: videoSubmissions.reviewedAt,
+        reviewedBy: sql<string | null>`(SELECT coalesce(r.name, r.email) FROM users r WHERE r.id = ${videoSubmissions.reviewedByUserId})`,
         teacherName: teachers.fullName,
         teacherHindi: teachers.hindiName,
         teacherSubject: teachers.subjectSpecialism,
@@ -205,6 +233,23 @@ export default async function TeachBackQueuePage({
   ]);
   const selected = selectedRows[0] ?? null;
   const selectedId = selected?.id;
+  // Each listed clip's latest decision, and whether this reviewer may decide
+  // the open one (her own mentees only, for a mentor).
+  const decisions = await latestApprovals(db, "teach_back", [...new Set([...rows, ...selectedRows].map((r) => r.id))]);
+  const selectedDecision = selected ? decisions.get(selected.id) : undefined;
+  const decided = selectedDecision && selectedDecision.status !== "pending" ? selectedDecision : undefined;
+  const mayReview = selected ? await mayReviewTeachBack(db, actor, selected.id) : false;
+  // What the review route sent back to this clip for (?error=).
+  const reviewError = selected && sp.id === selected.id && sp.error && REVIEW_ERRORS.has(sp.error) ? sp.error : null;
+  const justReviewed = isUuid(sp.reviewed);
+  // The Approve / Request changes form is shown for a playable clip nobody has
+  // decided yet, to a reviewer who may decide it.
+  const formShown =
+    !!selected &&
+    !decided &&
+    selected.reviewedAt === null &&
+    isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) &&
+    mayReview;
   const from = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const to = rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + rows.length;
   const hasNext = page * PAGE_SIZE < total;
@@ -291,6 +336,23 @@ export default async function TeachBackQueuePage({
         </Link>
       </header>
 
+      {/* After a decision the route comes back here (?reviewed=<id>). */}
+      {justReviewed ? (
+        <p
+          role="status"
+          style={{
+            margin: "0 0 14px",
+            padding: "8px 12px",
+            background: "var(--lichen-soft)",
+            color: "var(--lichen)",
+            borderRadius: "var(--r-2)",
+            fontSize: 12,
+          }}
+        >
+          {t("teachBack.decisionRecorded")}
+        </p>
+      ) : null}
+
       {/* Wraps: three tabs with their counts are wider than a phone. A named
           nav, like the other RTT filters, and the tab that is on says so
           (aria-current): it was shown by its fill alone (F135). */}
@@ -351,7 +413,7 @@ export default async function TeachBackQueuePage({
           ) : (
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {rows.map((r) => {
-                const chip = chipFor(r, t);
+                const chip = chipFor(r, decisions.get(r.id), t);
                 const isSelected = selectedId === r.id;
                 return (
                   <li key={r.id}>
@@ -523,8 +585,8 @@ export default async function TeachBackQueuePage({
               <span
                 style={{
                   padding: "3px 10px",
-                  background: chipFor(selected, t).bg,
-                  color: chipFor(selected, t).ink,
+                  background: chipFor(selected, selectedDecision, t).bg,
+                  color: chipFor(selected, selectedDecision, t).ink,
                   borderRadius: 999,
                   fontSize: 10,
                   textTransform: "uppercase",
@@ -533,7 +595,7 @@ export default async function TeachBackQueuePage({
                   whiteSpace: "nowrap",
                 }}
               >
-                {chipFor(selected, t).label}
+                {chipFor(selected, selectedDecision, t).label}
               </span>
             </header>
 
@@ -625,7 +687,8 @@ export default async function TeachBackQueuePage({
               >
                 {t("teachBack.viewVideo")}
               </Link>
-              {selected.reviewedAt !== null ? (
+              {selected.reviewedAt !== null && !decided ? (
+                // Reviewed before decisions existed: no decision to show.
                 <span
                   style={{
                     padding: "8px 14px",
@@ -638,7 +701,8 @@ export default async function TeachBackQueuePage({
                 >
                   {t("teachBack.alreadyReviewed")}
                 </span>
-              ) : !isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) ? (
+              ) : selected.reviewedAt === null &&
+                !isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) ? (
                 // Not playable yet (or failed). The button used to render for
                 // every unreviewed row, and a review recorded now would keep
                 // the clip out of "Pending review" once it became watchable;
@@ -650,30 +714,122 @@ export default async function TeachBackQueuePage({
                     ? t("teachBack.failed")
                     : t("teachBack.waitReady", { status: statusText(selected.status, t) })}
                 </span>
-              ) : (
+              ) : null}
+            </div>
+
+            {decided ? (
+              // The decision taken, and the feedback the teacher was sent.
+              <section data-testid="teach-back-decision" style={{ display: "grid", gap: 6, fontSize: 12 }}>
+                <div style={{ color: "var(--ink-3)" }}>
+                  {t("teachBack.decidedBy", {
+                    decision: decided.status,
+                    name: selected.reviewedBy ?? t("teachBack.unknownReviewer"),
+                    date: fmtDateTime(decided.decidedAt, intl),
+                  })}
+                </div>
+                {decided.comment ? (
+                  <div>
+                    <div style={{ ...dtStyle, marginBottom: 4 }}>{t("teachBack.feedback")}</div>
+                    <p
+                      style={{
+                        margin: 0,
+                        background: "var(--paper)",
+                        border: "1px solid var(--line)",
+                        borderRadius: "var(--r-2)",
+                        padding: "10px 12px",
+                        color: "var(--ink-2)",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {decided.comment}
+                    </p>
+                  </div>
+                ) : null}
+              </section>
+            ) : selected.reviewedAt === null &&
+              isPendingTeachBackReview({ contextType: "teach_back", status: selected.status, reviewedAt: null }) ? (
+              mayReview ? (
+                // Approve, or Request changes with the feedback she needs. One
+                // form, two submit buttons (decision=...): works with no
+                // JavaScript, and a single column at phone width.
                 <form
                   method="POST"
                   action={`/api/teach-back/${selected.id}/review`}
-                  style={{ margin: 0 }}
+                  style={{ margin: 0, display: "grid", gap: 10 }}
                 >
-                  <button
-                    type="submit"
-                    style={{
-                      padding: "8px 14px",
-                      background: "var(--ink)",
-                      color: "var(--paper)",
-                      border: "none",
-                      borderRadius: "var(--r-2)",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {t("teachBack.markReviewed")}
-                  </button>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={dtStyle}>{t("teachBack.feedbackLabel")}</span>
+                    <textarea
+                      name="feedback"
+                      rows={4}
+                      maxLength={4000}
+                      aria-describedby="teach-back-feedback-hint"
+                      style={{
+                        width: "100%",
+                        padding: "8px 10px",
+                        border: "1px solid var(--line-2)",
+                        borderRadius: "var(--r-2)",
+                        background: "var(--card-hi)",
+                        fontSize: 13,
+                        fontFamily: "inherit",
+                      }}
+                    />
+                    <span id="teach-back-feedback-hint" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                      {t("teachBack.feedbackHint")}
+                    </span>
+                  </label>
+                  {reviewError ? (
+                    <p role="alert" style={{ margin: 0, color: "var(--rust)", fontSize: 12 }}>
+                      {t(`teachBack.error.${reviewError}`)}
+                    </p>
+                  ) : null}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="submit"
+                      name="decision"
+                      value="approved"
+                      style={{
+                        padding: "8px 14px",
+                        background: "var(--ink)",
+                        color: "var(--paper)",
+                        border: "none",
+                        borderRadius: "var(--r-2)",
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {t("teachBack.approve")}
+                    </button>
+                    <button
+                      type="submit"
+                      name="decision"
+                      value="changes_requested"
+                      style={{
+                        padding: "8px 14px",
+                        background: "var(--card-hi)",
+                        color: "var(--ink)",
+                        border: "1px solid var(--line-2)",
+                        borderRadius: "var(--r-2)",
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {t("teachBack.requestChanges")}
+                    </button>
+                  </div>
                 </form>
-              )}
-            </div>
+              ) : (
+                // Listed, but not hers to decide: another mentor's mentee.
+                <p style={{ margin: 0, color: "var(--ink-3)", fontSize: 12 }}>{t("teachBack.notYourMentee")}</p>
+              )
+            ) : null}
+            {reviewError && !formShown ? (
+              <p role="alert" style={{ margin: 0, color: "var(--rust)", fontSize: 12 }}>
+                {t(`teachBack.error.${reviewError}`)}
+              </p>
+            ) : null}
           </article>
         ) : null}
       </section>

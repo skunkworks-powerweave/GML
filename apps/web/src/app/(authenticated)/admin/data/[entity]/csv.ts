@@ -13,7 +13,7 @@ import Papa from "papaparse";
 import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
-import type { AdminEntity } from "@/admin/types";
+import type { AdminDb, AdminEntity } from "@/admin/types";
 import { exportColumnKeys } from "@/admin/export-columns";
 import { entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
@@ -24,6 +24,7 @@ import { adminMessage, problemsText, type Translate } from "@/admin/labels";
 import { MutationRefused, updateAudit } from "@/admin/audit-image";
 import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { keepStoredPrecision } from "@/admin/dates";
+import { keepDerivedCounts } from "@/admin/derived-counts";
 import { requireRole } from "@/lib/guards";
 import { withAudit } from "@/lib/audit";
 import { lookupOwn } from "@/lib/lookup";
@@ -251,7 +252,8 @@ export async function exportCsv(slug: string): Promise<Response> {
 
   // Fire-and-forget audit row.
   const audited = withAudit(async () => {}, {
-    action: `${entity.slug}.bulk_export`,
+    // auditName where the slug is not a valid action segment (docs/audit-actions.md).
+    action: entity.auditName ? `${entity.auditName}.bulk_export` : `${entity.slug}.bulk_export`,
     entityType: entity.slug,
     metadata: { rowCount: rows.length, filename, truncated },
   });
@@ -283,8 +285,10 @@ export async function importCsv(slug: string, csv: string): Promise<{
   errors: { row: number; message: string }[];
 }> {
   const entity = getEntityOrThrow(slug);
-  await requireRole(mutateRolesFor(entity));
+  const session = await requireRole(mutateRolesFor(entity));
   const t = await translator();
+  // The columns the server sets itself on each row it writes (AdminEntity.writeStamp).
+  const stamp = (op: "create" | "update") => entity.writeStamp?.({ userId: session.user.id, op }) ?? {};
 
   const parsed = Papa.parse<Record<string, string>>(csv, {
     header: true,
@@ -431,7 +435,8 @@ export async function importCsv(slug: string, csv: string): Promise<{
   // savepoint; a chunk the database refuses is retried row by row, each in
   // its own savepoint, so exactly the offending rows are reported -- by line,
   // in words (admin/db-errors.ts) -- and every other row lands.
-  const perRow = entity.formFields.length + 1;
+  // A bind parameter per field, the id, and each stamped column.
+  const perRow = entity.formFields.length + 1 + Object.keys(stamp("create")).length;
   const chunkSize = Math.max(1, Math.floor(IMPORT_PARAMETER_BUDGET / perRow));
   const errorsBefore = errors.length;
   const newRows = validRows.filter((r) => !r.id);
@@ -439,87 +444,101 @@ export async function importCsv(slug: string, csv: string): Promise<{
 
   const audited = withAudit(
     async () =>
-      db.transaction(async (tx) => {
-        let inserted = 0;
-        let updated = 0;
-        // What each update changed, for the audit row, as the grid's own
-        // update records it (admin/audit-image.ts). Capped: a file can
-        // carry thousands of rows.
-        const updates: Array<Record<string, unknown>> = [];
+      db.transaction(async (tx) =>
+        // The numbers the rows move (a student's attendance: its session's
+        // counts), brought up to date in the same transaction
+        // (admin/derived-counts.ts): the rows as the file gives them, and as
+        // stored before an update.
+        keepDerivedCounts(
+          entity.slug,
+          tx as unknown as AdminDb,
+          [
+            ...validRows.map((r) => (r.id ? { ...r.data, id: r.id } : r.data)),
+            ...idRows.flatMap((r) => (r.id && existing.has(r.id) ? [existing.get(r.id)!] : [])),
+          ],
+          async () => {
+            let inserted = 0;
+            let updated = 0;
+            // What each update changed, for the audit row, as the grid's own
+            // update records it (admin/audit-image.ts). Capped: a file can
+            // carry thousands of rows.
+            const updates: Array<Record<string, unknown>> = [];
 
-        // Rows naming an id: that row, updated through the same read-lock-
-        // guard-write as the grid's edit (a signed-off observation cycle
-        // keeps its teacher here too), or inserted under that id.
-        for (const row of idRows) {
-          try {
-            await tx.transaction(async (sp) => {
-              const [before] = (await sp
-                .select()
-                .from(entity.table as never)
-                .where(eq(idCol as never, row.id!))
-                .for("update")) as Record<string, unknown>[];
-              // Checked above as a new row or as a change to this one; a row
-              // that appeared or vanished since is refused, not guessed at.
-              if (!before) {
-                if (row.update) throw new MutationRefused(t("write.rowGone"));
-                await sp.insert(entity.table as never).values({ ...row.data, id: row.id } as never);
-                inserted += 1;
-                return;
+            // Rows naming an id: that row, updated through the same read-lock-
+            // guard-write as the grid's edit (a signed-off observation cycle
+            // keeps its teacher here too), or inserted under that id.
+            for (const row of idRows) {
+              try {
+                await tx.transaction(async (sp) => {
+                  const [before] = (await sp
+                    .select()
+                    .from(entity.table as never)
+                    .where(eq(idCol as never, row.id!))
+                    .for("update")) as Record<string, unknown>[];
+                  // Checked above as a new row or as a change to this one; a row
+                  // that appeared or vanished since is refused, not guessed at.
+                  if (!before) {
+                    if (row.update) throw new MutationRefused(t("write.rowGone"));
+                    await sp.insert(entity.table as never).values({ ...row.data, ...stamp("create"), id: row.id } as never);
+                    inserted += 1;
+                    return;
+                  }
+                  if (!row.update) {
+                    throw new MutationRefused(t("import.addedMeanwhile"));
+                  }
+                  // As the grid's edit: a hand-typed minute equal to the stored
+                  // time keeps its seconds.
+                  const next = keepStoredPrecision(before, row.data);
+                  const reason = entity.guardMutation?.("update", before, { ...before, ...next });
+                  if (reason) throw new MutationRefused(adminMessage(t, reason));
+                  // A file of ids alone changes nothing, and UPDATE needs a column.
+                  if (Object.keys(next).length > 0) {
+                    await sp
+                      .update(entity.table as never)
+                      .set({ ...next, ...stamp("update") } as never)
+                      .where(eq(idCol as never, row.id!));
+                  }
+                  updated += 1;
+                  if (updates.length < IMPORT_AUDITED_UPDATES) {
+                    updates.push({ id: row.id, ...updateAudit(entity, before, next) });
+                  }
+                });
+              } catch (err) {
+                errors.push({
+                  row: row.line,
+                  message: err instanceof MutationRefused ? err.message : describeWriteError(t, entity, err).text,
+                });
               }
-              if (!row.update) {
-                throw new MutationRefused(t("import.addedMeanwhile"));
-              }
-              // As the grid's edit: a hand-typed minute equal to the stored
-              // time keeps its seconds.
-              const next = keepStoredPrecision(before, row.data);
-              const reason = entity.guardMutation?.("update", before, { ...before, ...next });
-              if (reason) throw new MutationRefused(adminMessage(t, reason));
-              // A file of ids alone changes nothing, and UPDATE needs a column.
-              if (Object.keys(next).length > 0) {
-                await sp
-                  .update(entity.table as never)
-                  .set(next as never)
-                  .where(eq(idCol as never, row.id!));
-              }
-              updated += 1;
-              if (updates.length < IMPORT_AUDITED_UPDATES) {
-                updates.push({ id: row.id, ...updateAudit(entity, before, next) });
-              }
-            });
-          } catch (err) {
-            errors.push({
-              row: row.line,
-              message: err instanceof MutationRefused ? err.message : describeWriteError(t, entity, err).text,
-            });
-          }
-        }
-
-        for (let start = 0; start < newRows.length; start += chunkSize) {
-          const chunk = newRows.slice(start, start + chunkSize);
-          try {
-            await tx.transaction(async (sp) => {
-              await sp.insert(entity.table as never).values(chunk.map((r) => r.data) as never);
-            });
-            inserted += chunk.length;
-            continue;
-          } catch {
-            // Fall through: find the rows the database refuses.
-          }
-          for (const row of chunk) {
-            try {
-              await tx.transaction(async (sp) => {
-                await sp.insert(entity.table as never).values(row.data as never);
-              });
-              inserted += 1;
-            } catch (err) {
-              errors.push({ row: row.line, message: describeWriteError(t, entity, err).text });
             }
-          }
-        }
-        return { inserted, updated, updates };
-      }),
+
+            for (let start = 0; start < newRows.length; start += chunkSize) {
+              const chunk = newRows.slice(start, start + chunkSize);
+              try {
+                await tx.transaction(async (sp) => {
+                  await sp.insert(entity.table as never).values(chunk.map((r) => ({ ...r.data, ...stamp("create") })) as never);
+                });
+                inserted += chunk.length;
+                continue;
+              } catch {
+                // Fall through: find the rows the database refuses.
+              }
+              for (const row of chunk) {
+                try {
+                  await tx.transaction(async (sp) => {
+                    await sp.insert(entity.table as never).values({ ...row.data, ...stamp("create") } as never);
+                  });
+                  inserted += 1;
+                } catch (err) {
+                  errors.push({ row: row.line, message: describeWriteError(t, entity, err).text });
+                }
+              }
+            }
+            return { inserted, updated, updates };
+          },
+        ),
+      ),
     {
-      action: `${entity.slug}.bulk_import`,
+      action: entity.auditName ? `${entity.auditName}.bulk_import` : `${entity.slug}.bulk_import`,
       entityType: entity.slug,
       metadata: {},
       metadataFrom: ({ inserted, updated, updates }) => ({

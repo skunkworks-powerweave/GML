@@ -23,6 +23,7 @@ import { uuidOrNotFound } from "@/lib/ids";
 import { actorFrom } from "@/lib/authz";
 import { teacherCycleHistory, teacherPairingHistory } from "@/lib/gated-reads";
 import { mentorshipAccess, observationAccess } from "@/lib/visibility";
+import { mayOpenTeacher, repoScope } from "@/lib/teaching/visibility";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
 import { enumLabel, present, repoIntlLocale } from "@/components/repo/repo-i18n";
@@ -86,6 +87,10 @@ export default async function RepoTeacherDetailPage({
 
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
+  // A teacher opens her own profile only. A colleague's profile -- her phone,
+  // her sessions, her school and phase -- answers 404, as a record that does
+  // not exist would (lib/teaching/visibility.ts). Other roles are unchanged.
+  if (!mayOpenTeacher(await repoScope(db, actor), id)) notFound();
 
   const [teacher] = await db
     .select()
@@ -136,8 +141,8 @@ export default async function RepoTeacherDetailPage({
     .limit(12);
 
   // The teacher's own profile -- name, subject, school, phase, sessions -- is
-  // directory data and stays visible to any signed-in user; that is what /repo
-  // is for. THE OBSERVATION HISTORY AND THE MENTOR PAIRING ARE NOT. Both were
+  // directory data for staff (a teacher reaches only her own, checked above).
+  // THE OBSERVATION HISTORY AND THE MENTOR PAIRING ARE NOT. Both were
   // bare `teacher_id = $1` selects on a page outside the observation and
   // mentorship section gates, so any teacher could open a colleague from
   // /repo/teachers and read her cycle codes, topics, evaluative-vs-developmental

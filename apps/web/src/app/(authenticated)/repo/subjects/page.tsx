@@ -20,6 +20,8 @@ import {
   resourceSubjects,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { andAlso, outlinesWhere, repoScope, sessionsWhere } from "@/lib/teaching/visibility";
 // Spec 138 — mobile card-list fallback (desktop keeps the table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
@@ -62,6 +64,12 @@ export default async function RepoSubjectsIndexPage({
 }) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  // Subjects are reference data and every one stays listed. For a teacher the
+  // counts beside them are her own: approved programme outlines and her plans,
+  // her sessions (lib/teaching/visibility.ts). Other roles: as before.
+  const scope = await repoScope(db, actor);
   const t = await getTranslations("repo");
 
   const sp = await searchParams;
@@ -103,11 +111,11 @@ export default async function RepoSubjectsIndexPage({
       displayOrder: subjects.displayOrder,
       outlines: sql<number>`(
         SELECT COUNT(*)::int FROM ${courseOutlines}
-        WHERE ${courseOutlines.subjectId} = ${subjects.id}
+        WHERE ${courseOutlines.subjectId} = ${subjects.id}${andAlso(outlinesWhere(scope))}
       )`.as("outlines"),
       sessions: sql<number>`(
         SELECT COUNT(*)::int FROM ${classroomSessions}
-        WHERE ${classroomSessions.subjectId} = ${subjects.id}
+        WHERE ${classroomSessions.subjectId} = ${subjects.id}${andAlso(sessionsWhere(scope))}
       )`.as("sessions"),
       readings: sql<number>`(
         SELECT COUNT(*)::int FROM ${resourceSubjects}

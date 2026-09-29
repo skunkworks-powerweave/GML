@@ -43,7 +43,9 @@ export type QuickFindResult = {
     | "observation_cycle"
     | "mentor_pairing"
     | "outline"
-    | "session";
+    | "session"
+    | "resource"
+    | "rtt_subject";
   id: string;
   label: string;
   sublabel: string;
@@ -69,6 +71,8 @@ const KIND_KEY: Record<QuickFindResult["kind"], string> = {
   mentor_pairing: "mentorPairing",
   outline: "outline",
   session: "session",
+  resource: "resource",
+  rtt_subject: "rttSubject",
 };
 
 /**

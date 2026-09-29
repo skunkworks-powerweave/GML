@@ -85,6 +85,18 @@ const CRUMB_KEY: Record<string, string> = {
   progress: "progress",
   "teach-back": "teachBack",
 
+  // teaching records: a teacher's own records, the approvals queue, RTT
+  // attendance and the grade scales and rubrics
+  approvals: "approvals",
+  attendance: "attendance",
+  teaching: "teaching",
+  classes: "classes",
+  plans: "plans",
+  marks: "marks",
+  grading: "grading",
+  rubrics: "rubrics",
+  scales: "scales",
+
   // the rest: forms, observation, quizzes, mentorship and repo sub-pages
   new: "new",
   history: "history",
@@ -114,6 +126,10 @@ export const ROUTABLE: readonly string[] = [
   "/admin/forms",
   "/admin/forms/[id]",
   "/admin/gates",
+  // Grade scales and rubrics (teaching-records design).
+  "/admin/grading",
+  "/admin/grading/rubrics/[id]",
+  "/admin/grading/scales/[id]",
   "/admin/quizzes",
   "/admin/quizzes/[id]",
   "/admin/scorm",
@@ -122,6 +138,12 @@ export const ROUTABLE: readonly string[] = [
   "/admin/transcode-jobs",
   "/admin/users",
   "/admin/whatsapp-log",
+  // The approvals queue and one request (teaching-records design).
+  "/approvals",
+  "/approvals/[id]",
+  // Admins marking teachers' RTT attendance (teaching-records design).
+  "/attendance",
+  "/attendance/[rttSessionId]",
   "/dashboard",
   "/forms",
   "/forms/[slug]",
@@ -164,6 +186,16 @@ export const ROUTABLE: readonly string[] = [
   "/rtt/teach-back",
   "/scorm/[id]",
   "/settings",
+  // A teacher's own records (teaching-records design).
+  "/teaching",
+  "/teaching/classes",
+  "/teaching/marks",
+  "/teaching/marks/[id]",
+  "/teaching/plans",
+  "/teaching/plans/[id]",
+  "/teaching/sessions",
+  "/teaching/sessions/[id]",
+  "/teaching/students",
   "/uploads",
   "/videos",
   "/videos/[id]",

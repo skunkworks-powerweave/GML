@@ -23,6 +23,8 @@ import {
   sessions as classroomSessions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { andAlso, classesWhere, repoScope, schoolsWhere, sessionsWhere, teachersWhere } from "@/lib/teaching/visibility";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
@@ -82,6 +84,13 @@ export default async function RepoSchoolsIndexPage({
   if (!READ_ROLES.has(role)) {
     redirect("/forbidden");
   }
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  // A teacher sees her own school only, and its counts are her own: herself,
+  // the classes she teaches, her sessions -- not the school's roster or its
+  // other teachers' sessions (lib/teaching/visibility.ts). For every other
+  // role each predicate is undefined and the SQL is as it was.
+  const scope = await repoScope(db, actor);
 
   const sp = await searchParams;
   const districtFilter = (sp.district ?? "all").toLowerCase();
@@ -99,9 +108,9 @@ export default async function RepoSchoolsIndexPage({
   // ?q=<one school> aggregated every session ever logged. The unfiltered view
   // lists nearly every school, so it gains little: the saving is on the
   // district and ?q= views.
-  const teachersTotal = sql<number>`(select count(*)::int from ${teachers} where ${teachers.schoolId} = ${schools.id} and ${eq(teachers.active, true)})`;
-  const classesTotal = sql<number>`(select count(*)::int from ${classes} where ${classes.schoolId} = ${schools.id} and ${eq(classes.active, true)})`;
-  const sessionsTotal = sql<number>`(select count(*)::int from ${classroomSessions} where ${classroomSessions.schoolId} = ${schools.id})`;
+  const teachersTotal = sql<number>`(select count(*)::int from ${teachers} where ${teachers.schoolId} = ${schools.id} and ${eq(teachers.active, true)}${andAlso(teachersWhere(scope))})`;
+  const classesTotal = sql<number>`(select count(*)::int from ${classes} where ${classes.schoolId} = ${schools.id} and ${eq(classes.active, true)}${andAlso(classesWhere(scope))})`;
+  const sessionsTotal = sql<number>`(select count(*)::int from ${classroomSessions} where ${classroomSessions.schoolId} = ${schools.id}${andAlso(sessionsWhere(scope))})`;
 
   // Spec 129 — build the district WHERE clause server-side. Accept either
   // the JSX-prototype's "kgl" code or the longer "kargil" canonical form so
@@ -129,6 +138,8 @@ export default async function RepoSchoolsIndexPage({
     ? ilike(schools.name, `%${escapeIlike(qFilter)}%`)
     : undefined;
   const conds: SQL[] = [eq(schools.active, true)];
+  const ownSchool = schoolsWhere(scope);
+  if (ownSchool) conds.push(ownSchool);
   if (districtCond) conds.push(districtCond);
   if (qCond) conds.push(qCond);
   const whereCond = and(...conds);
@@ -162,7 +173,7 @@ export default async function RepoSchoolsIndexPage({
     .from(schools)
     .leftJoin(zones, eq(schools.zoneId, zones.id))
     .leftJoin(districts, eq(zones.districtId, districts.id))
-    .where(eq(schools.active, true))
+    .where(and(eq(schools.active, true), ownSchool))
     .groupBy(districts.code);
 
   const totalSchools = countRows.reduce((acc, r) => acc + r.n, 0);

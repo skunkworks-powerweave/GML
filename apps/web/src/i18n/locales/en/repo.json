@@ -409,6 +409,17 @@
     "footer": "PDF viewing is logged. Document is confidential — do not redistribute. (Anti-download is a deterrent, not DRM.)",
     "watermarkFallback": "viewer"
   },
+  "own": {
+    "notice": "Your own records: your profile, the classes you teach, your students, your sessions and your lesson plans. Subjects, programme outlines and reading material are shared with everyone.",
+    "sessionsTitle": "Your sessions ({count})"
+  },
+  "approval": {
+    "draft": "Draft",
+    "pending": "Pending approval",
+    "approved": "Approved",
+    "changes_requested": "Changes requested",
+    "rejected": "Not approved"
+  },
   "client": {
     "pdfViewer": {
       "title": "PDF document viewer"

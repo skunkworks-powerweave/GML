@@ -152,9 +152,11 @@ test("spec 152 — SM-9 audit metadata block includes skippedFilters alongside f
     "audit metadata must include skippedFilters so SM-9 captures user intent on rejected filters",
   );
   // The recordAudit call should be the PII-audited (*.view) one.
+  // An entity whose slug has a hyphen names its audit prefix (auditName:
+  // session-attendance -> session_attendance.view); every other one is its slug.
   assert.match(
     src,
-    /action:\s*`\$\{entity\.slug\}\.view`/,
+    /action:\s*(?:entity\.auditName\s*\?\s*`\$\{entity\.auditName\}\.view`\s*:\s*)?`\$\{entity\.slug\}\.view`/,
     "the PII audit hook for entity.slug.view must still fire",
   );
 });

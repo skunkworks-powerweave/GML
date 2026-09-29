@@ -32,6 +32,9 @@ const code = (src) =>
 
 const ACTIONS_PATH = "apps/web/src/app/(authenticated)/observation/[cycleId]/actions.ts";
 const PAGE_PATH = "apps/web/src/app/(authenticated)/observation/[cycleId]/page.tsx";
+// Sign-off became a decision on an approval request (teaching records,
+// 2026-09-28): what the decision does to the cycle lives here.
+const SIGNOFF_LIB_PATH = "apps/web/src/lib/observation/cycle-signoff.ts";
 
 test("spec 117 — actions.ts exists and declares use-server", () => {
   assert.ok(existsSync(resolve(root, ACTIONS_PATH)), `${ACTIONS_PATH} must exist`);
@@ -86,13 +89,32 @@ test("spec 117 — sign-off action has the high-trust role gate (no teacher, no 
 });
 
 test("spec 117 — all transitions go through a guarded UPDATE with status in WHERE clause", () => {
-  const src = read(ACTIONS_PATH);
+  // MOVED (teaching records, 2026-09-28). Sign-off is now a decision on the
+  // cycle's observation_signoff approval request, taken on the cycle page or on
+  // /approvals, so the sign-off and send-back transitions live with the
+  // approval handler's helper in lib/observation/cycle-signoff.ts. The three
+  // form submissions keep their guarded UPDATE in actions.ts
+  // (submitFormAndTransition, asserted below).
+  const lib = code(read(SIGNOFF_LIB_PATH));
+  const helper = lib.slice(lib.indexOf("export async function transitionCycleStatus("));
+  assert.ok(helper.length > 0 && lib.includes("export async function transitionCycleStatus("), "the guarded helper must exist");
   // The helper performs an atomic UPDATE ... WHERE id = ? AND status = ? RETURNING ...
+  assert.match(helper, /\.update\(observationCycles\)/);
+  assert.match(helper, /\.set\(\{[\s\S]*?status:\s*to/);
+  assert.match(helper, /eq\(observationCycles\.status,\s*from\)/);
+  assert.match(helper, /\.returning\(\{\s*code:\s*observationCycles\.code\s*\}\)/);
+  assert.match(helper, /updated\.length\s*===\s*0/);
+  // Both decisions go through it, and a failed precondition rolls the decision back.
+  assert.match(lib, /transitionCycleStatus\(tx,\s*cycleId,\s*"post_submitted",\s*"complete"\)/);
+  assert.match(lib, /transitionCycleStatus\(tx,\s*cycleId,\s*"post_submitted",\s*"observed"\)/);
+  assert.match(lib, /throw new CycleStateError/);
+
+  // The form submissions: the same guarded shape, and the zero-rows path is an
+  // invalid_transition redirect.
+  const src = read(ACTIONS_PATH);
   assert.match(src, /\.update\(observationCycles\)/);
-  assert.match(src, /\.set\(\{[\s\S]*?status:\s*to/);
-  assert.match(src, /eq\(observationCycles\.status,\s*from\)/);
+  assert.match(src, /eq\(observationCycles\.status,\s*opts\.from\)/);
   assert.match(src, /\.returning\(\{\s*code:\s*observationCycles\.code\s*\}\)/);
-  // Zero-rows path → invalid_transition redirect.
   assert.match(src, /invalid_transition/);
   assert.match(src, /updated\.length\s*===\s*0/);
 });
@@ -180,15 +202,21 @@ test("spec 117 — each action calls recordAudit with the correct dotted action 
   assert.match(src, /action:\s*"observation\.pre_form\.submitted"/);
   assert.match(src, /action:\s*"observation\.observer_form\.submitted"/);
   assert.match(src, /action:\s*"observation\.post_form\.submitted"/);
-  assert.match(src, /action:\s*"observation\.signed_off"/);
+  assert.match(src, /action:\s*"observation\.scores\.saved"/);
   assert.match(src, /action:\s*"observation\.note\.added"/);
+  // MOVED: the sign-off and send-back rows are written by the approval
+  // handler's helper, whichever page the decision was taken on.
+  const lib = code(read(SIGNOFF_LIB_PATH));
+  assert.match(lib, /from\s+"\.\.\/audit"/);
+  assert.match(lib, /action:\s*"observation\.signed_off"/);
+  assert.match(lib, /action:\s*"observation\.cycle\.sent_back"/);
   // Best-effort void prefix so audit failure doesn't block the user flow.
   const voidMatches = src.match(/void\s+recordAudit/g) ?? [];
-  assert.ok(voidMatches.length >= 5, `recordAudit must be void-prefixed in all 5 actions (got ${voidMatches.length})`);
+  assert.ok(voidMatches.length >= 5, `recordAudit must be void-prefixed in the actions (got ${voidMatches.length})`);
 });
 
 test("spec 117 — sign-off audit metadata carries signedByUserId and signedAt", () => {
-  const src = read(ACTIONS_PATH);
+  const src = code(read(SIGNOFF_LIB_PATH));
   const m = src.match(/action:\s*"observation\.signed_off"[\s\S]*?\}\s*\)/);
   assert.ok(m, "sign-off recordAudit block must be locatable");
   assert.match(m[0], /signedByUserId/);

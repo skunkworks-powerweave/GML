@@ -209,6 +209,10 @@
         "digestWeekly": {
           "label": "Weekly digest",
           "hint": "Friday roll-up across all activities"
+        },
+        "approval": {
+          "label": "Approvals",
+          "hint": "Approvers are told when something waits for them; the person who sent it is told the decision"
         }
       }
     },

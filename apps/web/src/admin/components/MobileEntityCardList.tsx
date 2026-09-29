@@ -43,6 +43,19 @@ export type MobileEntityCardListProps = {
   columns: MobileCardColumn[];
   /** Optional override for how many of `columns` (after title) to show as KV pairs. */
   maxKvFields?: number;
+  /**
+   * Whether the viewer may download the table (admin/access.ts
+   * exportRolesFor, and super_admin for learners). The Export button was on
+   * every card for every reader, so a programme_admin on learners was sent to
+   * /forbidden -- the desktop header already hid it.
+   */
+  canExport?: boolean;
+  /**
+   * Whether the viewer may change rows. The card button opens the grid's
+   * ?edit= panel either way: the edit form (and Delete) for a writer, the
+   * row's read-only details for anyone else; its label says which.
+   */
+  canEdit?: boolean;
 };
 
 const DEFAULT_KV_COUNT = 3;
@@ -145,6 +158,8 @@ export function MobileEntityCardList({
   rows,
   columns,
   maxKvFields = DEFAULT_KV_COUNT,
+  canExport = true,
+  canEdit = true,
 }: MobileEntityCardListProps) {
   const t = useTranslations("adminData.client");
   const yesNo = (v: boolean) => (v ? t("mobileCards.yes") : t("mobileCards.no"));
@@ -169,7 +184,9 @@ export function MobileEntityCardList({
           textAlign: "center",
         }}
       >
-        {t("mobileCards.empty", { entity: entityLabel.toLowerCase() })}
+        {canEdit
+          ? t("mobileCards.empty", { entity: entityLabel.toLowerCase() })
+          : t("mobileCards.emptyReadOnly", { entity: entityLabel.toLowerCase() })}
       </div>
     );
   }
@@ -261,19 +278,23 @@ export function MobileEntityCardList({
             </dl>
 
             <div style={buttonRowStyle}>
-              <a
-                href={csvHref}
-                style={buttonBaseStyle}
-                title={t("mobileCards.exportTitle", { entity: entityLabel })}
-              >
-                {t("mobileCards.export")}
-              </a>
+              {canExport ? (
+                <a
+                  href={csvHref}
+                  style={buttonBaseStyle}
+                  title={t("mobileCards.exportTitle", { entity: entityLabel })}
+                  data-card-action="export"
+                >
+                  {t("mobileCards.export")}
+                </a>
+              ) : null}
               <a
                 href={viewHref}
                 style={buttonPrimaryStyle}
                 title={t("mobileCards.viewTitle", { title: titleValue })}
+                data-card-action={canEdit ? "edit" : "view"}
               >
-                {t("mobileCards.view")}
+                {canEdit ? t("mobileCards.edit") : t("mobileCards.view")}
               </a>
             </div>
           </article>

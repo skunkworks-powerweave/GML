@@ -17,6 +17,7 @@ import {
   quizSubmissions,
 } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { quizGrader } from "@/lib/grading/quiz";
 import { quizShownTo } from "../../quiz-scope";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,10 @@ export default async function QuizResultPage({
   const passed = submission.passed;
   const score = submission.score;
   const threshold = quiz.passThreshold;
+  // The grade band beside pass/fail: the quiz's own scale, else the default
+  // quiz scale; none when neither exists (lib/grading/quiz.ts).
+  const tGrading = await getTranslations("grading");
+  const band = (await quizGrader(db, quiz)).bandOf(score);
 
   // ── THE ANSWER KEY IS SHOWN ONLY WHEN IT CAN NO LONGER BE USED ────────────
   //
@@ -202,6 +207,25 @@ export default async function QuizResultPage({
           >
             {passed ? t("result.passBadge", { threshold }) : t("result.failBadge", { threshold })}
           </div>
+          {band ? (
+            <div
+              data-testid="quiz-result-grade"
+              style={{
+                display: "inline-block",
+                marginTop: 8,
+                marginLeft: 8,
+                padding: "4px 12px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontFamily: "var(--mono)",
+                letterSpacing: "0.05em",
+                border: "1px solid var(--line-2)",
+                color: "var(--ink)",
+              }}
+            >
+              {tGrading("quiz.grade", { grade: band.label })}
+            </div>
+          ) : null}
           <div
             style={{
               fontSize: 13,

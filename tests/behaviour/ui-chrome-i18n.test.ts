@@ -35,12 +35,16 @@ const crumbT = (locale: "en" | "hi" | "bo") => (key: string) => {
   return v;
 };
 
-/** Every static segment of every page under app/(authenticated). */
+/**
+ * Every static segment of every page under app/(authenticated). A `_folder` is
+ * a Next private folder (teaching/_components, admin/grading/_ui): never part
+ * of a URL, so never a crumb.
+ */
 function staticSegments(dir = join(SRC_DIR, "app", "(authenticated)")): Set<string> {
   const out = new Set<string>();
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (!statSync(p).isDirectory()) continue;
+    if (!statSync(p).isDirectory() || name.startsWith("_")) continue;
     if (!name.startsWith("[")) out.add(name);
     for (const s of staticSegments(p)) out.add(s);
   }

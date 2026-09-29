@@ -30,6 +30,7 @@ import { auth } from "@/auth";
 import { actorFrom } from "@/lib/authz";
 import { cycleCountsByTeacher } from "@/lib/gated-reads";
 import { observationAccess } from "@/lib/visibility";
+import { repoScope, schoolsWhere, teachersWhere } from "@/lib/teaching/visibility";
 // Spec 138 — mobile card-list fallback (desktop keeps the 8-col table).
 import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
@@ -110,7 +111,14 @@ export default async function RepoTeachersIndexPage({
   const cycleCounts = cycleCountsByTeacher(db, observation);
   const cyclesLabel = (n: number | null) => (observation.granted ? String(n ?? 0) : "—");
 
+  // A teacher sees herself only: the directory, with colleagues' phones and
+  // session counts, is not hers to read (lib/teaching/visibility.ts). Every
+  // other role keeps the programme-wide list.
+  const scope = await repoScope(db, actor);
+  const own = teachersWhere(scope);
+
   const conds: SQL[] = [eq(teachers.active, true)];
+  if (own) conds.push(own);
   if (schoolFilter) conds.push(eq(teachers.schoolId, schoolFilter));
   if (phaseFilter) conds.push(eq(teachers.currentPhaseId, phaseFilter));
   // Spec 158 — combine the new ?q= filter via and(...).
@@ -143,7 +151,7 @@ export default async function RepoTeachersIndexPage({
   const schoolOptions = await db
     .select({ id: schools.id, code: schools.code, name: schools.name })
     .from(schools)
-    .where(eq(schools.active, true))
+    .where(and(eq(schools.active, true), schoolsWhere(scope)))
     .orderBy(asc(schools.name));
   const phaseOptions = await db
     .select({ id: phases.id, label: phases.label })

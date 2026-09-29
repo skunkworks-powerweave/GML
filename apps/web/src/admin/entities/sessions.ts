@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { sessions } from "@gml/db/schema";
+import { RECORD_APPROVAL_STATES, sessions } from "@gml/db/schema";
 import type { AdminEntity } from "../types";
 
 export const sessionsEntity: AdminEntity = {
@@ -22,6 +22,8 @@ export const sessionsEntity: AdminEntity = {
     { key: "attendedCount" },
     { key: "totalCount" },
     { key: "observed" },
+    { key: "section" },
+    { key: "approvalStatus", choices: RECORD_APPROVAL_STATES },
   ],
   formSchema: z.object({
     schoolId: z.string().uuid(),
@@ -42,7 +44,13 @@ export const sessionsEntity: AdminEntity = {
     totalCount: z.coerce.number().int().min(0).default(0),
     observed: z.boolean().default(false),
     observationCycleId: z.string().uuid().optional().nullable(),
+    // Migration 0043. What happened, in the teacher's words; and the section
+    // of the class taught (empty = the whole grade). approval_status is shown
+    // and never a form field: the approvals queue moves it (lib/approvals),
+    // and a session entered here is approved as entered (the column default).
+    notes: z.string().max(8000).optional().nullable(),
+    section: z.string().trim().max(8).optional().nullable(),
   }).refine((v) => v.attendedCount <= v.totalCount, { message: "validation.attendedWithinTotal", path: ["attendedCount"] }),
-  formFields: ["schoolId", "classId", "subjectId", "teacherId", "outlineLessonId", "scheduledDate", "scheduledTime", "durationMin", "topic", "status", "attendedCount", "totalCount", "observed", "observationCycleId"],
+  formFields: ["schoolId", "classId", "subjectId", "teacherId", "outlineLessonId", "scheduledDate", "scheduledTime", "durationMin", "topic", "status", "attendedCount", "totalCount", "observed", "observationCycleId", "section", "notes"],
   describeRow: (r) => `session:${r.scheduledDate}/${r.classId}`,
 };

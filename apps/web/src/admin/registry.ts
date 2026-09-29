@@ -32,6 +32,17 @@ import { learnersEntity } from "./entities/learners";
 import { districtsEntity } from "./entities/districts";
 import { phasesEntity } from "./entities/phases";
 import { termsEntity } from "./entities/terms";
+import { gradingScalesEntity } from "./entities/grading-scales";
+import { gradingBandsEntity } from "./entities/grading-bands";
+import { observationRubricsEntity } from "./entities/observation-rubrics";
+import { rubricCriteriaEntity } from "./entities/rubric-criteria";
+import { teacherClassesEntity } from "./entities/teacher-classes";
+import { sessionAttendanceEntity } from "./entities/session-attendance";
+import { assessmentsEntity } from "./entities/assessments";
+import { assessmentMarksEntity } from "./entities/assessment-marks";
+import { quizzesEntity } from "./entities/quizzes";
+import { approvalsEntity } from "./entities/approvals";
+import { accountRequestsEntity } from "./entities/account-requests";
 
 export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   // The tops of both hierarchies. Only the seed ever wrote them, so the
@@ -65,6 +76,23 @@ export const ADMIN_ENTITIES: Record<string, AdminEntity> = {
   resources: resourcesEntity,
   "resource-subjects": resourceSubjectsEntity,
   learners: learnersEntity, // SM-9 piiAudited:true
+  // Teaching records (migration 0043; docs/superpowers/specs/2026-09-28-
+  // teaching-records-design.md): "every new table gets an admin data-table
+  // entity, so admins can add, edit and delete from scratch and use CSV
+  // import and export". Tests: tests/behaviour/admin-platform-*.test.ts.
+  "teacher-classes": teacherClassesEntity,
+  "session-attendance": sessionAttendanceEntity, // SM-9 piiAudited:true
+  assessments: assessmentsEntity,
+  "assessment-marks": assessmentMarksEntity, // SM-9 piiAudited:true
+  "grading-scales": gradingScalesEntity,
+  "grading-bands": gradingBandsEntity,
+  "observation-rubrics": observationRubricsEntity,
+  "rubric-criteria": rubricCriteriaEntity,
+  // Its grade scale; never deleted here (the entity's guard).
+  quizzes: quizzesEntity,
+  // Read-only lists: decisions are taken at /approvals (mutateRoles: []).
+  approvals: approvalsEntity,
+  "account-requests": accountRequestsEntity,
 };
 
 export type AdminEntitySlug = keyof typeof ADMIN_ENTITIES;

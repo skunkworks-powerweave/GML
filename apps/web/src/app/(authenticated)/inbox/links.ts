@@ -15,7 +15,14 @@ const ENTITY_HREF: Record<string, (id: string) => string> = {
   mentor_pairing: (id) => `/mentorship/${id}`,
   pairing: (id) => `/mentorship/${id}`,
   quiz: (id) => `/quizzes/${id}`,
-  session: (id) => `/repo/session/${id}`,
+  // Teaching records (lib/approvals): the approver opens the request, the
+  // teacher her own record.
+  session: (id) => `/teaching/sessions/${id}`,
+  approval: (id) => `/approvals/${id}`,
+  lesson_plan: (id) => `/teaching/plans/${id}`,
+  assessment: (id) => `/teaching/marks/${id}`,
+  teach_back: (id) => `/videos/${id}`,
+  observation_signoff: (id) => `/observation/${id}`,
 };
 
 export function hrefForEntity(entityType: string | null, entityId: string | null): string | null {

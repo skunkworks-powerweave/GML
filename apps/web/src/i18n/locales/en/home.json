@@ -149,7 +149,12 @@
       "mentor_pairing": "Pairing",
       "pairing": "Pairing",
       "quiz": "Quiz",
-      "session": "Session"
+      "session": "Session",
+      "approval": "Approval",
+      "lesson_plan": "Lesson plan",
+      "assessment": "Marks",
+      "teach_back": "Teach-back",
+      "observation_signoff": "Observation sign-off"
     },
     "kind": {
       "helpdeskTicket": "Help request",
@@ -161,7 +166,8 @@
       "meetingCancelled": "Meeting cancelled",
       "pairingFinalSubmitted": "Final feedback in",
       "digestWeekly": "Weekly digest",
-      "quizDue": "Quiz due"
+      "quizDue": "Quiz due",
+      "approval": "Approvals"
     }
   },
   "quickFind": {
@@ -292,7 +298,7 @@
         },
         "observerTeachBack": {
           "title": "Teach-back reviews",
-          "body": "Teachers record themselves teaching an RTT lesson. Watch each one and mark it reviewed."
+          "body": "Teachers record themselves teaching an RTT lesson. Watch each one, then approve it or ask for changes."
         }
       }
     },
@@ -316,7 +322,9 @@
         "observationCycle": "Observation",
         "mentorPairing": "Mentor pairing",
         "outline": "Outline",
-        "session": "Session"
+        "session": "Session",
+        "resource": "Reading material",
+        "rttSubject": "RTT subject"
       },
       "refusal": {
         "unavailable": {

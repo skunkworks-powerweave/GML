@@ -66,7 +66,8 @@ import { referenceLabels, referenceOptions, withCurrentValues, type RefContext }
 import { exportRolesFor } from "@/admin/access";
 import { istDayRange, toIstDate, toIstDateTime } from "@/admin/dates";
 import { dateInputType, enumOptions } from "@/admin/zod-shape";
-import { adminMessage, columnLabel, entityLabel, enumLabel, rowFormText, type Translate } from "@/admin/labels";
+import { adminMessage, columnLabel, entityLabel, enumLabel, fieldLabel, rowFormText, type Translate } from "@/admin/labels";
+import { deleteWarning } from "@/admin/delete-effects";
 import type { AdminMessage } from "@/admin/types";
 import { RowForm } from "./row-form";
 import { DeleteRowButton } from "./delete-button";
@@ -162,6 +163,8 @@ function buildColumnFilter(
   col: unknown,
   value: string,
   note: (why: AdminMessage) => void = () => undefined,
+  // A shown-only column's fixed values (AdminColumn.choices): an approval state.
+  displayChoices?: readonly string[],
 ): SQL | null {
   const column = col as { columnType?: string; enumValues?: readonly string[] };
   const inner = zodType ? unwrapZod(zodType) : undefined;
@@ -174,7 +177,7 @@ function buildColumnFilter(
       ? (((inner as unknown as { options?: readonly string[] }).options) ?? [])
       : column.columnType === "PgEnumColumn"
         ? (column.enumValues ?? [])
-        : null;
+        : (displayChoices ?? null);
   if (options) {
     if (!options.includes(value)) {
       note({ key: "grid.skip.notOneOf", values: { options: options.join(", ") } });
@@ -288,6 +291,16 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // if these two ever disagree the button lies about what will happen.
   const canImport = hasAnyRole(session.user.role, entity.mutateRoles ?? entity.readRoles);
 
+  // THE SAME RULE FOR EVERY WRITE CONTROL. Add, Edit, Delete and the bulk
+  // selection were rendered to every reader, and each of them posts to an
+  // action that requires mutateRoles (actions.ts mutateRolesFor) -- so a
+  // programme_admin on a super_admin-only table, or anyone on a read-only
+  // list (approvals: mutateRoles []), was offered them and sent to /forbidden.
+  // A reader who cannot write gets the rows, their details (?edit= opens a
+  // read-only panel instead of the form) and nothing that writes; the phone
+  // card list follows the same flag. The actions still check on their own.
+  const canMutate = canImport;
+
   const pageNum = Math.max(1, Number(sp.page ?? 1) || 1);
   const offset = (pageNum - 1) * PAGE_SIZE;
 
@@ -347,9 +360,15 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
     if (!columnsByKey.has(key)) continue; // ignore unknown columns
     const col = tableColumns[key];
     if (!col) continue;
-    const clause = buildColumnFilter(formShape[key], col, value, (why) => {
-      skippedWhy[key] = adminMessage(tl, why);
-    });
+    const clause = buildColumnFilter(
+      formShape[key],
+      col,
+      value,
+      (why) => {
+        skippedWhy[key] = adminMessage(tl, why);
+      },
+      columnsByKey.get(key)?.choices,
+    );
     if (clause === null) {
       skippedFilters[key] = value;
       continue;
@@ -415,7 +434,9 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // user tried to narrow by.
   if (entity.piiAudited) {
     void recordAudit({
-      action: `${entity.slug}.view`,
+      // auditName where the slug is not a valid action segment
+      // (session-attendance -> session_attendance.view).
+      action: entity.auditName ? `${entity.auditName}.view` : `${entity.slug}.view`,
       entityType: entity.slug,
       metadata: {
         rowCount: rows.length,
@@ -435,26 +456,34 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // Links into a gated table are named only for a viewer holding its
   // password (admin/references.ts).
   const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
-  const refLabels = await referenceLabels(db, entity, rows, refCtx);
+  // The row a read-only panel shows is named the same way as the grid's rows.
+  const refLabels = await referenceLabels(db, entity, editRow && !canMutate ? [...rows, editRow] : rows, refCtx);
   // Each column's allowed values, where it is an enum -- a ZodEnum over a
-  // varchar, or a Postgres enum column: its filter offers them, and its cells
-  // and choices show them by name (adminData.entities.<slug>.enum).
+  // varchar, a Postgres enum column, or a shown-only column's own list
+  // (AdminColumn.choices): its filter offers them, and its cells and choices
+  // show them by name (adminData.entities.<slug>.enum).
   const choicesFor = (key: string): string[] | null => {
     const col = tableColumns[key] as { columnType?: string; enumValues?: readonly string[] } | undefined;
-    return enumOptions(formShape[key]) ?? (col?.columnType === "PgEnumColumn" ? [...(col.enumValues ?? [])] : null);
+    const shown = columnsByKey.get(key)?.choices;
+    return (
+      enumOptions(formShape[key]) ??
+      (col?.columnType === "PgEnumColumn" ? [...(col.enumValues ?? [])] : shown ? [...shown] : null)
+    );
   };
   const yesNo = (v: boolean) => (v ? t("grid.yes") : t("grid.no"));
-  const displayRows = rows.map((r) => {
+  // The columns a row's read-only panel lists: the grid's, then the form's.
+  const detailKeys = [...new Set([...entity.displayColumns.map((c) => c.key), ...entity.formFields])];
+  const toDisplay = (r: Record<string, unknown>, keys: readonly string[]) => {
     const out: Record<string, unknown> = { ...r };
     for (const [field, labels] of Object.entries(refLabels)) {
       const v = r[field];
       if (typeof v === "string" && labels[v]) out[field] = labels[v];
     }
-    for (const c of entity.displayColumns) {
-      const v = r[c.key];
-      const choices = typeof v === "string" ? choicesFor(c.key) : null;
-      if (choices) out[c.key] = enumLabel(tl, entity, c.key, v as string, choices);
-      else if (typeof v === "boolean") out[c.key] = yesNo(v);
+    for (const key of keys) {
+      const v = r[key];
+      const choices = typeof v === "string" ? choicesFor(key) : null;
+      if (choices) out[key] = enumLabel(tl, entity, key, v as string, choices);
+      else if (typeof v === "boolean") out[key] = yesNo(v);
     }
     // Timestamps in the programme's timezone, with their time: the cells used
     // to show the UTC date alone, so a webinar at 10:30 IST and one at 23:00
@@ -466,13 +495,21 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       }
     }
     return out;
-  });
-  // The form's pickers: every row each FK field may point at, by name.
+  };
+  const displayRows = rows.map((r) => toDisplay(r, entity.displayColumns.map((c) => c.key)));
+  // The form's pickers and the filters': every row each FK field may point
+  // at, by name.
   const refOptions = await referenceOptions(db, entity, refCtx);
   // ...and the edit form offers each link it already has, even one the
   // picker would not list (an account since given another role), so the
   // select never falls back to "— none —" and unlinks it on save.
-  const editOptions = editRow ? await withCurrentValues(db, entity, refOptions, editRow) : refOptions;
+  const editOptions = editRow && canMutate ? await withCurrentValues(db, entity, refOptions, editRow) : refOptions;
+
+  // What else a delete deletes or unlinks, from the foreign keys
+  // (admin/delete-effects.ts), said in the confirmation before it happens.
+  const deleteText = canMutate
+    ? deleteWarning(tl, entity.table)
+    : null;
 
   const fmt = (col: { key: string; format?: (v: unknown) => string }, row: Record<string, unknown>) => {
     const v = row[col.key];
@@ -617,9 +654,9 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
       {/* Spec 114: edit panel. When ?edit=<id> is set and the row was found,
           swap the "Add new" form for an "Edit row" form prefilled with values. */}
       {editRowId && editRow ? (
-        <section className="mb-8 rounded-lg border border-amber-300 bg-amber-50 p-4">
+        <section className="mb-8 rounded-lg border border-amber-300 bg-amber-50 p-4" data-row-panel={canMutate ? "edit" : "view"}>
           <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="text-sm font-medium text-amber-900">{t("grid.editRow")}</h2>
+            <h2 className="text-sm font-medium text-amber-900">{canMutate ? t("grid.editRow") : t("grid.viewRow")}</h2>
             <Link href={`/admin/data/${slug}`} className="text-xs text-amber-900 hover:underline">
               {t("grid.close")}
             </Link>
@@ -637,20 +674,59 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               ),
             })}
           </p>
-          <RowForm
-            entitySlug={slug}
-            mode="edit"
-            rowId={editRowId}
-            initialValues={editRow}
-            options={editOptions}
-            text={formText}
-          />
+          {canMutate ? (
+            <>
+              <RowForm
+                entitySlug={slug}
+                mode="edit"
+                rowId={editRowId}
+                initialValues={editRow}
+                options={editOptions}
+                text={formText}
+              />
+              {/* The phone's card list has no Delete of its own: its View
+                  opens this panel, so the row can be deleted from here too,
+                  with the same confirmation. */}
+              <div className="mt-4 border-t border-amber-200 pt-3">
+                <DeleteRowButton
+                  entitySlug={slug}
+                  rowId={editRowId}
+                  rowLabel={entity.describeRow?.(editRow)}
+                  warning={deleteText ?? undefined}
+                />
+              </div>
+            </>
+          ) : (
+            // A reader who cannot write: the row, named as the grid names it.
+            <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="row-details">
+              {(() => {
+                const shown = toDisplay(editRow, detailKeys);
+                return detailKeys.map((key) => (
+                  <div key={key} className="min-w-0">
+                    <dt className="text-[11px] font-medium text-amber-900">
+                      {columnsByKey.has(key) ? header(key) : fieldLabel(tl, entity, key)}
+                    </dt>
+                    <dd className="whitespace-pre-wrap break-words text-sm text-neutral-800">{fmt({ key }, shown)}</dd>
+                  </div>
+                ));
+              })()}
+            </dl>
+          )}
         </section>
-      ) : (
+      ) : canMutate ? (
         <section className="mb-8 rounded-lg border border-neutral-200 bg-white p-4">
+          {/* "Add new" (adminData.grid.addNew) */}
           <h2 className="mb-3 text-sm font-medium text-neutral-700">{t("grid.addNew")}</h2>
           <RowForm entitySlug={slug} mode="create" options={refOptions} text={formText} />
         </section>
+      ) : (
+        <p
+          role="note"
+          data-testid="grid-read-only"
+          className="mb-6 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600"
+        >
+          {t("grid.readOnly")}
+        </p>
       )}
 
       {/* Spec 114: column-filter toolbar. URL-driven (`?filter[<col>]=<value>`).
@@ -772,6 +848,8 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                 label: header(c.key),
                 format: c.format,
               }))}
+              canExport={canExport}
+              canEdit={canMutate}
             />
           </section>
           <nav
@@ -803,19 +881,22 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
         aria-hidden={device === "mobile"}
       >
         <BulkSelectionProvider allRowIds={allRowIds}>
-          {/* Spec 157: sticky bulk-action toolbar — only visible when ≥1 row is selected. */}
-          <BulkDeleteToolbar entitySlug={slug} />
+          {/* Spec 157: sticky bulk-action toolbar — only visible when ≥1 row is
+              selected, and only to a role that may delete. */}
+          {canMutate ? <BulkDeleteToolbar entitySlug={slug} warning={deleteText ?? undefined} /> : null}
           <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="border-b border-neutral-200 bg-neutral-50 text-left text-xs uppercase tracking-wide text-neutral-500">
               <tr>
-                {/* Spec 157: select-all checkbox column. */}
+                {/* Spec 157: select-all checkbox column -- the checkbox only for a
+                    role that may delete; the column stays, so the layout does not
+                    shift between roles. */}
                 <th
                   scope="col"
                   className="w-8 px-3 py-2 font-medium"
                   data-bulk-select-col="true"
                 >
-                  <BulkSelectAllCheckbox />
+                  {canMutate ? <BulkSelectAllCheckbox /> : null}
                 </th>
                 {entity.displayColumns.map((c) => {
                   const isActive = sortKey === c.key;
@@ -852,7 +933,11 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={entity.displayColumns.length + 2} className="px-3 py-8 text-center text-neutral-500">
-                    {Object.keys(appliedFilters).length > 0 ? t("grid.noMatches") : t("grid.empty")}
+                    {Object.keys(appliedFilters).length > 0
+                      ? t("grid.noMatches")
+                      : canMutate
+                        ? t("grid.empty")
+                        : t("grid.emptyReadOnly")}
                   </td>
                 </tr>
               ) : (
@@ -863,7 +948,7 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                     <tr key={rowId || i} className="border-t border-neutral-100">
                       {/* Spec 157: per-row bulk-select checkbox. */}
                       <td className="px-3 py-2">
-                        {rowId ? <BulkRowCheckbox rowId={rowId} /> : null}
+                        {rowId && canMutate ? <BulkRowCheckbox rowId={rowId} /> : null}
                       </td>
                       {entity.displayColumns.map((c) => (
                         <td key={c.key} className="px-3 py-2">{fmt(c, row)}</td>
@@ -874,16 +959,17 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
                             <Link
                               href={`/admin/data/${slug}?edit=${encodeURIComponent(rowId)}`}
                               className="text-xs text-neutral-700 hover:underline"
-                              data-action="edit-row"
+                              data-action={canMutate ? "edit-row" : "view-row"}
                             >
-                              {tAction("edit")}
+                              {canMutate ? tAction("edit") : t("grid.view")}
                             </Link>
                           ) : null}
-                          {rowId ? (
+                          {rowId && canMutate ? (
                             <DeleteRowButton
                               entitySlug={slug}
                               rowId={rowId}
                               rowLabel={rowLabel}
+                              warning={deleteText ?? undefined}
                             />
                           ) : null}
                         </div>

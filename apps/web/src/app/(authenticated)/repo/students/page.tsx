@@ -1,5 +1,6 @@
 // /repo/students — Admin-only learner index. 1:1 port of RepoStudentsIndex
-// (repository.jsx lines 938–975). Role-gated to programme_admin+, every view
+// (repository.jsx lines 938–975). Role-gated to programme_admin+ -- and to a
+// teacher for her own students only (lib/teaching/visibility.ts) -- every view
 // writes an SM-9 audit row ("learners.bulk_view"), bulk CSV export requires
 // super_admin. Pagination via `?page=`, optional school filter via `?school=`.
 //
@@ -19,6 +20,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, isNull } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -26,6 +28,9 @@ import { learners, classes, schools } from "@gml/db/schema";
 import { requireRole } from "@/lib/guards";
 import { recordAudit, recordAuditDedup } from "@/lib/audit";
 import { isUuid } from "@/lib/ids";
+import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { learnersWhere, repoScope } from "@/lib/teaching/visibility";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 
 export const dynamic = "force-dynamic";
@@ -50,9 +55,16 @@ type PageProps = {
 
 export default async function RepoStudentsPage({ searchParams }: PageProps) {
   // SM-9: PII-bearing learner index is gated to programme leads + super admins.
-  const session = await requireRole(["programme_admin", "super_admin"]);
+  // A teacher is let in to her own students only: the scope below limits the
+  // rows to the classes (and sections) she teaches.
+  const signedIn = await auth();
+  const session =
+    signedIn?.user?.role === "teacher" ? signedIn : await requireRole(["programme_admin", "super_admin"]);
   const isSuperAdmin = session.user.role === "super_admin";
   const userId = session.user.id;
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const own = learnersWhere(await repoScope(db, actor));
   const t = await getTranslations("repo");
 
   const sp = await searchParams;
@@ -71,6 +83,7 @@ export default async function RepoStudentsPage({ searchParams }: PageProps) {
   // via and(...). The ILIKE predicate wraps the user query in % so it's a
   // case-insensitive substring match against learners.name.
   const conds = [eq(learners.active, true), isNull(learners.deletedAt)];
+  if (own) conds.push(own);
   if (schoolFilter) conds.push(eq(learners.schoolId, schoolFilter));
   if (qFilter) conds.push(ilike(learners.name, `%${escapeIlike(qFilter)}%`));
   const whereExpr = and(...conds);

@@ -56,6 +56,7 @@ const NOTIFICATION_KIND_KEYS: Record<NotificationKind, string> = {
   "meeting.cancelled": "meetingCancelled",
   "pairing.final_submitted": "pairingFinalSubmitted",
   "digest.weekly": "digestWeekly",
+  approval: "approval",
 };
 
 // The fields a rejected save names in ?error= (comma-separated). Each has its

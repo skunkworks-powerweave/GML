@@ -149,7 +149,12 @@
       "mentor_pairing": "जोड़ी",
       "pairing": "जोड़ी",
       "quiz": "क्विज़",
-      "session": "सत्र"
+      "session": "सत्र",
+      "approval": "स्वीकृति",
+      "lesson_plan": "पाठ योजना",
+      "assessment": "अंक",
+      "teach_back": "टीच-बैक",
+      "observation_signoff": "अवलोकन हस्ताक्षर"
     },
     "kind": {
       "helpdeskTicket": "सहायता अनुरोध",
@@ -161,7 +166,8 @@
       "meetingCancelled": "बैठक रद्द",
       "pairingFinalSubmitted": "अंतिम फ़ीडबैक मिला",
       "digestWeekly": "साप्ताहिक सारांश",
-      "quizDue": "क्विज़ बकाया"
+      "quizDue": "क्विज़ बकाया",
+      "approval": "स्वीकृतियाँ"
     }
   },
   "quickFind": {
@@ -292,7 +298,7 @@
         },
         "observerTeachBack": {
           "title": "टीच-बैक समीक्षाएँ",
-          "body": "शिक्षक RTT का कोई पाठ पढ़ाते हुए ख़ुद को रिकॉर्ड करते हैं। हर एक देखें और उसे समीक्षित चिह्नित करें।"
+          "body": "शिक्षक RTT का कोई पाठ पढ़ाते हुए ख़ुद को रिकॉर्ड करते हैं। हर एक देखें, फिर उसे स्वीकृत करें या बदलाव माँगें।"
         }
       }
     },
@@ -316,7 +322,9 @@
         "observationCycle": "अवलोकन",
         "mentorPairing": "मेंटर जोड़ी",
         "outline": "रूपरेखा",
-        "session": "सत्र"
+        "session": "सत्र",
+        "resource": "पठन सामग्री",
+        "rttSubject": "RTT विषय"
       },
       "refusal": {
         "unavailable": {

@@ -3,7 +3,8 @@
 // queries video_submissions filtered to context_type='teach_back',
 // joins teachers via users, renders the SM-7 Hindi-name conditional,
 // renders the two terminal statuses with the GML colour mapping,
-// and points the "Mark reviewed" form at /api/teach-back/[id]/review.
+// and points the review form (Approve / Request changes) at
+// /api/teach-back/[id]/review.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -85,13 +86,24 @@ test("spec 066 — Hindi name is rendered conditionally with the Devanagari font
   assert.match(src, /teacherHindi\s*\?/);
 });
 
-test("spec 066 — 'Mark reviewed' form posts to /api/teach-back/[id]/review", () => {
+// The one "Mark reviewed" button became a decision (teaching-records design,
+// 2026-09-28): Approve, or Request changes with written feedback, posted to
+// the same route as decision=approved / decision=changes_requested.
+test("spec 066 — the review form posts Approve / Request changes, with feedback, to /api/teach-back/[id]/review", () => {
   const src = read(PAGE_PATH);
   assert.match(src, /\/api\/teach-back\/\$\{[^}]+\}\/review/);
-  // The button's label is the rtt namespace's (read by key).
-  assert.ok(readsKey(src, "teachBack.markReviewed"), "the form's button reads rtt.teachBack.markReviewed");
-  assert.equal(message("rtt.teachBack.markReviewed"), "Mark reviewed");
   assert.match(src, /method="POST"/);
+  // The buttons' labels are the rtt namespace's (read by key).
+  for (const [key, words] of [
+    ["teachBack.approve", "Approve"],
+    ["teachBack.requestChanges", "Request changes"],
+  ]) {
+    assert.ok(readsKey(src, key), `the form's button reads rtt.${key}`);
+    assert.equal(message(`rtt.${key}`), words);
+  }
+  assert.match(src, /name="decision"\s+value="approved"/);
+  assert.match(src, /name="decision"\s+value="changes_requested"/);
+  assert.match(src, /name="feedback"/);
 });
 
 test("spec 066 — right pane links to /videos/[id] (Tier-0 video player route)", () => {

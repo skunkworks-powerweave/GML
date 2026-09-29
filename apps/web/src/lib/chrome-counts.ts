@@ -26,8 +26,12 @@ import type { RoleName } from "@gml/shared/auth/roles";
 import { transcodeQueueDepth } from "@/lib/queue";
 import { notificationKindFilter } from "./notification-kinds";
 import { navCounts, type NavCounts as NavCountsShape } from "./nav-counts";
+import { decidableTypes, pendingApprovalCount } from "./approvals";
 
-export type NavCounts = NavCountsShape;
+export type NavCounts = NavCountsShape & {
+  /** Anyone who decides approvals: requests waiting on them (the /approvals badge). */
+  approvals?: number;
+};
 
 // "Awaiting reviewer attention" is now derived, not a status value.
 //
@@ -54,14 +58,40 @@ export const loadNavCounts = cache(async function loadNavCounts(
   userId: string,
   role: RoleName,
 ): Promise<NavCounts> {
-  try {
-    return await navCounts(db, userId, role);
-  } catch (err) {
-    // Fail-closed: keep the chrome readable when the DB is unavailable.
-    console.error("[chrome-counts] loadNavCounts failed", err);
-    return {};
-  }
+  const [counts, approvals] = await Promise.all([
+    (async () => {
+      try {
+        return await navCounts(db, userId, role);
+      } catch (err) {
+        // Fail-closed: keep the chrome readable when the DB is unavailable.
+        console.error("[chrome-counts] loadNavCounts failed", err);
+        return {};
+      }
+    })(),
+    loadApprovalsWaiting(userId, role),
+  ]);
+  return approvals === undefined ? counts : { ...counts, approvals };
 });
+
+/**
+ * Requests waiting on this user in the approvals queue: exactly what
+ * /approvals lists as pending for them (lib/approvals pendingApprovalCount --
+ * the kinds their role decides, and within those what they may decide).
+ * Undefined -- no badge -- for a role that decides nothing, and when the count
+ * cannot be taken. Not in lib/nav-counts.ts: lib/approvals is server-only and
+ * reaches the notification and audit modules, which that file's callers
+ * (and its behaviour test) do not load.
+ */
+async function loadApprovalsWaiting(userId: string, role: RoleName): Promise<number | undefined> {
+  const actor = { id: userId, role };
+  if (decidableTypes(actor).length === 0) return undefined;
+  try {
+    return await pendingApprovalCount(db, actor);
+  } catch (err) {
+    console.error("[chrome-counts] the approvals count failed", err);
+    return undefined;
+  }
+}
 
 /**
  * Per-request cached unread notifications count. Drives the topbar bell
@@ -203,4 +233,5 @@ const NAV_BADGE_MAP: Record<string, (c: NavCounts) => number | undefined> = {
   "teach-back": (c) => c.pendingReview,
   uploads: (c) => c.myUploads,
   forms: (c) => c.pendingForms,
+  approvals: (c) => c.approvals,
 };

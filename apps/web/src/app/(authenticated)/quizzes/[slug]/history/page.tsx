@@ -28,6 +28,7 @@ import { db } from "@gml/db";
 import { quizzes, quizSubmissions } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { lookupOwn } from "@/lib/lookup";
+import { quizGrader } from "@/lib/grading/quiz";
 import { quizShownTo } from "../quiz-scope";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +73,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
   // it. From here nothing starts until the learner presses "Take quiz again".
   const sp = searchParams ? await searchParams : {};
   const t = await getTranslations("rtt");
+  const tGrading = await getTranslations("grading");
   // ?error= code -> its message under rtt.history.errors. time_up: the runner
   // page sends a learner here when they come back to a timed attempt with no
   // time left but inside the submit grace -- answers already sent may still
@@ -109,6 +111,8 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
       ),
     )
     .orderBy(desc(quizSubmissions.submittedAt));
+  // Each attempt's grade band, beside pass/fail (lib/grading/quiz.ts).
+  const grader = await quizGrader(db, quiz);
 
   // ARE THERE ATTEMPTS LEFT?
   //
@@ -221,6 +225,7 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                   <th>{t("history.col.submitted")}</th>
                   <th>{t("history.col.score")}</th>
                   <th>{t("history.col.result")}</th>
+                  {grader.scale ? <th>{tGrading("quiz.col")}</th> : null}
                   <th />
                 </tr>
               </thead>
@@ -290,6 +295,22 @@ export default async function QuizHistoryPage({ params, searchParams }: Props) {
                         {r.passed ? t("history.pass") : t("history.retry")}
                       </span>
                     </td>
+                    {grader.scale ? (
+                      <td
+                        data-testid="quiz-history-grade"
+                        style={{
+                          padding: "12px 14px",
+                          fontSize: 12,
+                          fontFamily: "var(--mono)",
+                          borderBottom:
+                            i === rows.length - 1
+                              ? "none"
+                              : "1px solid var(--line)",
+                        }}
+                      >
+                        {grader.bandOf(r.score)?.label ?? "—"}
+                      </td>
+                    ) : null}
                     <td
                       style={{
                         padding: "12px 14px",

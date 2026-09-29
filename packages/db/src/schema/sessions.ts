@@ -2,7 +2,7 @@
 // Distinct from rtt_sessions (RTT training cohort sessions).
 // Optionally links to an outline_lesson (curriculum spine) and/or an observation_cycle.
 
-import { boolean, check, date, index, integer, pgTable, time, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, check, date, index, integer, pgTable, text, time, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { schools, teachers } from "./geography";
 import { subjects } from "./subjects";
@@ -28,6 +28,14 @@ export const sessions = pgTable(
     totalCount: integer("total_count").notNull().default(0),
     observed: boolean("observed").notNull().default(false),
     observationCycleId: uuid("observation_cycle_id").references(() => observationCycles.id, { onDelete: "set null" }),
+    // Migration 0043 (teaching records): what happened in the session, in the
+    // teacher's words; the section of the class taught (NULL = the whole
+    // grade); and whether a programme admin has approved it. A session an
+    // admin enters is approved as entered; one a teacher enters starts as a
+    // draft (lib/approvals).
+    notes: text("notes"),
+    section: varchar("section", { length: 8 }),
+    approvalStatus: varchar("approval_status", { length: 20 }).notNull().default("approved"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -47,6 +55,8 @@ export const sessions = pgTable(
     check("sessions_counts_nonneg_check", sql`${t.attendedCount} >= 0 AND ${t.totalCount} >= 0`),
     check("sessions_attended_le_total_check", sql`${t.attendedCount} <= ${t.totalCount}`),
     check("sessions_duration_check", sql`${t.durationMin} IS NULL OR ${t.durationMin} > 0`),
+    check("sessions_approval_status_check", sql`${t.approvalStatus} IN ('draft', 'pending', 'approved', 'changes_requested', 'rejected')`),
+    index("sessions_approval_idx").on(t.approvalStatus),
   ],
 );
 

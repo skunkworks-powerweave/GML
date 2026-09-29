@@ -37,7 +37,16 @@
     "allTables": "All tables",
     "users": "Users",
     "primary": "Main navigation",
-    "menu": "Menu"
+    "menu": "Menu",
+    "classes": "My classes",
+    "students": "My students",
+    "lessonPlans": "Lesson plans",
+    "teachingSessions": "My sessions",
+    "marks": "Marks",
+    "progress": "My progress",
+    "approvals": "Approvals",
+    "attendanceMarking": "Mark attendance",
+    "grading": "Grading"
   },
   "navSection": {
     "programme": "Programme",
@@ -47,7 +56,8 @@
     "data": "Data",
     "system": "System",
     "resources": "Resources",
-    "yourAccount": "Your account"
+    "yourAccount": "Your account",
+    "myTeaching": "My teaching"
   },
   "crumb": {
     "dashboard": "Dashboard",
@@ -99,6 +109,15 @@
     "responses": "Responses",
     "learners": "Learners",
     "view": "View",
+    "approvals": "Approvals",
+    "attendance": "Attendance",
+    "teaching": "My teaching",
+    "classes": "Classes",
+    "plans": "Lesson plans",
+    "marks": "Marks",
+    "grading": "Grading",
+    "rubrics": "Rubrics",
+    "scales": "Grade scales",
     "details": "Details",
     "trail": "Breadcrumb"
   },
@@ -237,6 +256,37 @@
       "invalidTitle": "This reset link is no longer valid.",
       "invalidHelp": "Recovery links can only be used once and expire shortly after they are sent. Request a new one, or ask your programme administrator to set your password.",
       "requestNew": "Request a new link"
+    },
+    "requestAccount": {
+      "link": "Request an account",
+      "title": "Request an account",
+      "intro": "A programme administrator reviews every request. If yours is approved, they will give you your sign-in details.",
+      "fullName": "Full name",
+      "email": "Email",
+      "phone": "Phone (optional)",
+      "role": "Your role",
+      "school": "School",
+      "schoolNone": "No school chosen",
+      "schoolHint": "Teachers: choose the school you teach at. Mentors and observers may leave it empty.",
+      "message": "Message (optional)",
+      "messageHint": "Anything the programme administrator should know.",
+      "honeypot": "Leave this field empty",
+      "submit": "Send request",
+      "sending": "Sending…",
+      "done": "Thank you. A programme administrator reviews every request, and will give you your sign-in details if it is approved.",
+      "back": "← Back to sign in",
+      "invalid": {
+        "fullName": "Enter your full name (up to 160 characters).",
+        "email": "Enter a valid email address.",
+        "phone": "Enter a phone number of 8 to 15 digits, or leave it empty.",
+        "school": "Choose your school from the list. A teacher must choose one.",
+        "role": "Choose your role.",
+        "message": "Shorten the message to under 2000 characters."
+      },
+      "error": {
+        "rate_limited": "Too many requests have come from this network. Wait a while and try again.",
+        "unavailable": "Requests cannot be sent right now. Try again in a few minutes."
+      }
     }
   },
   "password": {

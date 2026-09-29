@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { courseOutlines } from "@gml/db/schema";
+import { courseOutlines, RECORD_APPROVAL_STATES } from "@gml/db/schema";
 import type { AdminEntity } from "../types";
 
 export const courseOutlinesEntity: AdminEntity = {
@@ -14,6 +14,10 @@ export const courseOutlinesEntity: AdminEntity = {
     { key: "term" },
     { key: "weeks" },
     { key: "status" },
+    // Migration 0043: whose plan it is (empty = the programme's outline), and
+    // its approval state -- shown, and moved only by the approvals queue.
+    { key: "ownerTeacherId" },
+    { key: "approvalStatus", choices: RECORD_APPROVAL_STATES },
   ],
   formSchema: z.object({
     subjectId: z.string().uuid(),

@@ -9,6 +9,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { QuickFindTrigger } from "@/components/quickfind/QuickFindTrigger";
 import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
@@ -25,6 +26,18 @@ import {
   subjects,
   teachers,
 } from "@gml/db/schema";
+import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import {
+  classesWhere,
+  learnersWhere,
+  mentorsWhere,
+  outlinesWhere,
+  repoScope,
+  schoolsWhere,
+  sessionsWhere,
+  teachersWhere,
+} from "@/lib/teaching/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +118,13 @@ function Glyph({ name, size = 14 }: { name: string; size?: number }) {
 }
 
 export default async function RepoHomePage() {
+  const actor = actorFrom(await auth());
+  if (!actor) redirect("/login");
+  // A teacher's figures are her own: her school, her classes, her sessions,
+  // herself, her mentor(s), her students, the outlines she may open. Subjects
+  // and reading material are shared reference data and count in full. For
+  // every other role each predicate is undefined: the programme's figures.
+  const scope = await repoScope(db, actor);
   const t = await getTranslations("repo");
   // ---------- 8 parallel count queries ----------
   const { mon, fri, monLabel, friLabel } = currentWeekMonFri(await repoIntlLocale());
@@ -120,14 +140,14 @@ export default async function RepoHomePage() {
     learnersCount,
     resourcesCount,
   ] = await Promise.all([
-    db.select({ c: count() }).from(schools),
-    db.select({ c: count() }).from(classes),
+    db.select({ c: count() }).from(schools).where(schoolsWhere(scope)),
+    db.select({ c: count() }).from(classes).where(classesWhere(scope)),
     db.select({ c: count() }).from(subjects),
-    db.select({ c: count() }).from(courseOutlines),
-    db.select({ c: count() }).from(sessions),
-    db.select({ c: count() }).from(teachers),
-    db.select({ c: count() }).from(mentors),
-    db.select({ c: count() }).from(learners),
+    db.select({ c: count() }).from(courseOutlines).where(outlinesWhere(scope)),
+    db.select({ c: count() }).from(sessions).where(sessionsWhere(scope)),
+    db.select({ c: count() }).from(teachers).where(teachersWhere(scope)),
+    db.select({ c: count() }).from(mentors).where(mentorsWhere(scope)),
+    db.select({ c: count() }).from(learners).where(learnersWhere(scope)),
     db.select({ c: count() }).from(resources),
   ]);
 
@@ -159,7 +179,7 @@ export default async function RepoHomePage() {
     .leftJoin(schools, eq(sessions.schoolId, schools.id))
     .leftJoin(classes, eq(sessions.classId, classes.id))
     .leftJoin(subjects, eq(sessions.subjectId, subjects.id))
-    .where(and(between(sessions.scheduledDate, mon, fri)))
+    .where(and(between(sessions.scheduledDate, mon, fri), sessionsWhere(scope)))
     .orderBy(asc(sessions.scheduledDate), asc(sessions.scheduledTime))
     .limit(8);
 
@@ -185,7 +205,7 @@ export default async function RepoHomePage() {
             <div className="label">{t("common.repository")}</div>
             <h1 style={{ fontFamily: "var(--serif)", fontSize: 28, marginTop: 4 }}>{t("home.title")}</h1>
             <p style={{ color: "var(--ink-3)", marginTop: 4, maxWidth: 640 }}>
-              {t("home.intro")}
+              {scope.own ? t("own.notice") : t("home.intro")}
             </p>
           </div>
           {/* Was a bare <button type="button"> with no handler, inside an async
@@ -206,7 +226,7 @@ export default async function RepoHomePage() {
       <div className="page-body" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
         {/* 5-stat row */}
         <section className="grid grid-cols-2 gap-[14px] md:grid-cols-5">
-          <StatCard label={t("home.stats.schools")} value={stats.schools} hint={stats.schools ? t("home.stats.schoolsHint") : undefined} />
+          <StatCard label={t("home.stats.schools")} value={stats.schools} hint={stats.schools && !scope.own ? t("home.stats.schoolsHint") : undefined} />
           <StatCard label={t("home.stats.classes")} value={stats.classes} />
           <StatCard label={t("home.stats.subjects")} value={stats.subjects} hint={t("home.stats.subjectsHint")} />
           <StatCard label={t("home.stats.sessions")} value={stats.sessions} hint={t("home.stats.sessionsHint")} />

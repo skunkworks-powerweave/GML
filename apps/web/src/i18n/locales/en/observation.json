@@ -119,7 +119,12 @@
       "cycle_locked": "This cycle has been signed off. Its record is closed, so nothing more can be added to it.",
       "invalid_cycle": "That cycle reference was not valid.",
       "cycle_not_found": "That cycle no longer exists.",
-      "unknown": "That action could not be completed. Please try again."
+      "unknown": "That action could not be completed. Please try again.",
+      "invalidScore": "A score was missing or out of range, or a note was longer than {max} characters, so nothing was recorded. Please correct it and submit again.",
+      "invalidScoreCriterion": "The score for \"{criterion}\" was missing or out of range, or its note was longer than {max} characters, so nothing was recorded. Please correct it and submit again.",
+      "comment_required": "Say what needs to change before sending the cycle back.",
+      "comment_too_long": "A comment can be at most {max} characters, so nothing was decided. Please shorten it and try again.",
+      "not_allowed": "You can't decide this cycle's sign-off."
     },
     "signOff": "Sign off cycle",
     "formsLabel": "Forms · {count}",
@@ -151,7 +156,48 @@
     "noNotes": "No notes yet.",
     "newNoteLabel": "New note",
     "newNotePlaceholder": "Add a note. Existing notes are kept above.",
-    "addNote": "Add note"
+    "addNote": "Add note",
+    "rubric": {
+      "label": "Rubric · {name}",
+      "title": "Rubric scores",
+      "formLegend": "Score each criterion of the rubric \"{name}\"",
+      "criterionLegend": "{title} (0–{max})",
+      "scoreOption": "{title}: {score} of {max}",
+      "noteLabel": "Note on \"{title}\" (optional)",
+      "notePlaceholder": "What you saw for this criterion",
+      "total": "{total} / {max}",
+      "percent": "{pct}%",
+      "band": "Level {band}",
+      "noScale": "No grade scale for observations yet, so no level is shown.",
+      "outsideScale": "The grade scale has no level for this score.",
+      "notScored": "Not scored",
+      "criterionScore": "{score} / {max}",
+      "scoredBy": "Last scored by {name} on {date}",
+      "scoredOn": "Last scored on {date}",
+      "none": "Not scored yet.",
+      "revise": "Revise the scores",
+      "add": "Score the rubric",
+      "reviseHint": "The scores can be changed until the cycle is signed off.",
+      "save": "Save scores"
+    },
+    "signoff": {
+      "label": "Sign-off",
+      "states": {
+        "pending": "Waiting for sign-off",
+        "approved": "Signed off",
+        "changes_requested": "Sent back"
+      },
+      "pending": "The post-observation form went in on {date}. The teacher's mentor or a programme administrator signs the cycle off.",
+      "approved": "Signed off on {date}.",
+      "sentBack": "Sent back to the teacher on {date}.",
+      "reviseHint": "The teacher revises the post-observation form and submits it again.",
+      "commentHeading": "Comment",
+      "commentLabel": "Comment (optional)",
+      "commentPlaceholder": "Anything the teacher and the observer should read with the sign-off",
+      "sendBackLabel": "What needs to change (required to send back)",
+      "sendBackPlaceholder": "Tell the teacher what to revise in the post-observation form",
+      "sendBack": "Send back"
+    }
   },
   "stages": {
     "pre": {
@@ -196,6 +242,10 @@
     "complete": {
       "subject": "An observation cycle you are part of has been signed off",
       "body": "Its forms and notes stay on the cycle page in the Observation section."
+    },
+    "sentBack": {
+      "subject": "Your post-observation form was sent back for changes",
+      "body": "{comment}\n\nOpen the cycle to revise the form; the Observation section asks for its password first."
     }
   }
 }

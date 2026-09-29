@@ -47,6 +47,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
         { id: "rtt", labelKey: "rtt", icon: "mountain", href: "/rtt" },
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
+        { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
+        { id: "attendance", labelKey: "attendanceMarking", icon: "table", href: "/attendance" },
       ],
     },
     {
@@ -82,6 +84,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "audit", labelKey: "audit", icon: "shield", href: "/admin/audit", gate: "admin" },
         { id: "gates", labelKey: "gates", icon: "lock", href: "/admin/gates" },
         { id: "forms", labelKey: "forms", icon: "file", href: "/admin/forms" },
+        { id: "grading", labelKey: "grading", icon: "table", href: "/admin/grading" },
         { id: "settings", labelKey: "settings", icon: "settings", href: "/settings" },
       ],
     },
@@ -96,6 +99,8 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
         { id: "rtt", labelKey: "rtt", icon: "mountain", href: "/rtt" },
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
+        { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
+        { id: "attendance", labelKey: "attendanceMarking", icon: "table", href: "/attendance" },
       ],
     },
     {
@@ -114,6 +119,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       items: [
         { id: "tbl-teachers", labelKey: "teachers", icon: "users", href: "/admin/data/teachers" },
         { id: "tbl-schools", labelKey: "schools", icon: "school", href: "/admin/data/schools" },
+        { id: "tbl-attendance", labelKey: "attendance", icon: "table", href: "/admin/data/rtt-attendance" },
         { id: "tbl-pairings", labelKey: "pairings", icon: "users", href: "/admin/data/mentor-pairings" },
         // See the super_admin Data section: the index of every table.
         { id: "tbl-all", labelKey: "allTables", icon: "table", href: "/admin" },
@@ -125,6 +131,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "users", labelKey: "users", icon: "users", href: "/admin/users" },
         { id: "audit", labelKey: "audit", icon: "shield", href: "/admin/audit", gate: "admin" },
         { id: "forms", labelKey: "forms", icon: "file", href: "/admin/forms" },
+        { id: "grading", labelKey: "grading", icon: "table", href: "/admin/grading" },
       ],
     },
   ],
@@ -139,6 +146,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         // The teach-back review queue. This item linked to /videos, which has
         // no review control, so the badge pointed at nothing a mentor could do.
         { id: "teach-back", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
@@ -171,6 +179,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         // Observers may review teach-backs (rtt/teach-back READ_ROLES) and had
         // no way to reach the queue.
         { id: "teach-back", labelKey: "pendingReview", icon: "video", href: "/rtt/teach-back?status=review_pending" },
+        { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
       ],
     },
@@ -193,11 +202,25 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       items: [
         { id: "dashboard", labelKey: "dashboard", icon: "home", href: "/dashboard" },
         { id: "rtt", labelKey: "myPhase", icon: "mountain", href: "/rtt" },
-        { id: "observation", labelKey: "myObservations", icon: "eye", href: "/observation" },
+        { id: "progress", labelKey: "progress", icon: "cycle", href: "/rtt/progress" },
+        // gate: the observation layout asks for the section password for
+        // teachers too; the menu now shows the lock that says so.
+        { id: "observation", labelKey: "myObservations", icon: "eye", href: "/observation", gate: "observation" },
         // Her pairing: its meetings, her Q1/Q4 videos and her reflections. A
         // teacher could reach it only from an inbox notification.
         { id: "mentorship", labelKey: "mentorship", icon: "users", href: "/mentorship", gate: "mentorship" },
         { id: "uploads", labelKey: "uploads", icon: "upload", href: "/uploads" },
+      ],
+    },
+    {
+      // Her own records (teaching-records design, 2026-09-28).
+      section: "myTeaching",
+      items: [
+        { id: "teaching-classes", labelKey: "classes", icon: "school", href: "/teaching/classes" },
+        { id: "teaching-students", labelKey: "students", icon: "users", href: "/teaching/students" },
+        { id: "teaching-plans", labelKey: "lessonPlans", icon: "file", href: "/teaching/plans" },
+        { id: "teaching-sessions", labelKey: "teachingSessions", icon: "cycle", href: "/teaching/sessions" },
+        { id: "teaching-marks", labelKey: "marks", icon: "table", href: "/teaching/marks" },
       ],
     },
     {
@@ -269,7 +292,7 @@ export const TABS_BY_ROLE: Record<RoleName, MobileTab[]> = {
   teacher: [
     { id: "home", labelKey: "dashboard", icon: "home", href: "/dashboard" },
     { id: "learn", labelKey: "rtt", icon: "book", href: "/rtt" },
-    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation" },
+    { id: "observe", labelKey: "observation", icon: "eye", href: "/observation", gate: "observation" },
     { id: "inbox", labelKey: "inbox", icon: "chat", href: "/inbox" },
     // /uploads was in the DESKTOP sidebar only. A phone has no sidebar, so a
     // teacher could reach her uploads page -- the only mount of the mobile

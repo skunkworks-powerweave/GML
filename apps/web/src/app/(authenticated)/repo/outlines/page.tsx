@@ -8,6 +8,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { and, asc, eq, ilike, type SQL } from "drizzle-orm";
 import { db } from "@gml/db";
@@ -17,6 +18,9 @@ import { getDeviceType } from "@/lib/device";
 import { MobileRepoCardList } from "@/components/repo/MobileRepoCardList";
 import { escapeIlike } from "@gml/shared/sql/ilike";
 import { enumLabel } from "@/components/repo/repo-i18n";
+import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { outlinesWhere, repoScope } from "@/lib/teaching/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +51,12 @@ export default async function RepoOutlinesIndexPage({
 }: {
   searchParams: SearchParams;
 }) {
+  const actor = actorFrom(await auth());
+  if (!actor) redirect("/login");
+  // A teacher lists the approved programme outlines and her own lesson plans;
+  // other teachers' plans are not hers to read (lib/teaching/visibility.ts).
+  // Every other role lists every outline, as before.
+  const own = outlinesWhere(await repoScope(db, actor));
   const sp = await searchParams;
   const t = await getTranslations("repo");
   const statusLabel = (status: string) => enumLabel(t, "outlineStatus", STATUS_CHIP[status] ? status : "planned");
@@ -69,6 +79,7 @@ export default async function RepoOutlinesIndexPage({
   const qFilter = qRaw.trim().length > 0 ? qRaw.trim() : null;
 
   const conds: SQL[] = [];
+  if (own) conds.push(own);
   if (gradeFilter !== null) conds.push(eq(courseOutlines.grade, gradeFilter));
   if (termFilter !== null) conds.push(eq(courseOutlines.term, termFilter));
   if (statusFilter !== null) conds.push(eq(courseOutlines.status, statusFilter));
@@ -84,6 +95,7 @@ export default async function RepoOutlinesIndexPage({
       weeks: courseOutlines.weeks,
       sessionsCount: courseOutlines.sessionsCount,
       status: courseOutlines.status,
+      approvalStatus: courseOutlines.approvalStatus,
       subjectName: subjects.name,
       subjectColor: subjects.color,
       ownerName: teachers.fullName,
@@ -215,6 +227,7 @@ export default async function RepoOutlinesIndexPage({
                       : t("outlines.cardMeta", { grade: o.grade, term: o.term, sessions: o.sessionsCount }),
                   },
                   o.ownerName ? { label: t("common.owner"), value: o.ownerName } : { value: "—" },
+                  ...(o.approvalStatus !== "approved" ? [{ value: enumLabel(t, "approval", o.approvalStatus) }] : []),
                 ],
               };
             })}
@@ -279,6 +292,11 @@ export default async function RepoOutlinesIndexPage({
                       </td>
                       <td>
                         <span className={`chip ${chip.kind}`.trim()}>{statusLabel(o.status)}</span>
+                        {o.approvalStatus !== "approved" ? (
+                          <span className="chip chip-saffron" style={{ marginLeft: 4 }}>
+                            {enumLabel(t, "approval", o.approvalStatus)}
+                          </span>
+                        ) : null}
                       </td>
                       <td style={{ textAlign: "right" }}>
                         <Link

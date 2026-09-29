@@ -4,13 +4,15 @@
 // through to /learners is what triggers the SM-9 audit hook (see ./learners/page.tsx).
 
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { and, desc, eq, gte, isNull, lte, or } from "drizzle-orm";
 import { db } from "@gml/db";
 import { classes, schools, subjects, sessions, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
+import { actorFrom } from "@/lib/authz";
+import { mayOpenClass, repoScope, sessionsWhere } from "@/lib/teaching/visibility";
 import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
@@ -45,8 +47,16 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
   // A malformed id names no record: 404, not a Postgres 22P02 and a 500.
   const id = uuidOrNotFound((await params).id);
   const session = await auth();
-  const role = session?.user?.role ?? "teacher";
-  const canSeeRoster = role === "super_admin" || role === "programme_admin";
+  const actor = actorFrom(session);
+  if (!actor) redirect("/login");
+  const role = actor.role;
+  // A teacher opens only the classes she teaches (another class answers 404),
+  // sees her own sessions in it, and may open its roster -- her own students,
+  // audited like an administrator's read (./learners/page.tsx). Other roles
+  // are unchanged (lib/teaching/visibility.ts).
+  const scope = await repoScope(db, actor);
+  if (!mayOpenClass(scope, id)) notFound();
+  const canSeeRoster = role === "super_admin" || role === "programme_admin" || scope.own;
   const t = await getTranslations("repo");
   const intl = await repoIntlLocale();
 
@@ -83,7 +93,7 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
     .from(sessions)
     .leftJoin(subjects, eq(sessions.subjectId, subjects.id))
     .leftJoin(teachers, eq(sessions.teacherId, teachers.id))
-    .where(eq(sessions.classId, id))
+    .where(and(eq(sessions.classId, id), sessionsWhere(scope)))
     .orderBy(desc(sessions.scheduledDate))
     .limit(12);
 

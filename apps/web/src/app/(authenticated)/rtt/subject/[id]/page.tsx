@@ -23,7 +23,9 @@ import {
 import { uploadHref } from "@/app/(authenticated)/uploads/context";
 import { uuidOrNotFound } from "@/lib/ids";
 import { listSubjectAssessments } from "@/lib/rtt/assessments";
-import { attendanceOf, doneItems, resumeModule } from "@/lib/rtt/progress";
+import { attendanceOf, doneItems, resumeModule, type AttendanceStatus } from "@/lib/rtt/progress";
+import { ATTENDED } from "@/lib/rtt/attendance";
+import { teachBackDecisions, type TeachBackDecisionState } from "@/lib/rtt/teach-back";
 import { rttScope } from "@/lib/rtt/scope";
 import { webLink } from "@/lib/rtt/links";
 import { launchLabel, statusChip, statusLabel } from "@/lib/scorm/format";
@@ -48,8 +50,11 @@ function ProgressToggle({ kind, itemId, isDone, t }: { kind: "lesson" | "reading
   );
 }
 
-const ATTENDANCE_CHIP: Record<string, string> = {
+// Every attendance_status, "late" included (migration 0043); each has a label
+// under rtt.attendance.
+const ATTENDANCE_CHIP: Record<AttendanceStatus, string> = {
   present: "chip chip-lichen",
+  late: "chip chip-saffron",
   absent: "chip chip-rust",
   excused: "chip",
 };
@@ -57,8 +62,18 @@ const ATTENDANCE_CHIP: Record<string, string> = {
 /** video_status values with a label under rtt.videoStatus. */
 const VIDEO_STATUSES = new Set(["received", "queued", "transcoding", "ready", "failed", "review_pending", "reviewed"]);
 
-/** A teach-back's state for the teacher who sent it: review first, then the pipeline. */
-function teachBackChip(v: { status: string; reviewedAt: Date | null }, t: Translate): { cls: string; label: string } {
+/**
+ * A teach-back's state for the teacher who sent it: the reviewer's decision
+ * first (lib/rtt/teach-back.ts), then the review, then the pipeline.
+ */
+function teachBackChip(
+  v: { status: string; reviewedAt: Date | null },
+  decision: TeachBackDecisionState | undefined,
+  t: Translate,
+): { cls: string; label: string } {
+  if (decision?.status === "approved") return { cls: "chip chip-lichen", label: t("subject.teachBackApproved") };
+  if (decision?.status === "changes_requested") return { cls: "chip chip-rust", label: t("subject.teachBackChanges") };
+  if (decision?.status === "rejected") return { cls: "chip chip-rust", label: t("subject.teachBackRejected") };
   if (v.reviewedAt) return { cls: "chip chip-lichen", label: t("subject.teachBackReviewed") };
   if (v.status === "ready") return { cls: "chip chip-saffron", label: t("subject.teachBackAwaiting") };
   if (v.status === "failed") return { cls: "chip chip-rust", label: t("subject.teachBackFailed") };
@@ -191,7 +206,8 @@ export default async function RttSubjectPage({
       sessions.map((s) => s.id),
     ),
   ]);
-  const presentCount = [...attendance.values()].filter((s) => s === "present").length;
+  // Attended: on time or late, as /rtt/progress counts it.
+  const presentCount = [...attendance.values()].filter((s) => ATTENDED.includes(s)).length;
   const passedCount = assessments.filter((q) => q.passed).length;
 
   // HER TEACH-BACKS OF THIS SUBJECT (FR-02). The review side -- the
@@ -219,6 +235,12 @@ export default async function RttSubjectPage({
         )
         .orderBy(desc(videoSubmissions.createdAt))
         .limit(10);
+  // What her reviewer decided about each, and the feedback they wrote
+  // (lib/rtt/teach-back.ts): "reviewed" alone told her nothing.
+  const decisions = await teachBackDecisions(
+    db,
+    teachBacks.map((v) => v.id),
+  );
 
   // "Resume" (spec 119's in-page anchor) goes to the first module with a
   // lesson she has not done. It always went to module 1, whatever she had
@@ -722,10 +744,8 @@ export default async function RttSubjectPage({
                           </td>
                           <td>
                             {attendance.has(s.id) ? (
-                              <span className={ATTENDANCE_CHIP[attendance.get(s.id)!] ?? "chip"}>
-                                {ATTENDANCE_CHIP[attendance.get(s.id)!]
-                                  ? t(`attendance.${attendance.get(s.id)!}`)
-                                  : attendance.get(s.id)!}
+                              <span className={ATTENDANCE_CHIP[attendance.get(s.id)!]}>
+                                {t(`attendance.${attendance.get(s.id)!}`)}
                               </span>
                             ) : (
                               <em className="dash">—</em>
@@ -812,25 +832,51 @@ export default async function RttSubjectPage({
               {teachBacks.length > 0 ? (
                 <ul style={{ listStyle: "none", margin: 0, padding: "0 14px", fontSize: 13 }}>
                   {teachBacks.map((v, i) => {
-                    const chip = teachBackChip(v, t);
+                    const decision = decisions.get(v.id);
+                    const chip = teachBackChip(v, decision, t);
+                    const feedback = decision && decision.status !== "pending" ? decision.feedback : null;
                     return (
                       <li
                         key={v.id}
                         style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: 10,
                           padding: "10px 0",
                           borderTop: i ? "1px solid var(--line)" : "none",
                         }}
                       >
-                        <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
-                          {t("subject.sent", {
-                            date: new Date(v.createdAt).toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" }),
-                          })}
-                        </Link>
-                        <span className={chip.cls}>{chip.label}</span>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: 10,
+                          }}
+                        >
+                          <Link href={`/videos/${v.id}`} style={{ color: "var(--indigo)" }}>
+                            {t("subject.sent", {
+                              date: new Date(v.createdAt).toLocaleDateString(intl, { day: "numeric", month: "long", year: "numeric" }),
+                            })}
+                          </Link>
+                          <span className={chip.cls}>{chip.label}</span>
+                        </div>
+                        {/* The reviewer's written feedback: why changes are
+                            asked for, or what went well. */}
+                        {feedback ? (
+                          <div data-testid="teach-back-feedback" style={{ marginTop: 6, fontSize: 12 }}>
+                            <div style={{ color: "var(--ink-3)", fontSize: 11 }}>
+                              {decision?.decidedAt
+                                ? t("subject.teachBackFeedbackOn", {
+                                    date: new Date(decision.decidedAt).toLocaleDateString(intl, {
+                                      day: "numeric",
+                                      month: "long",
+                                      year: "numeric",
+                                    }),
+                                  })
+                                : t("subject.teachBackFeedback")}
+                            </div>
+                            <p style={{ margin: "2px 0 0", whiteSpace: "pre-wrap", color: "var(--ink-2)" }}>{feedback}</p>
+                          </div>
+                        ) : null}
                       </li>
                     );
                   })}

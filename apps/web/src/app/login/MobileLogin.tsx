@@ -301,6 +301,25 @@ export function MobileLogin({ from, emailEnabled, linkError }: LoginShellProps) 
           <EmailLinkForm />
         )}
 
+        {/* Someone without a login asks for one; a programme admin decides
+            it on /approvals. A full-width touch target, like the form's. */}
+        <Link
+          href="/request-account"
+          data-testid="mobile-request-account"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minHeight: TOUCH_TARGET,
+            marginTop: 12,
+            fontSize: 14,
+            color: "var(--ink-2)",
+            textDecoration: "underline",
+          }}
+        >
+          {t("requestAccount.link")}
+        </Link>
+
         {/* Footer disclosure — the programme audit copy lifted from the
             desktop shell's right-pane footer, restyled for narrow widths. */}
         <div

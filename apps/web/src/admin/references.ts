@@ -122,6 +122,40 @@ const LABELS: Record<string, LabelSource> = {
     id: s.observationCycles.id,
     label: sql<string>`${s.observationCycles.code}`,
   },
+  // Teaching records (migration 0043).
+  grading_scales: { table: s.gradingScales, id: s.gradingScales.id, label: sql<string>`${s.gradingScales.name}` },
+  observation_rubrics: {
+    table: s.observationRubrics,
+    id: s.observationRubrics.id,
+    label: sql<string>`${s.observationRubrics.name}`,
+  },
+  rubric_criteria: {
+    table: s.rubricCriteria,
+    id: s.rubricCriteria.id,
+    label: sql<string>`${s.observationRubrics.name} || ' #' || ${s.rubricCriteria.sequence} || ' ' || ${s.rubricCriteria.title}`,
+    join: { table: s.observationRubrics, on: eq(s.observationRubrics.id, s.rubricCriteria.rubricId) },
+  },
+  // A test is named with its date: "Unit test 1" recurs every term.
+  assessments: {
+    table: s.assessments,
+    id: s.assessments.id,
+    label: sql<string>`${s.assessments.title} || coalesce(' (' || ${s.assessments.assessedOn}::text || ')', '')`,
+  },
+  // A child is named with her roll number, which tells two of one name apart.
+  // Only the attendance and marks grids link to one, and both are audited as
+  // learner reads (SM-9).
+  learners: {
+    table: s.learners,
+    id: s.learners.id,
+    label: sql<string>`${s.learners.name} || coalesce(' #' || ${s.learners.rollNumber}, '')`,
+    hide: isNull(s.learners.deletedAt),
+  },
+  // A session has no name: its date and topic.
+  sessions: {
+    table: s.sessions,
+    id: s.sessions.id,
+    label: sql<string>`${s.sessions.scheduledDate}::text || coalesce(' · ' || ${s.sessions.topic}, '')`,
+  },
 };
 
 /**

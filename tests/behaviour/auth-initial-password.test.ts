@@ -114,6 +114,12 @@ test("an account an administrator creates must change its password before using 
   await signInThroughApp(email, initial);
   assert.equal(await proxyRedirect("/dashboard"), "/settings?password=required", "every page sends them to Settings first");
   assert.equal(await proxyRedirect("/observation/123"), "/settings?password=required");
+  // The teaching-records sections too: a login made by approving an account
+  // request carries the same flag, and /teaching and /attendance had no proxy
+  // rule, so the redirect never ran there.
+  for (const path of ["/teaching", "/teaching/sessions", "/attendance", "/approvals"]) {
+    assert.equal(await proxyRedirect(path), "/settings?password=required", `${path} sends them to Settings first`);
+  }
   assert.equal(await proxyRedirect("/settings?password=required"), null, "Settings itself stays reachable");
 
   // Settings says why they are there, whatever the URL. Straight after sign-in

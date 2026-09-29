@@ -1,7 +1,8 @@
 // Governance test for spec 097 — POST /api/teach-back/[id]/review.
 // Asserts the route file exists, exports POST (200/404/403/401 paths) plus
-// a GET 405 stub, gates by the four read-roles, scopes the UPDATE to
-// context_type='teach_back', uses the locked workspace imports, and writes
+// a GET 405 stub, gates by the four read-roles, decides through the approvals
+// queue (whose teach-back handler scopes the UPDATE to
+// context_type='teach_back'), uses the locked workspace imports, and writes
 // the teach_back.reviewed audit row.
 
 import { test } from "node:test";
@@ -48,10 +49,25 @@ test("spec 097 — role gate covers exactly the four reader roles, returns 403 o
   assert.match(src, /status:\s*403/);
 });
 
-test("spec 097 — UPDATE is scoped to context_type='teach_back' and records review without clobbering status", () => {
+// The route decides through the approvals queue (teaching-records design,
+// 2026-09-28): Approve or Request changes with feedback. The write that marks
+// the video reviewed moved into the teach-back approval handler, which the
+// queue calls inside the decision's transaction; these hold the same rules
+// there.
+const HANDLER_PATH = "apps/web/src/lib/approvals/handlers/teach-back.ts";
+
+test("spec 097 — the route decides through the approvals queue (reviewTeachBack -> decideApproval)", () => {
   const src = read(ROUTE_PATH);
+  assert.match(src, /reviewTeachBack\(/);
+  assert.match(src, /from\s+"@\/lib\/rtt\/teach-back"/);
+  const lib = read("apps/web/src/lib/rtt/teach-back.ts");
+  assert.match(lib, /decideApproval\(/);
+});
+
+test("spec 097 — the handler's UPDATE is scoped to context_type='teach_back' and records review without clobbering status", () => {
+  const src = read(HANDLER_PATH);
   // drizzle update on videoSubmissions
-  assert.match(src, /db\s*\.\s*update\(videoSubmissions\)/);
+  assert.match(src, /\.update\(videoSubmissions\)/);
 
   // Inverted deliberately. This used to REQUIRE `.set({ status: "reviewed" })`,
   // pinning a real bug in place: `video_status` is one mutually-exclusive enum
@@ -73,13 +89,10 @@ test("spec 097 — UPDATE is scoped to context_type='teach_back' and records rev
   // and() conjunction with eq()
   assert.match(src, /\band\s*\(/);
   assert.match(src, /\beq\(/);
-  // .returning to detect zero-row update
-  assert.match(src, /\.returning\(/);
 });
 
-test("spec 097 — 404 path: zero rows updated returns not_found", () => {
+test("spec 097 — 404 path: an unknown teach-back returns not_found", () => {
   const src = read(ROUTE_PATH);
-  assert.match(src, /updated\.length\s*===\s*0/);
   assert.match(src, /not_found/);
   assert.match(src, /status:\s*404/);
 });
@@ -104,10 +117,12 @@ test("spec 097 — success response is {ok:true} with 200", () => {
 test("spec 097 — imports use locked workspace packages, no new deps", () => {
   const src = read(ROUTE_PATH);
   assert.match(src, /from\s+"@gml\/db"/);
-  assert.match(src, /from\s+"@gml\/db\/schema"/);
   assert.match(src, /from\s+"@gml\/shared\/auth\/roles"/);
   assert.match(src, /from\s+"next\/server"/);
-  assert.match(src, /from\s+"drizzle-orm"/);
+  // The table and the drizzle helpers are the handler's now (see above).
+  const handler = read(HANDLER_PATH);
+  assert.match(handler, /from\s+"@gml\/db\/schema"/);
+  assert.match(handler, /from\s+"drizzle-orm"/);
   // dynamic="force-dynamic" — never cache a mutation endpoint.
   assert.match(src, /export const dynamic\s*=\s*"force-dynamic"/);
 });

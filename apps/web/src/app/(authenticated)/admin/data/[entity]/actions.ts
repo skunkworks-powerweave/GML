@@ -30,6 +30,7 @@ import { describeWriteError } from "@/admin/db-errors";
 import { issueLine, issueMessage } from "@/admin/issues";
 import { adminMessage, problemsText, type Translate } from "@/admin/labels";
 import { keepStoredPrecision } from "@/admin/dates";
+import { keepDerivedCounts } from "@/admin/derived-counts";
 import { requireRole } from "@/lib/guards";
 import { assertSectionGate } from "@/lib/gates";
 import { recordAudit, withAudit } from "@/lib/audit";
@@ -53,6 +54,21 @@ const BULK_BEFORE_IMAGE_CAP = 200;
 
 function mutateRolesFor(entity: ReturnType<typeof getEntityOrThrow>) {
   return entity.mutateRoles ?? entity.readRoles;
+}
+
+/** The columns the entity has the server set on this write (AdminEntity.writeStamp). */
+function stampFor(entity: ReturnType<typeof getEntityOrThrow>, userId: string, op: "create" | "update") {
+  return entity.writeStamp?.({ userId, op }) ?? {};
+}
+
+/**
+ * An update's columns as its audit row records them: everything it sets but
+ * the row's own updatedAt stamp, which changes on every save and says nothing
+ * a reader of the log needs.
+ */
+function auditedWrite(write: Record<string, unknown>): Record<string, unknown> {
+  const { updatedAt: _stamp, ...rest } = write;
+  return rest;
 }
 
 /**
@@ -222,16 +238,23 @@ export async function createRowAction(
   }
   const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
   if (problems) return problemsState(t, echo, problems);
+  // The columns the server sets itself (who marked an attendance, and when).
+  const values = { ...(parse.data as Record<string, unknown>), ...stampFor(entity, session.user.id, "create") };
 
   const audited = withAudit(
-    async () => {
-      // RETURNING the row so the audit entry carries its id (see withAudit).
-      const inserted = db.insert(entity.table as never).values(parse.data as never) as unknown as {
-        returning: () => Promise<Array<Record<string, unknown>>>;
-      };
-      const [created] = await inserted.returning();
-      return created?.id != null ? String(created.id) : null;
-    },
+    async () =>
+      // In a transaction with the numbers the row moves (a student's
+      // attendance: its session's counts; admin/derived-counts.ts).
+      db.transaction(async (tx) =>
+        keepDerivedCounts(entity.slug, tx as unknown as AdminDb, [values], async () => {
+          // RETURNING the row so the audit entry carries its id (see withAudit).
+          const inserted = tx.insert(entity.table as never).values(values as never) as unknown as {
+            returning: () => Promise<Array<Record<string, unknown>>>;
+          };
+          const [created] = await inserted.returning();
+          return created?.id != null ? String(created.id) : null;
+        }),
+      ),
     {
       action: "admin.row.create",
       entityType: entity.slug,
@@ -308,11 +331,14 @@ export async function updateRowAction(
         if (reason) throw new MutationRefused(adminMessage(t, reason));
         const problems = await entityRowProblems(entity, next, before, tx as unknown as AdminDb);
         if (problems) throw new RowProblems(problems);
-        await tx
-          .update(entity.table as never)
-          .set(write as never)
-          .where(eq(idCol as never, rowId));
-        return updateAudit(entity, before, write);
+        const stamped = { ...write, ...stampFor(entity, session.user.id, "update") };
+        await keepDerivedCounts(entity.slug, tx as unknown as AdminDb, [before, { ...before, ...stamped }], () =>
+          tx
+            .update(entity.table as never)
+            .set(stamped as never)
+            .where(eq(idCol as never, rowId)),
+        );
+        return updateAudit(entity, before, auditedWrite(stamped));
       }),
     {
       action: "admin.row.update",
@@ -374,7 +400,9 @@ export async function deleteRowAction(formData: FormData): Promise<void> {
         if (!before) return null;
         const reason = entity.guardMutation?.("delete", before);
         if (reason) throw new MutationRefused(reason.key, rowId); // the page asks the guard again for the sentence
-        await tx.delete(entity.table as never).where(eq(idCol as never, rowId));
+        await keepDerivedCounts(entity.slug, tx as unknown as AdminDb, [before], () =>
+          tx.delete(entity.table as never).where(eq(idCol as never, rowId)),
+        );
         return before;
       }),
     {
@@ -501,9 +529,11 @@ export async function bulkDeleteAction(formData: FormData): Promise<void> {
       }
       // Single DELETE ... WHERE id IN (...) — atomic, one round-trip.
       // Drizzle's `inArray` builds the correct parameterised SQL list.
-      await tx
-        .delete(entity.table as never)
-        .where(inArray(idCol as never, rowIds as never[]));
+      await keepDerivedCounts(entity.slug, tx as unknown as AdminDb, befores, () =>
+        tx
+          .delete(entity.table as never)
+          .where(inArray(idCol as never, rowIds as never[])),
+      );
       deletedCount = befores.length;
     });
   } catch (err) {
