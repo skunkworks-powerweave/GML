@@ -11,6 +11,14 @@ second copy of `README-deploy.md` is a pointer instead — two operator document
 that overlap will drift, and drift is what made the previous version of this
 file describe a system that no longer existed.
 
+**Releases, staging and production, and CI/CD** (tag → images → deploy over
+SSH, with an approval before production) are in
+[`docs/handover/IT-HANDOVER.md`](docs/handover/IT-HANDOVER.md). **QA** of each
+release candidate follows [`docs/qa/QA-PLAN.md`](docs/qa/QA-PLAN.md). The
+first deploy on each server is still the manual 5-step deploy below; the
+`deploy` workflow runs the same upgrade (`git checkout <tag> && ./scripts/deploy.sh`)
+after that.
+
 ---
 
 ## What runs on the box

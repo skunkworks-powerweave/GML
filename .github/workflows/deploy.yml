@@ -1,0 +1,117 @@
+# Deploy a released version by running the documented upgrade on that
+# environment's server over SSH (README-deploy.md section 4):
+#
+#   git fetch --tags && git checkout <tag> && ./scripts/deploy.sh
+#
+#   staging     automatically, when a GitHub Release is published
+#   production  only by hand (Actions > deploy > Run workflow), only a final
+#               version (v1.2.3, not v1.2.3-rc.1), and only through the
+#               "production" environment, where IT adds required reviewers
+#
+# Each GitHub environment (Settings > Environments) holds its own server:
+#   secrets  DEPLOY_HOST          the server's address
+#            DEPLOY_USER          the account that owns the checkout
+#            DEPLOY_SSH_KEY       a private key for that account, deploy-only
+#            DEPLOY_KNOWN_HOSTS   the server's host key line(s): ssh-keyscan,
+#                                 checked by hand against the server itself
+#   vars     DEPLOY_PATH          the checkout on the server (e.g. /home/gml/gml-lms)
+#            DEPLOY_URL           https://<domain>, for the health check
+#
+# A published release whose staging environment has no DEPLOY_HOST yet says so
+# and deploys nothing; a hand-started deploy to an unconfigured environment fails.
+# deploy.sh keeps its own guarantees: migrations run before anything serving is
+# touched, and a failure leaves the previous containers serving. Rollback stays
+# a deliberate act on the server (./scripts/rollback.sh).
+name: deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        required: true
+      tag:
+        description: The release tag to deploy, e.g. v1.2.3
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'release' && 'staging' || inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }} to ${{ github.event_name == 'release' && 'staging' || inputs.environment }}
+    runs-on: ubuntu-24.04
+    environment: ${{ github.event_name == 'release' && 'staging' || inputs.environment }}
+    env:
+      TARGET: ${{ github.event_name == 'release' && 'staging' || inputs.environment }}
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+      TRIGGER: ${{ github.event_name }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+    steps:
+      # The tag reaches the server's shell, so it is checked here first: a
+      # version and nothing else. Production takes a final version only; a
+      # release candidate is for staging and QA.
+      - name: Check the tag and the target
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::'$TAG' is not a release tag (v1.2.3 or v1.2.3-rc.1)"; exit 1
+          fi
+          if [ "$TARGET" = production ] && [[ "$TAG" == *-rc* ]]; then
+            echo "::error::production takes a final version; $TAG is a release candidate. Tag the version QA signed off (e.g. ${TAG%%-rc*}) and deploy that."; exit 1
+          fi
+
+      - name: Is ${{ env.TARGET }} configured?
+        id: configured
+        run: |
+          missing=()
+          for v in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS DEPLOY_PATH DEPLOY_URL; do
+            [ -n "${!v}" ] || missing+=("$v")
+          done
+          if [ ${#missing[@]} -eq 0 ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          msg="$TARGET is not configured yet (missing: ${missing[*]}). Add them under Settings > Environments > $TARGET; see docs/handover/IT-HANDOVER.md."
+          if [ "$TRIGGER" = release ]; then echo "::notice::$msg Nothing was deployed."; echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "::error::$msg"; exit 1
+
+      - name: Deploy ${{ env.TAG }} on the ${{ env.TARGET }} server
+        if: steps.configured.outputs.ok == 'true'
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The remote script is sent on stdin with the tag and path as
+          # arguments, so neither is spliced into a command string.
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 \
+            "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$DEPLOY_PATH" "$TAG" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          git fetch --tags --force origin
+          git checkout --detach "refs/tags/$2"
+          echo "[deploy] $(git describe --tags) at $(git rev-parse --short HEAD)"
+          ./scripts/deploy.sh
+          REMOTE
+
+      - name: Health through ${{ env.DEPLOY_URL }}
+        if: steps.configured.outputs.ok == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            if body=$(curl -fsS --max-time 10 "$DEPLOY_URL/api/health"); then
+              echo "$body"
+              echo "$body" | jq -e '.ok == true and .migrations == true' >/dev/null && exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$DEPLOY_URL/api/health did not report ok within 5 minutes"; exit 1
