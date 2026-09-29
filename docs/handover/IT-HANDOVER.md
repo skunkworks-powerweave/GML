@@ -85,9 +85,20 @@ These have not been proven on real infrastructure. They are QA-ACC-01 to 06 in t
 - a backup reaching S3, and a passing restore drill;
 - a repeat deploy through CI.
 
-## 6. Time-sensitive
+## 6. Time-sensitive, and still needed
 
 **The seeded programme phases end on 2026-09-30.** After that date the dashboard names no current phase until the next phase and its terms are added at `/admin/data/phases` and `/admin/data/terms`, and its RTT subjects at `/admin/data/rtt-subjects` (`README-deploy.md` 3.1). Do this on every environment, as part of loading the programme's data.
+
+**WhatsApp stays switched off until the Meta keys are added.** WhatsApp is how teachers send videos on low bandwidth. It is built, and until these keys are set the webhook refuses all traffic while the rest of the app works (videos arrive by direct upload only). It needs four values from the programme's Meta Business account, put in each server's `.env`, and then the webhook registered in Meta (`README-IT.md`, WhatsApp Business setup):
+
+| `.env` key | From Meta |
+|---|---|
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp → API Setup → Phone number ID (not the phone number itself) |
+| `WHATSAPP_APP_SECRET` | App settings → Basic → App secret |
+| `WHATSAPP_ACCESS_TOKEN` | a **permanent** token: Business settings → Users → System users. The token on the API Setup page expires after 24 hours, and with it no video can be downloaded. |
+| `WHATSAPP_VERIFY_TOKEN` | any long random string you choose; Meta sends it back once, when the webhook is registered |
+
+Whoever manages the programme's Meta Business account creates these. IT adds them to `.env`, redeploys, and registers the webhook. Acceptance check QA-ACC-04 waits for them.
 
 ## 7. Known gaps in this release
 
