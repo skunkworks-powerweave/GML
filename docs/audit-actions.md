@@ -177,7 +177,7 @@ The data tables added for teaching records (`/admin/data/<slug>`, `apps/web/src/
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `learners.view` | A single class's learners list was rendered on `/repo/class/[id]/learners` (SM-9 — every learner-PII read writes an audit row), by a `programme_admin` / `super_admin`, or by a teacher for a class she teaches (her own students only; any other class answers 404 and writes nothing). `entity_type` `class`, `entity_id` the class, `user_id` the reader | `route`, `schoolId`, `grade` |
+| `learners.view` | A single class's learners list was rendered on `/repo/class/[id]/learners`, or a class's student progress on `/progress/students/[classId]` (SM-9 — every learner-PII read writes an audit row), by a `programme_admin` / `super_admin`, or by a teacher for a class she teaches (her own students only; any other class answers 404 and writes nothing; the progress page is the admins' only). `entity_type` `class`, `entity_id` the class, `user_id` the reader | `route`, `schoolId`, `grade` |
 | `learners.bulk_view` | The all-learners surface `/repo/students` rendered (multi-class scan) — for a teacher, her own students only. `entity_type` `all`, `user_id` the reader | `piiAudited`, `rowCount`, `page`, `schoolFilter`, `qFilter` |
 | `learners.search` | `/repo/students` rendered with a name search (`?q=`); one row per reader, search and hour (deduplicated), beside that render's `learners.bulk_view` | `q`, `resultCount`, `__dedupKey` (the reader and search it deduplicates on) |
 | `learners.bulk_export` | A `super_admin` downloaded the learners CSV via `/api/admin/learners/export` (SM-9 bulk-export gate) | `actorId`, `rowCount`, `filterApplied` |
@@ -387,7 +387,7 @@ which fields changed.
 | `teaching.student.created` | A teacher added a student to one of her classes (`learner`) | `classId`, `section` |
 | `teaching.student.updated` | A teacher changed one of her students (`learner`); nothing is written when nothing changed | `classId`, `changed` (the field names: name, rollNumber, age, guardian, section) |
 | `teaching.student.removed` | A teacher removed one of her students (`learner`): `deleted_at` is set, history stays | `classId` |
-| `teaching.students.viewed` | Learner names were rendered for a signed-in user (SM-9): `/teaching/students` (entity `teacher`, her teachers row) or a session's attendance list on `/teaching/sessions/[id]` (entity `session`) | `page` ("students" / "session"), `rowCount` |
+| `teaching.students.viewed` | Learner names were rendered for a signed-in user (SM-9): `/teaching/students` or `/teaching/progress` (entity `teacher`, her teachers row) or a session's attendance list on `/teaching/sessions/[id]` (entity `session`) | `page` ("students" / "progress" / "session"), `rowCount` |
 | `teaching.plan.created` | A teacher created a lesson plan (`course_outline` owned by her), from scratch or by starting from a programme outline | `subjectId`, `grade`, `term`; when started from a programme outline also `copiedFrom` (the outline) and `lessonCount` (lessons copied) |
 | `teaching.plan.updated` | A teacher changed an editable plan's details (`course_outline`) | `subjectId`, `grade`, `term` |
 | `teaching.plan.deleted` | A teacher deleted an editable plan and its lessons (`course_outline`) | `lessonCount` |

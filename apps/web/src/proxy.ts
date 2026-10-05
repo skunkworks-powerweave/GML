@@ -71,6 +71,7 @@ type PolicyRule = {
 // remains the authority, this is the cheap early exit.
 const POLICIES: PolicyRule[] = [
   { prefix: "/admin", roles: ["programme_admin", "super_admin"] },
+  { prefix: "/progress", roles: ["programme_admin", "super_admin"] },
   { prefix: "/dashboard", loggedIn: true },
   { prefix: "/observation", loggedIn: true },
   { prefix: "/rtt", loggedIn: true },

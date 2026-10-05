@@ -60,6 +60,12 @@ export default async function TeachingHubPage() {
           ))}
         </section>
 
+        <div style={wrapRow}>
+          <Link href="/teaching/progress" className="btn btn-sm">
+            {t("hub.links.progress")}
+          </Link>
+        </div>
+
         <Card title={t("hub.returnedTitle", { count: returned.length })} sub={t("hub.returnedSub")}>
           {returned.length === 0 ? (
             <Empty>{t("hub.returnedEmpty")}</Empty>

@@ -86,7 +86,8 @@
       "students": "My students",
       "plans": "Lesson plans",
       "sessions": "My sessions",
-      "marks": "Marks"
+      "marks": "Marks",
+      "progress": "Student progress"
     },
     "returnedTitle": "Sent back to you ({count})",
     "returnedSub": "A programme administrator asked for changes to these or did not approve them. Open one to see why and fix it.",
@@ -287,5 +288,61 @@
     "summary": "{classes, plural, one {# class} other {# classes}} · {students, plural, one {# student} other {# students}} · {plans, plural, one {# lesson plan} other {# lesson plans}} · {sessions, plural, one {# session} other {# sessions}}",
     "returned": "{count, plural, one {# record was sent back to you} other {# records were sent back to you}}",
     "open": "Open My teaching"
+  },
+  "progress": {
+    "title": "Student progress",
+    "intro": "How the students of your classes are getting on: attendance, marks and sessions held. Only your own sessions and tests are counted.",
+    "howTitle": "How these numbers are worked out",
+    "rule": {
+      "attendance": "Attendance % is the sessions a student was present or late for, out of the sessions she was marked in; cancelled sessions are not counted.",
+      "marks": "Average marks is the mean of each recorded mark as a percentage of its test's total; absent and blank marks are left out.",
+      "low": "Students below {threshold}% attendance are highlighted."
+    },
+    "noClasses": "Add a class first; its progress then appears here.",
+    "noStudents": "No students in this class yet.",
+    "percent": "{value}%",
+    "sort": {
+      "label": "Order students by",
+      "roll": "Roll number",
+      "attendance": "Lowest attendance first"
+    },
+    "stat": {
+      "students": "Students",
+      "sessions": "Sessions held",
+      "sessionsOf": "{held} of {planned}",
+      "attendance": "Attendance",
+      "marks": "Average marks",
+      "low": "Below {threshold}% attendance"
+    },
+    "student": {
+      "attendance": "Attendance",
+      "attendanceValue": "{pct}% ({attended} of {marked, plural, one {# session} other {# sessions}})",
+      "attendanceRoster": "{pct}% on the student list (no sessions marked yet)",
+      "notMarked": "Not marked yet",
+      "marks": "Marks",
+      "noMarks": "None yet",
+      "last": "Last session",
+      "noSession": "None yet"
+    },
+    "low": "Low attendance",
+    "admin": {
+      "label": "Programme",
+      "intro": "Every school and class in the programme: students, sessions held, attendance and marks. Open a class to see its students.",
+      "schoolFilter": "School",
+      "allSchools": "All schools",
+      "show": "Show",
+      "noSchools": "No schools match this filter.",
+      "noClasses": "No classes at this school yet.",
+      "open": "Open",
+      "page": "Page {page} of {pages}",
+      "prev": "Previous",
+      "next": "Next",
+      "schoolSub": "{code} · {district} · {zone}",
+      "allClasses": "All classes",
+      "classIntro": "{school}: attendance, marks and sessions held for every student in this class.",
+      "classTitle": "{school}: Grade {grade}",
+      "piiNote": "Student names are confidential. Opening this page is recorded in the audit log.",
+      "back": "Student progress"
+    }
   }
 }
