@@ -52,6 +52,7 @@ case "$*" in
     exit 0 ;;
   "compose ps -a --format"*) echo "migrate 0" ;;
   "compose ps --format"*) echo "app healthy" ;;
+  "compose run"*"caddy validate"*) [ "\${FAKE_CADDY_VALIDATE_EXIT:-0}" = 0 ] || echo "Error: tls: private key does not match public key" >&2; exit "\${FAKE_CADDY_VALIDATE_EXIT:-0}" ;;
   "compose logs"*) [ -n "\${FAKE_CADDY_LOG:-}" ] && printf '%s\\n' "$FAKE_CADDY_LOG"; exit 0 ;;
   *verify-auth.mjs*) exit "\${FAKE_VERIFY_AUTH_EXIT:-0}" ;;
 esac
@@ -108,6 +109,7 @@ test("a deploy onto a healthy stack gets past health and runs seed, verify-auth 
     );
     assert.ok(calls.some((l) => /verify-auth\.mjs/.test(l)), "verify-auth must run");
     assert.ok(calls.includes("pnpm test:smoke"), "the smoke suite must run");
+    assert.ok(!calls.some((l) => /caddy validate/.test(l)), "with no certificate in docker/certs there is nothing for Caddy to validate");
     assert.ok(
       calls.includes(`pnpm-env SMOKE_BASE_URL=https://${DOMAIN}`),
       `the smoke suite must target the site Caddy serves, not 127.0.0.1:\n${calls.join("\n")}`,
@@ -703,6 +705,57 @@ test("an unhealthy deploy without an ACME error does not blame ACME_EMAIL", () =
     assert.notEqual(r.status, 0);
     assert.ok(!/ACME contact address/.test(r.stderr), r.stderr);
     assert.match(r.stderr, /did not run/, "it still says the seed was not reached");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+const OWN_SNIPPET = "tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem\n";
+
+test("a certificate in docker/certs: the ACME contact is not judged, and Caddy validates the pair before anything is built", () => {
+  const sb = deploySandbox();
+  try {
+    sb.write(".env", ENV_FILE.replace("ops@gml-lms.org", "dev@localhost.invalid"));
+    sb.write("docker/certs/tls.caddy", OWN_SNIPPET);
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!/ACME_EMAIL \(/.test(r.stderr), `Let's Encrypt is not used, so its contact is not refused:\n${r.stderr}`);
+    const calls = sb.invocations();
+    const validate = calls.findIndex((l) =>
+      /^docker compose run --rm --no-deps -T --entrypoint caddy caddy validate --config \/etc\/caddy\/Caddyfile$/.test(l),
+    );
+    const build = calls.findIndex((l) => /^docker compose build/.test(l));
+    assert.ok(validate >= 0, `Caddy must be asked to validate the pair:\n${calls.join("\n")}`);
+    assert.ok(build < 0 || validate < build, "the check must come before the build");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a certificate Caddy rejects stops the deploy before anything is built or started, and shows Caddy's words", () => {
+  const sb = deploySandbox();
+  try {
+    sb.write("docker/certs/tls.caddy", OWN_SNIPPET);
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_CADDY_VALIDATE_EXIT: "1" } });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /private key does not match public key/);
+    assert.match(r.stderr, /Caddy rejects the certificate in docker\/certs/);
+    const calls = sb.invocations();
+    assert.ok(!calls.some((l) => /^docker compose (build|up)/.test(l) || /migrate/.test(l)), `nothing may run after the rejection:\n${calls.join("\n")}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a tls line that is not a certificate pair (tls internal) does not switch off the ACME check", () => {
+  const sb = deploySandbox();
+  try {
+    sb.write(".env", ENV_FILE.replace("ops@gml-lms.org", "dev@localhost.invalid"));
+    sb.write("docker/certs/tls.caddy", "tls internal\n");
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /ACME_EMAIL \(dev@localhost\.invalid\)/);
+    assert.ok(!sb.invocations().some((l) => /caddy validate/.test(l)));
   } finally {
     sb.cleanup();
   }

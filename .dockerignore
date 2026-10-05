@@ -30,6 +30,10 @@
 **/.env.*
 !.env.example
 
+# An operator's TLS private key (docker/certs/). Caddy reads it through a
+# bind mount; no Dockerfile copies it, so it must not enter a build context.
+docker/certs
+
 # Local/runtime state and docs that no build step reads.
 workspace
 specs

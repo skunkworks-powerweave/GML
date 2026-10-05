@@ -23,7 +23,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { makeSandbox, root } from "./_sandbox.mjs";
+import { spawnSync } from "node:child_process";
+import { bashExe, makeSandbox, root } from "./_sandbox.mjs";
 
 const PEM = "-----BEGIN CERTIFICATE-----\nMIIBstubstubstub\n-----END CERTIFICATE-----\n";
 
@@ -433,4 +434,111 @@ test("ACME: with DOMAIN=localhost a placeholder is only a WARN, because no certi
 test("ACME: an address with no domain part is still a FAIL, whatever DOMAIN is", () => {
   const r = run({ envFile: { DOMAIN: "localhost", ACME_EMAIL: "not-an-address" } });
   assert.ok(line(r.stdout, "FAIL", /ACME_EMAIL looks like an address/), r.stdout);
+});
+
+// ── A certificate the operator supplies (docker/certs) ─────────────
+
+const HAVE_OPENSSL = spawnSync(bashExe(), ["-c", "command -v openssl"], { encoding: "utf8" }).status === 0;
+const OPENSSL = { skip: !HAVE_OPENSSL && "openssl is not installed here" };
+
+/** A sandbox with a freshly made self-signed pair and the tls.caddy that points at it. */
+function certSandbox({ certHost = "lms.gml-lms.org", days = 90, email } = {}) {
+  const sb = preflightSandbox({ envFile: { ...PUBLIC_DOMAIN, ...(email ? { ACME_EMAIL: email } : {}) } });
+  const r = sb.bash(
+    `mkdir -p docker/certs && openssl req -x509 -newkey rsa:2048 -nodes -keyout docker/certs/privkey.pem ` +
+      `-out docker/certs/fullchain.pem -days ${days} -subj "/CN=${certHost}" ` +
+      `-addext "subjectAltName=DNS:${certHost}" >/dev/null 2>&1`,
+    { env: { MSYS_NO_PATHCONV: "1" } },
+  );
+  assert.equal(r.status, 0, `openssl could not make a test certificate: ${r.stderr}`);
+  sb.write("docker/certs/tls.caddy", "tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem\n");
+  return sb;
+}
+
+test("Own cert: a pair that covers DOMAIN, is current and matches passes; the ACME contact is then only a WARN", OPENSSL, () => {
+  const sb = certSandbox({ email: "dev@localhost.invalid" });
+  try {
+    const out = sb.run("scripts/preflight.sh").stdout;
+    assert.ok(line(out, "PASS", /tls\.caddy serves docker\/certs\/fullchain\.pem with docker\/certs\/privkey\.pem/), out);
+    assert.ok(line(out, "PASS", /the certificate covers lms\.gml-lms\.org/), out);
+    assert.ok(line(out, "PASS", /the certificate is valid until/), out);
+    assert.ok(line(out, "PASS", /the key matches the certificate/), out);
+    assert.ok(line(out, "WARN", /ACME_EMAIL .* not used while docker\/certs\/tls\.caddy supplies the certificate/), out);
+    assert.ok(!line(out, "FAIL", /ACME_EMAIL|certificate|key/), out);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: a certificate issued for another name is a FAIL", OPENSSL, () => {
+  const sb = certSandbox({ certHost: "other.gml-lms.org" });
+  try {
+    const out = sb.run("scripts/preflight.sh").stdout;
+    assert.ok(line(out, "FAIL", /the certificate covers lms\.gml-lms\.org/), out);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: a key from a different request is a FAIL", OPENSSL, () => {
+  const sb = certSandbox();
+  try {
+    const g = sb.bash("openssl genrsa -out docker/certs/privkey.pem 2048 >/dev/null 2>&1");
+    assert.equal(g.status, 0, g.stderr);
+    const r = sb.run("scripts/preflight.sh");
+    assert.ok(line(r.stdout, "FAIL", /the key matches the certificate/), r.stdout);
+    assert.notEqual(r.status, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: a certificate with under 14 days left is a WARN that says renewal is manual", OPENSSL, () => {
+  const sb = certSandbox({ days: 5 });
+  try {
+    const out = sb.run("scripts/preflight.sh").stdout;
+    assert.ok(line(out, "WARN", /the certificate expires on .*under 14 days.*renewal is manual/), out);
+    assert.ok(!line(out, "FAIL", /certificate/), out);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: a snippet that names a file which is not there is a FAIL that says where to put it", () => {
+  const sb = preflightSandbox({ envFile: PUBLIC_DOMAIN });
+  try {
+    sb.write("docker/certs/tls.caddy", "tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem\n");
+    const r = sb.run("scripts/preflight.sh");
+    assert.ok(line(r.stdout, "FAIL", /docker\/certs\/fullchain\.pem exists and is readable/), r.stdout);
+    assert.ok(line(r.stdout, "FAIL", /docker\/certs\/privkey\.pem exists and is readable/), r.stdout);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: a path outside /etc/caddy/certs is a FAIL, because compose mounts nothing else", () => {
+  const sb = preflightSandbox({ envFile: PUBLIC_DOMAIN });
+  try {
+    sb.write("docker/certs/tls.caddy", "tls /etc/ssl/site.pem /etc/ssl/site.key\n");
+    const r = sb.run("scripts/preflight.sh");
+    assert.ok(line(r.stdout, "FAIL", /names files under \/etc\/caddy\/certs/), r.stdout);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: a tls line that is not a certificate pair (tls internal) leaves the ACME check in force", () => {
+  const sb = preflightSandbox({ envFile: { ...PUBLIC_DOMAIN, ACME_EMAIL: "dev@localhost.invalid" } });
+  try {
+    sb.write("docker/certs/tls.caddy", "tls internal\n");
+    const r = sb.run("scripts/preflight.sh");
+    assert.ok(line(r.stdout, "FAIL", /ACME_EMAIL can be registered with a CA/), r.stdout);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("Own cert: with nothing in docker/certs, preflight says nothing about it", () => {
+  const r = run({ envFile: PUBLIC_DOMAIN });
+  assert.ok(!/docker\/certs/.test(r.out), r.out);
 });

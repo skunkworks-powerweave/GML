@@ -64,7 +64,7 @@ const PASSTHROUGH = [
   "cat", "dirname", "basename", "date", "mkdir", "rm", "mv", "cp", "ls",
   "find", "stat", "df", "uname", "base64", "gzip", "gunzip", "sleep", "env",
   "tee", "mktemp", "touch", "chmod", "numfmt", "od", "xargs", "id", "expr",
-  "seq", "getent", "true", "false",
+  "seq", "getent", "true", "false", "openssl",
 ];
 
 let cachedBash;

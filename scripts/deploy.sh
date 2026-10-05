@@ -243,10 +243,31 @@ acme_email_problem() {
   esac
   return 0
 }
-if [ "${DOMAIN_VALUE}" != "localhost" ]; then
+# A certificate the operator supplies (docker/certs/README.md): a
+# `tls <certificate> <key>` line in docker/certs/*.caddy makes Caddy serve that
+# pair and skip Let's Encrypt, so the ACME contact is not used.
+own_cert=false
+for snippet in docker/certs/*.caddy; do
+  [ -e "${snippet}" ] || continue
+  if grep -qE '^[[:space:]]*tls[[:space:]]+/[^[:space:]]+[[:space:]]+/[^[:space:]]+' "${snippet}"; then own_cert=true; fi
+done
+if [ "${DOMAIN_VALUE}" != "localhost" ] && [ "${own_cert}" = false ]; then
   acme_email="${ACME_EMAIL:-$(grep -E '^ACME_EMAIL=' .env | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' [:cntrl:]' || true)}"
   acme_problem="$(acme_email_problem "${acme_email}")"
   [ -z "${acme_problem}" ] || fail "ACME_EMAIL (${acme_email}) ${acme_problem}. Let's Encrypt and ZeroSSL refuse to register it, so Caddy could never get a certificate for ${DOMAIN_VALUE} and nothing would answer over HTTPS. Put a real mailbox in ACME_EMAIL in .env (a copy of a developer's .env or of .env.example carries a sample value) and re-run."
+fi
+
+# With a supplied certificate, have Caddy itself judge the pair before anything
+# is built or restarted: a key that does not belong to the certificate, a file it
+# cannot read or a path outside /etc/caddy/certs would otherwise surface only as
+# a Caddy that will not start, and `up` has already replaced the running one by
+# then. Caddy's own check, rather than a copy of it in shell.
+if [ "${own_cert}" = true ]; then
+  log "serving the certificate in docker/certs (Let's Encrypt is not used for ${DOMAIN_VALUE}); having Caddy check it"
+  if ! caddy_check="$(docker compose run --rm --no-deps -T --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile 2>&1)"; then
+    echo "${caddy_check}" >&2
+    fail "Caddy rejects the certificate in docker/certs (its output is above): a key that does not belong to the certificate, a file it cannot read, or a path outside /etc/caddy/certs. Nothing was built or restarted. See docker/certs/README.md."
+  fi
 fi
 
 # WhatsApp is optional. The webhook refuses every request while

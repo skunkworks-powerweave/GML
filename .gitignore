@@ -43,3 +43,10 @@ next-env.d.ts
 # (docs/superpowers/README.md). Ignored so a worktree's contents can never be
 # committed into the repository that contains it.
 .worktrees/
+
+# A TLS certificate and key the operator supplies (docker/certs/README.md).
+# Only the instructions and the example are tracked, so a private key can
+# never be committed from here.
+docker/certs/*
+!docker/certs/README.md
+!docker/certs/tls.caddy.example
