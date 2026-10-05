@@ -29,7 +29,7 @@ const PEM = "-----BEGIN CERTIFICATE-----\nMIIBstubstubstub\n-----END CERTIFICATE
 
 const BASE_ENV_FILE = {
   DOMAIN: "localhost",
-  ACME_EMAIL: "ops@example.test",
+  ACME_EMAIL: "ops@gml-lms.org",
   DATABASE_URL: "postgres://stub:stub@127.0.0.1:5432/stub",
   NEXT_PUBLIC_SUPABASE_URL: "https://abcdefgh.supabase.co",
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "stub",
@@ -104,6 +104,8 @@ esac`,
   if (t.pg_dump) sb.stub("pg_dump", `[ "$1" = "--version" ] && echo "pg_dump (PostgreSQL) ${t.pg_dump}"; exit 0`);
   if (t.rclone) sb.stub("rclone", "exit 0");
   sb.stub("curl", CURL);
+  // A public DOMAIN is looked up; keep the verdict off the real network.
+  sb.stub("getent", 'echo "203.0.113.9  $2"');
   // A fixed, roomy disk so the verdict does not depend on the test machine.
   sb.stub(
     "df",
@@ -397,4 +399,38 @@ test("Disk: the free-space hint describes what the root volume holds now", () =>
   } finally {
     sb.cleanup();
   }
+});
+
+// ── ACME contact address ───────────────────────────────────────────
+
+const PUBLIC_DOMAIN = { DOMAIN: "lms.gml-lms.org" };
+
+test("ACME: a placeholder contact on a public DOMAIN is a FAIL that says what to put there", () => {
+  // A .env copied from a developer machine (dev@localhost.invalid) or from
+  // .env.example (it@example.org) used to PASS "looks like an address", and the
+  // deploy then ended "not healthy after 180s": the CA refuses these, so Caddy
+  // never gets a certificate.
+  for (const email of ["dev@localhost.invalid", "it@example.org", "ops@example.test", "a@host.local"]) {
+    const r = run({ envFile: { ...PUBLIC_DOMAIN, ACME_EMAIL: email } });
+    assert.ok(line(r.stdout, "FAIL", /ACME_EMAIL can be registered with a CA/), `${email} must FAIL:\n${r.stdout}`);
+    assert.match(r.stdout, /fix: put a real mailbox in ACME_EMAIL/, r.stdout);
+    assert.notEqual(r.status, 0, `${email}: a blocking failure must exit non-zero`);
+  }
+});
+
+test("ACME: a real address passes on a public DOMAIN", () => {
+  const r = run({ envFile: { ...PUBLIC_DOMAIN, ACME_EMAIL: "ops@goldenmilelearning.org" } });
+  assert.ok(line(r.stdout, "PASS", /ACME_EMAIL looks like an address/), r.stdout);
+  assert.ok(!line(r.stdout, "FAIL", /ACME_EMAIL/), r.stdout);
+});
+
+test("ACME: with DOMAIN=localhost a placeholder is only a WARN, because no certificate is requested", () => {
+  const r = run({ envFile: { DOMAIN: "localhost", ACME_EMAIL: "dev@localhost.invalid" } });
+  assert.ok(line(r.stdout, "WARN", /ACME_EMAIL/), r.stdout);
+  assert.ok(!line(r.stdout, "FAIL", /ACME_EMAIL/), r.stdout);
+});
+
+test("ACME: an address with no domain part is still a FAIL, whatever DOMAIN is", () => {
+  const r = run({ envFile: { DOMAIN: "localhost", ACME_EMAIL: "not-an-address" } });
+  assert.ok(line(r.stdout, "FAIL", /ACME_EMAIL looks like an address/), r.stdout);
 });

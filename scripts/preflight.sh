@@ -292,11 +292,56 @@ else
   nb "DOMAIN is unset or localhost -- no public certificate will be issued"
 fi
 
-case "${ACME_EMAIL:-}" in
-  ?*@?*.?*) ok "ACME_EMAIL looks like an address" ;;
-  "") : ;;
-  *) no "ACME_EMAIL looks like an address" "expiry notices from the CA go here" ;;
-esac
+# A well-formed address is not enough. Caddy registers it with Let's Encrypt
+# and ZeroSSL, and both refuse a contact domain that is not a real public name.
+# Caddy then retries for ever with no certificate: HTTPS never answers,
+# /api/health is unreachable and deploy.sh ends "not healthy after 180s" with
+# no body. A .env copied from a developer machine (ACME_EMAIL=dev@localhost.invalid)
+# or from .env.example (it@example.org) does exactly this, and used to PASS here.
+#
+# Only a FAIL for a public DOMAIN: with DOMAIN=localhost no certificate is
+# requested, so the address is never sent anywhere.
+
+# Why a certificate authority would refuse this contact address; prints nothing
+# when it is usable. Let's Encrypt and ZeroSSL both refuse to register an
+# account whose contact domain is not a real public name (.invalid, .localhost,
+# .test, example.org ...), and Caddy then retries for ever with no certificate.
+# The same function is in scripts/deploy.sh and scripts/preflight.sh;
+# tests/scripts/acme-email.test.mjs keeps the two identical.
+acme_email_problem() {
+  local email="${1//[[:cntrl:]]/}" host tld
+  case "$email" in
+    ?*@?*.?*) ;;
+    *) echo "is not an address"; return 0 ;;
+  esac
+  host="${email##*@}"
+  host="${host,,}"
+  tld="${host##*.}"
+  case "$tld" in
+    invalid|localhost|local|localdomain|test|example|internal|lan|home|corp)
+      echo "ends in .${tld}, which is not a public domain" ;;
+    *)
+      case "$host" in
+        example.com|example.net|example.org|*.example.com|*.example.net|*.example.org)
+          echo "is on an example domain" ;;
+      esac ;;
+  esac
+  return 0
+}
+
+acme_problem="$(acme_email_problem "${ACME_EMAIL:-}")"
+if [ -z "${ACME_EMAIL:-}" ]; then
+  :   # reported as unset above
+elif [ -z "$acme_problem" ]; then
+  ok "ACME_EMAIL looks like an address"
+elif [ "$acme_problem" = "is not an address" ]; then
+  no "ACME_EMAIL looks like an address" "expiry notices from the CA go here"
+elif [ -n "${DOMAIN:-}" ] && [ "$DOMAIN" != "localhost" ]; then
+  no "ACME_EMAIL can be registered with a CA (${ACME_EMAIL} ${acme_problem})" \
+     "put a real mailbox in ACME_EMAIL in .env (a copy of a developer's .env or of .env.example carries a sample value), then re-run ./scripts/deploy.sh"
+else
+  nb "ACME_EMAIL ${acme_problem} -- harmless while DOMAIN is localhost (no certificate is requested); set a real mailbox before a public deploy"
+fi
 
 # ---- host -------------------------------------------------------------------
 sect "Host"

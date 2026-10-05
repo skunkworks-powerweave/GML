@@ -37,7 +37,7 @@ const sb_src = () => readFileSync(resolve(root, "scripts/deploy.sh"), "utf8");
 const DOMAIN = "lms.example.test";
 
 const ENV_FILE = `DOMAIN=${DOMAIN}
-ACME_EMAIL=ops@example.test
+ACME_EMAIL=ops@gml-lms.org
 DATABASE_URL=postgres://stub:stub@127.0.0.1:1/stub
 NEXT_PUBLIC_SUPABASE_URL=https://abcdefgh.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=stub
@@ -52,6 +52,7 @@ case "$*" in
     exit 0 ;;
   "compose ps -a --format"*) echo "migrate 0" ;;
   "compose ps --format"*) echo "app healthy" ;;
+  "compose logs"*) [ -n "\${FAKE_CADDY_LOG:-}" ] && printf '%s\\n' "$FAKE_CADDY_LOG"; exit 0 ;;
   *verify-auth.mjs*) exit "\${FAKE_VERIFY_AUTH_EXIT:-0}" ;;
 esac
 exit 0
@@ -636,6 +637,72 @@ test("a deploy that fails prunes nothing", () => {
     const r = sb.run("scripts/deploy.sh", { env: { HEALTH_TIMEOUT_SECONDS: "0", HEALTH_INTERVAL_SECONDS: "1" } });
     assert.notEqual(r.status, 0);
     assert.ok(!sb.invocations().some((l) => /prune/.test(l)), "keep everything for diagnosis when the deploy failed");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a placeholder ACME_EMAIL on a public DOMAIN stops the deploy before anything is built", () => {
+  // With ACME_EMAIL=dev@localhost.invalid the CA refuses Caddy's account, no
+  // certificate is ever issued, and the deploy used to build, migrate and start
+  // everything just to time out at health.
+  const sb = deploySandbox();
+  try {
+    sb.write(".env", ENV_FILE.replace("ops@gml-lms.org", "dev@localhost.invalid"));
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /ACME_EMAIL \(dev@localhost\.invalid\) ends in \.invalid/);
+    assert.match(r.stderr, new RegExp(`certificate for ${DOMAIN.replaceAll(".", "\\.")}`));
+    const calls = sb.invocations();
+    assert.ok(!calls.some((l) => /^docker compose (build|run|up)/.test(l)), `nothing may be built or started:\n${calls.join("\n")}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("an exported ACME_EMAIL is judged, as Compose reads it before .env", () => {
+  const sb = deploySandbox();
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, ACME_EMAIL: "it@example.org" } });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /ACME_EMAIL \(it@example\.org\) is on an example domain/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the same placeholder is not refused for DOMAIN=localhost, where no certificate is requested", () => {
+  const sb = deploySandbox();
+  try {
+    sb.write(".env", ENV_FILE.replace(`DOMAIN=${DOMAIN}`, "DOMAIN=localhost").replace("ops@gml-lms.org", "dev@localhost.invalid"));
+    const r = sb.run("scripts/deploy.sh", { env: { HEALTH_TIMEOUT_SECONDS: "0", HEALTH_INTERVAL_SECONDS: "1" } });
+    assert.ok(!/ACME_EMAIL/.test(r.stderr), `a localhost deploy must not be refused over ACME_EMAIL:\n${r.stderr}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("an unhealthy deploy whose caddy log says invalidContact names ACME_EMAIL and says the seed did not run", () => {
+  const sb = deploySandbox({ healthy: false });
+  try {
+    const caddy = '{"level":"error","logger":"tls.obtain","error":"HTTP 400 urn:ietf:params:acme:error:invalidContact - contact email has invalid domain"}';
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_CADDY_LOG: caddy } });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /refused over the ACME contact address/);
+    assert.match(r.stderr, /Put a real mailbox in ACME_EMAIL/);
+    assert.match(r.stderr, /seed and the auth check come after this step and did not run/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("an unhealthy deploy without an ACME error does not blame ACME_EMAIL", () => {
+  const sb = deploySandbox({ healthy: false });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.notEqual(r.status, 0);
+    assert.ok(!/ACME contact address/.test(r.stderr), r.stderr);
+    assert.match(r.stderr, /did not run/, "it still says the seed was not reached");
   } finally {
     sb.cleanup();
   }
