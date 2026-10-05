@@ -288,7 +288,8 @@ test("a deploy without WhatsApp configured completes, and says WhatsApp ingest i
 // ($SANDBOX_DIR/images, one file per tag holding an image id):
 //
 //   compose build             every service's :current -> sha256:<FAKE_BUILD>-<svc>
-//   tag SRC DST               DST -> SRC's id (SRC may itself be an id)
+//   tag SRC DST               DST -> SRC's id. SRC is a tagged name or an id that
+//                             some tag still holds; otherwise "No such image"
 //   image inspect --format {{.Id}} REF    REF's id, or exit 1 if REF is untagged
 //   compose build             ... unless FAKE_BUILD_FAIL is set: then only app
 //                             finishes and is tagged, and the build exits 1 --
@@ -308,7 +309,14 @@ case "$*" in
   "image inspect --format {{.Id}} "*)
     f="$(tagfile "$5")"; [ -f "$f" ] || exit 1; cat "$f"; echo; exit 0 ;;
   "tag "*)
-    if [ -f "$(tagfile "$2")" ]; then id="$(cat "$(tagfile "$2")")"; else id="$2"; fi
+    # Real Docker resolves SRC to an image that still EXISTS: a tagged name, or
+    # an id that some tag still holds. With the containerd image store (Docker
+    # 29) an image whose last tag has moved to another build is gone, and
+    # tagging its old id fails with "No such image" -- which stopped a real
+    # deploy after its migrations, before anything was started.
+    if [ -f "$(tagfile "$2")" ]; then id="$(cat "$(tagfile "$2")")"
+    elif grep -lxF -- "$2" "$store"/* >/dev/null 2>&1; then id="$2"
+    else echo "Error response from daemon: No such image: $2" >&2; exit 1; fi
     printf '%s' "$id" > "$(tagfile "$3")"; exit 0 ;;
   "image rm "*) rm -f "$(tagfile "$3")"; exit 0 ;;
   "compose build"*)
@@ -759,4 +767,57 @@ test("a tls line that is not a certificate pair (tls internal) does not switch o
   } finally {
     sb.cleanup();
   }
+});
+
+// ── The serving image must survive the build moving :current ────────────────
+//
+// A real staging deploy (Docker 29, containerd image store) stopped after its
+// migrations with "Error response from daemon: No such image: sha256:007c...".
+// deploy.sh had noted the serving image by ID, the build then moved :current
+// onto the new image, and the old one -- tagged nowhere any more -- no longer
+// existed to be tagged :previous. The strict `docker tag` in STORE_DOCKER above
+// is what makes the tests in this section able to see that.
+
+const HOLD = (sb) => ["app", "worker", "migrate"].map((svc) => [svc, imageId(sb, `gml-lms-${svc}:pre-deploy`)]);
+
+test("the serving image is held under its own tag while the build moves :current, and the holding tag is gone afterwards", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_BUILD: "v2" }, timeout: SLOW });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = sb.invocations();
+    const hold = calls.findIndex((l) => l === "docker tag gml-lms-app:current gml-lms-app:pre-deploy");
+    const build = calls.findIndex((l) => /^docker compose build/.test(l));
+    assert.ok(hold >= 0 && hold < build, `the serving image must be held BEFORE the build moves :current:\n${calls.join("\n")}`);
+    assert.equal(imageId(sb, "gml-lms-app:previous"), "sha256:v1-app");
+    assert.deepEqual(HOLD(sb), [["app", null], ["worker", null], ["migrate", null]], "no holding tag may outlive a deploy");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failed migration and a failed build also leave no holding tag, with :current back on what served", () => {
+  for (const [label, env] of [
+    ["migration", { FAKE_BUILD: "v2", FAKE_MIGRATE_EXIT: "1" }],
+    ["build", { FAKE_BUILD: "v2", FAKE_BUILD_FAIL: "1" }],
+  ]) {
+    const sb = storeSandbox({ serving: "v1", previous: "v0" });
+    try {
+      const r = sb.run("scripts/deploy.sh", { env: { ...FAST, ...env }, timeout: SLOW });
+      assert.notEqual(r.status, 0, `${label}: the deploy must fail`);
+      for (const svc of ["app", "worker"]) {
+        assert.equal(imageId(sb, `gml-lms-${svc}:current`), `sha256:v1-${svc}`, `${label}: :current must name what served\n${r.stderr}`);
+      }
+      assert.deepEqual(HOLD(sb), [["app", null], ["worker", null], ["migrate", null]], `${label}: no holding tag may be left`);
+    } finally {
+      sb.cleanup();
+    }
+  }
+});
+
+test("deploy.sh never tags an image by an id it noted before the build", () => {
+  assert.ok(
+    !/docker tag "\$\{was_current\[/.test(sb_src()),
+    "tagging by a remembered id is what died with 'No such image' once the build had moved the tag; tag from :pre-deploy",
+  );
 });
