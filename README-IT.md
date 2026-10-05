@@ -387,12 +387,13 @@ COMMIT;
 
 ## Troubleshooting
 
-The full table is `README-deploy.md` section 10. The four that account for most
+The full table is `README-deploy.md` section 10. The ones that account for most
 calls:
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Nobody can sign in, correct passwords rejected | The Supabase access-token hook is not enabled | `README-deploy.md` 2.2a. Confirm with `docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs`. |
+| `deploy.sh` ends "not healthy after 180s" with an empty health body; the caddy log says `invalidContact` | `ACME_EMAIL` is a placeholder (`dev@localhost.invalid` from a developer's `.env`, `it@example.org` from `.env.example`). Let's Encrypt and ZeroSSL refuse it, so Caddy gets no certificate | Put a real mailbox in `ACME_EMAIL` in `.env` and re-run `./scripts/deploy.sh`: it recreates Caddy and runs the seed it never reached. `bash scripts/preflight.sh` now fails on this before the deploy. |
 | `/api/health` returns 503 | Read which of `db`, `storage`, `migrations` is false | `docker compose logs migrate` first — it is usually that. |
 | Worker unhealthy, videos stuck transcoding | It cannot reach the database, or ffmpeg failed | Check `DATABASE_URL` uses the session pooler (5432); then `/admin/transcode-jobs`. |
 | WhatsApp videos not arriving | The integration is off or partly configured, or a secret or token is wrong | `/api/health` reports `whatsapp: off / partial / on` (its `details` name the missing variables), and `/admin/whatsapp-log` says the same. Secret unset: 503 `whatsapp_not_configured` and one `WhatsApp ingest is OFF` log line. Secret wrong: 401, `whatsapp.signature_failed` rows and a log line naming `WHATSAPP_APP_SECRET`. Access token missing or expired: the videos are listed on `/admin/whatsapp-log` as awaiting media, with the reason; fix the token, then **Retry fetch**. Check `docker compose logs app worker`. |

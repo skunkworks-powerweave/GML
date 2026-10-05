@@ -208,6 +208,47 @@ for var in DOMAIN ACME_EMAIL DATABASE_URL NEXT_PUBLIC_SUPABASE_URL \
 done
 [ -z "${missing}" ] || fail "these variables are unset or empty in .env:${missing}"
 
+# Present is not the same as usable. Caddy registers ACME_EMAIL with Let's
+# Encrypt and ZeroSSL, which refuse a contact domain that is not a real public
+# name, so a placeholder (ACME_EMAIL=dev@localhost.invalid from a developer's
+# .env, it@example.org from .env.example) means no certificate is ever issued,
+# nothing answers over HTTPS and the health check below can only time out.
+# Refuse here, before anything is built. A deploy to localhost requests no
+# certificate, so it is exempt. Compose reads an exported ACME_EMAIL before .env,
+# so this does too.
+
+# Why a certificate authority would refuse this contact address; prints nothing
+# when it is usable. Let's Encrypt and ZeroSSL both refuse to register an
+# account whose contact domain is not a real public name (.invalid, .localhost,
+# .test, example.org ...), and Caddy then retries for ever with no certificate.
+# The same function is in scripts/deploy.sh and scripts/preflight.sh;
+# tests/scripts/acme-email.test.mjs keeps the two identical.
+acme_email_problem() {
+  local email="${1//[[:cntrl:]]/}" host tld
+  case "$email" in
+    ?*@?*.?*) ;;
+    *) echo "is not an address"; return 0 ;;
+  esac
+  host="${email##*@}"
+  host="${host,,}"
+  tld="${host##*.}"
+  case "$tld" in
+    invalid|localhost|local|localdomain|test|example|internal|lan|home|corp)
+      echo "ends in .${tld}, which is not a public domain" ;;
+    *)
+      case "$host" in
+        example.com|example.net|example.org|*.example.com|*.example.net|*.example.org)
+          echo "is on an example domain" ;;
+      esac ;;
+  esac
+  return 0
+}
+if [ "${DOMAIN_VALUE}" != "localhost" ]; then
+  acme_email="${ACME_EMAIL:-$(grep -E '^ACME_EMAIL=' .env | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' [:cntrl:]' || true)}"
+  acme_problem="$(acme_email_problem "${acme_email}")"
+  [ -z "${acme_problem}" ] || fail "ACME_EMAIL (${acme_email}) ${acme_problem}. Let's Encrypt and ZeroSSL refuse to register it, so Caddy could never get a certificate for ${DOMAIN_VALUE} and nothing would answer over HTTPS. Put a real mailbox in ACME_EMAIL in .env (a copy of a developer's .env or of .env.example carries a sample value) and re-run."
+fi
+
 # WhatsApp is optional. The webhook refuses every request while
 # WHATSAPP_APP_SECRET is unset (it fails closed), so requiring it here added no
 # protection and made an integration the programme switches on later a
@@ -433,6 +474,14 @@ until app_http_healthy; do
     echo >&2
     docker compose logs --no-color --tail 40 app >&2
     docker compose logs --no-color --tail 20 caddy >&2
+    # Captured first: `grep -q` closing the pipe early would make a pipefail
+    # pipeline report failure even when it matched.
+    caddy_log="$(docker compose logs --no-color --tail 200 caddy 2>/dev/null || true)"
+    if grep -q 'invalidContact' <<<"${caddy_log}"; then
+      echo "[deploy] Caddy's certificate requests are being refused over the ACME contact address (invalidContact in the caddy log)." >&2
+      echo "[deploy] Put a real mailbox in ACME_EMAIL in .env; the next run recreates Caddy with it." >&2
+    fi
+    echo "[deploy] The seed and the auth check come after this step and did not run. Fix the cause above, then re-run ./scripts/deploy.sh." >&2
     exit 1
   fi
   sleep "${HEALTH_INTERVAL_SECONDS}"
