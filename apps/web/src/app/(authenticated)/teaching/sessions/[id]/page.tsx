@@ -48,6 +48,7 @@ import {
   classLabel,
   dateFormatter,
   Empty,
+  Field,
   listRow,
   mutedText,
   PageHeader,
@@ -55,6 +56,7 @@ import {
 } from "../../_components/ui";
 import { SessionFields } from "../session-fields";
 import { saveAttendanceAction, submitSessionAction, updateSessionAction } from "../actions";
+import { uploadAttendanceCsvAction } from "../attendance-csv";
 
 export const dynamic = "force-dynamic";
 
@@ -235,17 +237,24 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
               <input type="hidden" name="id" value={s.id} />
               <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
                 {students.map((st) => {
-                  const current = marks.get(st.id) ?? "present";
+                  // Only a mark that was recorded is selected: an unmarked student is not "present" until she says so.
+                  const current = marks.get(st.id);
                   return (
                     <li key={st.id} style={listRow}>
-                      <fieldset style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 6, minWidth: 0, width: "100%" }}>
+                      {/* Keyed by the recorded mark: a radio she has clicked ignores a new default, so a CSV that
+                          changes this student's mark must start her fieldset afresh, or the page would show her
+                          click and not the file. Students whose mark did not change keep what she has picked. */}
+                      <fieldset
+                        key={`${st.id}:${current ?? ""}`}
+                        style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 6, minWidth: 0, width: "100%" }}
+                      >
                         <legend style={{ fontWeight: 600, padding: 0, overflowWrap: "anywhere" }}>
                           {st.rollNumber ? t("session.studentWithRoll", { name: st.name, roll: st.rollNumber }) : st.name}
                         </legend>
                         <div style={wrapRow}>
                           {ATTENDANCE_STATUSES.map((a) => (
                             <label key={a} style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 13, minHeight: 32 }}>
-                              <input type="radio" name={`status_${st.id}`} value={a} defaultChecked={current === a} />
+                              <input type="radio" name={`status_${st.id}`} value={a} defaultChecked={current === a} required />
                               {t(`attendance.${a}`)}
                             </label>
                           ))}
@@ -259,12 +268,34 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
                 <SubmitButton className="btn btn-primary" name="intent" value="save">
                   {t("session.saveAttendance")}
                 </SubmitButton>
-                <SubmitButton className="btn" name="intent" value="all_present">
+                {/* formNoValidate: the shortcut must not wait for every group to be marked. */}
+                <SubmitButton className="btn" name="intent" value="all_present" formNoValidate>
                   {t("session.allPresent")}
                 </SubmitButton>
               </div>
               <p style={{ ...mutedText, margin: 0 }}>{t("session.attendanceHint")}</p>
             </ActionForm>
+          ) : null}
+          {/* The same marks in bulk: her roster to fill in, and the file back. */}
+          {takesAttendance && students.length > 0 ? (
+            <section style={{ display: "grid", gap: 8, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              <h3 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>{t("session.csvTitle")}</h3>
+              <p style={{ ...mutedText, margin: 0 }}>{t("session.csvIntro")}</p>
+              <div style={wrapRow}>
+                <a className="btn btn-sm" href={`/api/teaching/sessions/${s.id}/roster`} download>
+                  {t("session.downloadRoster")}
+                </a>
+              </div>
+              <ActionForm action={uploadAttendanceCsvAction}>
+                <input type="hidden" name="id" value={s.id} />
+                <Field label={t("session.uploadCsv")}>
+                  <input type="file" name="file" accept=".csv,text/csv" required />
+                </Field>
+                <div>
+                  <SubmitButton className="btn btn-sm">{t("session.uploadCsvSubmit")}</SubmitButton>
+                </div>
+              </ActionForm>
+            </section>
           ) : null}
           {!takesAttendance && students.length > 0 ? (
             <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>

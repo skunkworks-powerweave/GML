@@ -9,15 +9,18 @@
 //                   subject and grade, date, time, duration, topic, notes and
 //                   status. A new session is a draft (approval_status).
 //   attendance      her roster for the session's class and section, each
-//                   student present / absent / late / excused (default
-//                   present). One transaction upserts session_attendance and
-//                   writes the session's attended (present + late) and total
-//                   counts, and each student's attendance %.
+//                   student present / absent / late / excused; every student
+//                   must be marked (nobody defaults to present). One
+//                   transaction upserts session_attendance and writes the
+//                   session's attended (present + late) and total counts, and
+//                   each student's attendance % (records.ts saveSessionMarks,
+//                   shared with the CSV upload in ./attendance-csv.ts).
 //   submit          lib/approvals, item type "session": once pending or
 //                   approved the session AND its attendance are locked.
 //
-// Every write needs the session to be hers (lib/teaching ownsSession) and
-// still editable (lib/approvals isEditable). Audited under teaching.*.
+// Every write needs the session to be hers and still editable
+// (records.ts editableSessionOf: lib/teaching ownsSession, lib/approvals
+// isEditable). Audited under teaching.*.
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -27,19 +30,22 @@ import { db } from "@gml/db";
 import { sessionAttendance, sessions } from "@gml/db/schema";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/ids";
-import { isEditable, submitForApproval } from "@/lib/approvals";
-import { ownsSession, roster, type MyTeacher } from "@/lib/teaching";
+import { submitForApproval } from "@/lib/approvals";
+import { roster, type MyTeacher } from "@/lib/teaching";
 import { signedInTeacher } from "@/lib/teaching/current";
 import {
   ATTENDANCE_STATUSES,
+  attendanceOf,
+  attendanceStatus,
+  editableSessionOf,
   lessonFits,
   linkOf,
   lockEditableSession,
   parseDate,
   parseSection,
   parseTime,
-  recomputeSessionCounts,
   refreshLearnerAttendance,
+  saveSessionMarks,
   SESSION_STATUSES,
   sessionSubmitBlocker,
   subjectExists,
@@ -118,14 +124,9 @@ type Editable = { id: string; classId: string; section: string | null; status: s
 
 /** Her session named by the form's `id`, while she may still change it; otherwise the refusal. */
 async function editableSession(t: Translate, teacher: MyTeacher, fd: FormData): Promise<Editable | { error: string }> {
-  const id = text(fd, "id");
-  if (!isUuid(id) || !(await ownsSession(db, teacher.id, id))) return { error: t("errors.notFound") };
-  const [row] = await db
-    .select({ id: sessions.id, classId: sessions.classId, section: sessions.section, status: sessions.status, state: sessions.approvalStatus })
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .limit(1);
-  if (!row || !isEditable(row.state)) return { error: t("errors.locked") };
+  const row = await editableSessionOf(db, teacher.id, text(fd, "id"));
+  if (row === "notFound") return { error: t("errors.notFound") };
+  if (row === "locked") return { error: t("errors.locked") };
   return row;
 }
 
@@ -204,8 +205,11 @@ export async function updateSessionAction(_prev: ActionState, fd: FormData): Pro
 
 /**
  * Save the attendance of her session. The roster comes from the database, not
- * the form: a learner id that is not on it is ignored, and one missing from the
- * form is marked present. `intent=all_present` marks everyone present.
+ * the form: a learner id that is not on it is ignored. A student the form
+ * leaves out keeps her recorded mark; one with no mark at all is not guessed
+ * to be present -- the save is refused, naming how many are unmarked, and
+ * writes nothing. `intent=all_present` is the explicit shortcut: everyone
+ * present.
  */
 export async function saveAttendanceAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   const t = await getTranslations("teaching");
@@ -218,32 +222,17 @@ export async function saveAttendanceAction(_prev: ActionState, fd: FormData): Pr
   const students = await roster(db, s.classId, s.section);
   if (students.length === 0) return { error: t("errors.noStudents") };
   const allPresent = text(fd, "intent") === "all_present";
-  const marks = students.map((st) => {
-    const raw = text(fd, `status_${st.id}`);
-    const status: AttendanceStatus =
-      !allPresent && (ATTENDANCE_STATUSES as readonly string[]).includes(raw) ? (raw as AttendanceStatus) : "present";
-    return { learnerId: st.id, status };
-  });
+  const recorded = allPresent ? new Map<string, AttendanceStatus>() : await attendanceOf(db, s.id);
+  const marks: Array<{ learnerId: string; status: AttendanceStatus }> = [];
+  let unmarked = 0;
+  for (const st of students) {
+    const status = allPresent ? "present" : (attendanceStatus(text(fd, `status_${st.id}`)) ?? recorded.get(st.id));
+    if (status) marks.push({ learnerId: st.id, status });
+    else unmarked += 1;
+  }
+  if (unmarked > 0) return { error: t("errors.attendanceIncomplete", { count: unmarked }) };
 
-  const now = new Date();
-  const counts = await db.transaction(async (tx) => {
-    if (!(await lockEditableSession(tx, s.id))) return null;
-    for (const m of marks) {
-      await tx
-        .insert(sessionAttendance)
-        .values({ sessionId: s.id, learnerId: m.learnerId, status: m.status, markedByUserId: me.actor.id, markedAt: now })
-        .onConflictDoUpdate({
-          target: [sessionAttendance.sessionId, sessionAttendance.learnerId],
-          set: { status: m.status, markedByUserId: me.actor.id, markedAt: now },
-        });
-    }
-    const c = await recomputeSessionCounts(tx, s.id);
-    await refreshLearnerAttendance(
-      tx,
-      marks.map((m) => m.learnerId),
-    );
-    return c;
-  });
+  const counts = await saveSessionMarks(db, s.id, me.actor.id, marks);
   if (!counts) return { error: t("errors.locked") };
 
   const tally = Object.fromEntries(ATTENDANCE_STATUSES.map((k) => [k, marks.filter((m) => m.status === k).length])) as Record<
