@@ -12,10 +12,13 @@ import { db } from "@gml/db";
 import { classes, schools, subjects, sessions, teachers } from "@gml/db/schema";
 import { auth } from "@/auth";
 import { actorFrom } from "@/lib/authz";
+import { isAdmin } from "@/lib/visibility";
 import { mayOpenClass, repoScope, sessionsWhere } from "@/lib/teaching/visibility";
 import { uuidOrNotFound } from "@/lib/ids";
 import { getDeviceType } from "@/lib/device";
 import { MobileDetailFrame } from "@/components/shells";
+import { SessionVideosCard } from "@/components/video/SessionVideosCard";
+import { videosOfClass } from "@/lib/video/session-videos";
 import { enumLabel, repoIntlLocale } from "@/components/repo/repo-i18n";
 
 export const dynamic = "force-dynamic";
@@ -96,6 +99,23 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
     .where(and(eq(sessions.classId, id), sessionsWhere(scope)))
     .orderBy(desc(sessions.scheduledDate))
     .limit(12);
+
+  // Classroom videos belong to the session's own teacher and to programme
+  // administrators (lib/authz.ts sessionVideoAccess). Mentors and observers
+  // see this page without the card. The sessions above are already the
+  // teacher's own, so a teacher is offered only those to upload for.
+  const videoViewer = isAdmin(actor) || scope.own;
+  const classVideos = videoViewer ? await videosOfClass(id, sessionsWhere(scope)) : [];
+  const uploadSessions = sessionRows.map((s) => ({
+    id: s.id,
+    label: [
+      new Date(`${s.scheduledDate}T00:00:00`).toLocaleDateString(intl, { day: "numeric", month: "short" }),
+      s.subjectName,
+      s.topic,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  }));
 
   const stage = STAGE_CHIP[cls.stage] ?? STAGE_CHIP.Primary;
 
@@ -247,6 +267,10 @@ export default async function RepoClassDetailPage({ params }: { params: Promise<
               </table>
             )}
           </SectionCard>
+
+          {videoViewer ? (
+            <SessionVideosCard videos={classVideos} upload={{ kind: "pick", sessions: uploadSessions }} showSession />
+          ) : null}
         </div>
 
         <div style={{ display: "grid", gap: 16, alignContent: "start" }}>

@@ -187,14 +187,16 @@
       "quarterlyQ4": "Q4 endline video · {mentor} ↔ {teacher}",
       "teachBack": "Teach-back video for {subject}",
       "classroomSession": "Classroom session video",
-      "generic": "Not linked to a cycle, meeting or pairing"
+      "generic": "Not linked to a cycle, meeting or pairing",
+      "session": "Lesson video · Grade {grade} · {date}"
     },
     "audience": {
       "cycle": "It goes on the cycle's Evidence, where the teacher, the observer and the mentor review it.",
       "meeting": "It goes on that meeting in the pairing, for the mentor and the mentee.",
       "quarterly": "It goes on the pairing page, for the mentor and the mentee.",
       "teachBack": "It goes to the teach-back queue, where mentors and observers review it.",
-      "private": "Only you and programme administrators can see it."
+      "private": "Only you and programme administrators can see it.",
+      "session": "The session's teacher and programme administrators can see it, on the session page."
     },
     "option": {
       "quarterlyQ1": "Q1 baseline video for your mentor",
@@ -329,5 +331,17 @@
         "unknown": "Something went wrong. Please try again."
       }
     }
+  },
+  "sessionVideos": {
+    "title": "Videos",
+    "sub": "Lesson recordings for this class. Only the session's own teacher and programme administrators see them.",
+    "upload": "Upload a video",
+    "pick": "Session",
+    "noSessions": "Add a session first, then upload its video here.",
+    "empty": "No video yet.",
+    "item": "Video · {date}",
+    "itemOfSession": "{date} · {subject}",
+    "uploaded": "Uploaded {date}",
+    "minutes": "{minutes} min"
   }
 }

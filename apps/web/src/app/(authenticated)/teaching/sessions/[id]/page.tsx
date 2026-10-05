@@ -37,6 +37,8 @@ import {
   sessionSubmitBlocker,
 } from "@/lib/teaching/records";
 import { SubmitButton } from "@/components/SubmitButton";
+import { SessionVideosCard } from "@/components/video/SessionVideosCard";
+import { videosOfSessions } from "@/lib/video/session-videos";
 import { MobileDetailFrame } from "@/components/shells";
 import { ActionForm } from "../../_components/ActionForm";
 import {
@@ -128,6 +130,8 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
   ]);
   const lessons = editable && teacher ? await lessonChoices(db, teacher.id, [...new Set(links.map((l) => l.grade))]) : [];
   const blocker = editable ? await sessionSubmitBlocker(db, s) : null;
+  // Her own session, or an administrator: the two who may see and add its videos.
+  const videos = await videosOfSessions([s.id]);
 
   if (students.length > 0) {
     void recordAudit({
@@ -278,6 +282,8 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </ul>
           ) : null}
         </Card>
+
+        <SessionVideosCard videos={videos} upload={{ kind: "session", sessionId: s.id }} />
       </div>
     </div>
   );

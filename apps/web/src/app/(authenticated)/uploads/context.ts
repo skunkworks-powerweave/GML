@@ -10,12 +10,12 @@ import "server-only";
 
 import { and, asc, desc, eq, lte, ne } from "drizzle-orm";
 import { db } from "@gml/db";
-import { mentorMeetings, mentorPairings, mentors, observationCycles, phases, rttSubjects, teachers, terms } from "@gml/db/schema";
+import { classes, mentorMeetings, mentorPairings, mentors, observationCycles, phases, rttSubjects, schools, sessions, subjects, teachers, terms } from "@gml/db/schema";
 import { notFound } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 import { hasAnyRole } from "@gml/shared/auth/roles";
 import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
-import { assertCanAccessCycle, assertCanAccessPairing, isUuid, pairingClosed, type Actor } from "@/lib/authz";
+import { assertCanAccessCycle, assertCanAccessPairing, isUuid, pairingClosed, sessionVideoAccess, type Actor } from "@/lib/authz";
 import { rttScope } from "@/lib/rtt/scope";
 import { activeGrant, isAdmin, mentorshipAccess, observationAccess } from "@/lib/visibility";
 import type { UploadContextType } from "@/lib/video/upload";
@@ -71,6 +71,11 @@ export type ContextCheck = { ok: true; target: UploadTarget } | { ok: false; err
  *                      "teach_backs" namespace it was left to does not exist
  *                      -- so no page could offer a teach-back, and a
  *                      hand-typed one named nothing a reviewer could look up.
+ *   classroom_session  the SESSION, one the uploader may attach to: her own
+ *                      (a teacher) or any (a programme administrator), as
+ *                      lib/authz.ts sessionVideoAccess. It took any session
+ *                      id from anyone. With no id the video stays private to
+ *                      its uploader.
  *
  * A cycle, meeting, quarterly or teach-back upload with no id is refused. It
  * used to pass ("no id, nothing to check") and was stored linked to nothing:
@@ -161,11 +166,9 @@ export async function assertContextAllowed(
     }
 
     case "classroom_session":
-      // Not scoped to a per-row owner: a classroom session is programme-wide
-      // reference data. The submission still records who uploaded it. A
-      // malformed id names nothing; it used to reach the uuid column and fail
-      // there (22P02, a 500).
-      if (contextId && !isUuid(contextId)) notFound();
+      // A malformed id, an unknown session and a colleague's session are all
+      // absent: a 404, and never a Postgres 22P02 (a 500).
+      if (contextId && !(await sessionVideoAccess(actor, contextId))) notFound();
       return { ok: true, target: { contextType, contextId, quarter: null } };
   }
 }
@@ -299,8 +302,24 @@ export async function describeUploadTarget(
         whatsappText: `TB-${id}`,
       });
     }
-    case "classroom_session":
-      return described({ title: t("context.title.classroomSession"), audience: t("context.audience.private"), whatsappText: null });
+    case "classroom_session": {
+      if (!id) return described({ title: t("context.title.classroomSession"), audience: t("context.audience.private"), whatsappText: null });
+      const [s] = await db
+        .select({ grade: classes.grade, school: schools.name, subject: subjects.name, topic: sessions.topic, date: sessions.scheduledDate, teacherName: teachers.fullName })
+        .from(sessions)
+        .innerJoin(classes, eq(classes.id, sessions.classId))
+        .innerJoin(schools, eq(schools.id, sessions.schoolId))
+        .innerJoin(subjects, eq(subjects.id, sessions.subjectId))
+        .innerJoin(teachers, eq(teachers.id, sessions.teacherId))
+        .where(eq(sessions.id, id))
+        .limit(1);
+      const date = await dateFormatter();
+      return described({
+        title: joined(t("context.title.session", { grade: s!.grade, date: date(new Date(`${s!.date}T00:00:00+05:30`)) }), s!.subject, s!.topic, actor.role !== "teacher" && `${s!.school} · ${s!.teacherName}`),
+        audience: t("context.audience.session"),
+        whatsappText: null,
+      });
+    }
     case "generic":
       return described({
         title: t("context.title.generic"),
