@@ -17,9 +17,10 @@ import { revalidatePath } from "next/cache";
 import { getTranslations } from "next-intl/server";
 import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
-import { classes, learners } from "@gml/db/schema";
+import { learners } from "@gml/db/schema";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/ids";
+import { classPlacement } from "@/lib/learner-placement";
 import { teachesClass } from "@/lib/teaching";
 import { signedInTeacher } from "@/lib/teaching/current";
 import { linkOf, parseSection, studentOf, text, wholeNumber } from "@/lib/teaching/records";
@@ -58,7 +59,8 @@ export async function addStudentAction(_prev: ActionState, fd: FormData): Promis
   const fields = studentFields(t, fd);
   if ("error" in fields) return fields;
 
-  const [cls] = await db.select({ schoolId: classes.schoolId, grade: classes.grade }).from(classes).where(eq(classes.id, link.classId)).limit(1);
+  // The school and grade are the class's, never typed: lib/learner-placement.ts.
+  const cls = await classPlacement(db, link.classId);
   if (!cls) return { error: t("errors.classInvalid") };
   const [row] = await db
     .insert(learners)

@@ -62,7 +62,9 @@ test("the count follows every kind of write to learners", { skip }, async () => 
       await c.query(`UPDATE learners SET active = true WHERE id = $1`, [one]);
       assert.equal(await count(f, w.a), 3, "reactivating raises it again");
 
-      await c.query(`UPDATE learners SET class_id = $2 WHERE id = $1`, [two, w.b]);
+      // A student moved to another class takes that class's grade with her
+      // (learner-class-consistency.test.ts).
+      await c.query(`UPDATE learners SET class_id = $2, grade = 6 WHERE id = $1`, [two, w.b]);
       assert.equal(await count(f, w.a), 2, "a student moved out of a class leaves its count");
       assert.equal(await count(f, w.b), 1, "and joins the other class's");
 

@@ -18,6 +18,7 @@ import {
   teachers,
   type GradingTarget,
 } from "@gml/db/schema";
+import { checkPlacement, classPlacement, isBlank } from "../lib/learner-placement";
 import type { AdminDb, AdminMessage } from "./types";
 
 /**
@@ -124,6 +125,58 @@ export function learnerOfRecordClass(recordField: "sessionId" | "assessmentId"):
     return sameClass && sameSection ? null : { learnerId: { key: "validation.learnerNotInClass" } };
   };
 }
+
+/**
+ * A student's school and grade where the write leaves them blank: her class's.
+ * Run before the rules (AdminEntity.fillIn), on a create, an update and an
+ * import row alike, so a blank means the same thing in the grid and in a file.
+ * A class that does not exist fills nothing; learnerFitsClass reports it.
+ */
+export async function learnerPlacementFromClass(db: AdminDb, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const classId = row.classId;
+  if (typeof classId !== "string" || (!isBlank(row.schoolId) && !isBlank(row.grade))) return {};
+  const cls = await classPlacement(db, classId);
+  if (!cls) return {};
+  return {
+    ...(isBlank(row.schoolId) ? { schoolId: cls.schoolId } : {}),
+    ...(isBlank(row.grade) ? { grade: cls.grade } : {}),
+  };
+}
+
+/**
+ * A student's school and grade must be her class's school and grade
+ * (lib/learner-placement.ts). Judged when the write sets or changes the class,
+ * the school or the grade, so a student stored before the rule -- whose class's
+ * grade was edited since -- keeps her unrelated edits; changing any of the
+ * three needs all of them to agree afterwards. Run on the row as it will be
+ * stored, blanks already filled.
+ */
+export const learnerFitsClass: Rule = async (db, row, before) => {
+  const classId = row.classId;
+  if (typeof classId !== "string") return null;
+  if (!touches(["classId", "schoolId", "grade"], row, before)) return null;
+  const verdict = await checkPlacement(db, classId, row);
+  if (verdict.kind === "fits") return null;
+  if (verdict.kind === "noClass") {
+    // The foreign key reports a class that is not there, unless a blank school
+    // or grade left it nothing to fail on.
+    return isBlank(row.schoolId) || isBlank(row.grade) ? { classId: { key: "dbError.missingRef" } } : null;
+  }
+  const problems: Record<string, AdminMessage> = {};
+  if (verdict.school) {
+    problems.schoolId = {
+      key: "validation.learnerSchoolNotClass",
+      values: { school: verdict.school.given, classSchool: verdict.school.expected },
+    };
+  }
+  if (verdict.grade) {
+    problems.grade = {
+      key: "validation.learnerGradeNotClass",
+      values: { grade: verdict.grade.given, classGrade: verdict.grade.expected },
+    };
+  }
+  return problems;
+};
 
 /** A test's marks cannot be more than its maximum, nor recorded for an absent student. */
 export const marksWithinMaximum: Rule = async (db, row, before) => {

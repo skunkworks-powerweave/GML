@@ -202,6 +202,33 @@ Two things to know:
 
 ---
 
+## Students whose school or grade disagrees with their class
+
+A student's school and grade are those of her class: the grid, the CSV import
+and a teacher's add-student screen refuse anything else, and a trigger on
+`learners` (`_post/016`) refuses it from any other writer. Students saved before
+that rule are NOT rewritten. This read-only query lists them:
+
+```sql
+SELECT l.id, l.name, l.roll_number,
+       ls.name AS student_school, cs.name AS class_school,
+       l.grade AS student_grade, c.grade AS class_grade
+  FROM learners l
+  JOIN classes c  ON c.id = l.class_id
+  JOIN schools ls ON ls.id = l.school_id
+  JOIN schools cs ON cs.id = c.school_id
+ WHERE l.school_id <> c.school_id OR l.grade <> c.grade
+ ORDER BY cs.name, c.grade, l.name;
+```
+
+Such a student can still be edited for anything else (guardian, name, active).
+Changing her class, school or grade -- in the grid, by CSV, or in SQL -- needs
+the three to agree afterwards: leave the school and grade blank to take the
+class's. Edit a class's own school or grade only after its students are moved,
+or they will appear in this list.
+
+---
+
 ## What is NOT monitored
 
 Stated so nobody assumes otherwise:

@@ -45,6 +45,20 @@ export async function entityGateOpen(entity: AdminEntity, userId: string): Promi
 }
 
 /**
+ * The columns the entity fills in itself where a zod-valid row left them blank
+ * (AdminEntity.fillIn), to be merged into the row before entityRowProblems
+ * judges it. `conn` as for entityRowProblems.
+ */
+export async function entityFilledColumns(
+  entity: AdminEntity,
+  row: Record<string, unknown>,
+  conn: AdminDb = db as unknown as AdminDb,
+): Promise<Record<string, unknown>> {
+  if (!entity.fillIn) return {};
+  return entity.fillIn(conn, row);
+}
+
+/**
  * The entity's database-backed field errors for a zod-valid row, or null:
  * field -> message key (admin/labels.ts problemsText says them).
  * `before` is the stored row an update replaces (absent on create); `conn` is

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { learners } from "@gml/db/schema";
+import { learnerFitsClass, learnerPlacementFromClass } from "../rules";
 import type { AdminEntity } from "../types";
 
 // Learners — actual children whom teachers teach. **PII-gated under SM-9.**
@@ -14,6 +15,10 @@ import type { AdminEntity } from "../types";
 // keeping a class list up to date. Deleting a student also deletes her
 // attendance and test marks (their foreign keys cascade), and the delete's
 // confirmation says so (admin/delete-effects.ts).
+//
+// A student's school and grade are her class's: left blank they are filled from
+// it, and one that differs is refused, in the grid and in a CSV alike
+// (lib/learner-placement.ts; a trigger on learners holds it for any other writer).
 export const learnersEntity: AdminEntity = {
   slug: "learners",
   table: learners,
@@ -34,8 +39,10 @@ export const learnersEntity: AdminEntity = {
   ],
   formSchema: z.object({
     classId: z.string().uuid(),
-    schoolId: z.string().uuid(),
-    grade: z.coerce.number().int().min(1).max(12),
+    // Blank is the class's school and grade (fillIn); one that differs from it
+    // is refused (validate). lib/learner-placement.ts.
+    schoolId: z.string().uuid().optional(),
+    grade: z.coerce.number().int().min(1).max(12).optional(),
     name: z.string().min(1).max(160),
     age: z.coerce.number().int().min(3).max(25).optional().nullable(),
     guardian: z.string().max(120).optional().nullable(),
@@ -48,6 +55,8 @@ export const learnersEntity: AdminEntity = {
   // A class list re-uploaded after a partial import (csv.ts); the roll number
   // tells two children of one name apart when both rows have it.
   duplicateKey: ["classId", "name", "rollNumber"],
+  fillIn: learnerPlacementFromClass,
+  validate: learnerFitsClass,
   writeStamp: ({ op }) => (op === "update" ? { updatedAt: new Date() } : {}),
   describeRow: (r) => `learner:${r.name ?? r.id}`,
 };

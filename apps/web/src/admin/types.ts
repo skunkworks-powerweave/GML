@@ -107,6 +107,14 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
    */
   gate?: GateSlug;
   /**
+   * Columns the entity fills in from another row when a write leaves them blank
+   * (a student's school and grade, from her class): the values to add to the
+   * row, or {}. Run by the create and update actions and by CSV import, after
+   * zod and before `validate`, which then judges the row as it will be stored.
+   * Its fields are optional in `formSchema`, so a blank is not a zod error.
+   */
+  fillIn?: (db: AdminDb, row: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  /**
    * Rules zod cannot check because they need the database (an observer id must
    * belong to a live observer account). Returns field -> message, or null.
    * Run by the create and update actions and by CSV import, after zod. On an
