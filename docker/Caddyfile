@@ -66,6 +66,15 @@
 }
 
 {$DOMAIN:localhost} {
+	# OPTIONAL: SERVE A CERTIFICATE THE ORGANISATION ALREADY HOLDS, instead of
+	# obtaining one from Let's Encrypt. The certificate, its key and a one-line
+	# tls.caddy go in docker/certs/ (see the README there), which compose mounts
+	# at /etc/caddy/certs. With no *.caddy file in it this imports nothing --
+	# Caddy logs one warning about the empty glob -- and automatic HTTPS works
+	# exactly as before. A bare `tls {$VAR}` cannot do this job: Caddy rejects
+	# `tls` with no argument, so the switch has to be a file that exists or not.
+	import /etc/caddy/certs/*.caddy
+
 	encode gzip zstd
 
 	# ACCESS LOG. Caddy records requests only for a site with a `log`

@@ -123,7 +123,7 @@ this is only the operator-facing subset.
 
 | Key | Notes |
 |---|---|
-| `DOMAIN` / `ACME_EMAIL` | The domain must already resolve here before the first deploy — Caddy needs it for the certificate. |
+| `DOMAIN` / `ACME_EMAIL` | The domain must already resolve here before the first deploy — Caddy needs it for the certificate. To serve a certificate you already hold instead of Let's Encrypt's, see `README-deploy.md` 2.6 (`docker/certs/`). |
 | `DATABASE_URL` | Supabase **session** pooler, port 5432. Not the transaction pooler on 6543. |
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Project origin and the browser-safe key. |
 | `SUPABASE_SECRET_KEY` | Bypasses RLS entirely and can create, ban and delete accounts. Never let it reach a browser. |

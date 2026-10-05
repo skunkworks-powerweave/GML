@@ -333,6 +333,10 @@ services:
       # NEXT_PUBLIC_SUPABASE_URL in the app container.
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # An optional certificate and key the operator supplies instead of
+      # Let's Encrypt (docker/certs/README.md). Read-only; holds nothing
+      # but the README until the operator opts in.
+      - ./docker/certs:/etc/caddy/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

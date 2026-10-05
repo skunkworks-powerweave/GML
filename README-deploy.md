@@ -342,6 +342,16 @@ and are installed in §7.
 
 ---
 
+### 2.6 Optional: your own TLS certificate
+
+Caddy gets a free Let's Encrypt certificate for `DOMAIN` and renews it by itself, which is what you want unless your organisation already holds a certificate for the name (purchased, wildcard, or from an internal CA) or Let's Encrypt cannot reach the box. Then put the pair in `docker/certs/` (the full steps are in `docker/certs/README.md`):
+
+1. `fullchain.pem` (the certificate, then its chain) and the unencrypted `privkey.pem`, `chmod 600 privkey.pem`. Git and the image builds ignore this folder, so the key is never committed or baked into an image.
+2. `cp docker/certs/tls.caddy.example docker/certs/tls.caddy`. Change the two paths only if the files are named differently; they are written as the container sees them (`/etc/caddy/certs/...`).
+3. `bash scripts/preflight.sh` checks the pair (readable, covers `DOMAIN`, not expired, key matches), and `./scripts/deploy.sh` has Caddy validate it before anything that is serving is touched.
+
+While `tls.caddy` exists Caddy does not contact Let's Encrypt for `DOMAIN`, and `ACME_EMAIL` is unused (it must still be set). **Renewal is then yours:** replace both files and run `docker compose exec caddy caddy reload --force --config /etc/caddy/Caddyfile` (`--force` because the Caddyfile itself is unchanged, so a plain reload does nothing; no downtime). Delete `tls.caddy` and re-run `./scripts/deploy.sh` to go back to Let's Encrypt. Port 80 still redirects to HTTPS, so keep it open.
+
 ## 3. First deploy
 
 ```bash

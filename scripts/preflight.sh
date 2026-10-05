@@ -292,6 +292,24 @@ else
   nb "DOMAIN is unset or localhost -- no public certificate will be issued"
 fi
 
+# A certificate the operator supplies (docker/certs/README.md). Caddy imports
+# docker/certs/*.caddy into the site block (docker/Caddyfile); a
+# `tls <certificate> <key>` line there makes it serve that pair and skip
+# Let's Encrypt for DOMAIN. Found here, before the ACME contact is judged,
+# because with a supplied certificate that address is not used.
+OWN_CERT=0
+own_snippet="" own_cert_file="" own_key_file=""
+for snippet in docker/certs/*.caddy; do
+  [ -e "$snippet" ] || continue
+  tls_line="$(grep -hE '^[[:space:]]*tls[[:space:]]+[^[:space:]]+' "$snippet" | head -n 1)"
+  [ -n "$tls_line" ] || continue
+  read -r _ own_cert_file own_key_file _ <<<"$tls_line"
+  case "$own_cert_file $own_key_file" in
+    /*" "/*) OWN_CERT=1; own_snippet="$snippet" ;;
+  esac
+  break
+done
+
 # A well-formed address is not enough. Caddy registers it with Let's Encrypt
 # and ZeroSSL, and both refuse a contact domain that is not a real public name.
 # Caddy then retries for ever with no certificate: HTTPS never answers,
@@ -336,11 +354,69 @@ elif [ -z "$acme_problem" ]; then
   ok "ACME_EMAIL looks like an address"
 elif [ "$acme_problem" = "is not an address" ]; then
   no "ACME_EMAIL looks like an address" "expiry notices from the CA go here"
+elif [ "$OWN_CERT" = 1 ]; then
+  nb "ACME_EMAIL ${acme_problem} -- not used while $own_snippet supplies the certificate; set a real mailbox before going back to Let's Encrypt"
 elif [ -n "${DOMAIN:-}" ] && [ "$DOMAIN" != "localhost" ]; then
   no "ACME_EMAIL can be registered with a CA (${ACME_EMAIL} ${acme_problem})" \
      "put a real mailbox in ACME_EMAIL in .env (a copy of a developer's .env or of .env.example carries a sample value), then re-run ./scripts/deploy.sh"
 else
   nb "ACME_EMAIL ${acme_problem} -- harmless while DOMAIN is localhost (no certificate is requested); set a real mailbox before a public deploy"
+fi
+
+# The pair Caddy will serve. It reads the files through the bind mount
+# docker/certs -> /etc/caddy/certs, so the paths in the snippet must live there.
+# Caddy refuses a key that does not belong to the certificate, and with
+# `restart: unless-stopped` that is a crash loop, so say so here instead.
+if [ "$OWN_CERT" = 1 ]; then
+  host_path() { case "$1" in /etc/caddy/certs/*) printf 'docker/certs/%s' "${1#/etc/caddy/certs/}" ;; esac; }
+  host_cert="$(host_path "$own_cert_file")"
+  host_key="$(host_path "$own_key_file")"
+  if [ -z "$host_cert" ] || [ -z "$host_key" ]; then
+    no "$own_snippet names files under /etc/caddy/certs" \
+       "compose mounts only docker/certs there; write the paths as /etc/caddy/certs/<file>"
+  elif [ ! -r "$host_cert" ] || [ ! -r "$host_key" ]; then
+    [ -r "$host_cert" ] || no "$host_cert exists and is readable" "put the certificate, then its chain, there (PEM)"
+    [ -r "$host_key" ] || no "$host_key exists and is readable" "put the unencrypted private key there (PEM)"
+  else
+    ok "$own_snippet serves $host_cert with $host_key; Let's Encrypt is not used"
+    if ! command -v openssl >/dev/null 2>&1; then
+      nb "openssl is not installed -- the certificate was not inspected (deploy.sh still has Caddy validate it)"
+    elif ! openssl x509 -in "$host_cert" -noout >/dev/null 2>&1; then
+      no "$host_cert is a PEM certificate" "the certificate must come first in the file, in PEM form"
+    else
+      if [ -n "${DOMAIN:-}" ] && [ "$DOMAIN" != "localhost" ]; then
+        if openssl x509 -in "$host_cert" -noout -checkhost "$DOMAIN" 2>/dev/null | grep -q "does match"; then
+          ok "the certificate covers $DOMAIN"
+        else
+          no "the certificate covers $DOMAIN" "it was issued for other names; get one that lists $DOMAIN (or a wildcard for its parent domain)"
+        fi
+      fi
+      cert_end="$(openssl x509 -in "$host_cert" -noout -enddate 2>/dev/null | cut -d= -f2)"
+      if ! openssl x509 -in "$host_cert" -noout -checkend 0 >/dev/null 2>&1; then
+        no "the certificate has not expired" "it ran out on $cert_end; get a new one"
+      elif ! openssl x509 -in "$host_cert" -noout -checkend 1209600 >/dev/null 2>&1; then
+        nb "the certificate expires on $cert_end (under 14 days) -- renewal is manual, see docker/certs/README.md"
+      else
+        ok "the certificate is valid until $cert_end"
+      fi
+      cert_pub="$(openssl x509 -in "$host_cert" -noout -pubkey 2>/dev/null)"
+      key_pub="$(openssl pkey -in "$host_key" -passin pass: -pubout 2>/dev/null)"
+      if [ -n "$key_pub" ] && [ "$cert_pub" = "$key_pub" ]; then
+        ok "the key matches the certificate"
+      else
+        no "the key matches the certificate" "this key is from a different request, or it is encrypted (Caddy needs it unencrypted)"
+      fi
+    fi
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*|CYGWIN*) : ;;
+      *)
+        kmode="$(stat -c '%a' "$host_key" 2>/dev/null || echo unknown)"
+        if [ "$kmode" != "unknown" ] && [ "${kmode: -1}" != "0" ]; then
+          nb "$host_key is readable by every account on this host (mode $kmode) -- chmod 600 $host_key"
+        fi
+        ;;
+    esac
+  fi
 fi
 
 # ---- host -------------------------------------------------------------------
