@@ -338,6 +338,23 @@ fi
 declare -A was_current=()
 for svc in app worker migrate; do
   was_current[${svc}]="$(docker image inspect --format '{{.Id}}' "gml-lms-${svc}:current" 2>/dev/null || true)"
+  # HOLD THE SERVING IMAGE UNDER A NAME OF ITS OWN, before the build moves
+  # :current.
+  #
+  # An image id is not enough to get back to it. With the containerd image
+  # store (the default in Docker 29) an image whose last tag moves to another
+  # build is gone: the build below removed it, and `docker tag <old id> ...`
+  # then died with "No such image" -- after the migrations, before anything was
+  # started (a real staging deploy). The same call puts :current back when a
+  # build or a migration fails, so those recovery paths were broken the same
+  # way. A second tag keeps the image alive on either store; it is dropped
+  # again once :previous or :current holds the image.
+  if [ -n "${was_current[${svc}]}" ]; then
+    docker tag "gml-lms-${svc}:current" "gml-lms-${svc}:pre-deploy"
+  else
+    # Left by an interrupted run, so it names nothing that served.
+    docker image rm "gml-lms-${svc}:pre-deploy" >/dev/null 2>&1 || true
+  fi
 done
 
 # Put :current back on what it named before this run's build, after a build or
@@ -349,10 +366,11 @@ done
 restore_current() {
   for svc in app worker migrate; do
     if [ -n "${was_current[${svc}]}" ]; then
-      docker tag "${was_current[${svc}]}" "gml-lms-${svc}:current"
+      docker tag "gml-lms-${svc}:pre-deploy" "gml-lms-${svc}:current"
     else
       docker image rm "gml-lms-${svc}:current" >/dev/null 2>&1 || true
     fi
+    docker image rm "gml-lms-${svc}:pre-deploy" >/dev/null 2>&1 || true
   done
 }
 
@@ -442,11 +460,16 @@ for svc in app worker; do
   if [ -z "${was_current[${svc}]}" ]; then
     log "gml-lms-${svc}: first build on this host -- no :previous to keep yet"
   elif [ "${release_changed}" = true ]; then
-    docker tag "${was_current[${svc}]}" "gml-lms-${svc}:previous"
+    docker tag "gml-lms-${svc}:pre-deploy" "gml-lms-${svc}:previous"
     log "tagged the release that was serving as gml-lms-${svc}:previous"
   else
     log "gml-lms-${svc}: the release is unchanged -- :previous left where it was"
   fi
+done
+# :previous (or the unchanged :current) holds what was serving now; the holding
+# tag has done its job.
+for svc in app worker migrate; do
+  docker image rm "gml-lms-${svc}:pre-deploy" >/dev/null 2>&1 || true
 done
 
 log "starting stack"

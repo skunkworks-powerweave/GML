@@ -264,6 +264,12 @@ test("spec 108: deploy.sh leaves a rollback target behind, and rollback.sh exist
   // are recorded BEFORE the build moves :current, and one becomes :previous
   // only when the build produced a different image.
   // tests/scripts/deploy-flow.test.mjs executes both cases.
+  //
+  // RE-SHAPED AGAIN. The serving image is now also HELD under
+  // gml-lms-<svc>:pre-deploy before the build, and :previous is tagged from
+  // that, not from the recorded id: on Docker 29's containerd image store the
+  // build removes an image whose last tag moved, and `docker tag <old id>` then
+  // failed with "No such image" after the migrations had run.
   const recorded = src.search(/was_current\[\$\{svc\}\]="\$\(docker image inspect --format '\{\{\.Id\}\}' "gml-lms-\$\{svc\}:current"/);
   assert.ok(
     recorded >= 0 && recorded < src.indexOf("docker compose build"),
@@ -279,7 +285,7 @@ test("spec 108: deploy.sh leaves a rollback target behind, and rollback.sh exist
   );
   assert.match(
     src,
-    /elif \[ "\$\{release_changed\}" = true \]; then\s+docker tag "\$\{was_current\[\$\{svc\}\]\}" "gml-lms-\$\{svc\}:previous"/,
+    /elif \[ "\$\{release_changed\}" = true \]; then\s+docker tag "gml-lms-\$\{svc\}:pre-deploy" "gml-lms-\$\{svc\}:previous"/,
     "deploy.sh must move every :previous to the serving image only when the release changed",
   );
   assert.ok(existsSync(resolve(root, "scripts/rollback.sh")), "scripts/rollback.sh must exist");
