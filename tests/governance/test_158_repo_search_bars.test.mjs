@@ -42,7 +42,7 @@ const ALL_PAGES = [
   ["teachers", TEACHERS_PATH, "teachers.fullName", "Search teachers by name"],
   ["mentors", MENTORS_PATH, "mentors.name", "Search mentors by name"],
   ["subjects", SUBJECTS_PATH, "subjects.name", "Search subjects by name"],
-  ["sessions", SESSIONS_PATH, "sessions.topic", "Search sessions by topic"],
+  ["sessions", SESSIONS_PATH, "sessions.topic", "Search classroom sessions by topic"],
   ["resources", RESOURCES_PATH, "resources.name", "Search resources by name"],
   ["outlines", OUTLINES_PATH, "courseOutlines.name", "Search outlines by name"],
 ];

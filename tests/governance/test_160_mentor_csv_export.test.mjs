@@ -265,14 +265,21 @@ test("spec 160 — response carries text/csv content-type and attachment disposi
   );
 });
 
-test("spec 160 — CSV headers row contains all six column keys in order", () => {
+test("spec 160 — CSV headers row starts with the six column keys in order", () => {
   const src = read(ROUTE_PATH);
   // The header order is part of the contract — operators who script
-  // against the CSV expect a stable column order.
+  // against the CSV expect a stable column order. The columns the mentors
+  // import takes beyond these six (userId, bio, photoUrl, active) follow them,
+  // from admin/export-columns.ts, so an edited export loads back whole.
   assert.match(
     src,
-    /const\s+headers\s*=\s*\[\s*"id"\s*,\s*"name"\s*,\s*"hindiName"\s*,\s*"baseLocation"\s*,\s*"expertiseAreas"\s*,\s*"pairingsActive"\s*\]/,
-    'route.ts must declare headers = ["id", "name", "hindiName", "baseLocation", "expertiseAreas", "pairingsActive"] in that exact order — operators script against this column layout',
+    /const\s+established\s*=\s*\[\s*"id"\s*,\s*"name"\s*,\s*"hindiName"\s*,\s*"baseLocation"\s*,\s*"expertiseAreas"\s*,\s*"pairingsActive"\s*\]/,
+    'route.ts must declare established = ["id", "name", "hindiName", "baseLocation", "expertiseAreas", "pairingsActive"] in that exact order — operators script against this column layout',
+  );
+  assert.match(
+    src,
+    /const\s+headers\s*=\s*\[\s*\.\.\.established\s*,\s*\.\.\.exportColumnKeys\(mentorsEntity\)/,
+    "route.ts must put the established columns first and then the columns the mentors import takes",
   );
 });
 

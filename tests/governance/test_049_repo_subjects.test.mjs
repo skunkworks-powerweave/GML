@@ -105,7 +105,7 @@ test("spec 049 — detail renders the 4-stat strip + 3 section cards (JSX:508-55
   }
   // Section cards.
   readsCopy(src, "subject.outlinesTitle", "Course outlines ({count})", "the outlines card");
-  readsCopy(src, "subject.recentTitle", "Recent sessions ({count})", "the sessions card");
+  readsCopy(src, "subject.recentTitle", "Recent classroom sessions ({count})", "the sessions card");
   readsCopy(src, "subject.readingTitle", "Reading material ({count})", "the readings card");
   // Outline status chip mapping per JSX:527: the stored status's label.
   assert.match(src, /enumLabel\(t,\s*"outlineStatus"/);

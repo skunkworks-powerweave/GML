@@ -364,6 +364,8 @@ export default async function RepoSchoolDetailPage({
               <KVRow label={t("common.classes")}>{classRows.length}</KVRow>
               <KVRow label={t("common.sessionsLogged")}>{sessionRows.length}</KVRow>
               <KVRow label={t("school.principal")}>{school.headTeacherName ?? "—"}</KVRow>
+              {/* Only when the row has one: a school's page states what its row holds. */}
+              {school.address ? <KVRow label={t("school.address")}>{school.address}</KVRow> : null}
               <KVRow label={t("school.onboarded")}>
                 <span className="mono">
                   {school.createdAt

@@ -160,7 +160,7 @@ test("school detail Details KV card has the expected rows from prototype", () =>
     ["common.district", "District"],
     ["common.teachers", "Teachers"],
     ["common.classes", "Classes"],
-    ["common.sessionsLogged", "Sessions logged"],
+    ["common.sessionsLogged", "Classroom sessions logged"],
     ["school.principal", "Principal"],
     ["school.onboarded", "Onboarded"],
   ]) {

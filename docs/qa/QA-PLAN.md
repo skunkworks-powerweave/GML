@@ -95,7 +95,7 @@ Never exercised before this release. Each needs a real server, domain or Meta ac
 |---|---|---|
 | QA-PAD-01 | Classroom Observation (password) → nominate a cycle | It appears as "nominated". |
 | QA-PAD-02 | Data tables: add, edit, delete a row; CSV export; CSV import | Works for subjects, schools, teachers, teacher classes, curriculum (course outlines and lessons), attendance and grading tables. A delete that would erase records of work is refused, with the reason. On a phone, rows show as cards. |
-| QA-PAD-03 | Mark attendance → an RTT session | Present, late, absent or excused per teacher, with who marked it. "Mark all present" marks everyone left. |
+| QA-PAD-03 | Mark training attendance → an RTT session | Present, late, absent or excused per teacher, with who marked it. "Mark all present" marks everyone left. |
 | QA-PAD-04 | Grading → a scale: edit bands; make it the default; switch it off | Band counts are right. Gaps show as a warning. A scale that is in use cannot be deleted. |
 | QA-PAD-05 | Grading → the rubric: rename or reorder criteria | Scores already given stay attached. A scored criterion cannot be removed. |
 | QA-PAD-06 | Approvals: the teacher's session and plan (QA-TEA-04/05) | **Request changes** needs a comment. **Approve** locks the record. Each decision reaches the teacher's inbox. |

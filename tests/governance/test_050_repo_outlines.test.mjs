@@ -80,7 +80,7 @@ test("050 — detail renders learning outcomes, lessons table, sessions, details
   const src = read(DETAIL);
   readsCopy(src, "outline.outcomesTitle", "Learning outcomes", "the outcomes card");
   readsCopy(src, "outline.lessonsTitle", "Lessons ({count})", "the lessons card");
-  readsCopy(src, "outline.sessionsTitle", "Sessions delivered against this outline ({count})", "the sessions card");
+  readsCopy(src, "outline.sessionsTitle", "Classroom sessions delivered against this outline ({count})", "the sessions card");
   readsCopy(src, "common.details", "Details", "the details card");
   readsCopy(src, "common.readingMaterial", "Reading material", "the readings card");
   // Two-column grid 1.6fr / 1fr (matches JSX prototype) from 768 px; one

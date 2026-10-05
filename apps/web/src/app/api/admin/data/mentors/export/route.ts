@@ -34,6 +34,8 @@
 import { NextResponse } from "next/server";
 import Papa from "papaparse";
 import { CSV_EXPORT_OPTIONS } from "@/admin/csv-safety";
+import { exportColumnKeys } from "@/admin/export-columns";
+import { mentorsEntity } from "@/admin/entities/mentors";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@gml/db";
 import { mentors, mentorPairings } from "@gml/db/schema";
@@ -82,6 +84,12 @@ export async function GET(_req: Request) {
       baseLocation: mentors.baseLocation,
       expertiseAreas: mentors.expertiseAreas,
       pairingsActive: pairingCounts.pairingsActive,
+      // What the mentors form and import take that the columns above do not
+      // carry (admin/export-columns.ts): an edited export loads back whole.
+      userId: mentors.userId,
+      bio: mentors.bio,
+      photoUrl: mentors.photoUrl,
+      active: mentors.active,
     })
     .from(mentors)
     .leftJoin(pairingCounts, eq(pairingCounts.mentorId, mentors.id))
@@ -108,9 +116,17 @@ export async function GET(_req: Request) {
     baseLocation: r.baseLocation ?? "",
     expertiseAreas: r.expertiseAreas ? JSON.stringify(r.expertiseAreas) : "[]",
     pairingsActive: r.pairingsActive ?? 0,
+    userId: r.userId ?? "",
+    bio: r.bio ?? "",
+    photoUrl: r.photoUrl ?? "",
+    active: String(r.active),
   }));
 
-  const headers = ["id", "name", "hindiName", "baseLocation", "expertiseAreas", "pairingsActive"];
+  // The six columns operators already script against keep their place; every
+  // other column the mentors import takes follows (userId, bio, photoUrl,
+  // active), so an edited export can be imported again.
+  const established = ["id", "name", "hindiName", "baseLocation", "expertiseAreas", "pairingsActive"];
+  const headers = [...established, ...exportColumnKeys(mentorsEntity).filter((k) => !established.includes(k))];
   // Escaped: a spreadsheet evaluates a cell starting with = + - @ (admin/csv-safety.ts).
   const csv = Papa.unparse({ fields: headers, data }, CSV_EXPORT_OPTIONS);
 

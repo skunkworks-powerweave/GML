@@ -101,7 +101,7 @@ test("052: detail route fetches teacher + school/zone + phase + sessions + cycle
   assert.match(src, /notFound\(\)/);
   // Section headings (repo namespace, read by key)
   for (const [key, heading] of [
-    ["teacher.sessionsTitle", /^Sessions taught/],
+    ["teacher.sessionsTitle", /^Classroom sessions taught/],
     ["teacher.pairingTitle", /^Mentor pairing$/],
     ["teacher.cyclesTitle", /^Recent observation cycles$/],
     ["teacher.cyclesTitleCount", /^Recent observation cycles \(/],

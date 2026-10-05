@@ -77,14 +77,20 @@ export function ImportCsv({
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  function reset() {
+  /** The chosen file and its preview, so nothing is left to import. */
+  function clearFile() {
     setFileName(null);
     setCsv(null);
     setHeader([]);
     setRowCount(0);
+    // Emptied too, so choosing the same file name again is a change the input reports.
+    if (fileInput.current) fileInput.current.value = "";
+  }
+
+  function reset() {
+    clearFile();
     setResult(null);
     setError(null);
-    if (fileInput.current) fileInput.current.value = "";
   }
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
@@ -100,7 +106,7 @@ export function ImportCsv({
   }
 
   async function onImport() {
-    if (!csv) return;
+    if (!csv || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -126,6 +132,12 @@ export function ImportCsv({
       }
       const body = (await res.json()) as ImportResult;
       setResult(body);
+      // THE FILE IS DONE WITH. It used to stay chosen, with "Import N rows"
+      // still live beside the result, so the natural next click sent the same
+      // rows again. The result stays; to import more, or the fixed rows, the
+      // operator chooses a file again (a failed request, above, keeps the file
+      // for a retry).
+      clearFile();
       if (body.inserted > 0 || (body.updated ?? 0) > 0) {
         // Rows landed; the grid behind this panel is now stale.
         router.refresh();
