@@ -8,7 +8,8 @@
 //     plans or the programme's outline for that subject and grade; it starts
 //     as a draft, in the section her class link names;
 //   - attendance is taken against her roster from the database (a learner id
-//     the form adds is ignored, one it leaves out is present); the session's
+//     the form adds is ignored, one it leaves out keeps its recorded mark, and
+//     is refused when it has none); the session's
 //     attended (present + late) and total counts and each student's
 //     attendance % are written with it; "mark all present" marks everyone;
 //   - another teacher gets 404 on the page and "not found" from every action;
@@ -159,10 +160,19 @@ test("she plans a session for her class, takes attendance, sends it, and it lock
         request.cookies = {};
       }
 
-      // Attendance: the roster comes from the database.
+      // Attendance: the roster comes from the database, and every student on it must be marked
+      // (a learner id the form adds is ignored; a student it leaves out is not guessed present --
+      // tests/behaviour/teaching-attendance-roster.test.ts).
       const saved = await a.saveAttendanceAction!(
         undefined,
-        form({ id, [`status_${w.a1}`]: "absent", [`status_${w.a2}`]: "late", [`status_${w.b1}`]: "absent", [`status_${randomUUID()}`]: "absent" }),
+        form({
+          id,
+          [`status_${w.a1}`]: "absent",
+          [`status_${w.a2}`]: "late",
+          [`status_${w.a3}`]: "present",
+          [`status_${w.b1}`]: "absent",
+          [`status_${randomUUID()}`]: "absent",
+        }),
       );
       assert.match(saved?.ok ?? "", /2 of 3 attended/);
       assert.deepEqual(await counts(c, id), { attended_count: 2, total_count: 3, approval_status: "draft" });
