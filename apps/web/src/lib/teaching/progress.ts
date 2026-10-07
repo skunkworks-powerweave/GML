@@ -13,21 +13,28 @@ import "server-only";
 // (./records.ts refreshLearnerAttendance): present and late over every session
 // the student was marked in that was not cancelled, rounded to a whole number;
 // a student never marked has none (NULL), not 0 -- unless a percentage was typed
-// on the student list (the grid or a CSV, learners.attendance_pct), which is then
-// shown as such, so what an administrator uploaded appears here too. A student
-// who has been marked is always worked out from the marks. A class's rate pools
-// its students' marks (attended / marked), so a student marked in many sessions
-// weighs more than one marked in few; it counts marked sessions only. Average
-// marks follow lib/grading/summary: each recorded mark as a percentage of its
-// test's maximum, absent and blank left out, one decimal. A record still
-// awaiting approval counts, as the design says reports do.
+// on the student list (the grid or a CSV, learners.attendance_pct) and no teacher
+// has marked her in this class, which is then shown as such, so what an
+// administrator uploaded appears here too. Once any session marks her, that stored
+// number is the pool of EVERY teacher's sessions (refreshLearnerAttendance), so a
+// teacher's page never borrows it: with none of her own marks she has none. A
+// class's rate pools its students' marks (attended / marked), so a student marked
+// in many sessions weighs more than one marked in few; it counts marked sessions
+// only. A session is held when it is Complete or attendance was taken for it
+// (teachers often take attendance and leave the status at Planned); planned is
+// every session that was not cancelled. Average marks follow lib/grading/summary:
+// each recorded mark as a percentage of its test's maximum, absent and blank left
+// out, one decimal. A record still awaiting approval counts, as the design says
+// reports do.
 //
 // WHO IS COUNTED. The students of a class are its roster (./index.ts roster):
 // active, not deleted, and for a teacher linked to one section that section's
 // and those with none. A teacher's figures count HER sessions and HER tests
 // only (as every other record of hers does -- lib/teaching/visibility.ts); an
 // admin's count every teacher's. Only sessions and tests of the student's own
-// class count towards that class.
+// class count towards that class, and for a section's view only that section's
+// and the whole grade's (a student with no section is on every section's roster
+// but must not carry one section's marks onto another's card).
 //
 // Aggregated in SQL, grouped by student or by class: the number of queries
 // does not grow with the number of students, sessions or schools.
@@ -77,6 +84,7 @@ export type StudentProgress = {
 
 export type ClassFigures = {
   students: number;
+  /** Complete, or with attendance taken. */
   sessionsHeld: number;
   /** Held and still to come: every session that was not cancelled. */
   sessionsPlanned: number;
@@ -120,8 +128,12 @@ const ownTest = (teacherId?: string | null) => (teacherId ? eq(assessments.teach
 const onRoster = (section: string | null) =>
   and(eq(learners.active, true), isNull(learners.deletedAt), section ? or(isNull(learners.section), eq(learners.section, section)) : undefined);
 
-/** A teacher's link to one section teaches that section's sessions and the whole grade's. */
+/** A teacher's link to one section teaches that section's sessions and tests and the whole grade's. */
 const sectionSessions = (section: string | null) => (section ? or(isNull(sessions.section), eq(sessions.section, section)) : undefined);
+const sectionTests = (section: string | null) => (section ? or(isNull(assessments.section), eq(assessments.section, section)) : undefined);
+
+/** Attendance was taken for this session, whatever its status says. */
+const attendanceTaken = sql`exists (select 1 from ${sessionAttendance} where ${sessionAttendance.sessionId} = ${sessions.id})`;
 
 export type Scope = {
   classId: string;
@@ -138,23 +150,33 @@ export async function studentProgress(db: Db, q: Scope): Promise<StudentProgress
   const students = await roster(db, q.classId, q.section ?? null);
   if (students.length === 0) return [];
   const ids = students.map((s) => s.id);
+  const section = q.section ?? null;
 
-  const [typed, attendance, marks] = await Promise.all([
+  const [typed, attendance, anyoneMarked, marks] = await Promise.all([
     db.select({ id: learners.id, pct: learners.attendancePct }).from(learners).where(inArray(learners.id, ids)),
     db
       .select({ learnerId: sessionAttendance.learnerId, marked: count(), attended: attendedCount, last: max(sessions.scheduledDate) })
       .from(sessionAttendance)
       .innerJoin(sessions, eq(sessions.id, sessionAttendance.sessionId))
-      .where(and(inArray(sessionAttendance.learnerId, ids), eq(sessions.classId, q.classId), counted, ownSession(q.teacherId)))
+      .where(and(inArray(sessionAttendance.learnerId, ids), eq(sessions.classId, q.classId), counted, ownSession(q.teacherId), sectionSessions(section)))
       .groupBy(sessionAttendance.learnerId),
+    // Marked in this class by anyone (a colleague, another section)? Only a narrowed view can miss such a mark.
+    q.teacherId || section
+      ? db
+          .selectDistinct({ learnerId: sessionAttendance.learnerId })
+          .from(sessionAttendance)
+          .innerJoin(sessions, eq(sessions.id, sessionAttendance.sessionId))
+          .where(and(inArray(sessionAttendance.learnerId, ids), eq(sessions.classId, q.classId), counted))
+      : Promise.resolve([]),
     db
       .select({ learnerId: assessmentMarks.learnerId, graded: count(), sum: markSum })
       .from(assessmentMarks)
       .innerJoin(assessments, eq(assessments.id, assessmentMarks.assessmentId))
-      .where(and(inArray(assessmentMarks.learnerId, ids), eq(assessments.classId, q.classId), recordedMark, ownTest(q.teacherId)))
+      .where(and(inArray(assessmentMarks.learnerId, ids), eq(assessments.classId, q.classId), recordedMark, ownTest(q.teacherId), sectionTests(section)))
       .groupBy(assessmentMarks.learnerId),
   ]);
   const typedOf = new Map(typed.map((r) => [r.id, r.pct]));
+  const markedByAnyone = new Set(anyoneMarked.map((r) => r.learnerId));
   const attendanceOf = new Map(attendance.map((r) => [r.learnerId, r]));
   const marksOf = new Map(marks.map((r) => [r.learnerId, r]));
 
@@ -163,7 +185,8 @@ export async function studentProgress(db: Db, q: Scope): Promise<StudentProgress
     const m = marksOf.get(s.id);
     const marked = a?.marked ?? 0;
     const attended = a?.attended ?? 0;
-    const fromRoster = marked === 0 && typedOf.get(s.id) != null;
+    // Stored on the student list and marked by no one: what was typed. Once anyone marked her it is the pooled figure.
+    const fromRoster = marked === 0 && !markedByAnyone.has(s.id) && typedOf.get(s.id) != null;
     const pct = fromRoster ? (typedOf.get(s.id) ?? null) : attendancePercent(attended, marked);
     return {
       id: s.id,
@@ -184,16 +207,25 @@ export async function studentProgress(db: Db, q: Scope): Promise<StudentProgress
 
 export type StudentOrder = "roll" | "attendance";
 
-/** The order a page was asked for (?sort=); anything else is the roster's. */
+/** The order a page was asked for (?sort=); anything else is by roll number. */
 export const parseOrder = (raw: unknown): StudentOrder => (raw === "attendance" ? "attendance" : "roll");
 
-/** Roster order, or lowest attendance first with the never-marked last; ties keep roster order. */
-export function sortStudents<T extends { attendancePct: number | null }>(rows: readonly T[], by: StudentOrder): T[] {
-  if (by !== "attendance") return [...rows];
-  return rows
-    .map((r, i) => [r, i] as const)
-    .sort(([a, i], [b, j]) => (a.attendancePct ?? Infinity) - (b.attendancePct ?? Infinity) || i - j)
-    .map(([r]) => r);
+type Sortable = { name: string; rollNumber: string | null; attendancePct: number | null };
+
+// roster() orders the roll number as text, so "10" comes before "2"; a teacher reads rolls as numbers.
+const collator = new Intl.Collator("en", { numeric: true });
+const byRoll = (a: Sortable, b: Sortable): number =>
+  Number(a.rollNumber == null) - Number(b.rollNumber == null) || collator.compare(a.rollNumber ?? "", b.rollNumber ?? "") || collator.compare(a.name, b.name);
+
+/** The lower attendance first; a student never marked has none, and comes last. */
+const byAttendance = (a: Sortable, b: Sortable): number => {
+  const [x, y] = [a.attendancePct ?? Infinity, b.attendancePct ?? Infinity];
+  return x === y ? 0 : x < y ? -1 : 1;
+};
+
+/** By roll number (those with none last), or lowest attendance first with the never-marked last and ties by roll number. */
+export function sortStudents<T extends Sortable>(rows: readonly T[], by: StudentOrder): T[] {
+  return [...rows].sort((a, b) => (by === "attendance" ? byAttendance(a, b) : 0) || byRoll(a, b));
 }
 
 // ── Per class ────────────────────────────────────────────────────────────────
@@ -220,7 +252,7 @@ export async function classFigures(
     db
       .select({
         classId: sessions.classId,
-        held: sql<number>`count(*) filter (where ${eq(sessions.status, "complete")})`.mapWith(Number),
+        held: sql<number>`count(*) filter (where ${counted} and (${eq(sessions.status, "complete")} or ${attendanceTaken}))`.mapWith(Number),
         planned: sql<number>`count(*) filter (where ${counted})`.mapWith(Number),
       })
       .from(sessions)
@@ -231,14 +263,14 @@ export async function classFigures(
       .from(sessionAttendance)
       .innerJoin(sessions, eq(sessions.id, sessionAttendance.sessionId))
       .innerJoin(learners, and(eq(learners.id, sessionAttendance.learnerId), eq(learners.classId, sessions.classId)))
-      .where(and(inArray(sessions.classId, q.classIds), counted, ownSession(q.teacherId), onRoster(section)))
+      .where(and(inArray(sessions.classId, q.classIds), counted, ownSession(q.teacherId), sectionSessions(section), onRoster(section)))
       .groupBy(sessions.classId),
     db
       .select({ classId: assessments.classId, graded: count(), sum: markSum })
       .from(assessmentMarks)
       .innerJoin(assessments, eq(assessments.id, assessmentMarks.assessmentId))
       .innerJoin(learners, and(eq(learners.id, assessmentMarks.learnerId), eq(learners.classId, assessments.classId)))
-      .where(and(inArray(assessments.classId, q.classIds), recordedMark, ownTest(q.teacherId), onRoster(section)))
+      .where(and(inArray(assessments.classId, q.classIds), recordedMark, ownTest(q.teacherId), sectionTests(section), onRoster(section)))
       .groupBy(assessments.classId),
   ]);
 

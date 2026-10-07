@@ -71,7 +71,18 @@ export default async function StudentProgressPage({ searchParams }: { searchPara
         {groups.map(({ link, students, figures, lowCount }) => (
           <Card key={link.linkId} id={`class-${link.linkId}`} title={classLabel(t, link.grade, link.section)} sub={t("students.count", { count: figures.students })}>
             <FiguresGrid t={t} figures={figures} lowCount={students.length > 0 ? lowCount : undefined} />
-            {students.length === 0 ? <Empty>{t("progress.noStudents")}</Empty> : <StudentRows t={t} students={sortStudents(students, order)} fmtDate={fmtDate} />}
+            {students.length === 0 ? (
+              <>
+                <Empty>{t("progress.noStudents")}</Empty>
+                <div>
+                  <Link href="/teaching/students" className="btn btn-sm">
+                    {t("progress.addStudents")}
+                  </Link>
+                </div>
+              </>
+            ) : (
+              <StudentRows t={t} students={sortStudents(students, order)} fmtDate={fmtDate} />
+            )}
           </Card>
         ))}
       </div>

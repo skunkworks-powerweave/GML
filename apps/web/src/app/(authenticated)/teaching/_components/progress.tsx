@@ -25,12 +25,13 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** What the figures mean, in words: the attendance rule, the marks rule and the highlight. */
+/** What the figures mean, in words: the attendance rule, what "held of planned" counts, the marks rule and the highlight. */
 export function RuleNote({ t }: { t: Translate }) {
   return (
     <section className="card" style={{ padding: 12, display: "grid", gap: 4 }}>
       <div className="label">{t("progress.howTitle")}</div>
       <p style={{ ...mutedText, margin: 0 }}>{t("progress.rule.attendance")}</p>
+      <p style={{ ...mutedText, margin: 0 }}>{t("progress.rule.sessions")}</p>
       <p style={{ ...mutedText, margin: 0 }}>{t("progress.rule.marks")}</p>
       <p style={{ ...mutedText, margin: 0 }}>{t("progress.rule.low", { threshold: LOW_ATTENDANCE_PCT })}</p>
     </section>

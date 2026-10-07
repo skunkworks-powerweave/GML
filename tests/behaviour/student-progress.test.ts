@@ -220,16 +220,22 @@ test("below 75% is low; 75% is not; no attendance yet is not a warning", async (
   assert.equal(p.isLowAttendance(null), false);
 });
 
-test("students sort by roll as given, or lowest attendance first with the unmarked last", async () => {
+test("students sort by roll number as a number, or lowest attendance first with the unmarked last", async () => {
   const p = await progressLib();
-  const row = (name: string, attendancePct: number | null) => ({ name, attendancePct }) as never;
-  const rows = [row("A", 90), row("B", null), row("C", 40), row("D", 90), row("E", 10)];
-  assert.deepEqual(p.sortStudents(rows, "roll").map((r: { name: string }) => r.name), ["A", "B", "C", "D", "E"]);
+  const row = (name: string, rollNumber: string | null, attendancePct: number | null) => ({ name, rollNumber, attendancePct }) as never;
+  const names = (rows: unknown[]) => rows.map((r) => (r as { name: string }).name);
+  // The roster comes out of Postgres as text: "10" before "2". Here it is as given, shuffled.
+  const rows = [row("C", "10", 40), row("A", "1", 90), row("F", null, 90), row("B", "2", null), row("E", "11", 10), row("D", "9", 90)];
+  assert.deepEqual(names(p.sortStudents(rows, "roll")), ["A", "B", "D", "C", "E", "F"], "1, 2, 9, 10, 11, then no roll number");
   assert.deepEqual(
-    p.sortStudents(rows, "attendance").map((r: { name: string }) => r.name),
-    ["E", "C", "A", "D", "B"],
-    "ties keep roll order",
+    names(p.sortStudents(rows, "attendance")),
+    ["E", "C", "A", "D", "F", "B"],
+    "worst first; the 90s keep roll order (1, 9, none); the unmarked last",
   );
+  // The same roll number: by name.
+  const twins = [row("Bo", "3", 50), row("Al", "3", 50)];
+  assert.deepEqual(names(p.sortStudents(twins, "roll")), ["Al", "Bo"]);
+  assert.deepEqual(names(p.sortStudents(twins, "attendance")), ["Al", "Bo"]);
 });
 
 // ── The figures, against Postgres ────────────────────────────────────────────
@@ -594,6 +600,204 @@ test("another teacher's class is not on her page, and a colleague's figures are 
       assert.match(two, /67%/);
       assert.doesNotMatch(two, /\b63%|\b64%/);
       assert.doesNotMatch(two, /Eshay|Fatima/);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a colleague's marks are not hers: no stored percentage stands in for sessions she has not marked", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prog"));
+    try {
+      const w = await world(f, tag("co"));
+      const { db } = await dbModule();
+      const p = await progressLib();
+      const records = await recordsLib();
+      // What saving attendance does: learners.attendance_pct becomes the figure over EVERY teacher's sessions.
+      await records.refreshLearnerAttendance(db, [w.angmo, w.bilal, w.chosdol, w.deskit, w.gyalpo]);
+      const stored = (await c.query(`SELECT attendance_pct FROM learners WHERE id = $1`, [w.chosdol])).rows[0].attendance_pct;
+      assert.equal(stored, 0, "Chosdol's stored 0% is T1's marking");
+
+      // T2 never marked Chosdol: nothing of hers to show, and nothing to warn about.
+      const two = await p.classProgress(db, { classId: w.c5, section: null, teacherId: w.t2 });
+      const by = Object.fromEntries(two.students.map((s: { name: string }) => [s.name, s]));
+      assert.deepEqual(pick(by.Chosdol, ["marked", "attendancePct", "pctFromRoster", "low"]), { marked: 0, attendancePct: null, pctFromRoster: false, low: false });
+      assert.deepEqual(pick(by.Gyalpo, ["marked", "attendancePct", "pctFromRoster", "low"]), { marked: 0, attendancePct: null, pctFromRoster: false, low: false });
+      assert.deepEqual(pick(by.Angmo, ["marked", "attended", "attendancePct", "pctFromRoster", "low"]), { marked: 1, attended: 0, attendancePct: 0, pctFromRoster: false, low: true }, "her own marks, not the pooled 50%");
+      assert.equal(two.lowCount, 1, "Angmo only");
+      assert.equal(two.figures.attendancePct, 67, "the tile and the rows agree");
+
+      // T1, who did mark her, still sees it.
+      const one = await p.classProgress(db, { classId: w.c5, section: "A", teacherId: w.t1 });
+      assert.deepEqual(pick(one.students.find((s: { name: string }) => s.name === "Chosdol")!, ["marked", "attendancePct", "pctFromRoster", "low"]), { marked: 2, attendancePct: 0, pctFromRoster: false, low: true });
+
+      // A percentage typed on the student list, with no session marked by anyone, is still shown to a teacher.
+      const fresh = await p.classProgress(db, { classId: w.c7, section: null, teacherId: w.t1 });
+      assert.deepEqual(fresh.students.map((s: { attendancePct: number | null; pctFromRoster: boolean }) => [s.attendancePct, s.pctFromRoster]), [[80, true], [60, true]]);
+
+      // The page says so in words.
+      as(w.t2User, "teacher");
+      const html = await teacherHtml();
+      const text = visible(html);
+      assert.doesNotMatch(text, /on the student list/, "no colleague's percentage under 'no sessions marked yet'");
+      assert.equal((text.match(/Not marked yet/g) ?? []).length, 2, "Chosdol and Gyalpo");
+      assert.equal((html.match(/>Low attendance</g) ?? []).length, 1, "Angmo only");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a teacher of one section is counted on that section's sessions and tests, not the other's", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prog"));
+    try {
+      const w = await world(f, tag("se"));
+      const { db } = await dbModule();
+      const p = await progressLib();
+      // Grade 9: T1 teaches sections A and B. a1 is in A, b1 in B, g in neither (the roster puts g on both).
+      const c9 = await f.row("classes", { school_id: w.s1, grade: 9, stage: "High" });
+      await f.row("teacher_classes", { teacher_id: w.t1, class_id: c9, section: "A" });
+      await f.row("teacher_classes", { teacher_id: w.t1, class_id: c9, section: "B" });
+      const learner = (name: string, section: string | null) =>
+        f.row("learners", { class_id: c9, school_id: w.s1, grade: 9, name, roll_number: name.slice(-1), section });
+      const a1 = await learner("Student a1", "A");
+      const b1 = await learner("Student b1", "B");
+      const g = await learner("Student g", null);
+      const held = (date: string, section: string) =>
+        f.row("sessions", { school_id: w.s1, class_id: c9, subject_id: w.maths, teacher_id: w.t1, scheduled_date: date, status: "complete", section });
+      const sA = await held("2026-09-01", "A");
+      const sB = await held("2026-09-02", "B");
+      const mark = (sessionId: string, learnerId: string, status: string) => f.row("session_attendance", { session_id: sessionId, learner_id: learnerId, status });
+      await mark(sA, a1, "present");
+      await mark(sA, g, "present");
+      await mark(sB, b1, "present");
+      await mark(sB, g, "absent");
+      const test = (section: string, title: string) =>
+        f.row("assessments", { teacher_id: w.t1, class_id: c9, subject_id: w.maths, section, title, max_marks: 10, approval_status: "draft" });
+      const tA = await test("A", "Test A");
+      const tB = await test("B", "Test B");
+      const score = (assessment: string, learnerId: string, marks: number) => f.row("assessment_marks", { assessment_id: assessment, learner_id: learnerId, marks, absent: false });
+      await score(tA, a1, 8);
+      await score(tA, g, 8);
+      await score(tB, b1, 2);
+      await score(tB, g, 2);
+
+      const keys = ["students", "sessionsHeld", "sessionsPlanned", "marked", "attended", "attendancePct", "marksCount", "marksAvg"] as const;
+      const a = await p.classProgress(db, { classId: c9, section: "A", teacherId: w.t1 });
+      assert.deepEqual(pick(a.figures, [...keys]), { students: 2, sessionsHeld: 1, sessionsPlanned: 1, marked: 2, attended: 2, attendancePct: 100, marksCount: 2, marksAvg: 80 });
+      const gA = a.students.find((s: { id: string }) => s.id === g)!;
+      assert.deepEqual(pick(gA, ["marked", "attended", "attendancePct", "marksCount", "marksAvg", "lastSession"]), {
+        marked: 1, attended: 1, attendancePct: 100, marksCount: 1, marksAvg: 80, lastSession: "2026-09-01",
+      }, "g on A's card: A's session and A's test only");
+
+      const b = await p.classProgress(db, { classId: c9, section: "B", teacherId: w.t1 });
+      assert.deepEqual(pick(b.figures, [...keys]), { students: 2, sessionsHeld: 1, sessionsPlanned: 1, marked: 2, attended: 1, attendancePct: 50, marksCount: 2, marksAvg: 20 });
+      const gB = b.students.find((s: { id: string }) => s.id === g)!;
+      assert.deepEqual(pick(gB, ["marked", "attended", "attendancePct", "marksAvg", "lastSession"]), { marked: 1, attended: 0, attendancePct: 0, marksAvg: 20, lastSession: "2026-09-02" });
+
+      // The whole grade, as an admin sees it, is both.
+      const all = await p.classProgress(db, { classId: c9 });
+      assert.deepEqual(pick(all.figures, [...keys]), { students: 3, sessionsHeld: 2, sessionsPlanned: 2, marked: 4, attended: 3, attendancePct: 75, marksCount: 4, marksAvg: 50 });
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a session with attendance taken is held, whatever its status says; a cancelled one never is", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prog"));
+    try {
+      const w = await world(f, tag("hd"));
+      const { db } = await dbModule();
+      const p = await progressLib();
+      const klass = await f.row("classes", { school_id: w.s1, grade: 10, stage: "High" });
+      await f.row("teacher_classes", { teacher_id: w.t1, class_id: klass });
+      const x = await f.row("learners", { class_id: klass, school_id: w.s1, grade: 10, name: "Xeno", roll_number: "1" });
+      const session = (date: string, status: string) =>
+        f.row("sessions", { school_id: w.s1, class_id: klass, subject_id: w.maths, teacher_id: w.t1, scheduled_date: date, status });
+      const mark = (sessionId: string, status: string) => f.row("session_attendance", { session_id: sessionId, learner_id: x, status });
+      await mark(await session("2026-09-01", "planned"), "present"); // taken, status never moved on
+      await mark(await session("2026-09-02", "in_progress"), "absent");
+      await mark(await session("2026-09-03", "cancelled"), "present"); // not counted anywhere
+      await session("2026-09-04", "complete"); // held, no attendance taken
+      await session("2026-09-05", "complete");
+      await session("2026-10-30", "planned"); // still to come
+
+      const r = await p.classProgress(db, { classId: klass, section: null, teacherId: w.t1 });
+      assert.deepEqual(pick(r.figures, ["sessionsHeld", "sessionsPlanned", "marked", "attended", "attendancePct"]), {
+        sessionsHeld: 4, sessionsPlanned: 5, marked: 2, attended: 1, attendancePct: 50,
+      }, "held never falls below the sessions the attendance figures come from");
+      const admin = await p.classProgress(db, { classId: klass });
+      assert.deepEqual(pick(admin.figures, ["sessionsHeld", "sessionsPlanned"]), { sessionsHeld: 4, sessionsPlanned: 5 });
+      const overview = await p.programmeProgress(db, { schoolId: w.s1 });
+      assert.equal(overview.schools[0].classes.find((k: { classId: string }) => k.classId === klass)!.figures.sessionsHeld, 4);
+
+      as(w.t1User, "teacher");
+      assert.match(visible(await teacherHtml()), /4 of 5/);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("her page says what 'held of planned' is, states the attendance rule plainly, and points an empty class to its next step", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prog"));
+    try {
+      const w = await world(f, tag("tx"));
+      as(w.t1User, "teacher");
+      const html = await teacherHtml();
+      const text = visible(html);
+      assert.match(text, /Sessions held \(of planned\)/, "the tile says what the second number is");
+      assert.match(text, /Sessions held = the sessions marked Complete or with attendance taken, out of all sessions planned\. Cancelled sessions are left out\./);
+      // The one sentence the owner asked for: plain, no pronoun for the student, and what counts against her.
+      assert.match(text, /Attendance % = the sessions a student was present or late, out of the sessions where attendance was taken\./);
+      assert.match(text, /Absent and excused count as not attended\./);
+      assert.doesNotMatch(text, /\bshe\b|\bher\b/i);
+      // An empty class (Grade 6) leads on to adding students; a class with students does not.
+      assert.equal((html.match(/href="\/teaching\/students"/g) ?? []).length, 1);
+      assert.match(html, /<a [^>]*href="\/teaching\/students"[^>]*>Add students</);
+      // The admin's pages carry the same sentences.
+      as(w.padmin, "programme_admin");
+      const admin = visible(((await pageOutcome(classPage, { params: Promise.resolve({ classId: w.c5 }), searchParams: Promise.resolve({}) })) as { html: string }).html);
+      assert.match(admin, /Sessions held \(of planned\)/);
+      assert.match(admin, /Absent and excused count as not attended\./);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("the admin overview names each Open link by its class, labels its pages, and offers a way out of an empty filter", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prog"));
+    try {
+      const w = await world(f, tag("a1"));
+      as(w.padmin, "programme_admin");
+      const one = await pageOutcome(overviewPage, { searchParams: Promise.resolve({ school: w.s1 }) });
+      const html = (one as { html: string }).html;
+      for (const grade of [5, 6, 7]) {
+        assert.match(html, new RegExp(`<a [^>]*href="/progress/students/[0-9a-f-]+"[^>]*aria-label="Open Grade ${grade}"[^>]*>Open</a>|<a [^>]*aria-label="Open Grade ${grade}"[^>]*href="/progress/students/[0-9a-f-]+"[^>]*>Open</a>`));
+      }
+
+      // A school outside the district asked for: nothing matches, and the page says what to do.
+      const none = await pageOutcome(overviewPage, { searchParams: Promise.resolve({ district: w.d2, school: w.s1 }) });
+      const emptyHtml = (none as { html: string }).html;
+      assert.match(visible(emptyHtml), /No schools match this filter\./);
+      assert.match(emptyHtml, /<a [^>]*href="\/progress\/students"[^>]*>Show all schools</);
+
+      // Past one page of schools, the page links are a labelled navigation.
+      await c.query(
+        `INSERT INTO schools (zone_id, name, code)
+         SELECT $1, 'Pg ' || n || ' ' || $2, 'Q' || lpad(n::text, 2, '0') || $3 FROM generate_series(1, 26) AS n`,
+        [w.z1, tag("a1"), tag("a1").replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()],
+      );
+      f.defer(`DELETE FROM schools WHERE zone_id = $1 AND name LIKE 'Pg %'`, [w.z1]);
+      const paged = await pageOutcome(overviewPage, { searchParams: Promise.resolve({ district: w.d1 }) });
+      assert.match((paged as { html: string }).html, /<nav [^>]*aria-label="Pages of schools"/);
     } finally {
       await f.cleanup();
     }

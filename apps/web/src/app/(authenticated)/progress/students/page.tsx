@@ -83,8 +83,13 @@ export default async function ProgressOverviewPage({ searchParams }: { searchPar
         </div>
 
         {overview.schools.length === 0 ? (
-          <section className="card card-hi" style={{ padding: 16 }}>
+          <section className="card card-hi" style={{ padding: 16, display: "grid", gap: 10 }}>
             <Empty>{t("progress.admin.noSchools")}</Empty>
+            <div>
+              <Link href="/progress/students" className="btn btn-sm">
+                {t("progress.admin.showAll")}
+              </Link>
+            </div>
           </section>
         ) : null}
 
@@ -108,7 +113,11 @@ export default async function ProgressOverviewPage({ searchParams }: { searchPar
                       <Link href={`/progress/students/${c.classId}`} style={{ fontWeight: 600, color: "var(--ink)" }}>
                         {t("common.gradeN", { grade: c.grade })}
                       </Link>
-                      <Link href={`/progress/students/${c.classId}`} className="btn btn-sm">
+                      <Link
+                        href={`/progress/students/${c.classId}`}
+                        className="btn btn-sm"
+                        aria-label={t("progress.admin.openClass", { grade: c.grade })}
+                      >
                         {t("progress.admin.open")}
                       </Link>
                     </div>
@@ -121,7 +130,7 @@ export default async function ProgressOverviewPage({ searchParams }: { searchPar
         ))}
 
         {overview.pages > 1 ? (
-          <nav style={{ ...wrapRow, justifyContent: "space-between" }}>
+          <nav aria-label={t("progress.admin.pages")} style={{ ...wrapRow, justifyContent: "space-between" }}>
             {overview.page > 1 ? (
               <Link href={href(overview.page - 1)} className="btn btn-sm">
                 {t("progress.admin.prev")}
