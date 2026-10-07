@@ -19,7 +19,7 @@ import {
   type GradingTarget,
 } from "@gml/db/schema";
 import { checkPlacement, classPlacement, isBlank } from "../lib/learner-placement";
-import type { AdminDb, AdminMessage } from "./types";
+import type { AdminDb, AdminMessage, RowLookups } from "./types";
 
 /**
  * A rule for a field that names a grade scale: the scale must be one for
@@ -67,6 +67,7 @@ type Rule = (
   db: AdminDb,
   row: Record<string, unknown>,
   before?: Record<string, unknown>,
+  memo?: RowLookups,
 ) => Promise<Record<string, AdminMessage> | null>;
 
 /** Did this write set or change any of `fields`? (Always, on a create.) */
@@ -132,10 +133,14 @@ export function learnerOfRecordClass(recordField: "sessionId" | "assessmentId"):
  * import row alike, so a blank means the same thing in the grid and in a file.
  * A class that does not exist fills nothing; learnerFitsClass reports it.
  */
-export async function learnerPlacementFromClass(db: AdminDb, row: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function learnerPlacementFromClass(
+  db: AdminDb,
+  row: Record<string, unknown>,
+  memo?: RowLookups,
+): Promise<Record<string, unknown>> {
   const classId = row.classId;
   if (typeof classId !== "string" || (!isBlank(row.schoolId) && !isBlank(row.grade))) return {};
-  const cls = await classPlacement(db, classId);
+  const cls = await classPlacement(db, classId, memo);
   if (!cls) return {};
   return {
     ...(isBlank(row.schoolId) ? { schoolId: cls.schoolId } : {}),
@@ -151,11 +156,11 @@ export async function learnerPlacementFromClass(db: AdminDb, row: Record<string,
  * three needs all of them to agree afterwards. Run on the row as it will be
  * stored, blanks already filled.
  */
-export const learnerFitsClass: Rule = async (db, row, before) => {
+export const learnerFitsClass: Rule = async (db, row, before, memo) => {
   const classId = row.classId;
   if (typeof classId !== "string") return null;
   if (!touches(["classId", "schoolId", "grade"], row, before)) return null;
-  const verdict = await checkPlacement(db, classId, row);
+  const verdict = await checkPlacement(db, classId, row, memo);
   if (verdict.kind === "fits") return null;
   if (verdict.kind === "noClass") {
     // The foreign key reports a class that is not there, unless a blank school
@@ -168,6 +173,8 @@ export const learnerFitsClass: Rule = async (db, row, before) => {
       key: "validation.learnerSchoolNotClass",
       values: { school: verdict.school.given, classSchool: verdict.school.expected },
     };
+  } else if (verdict.unknownSchool) {
+    problems.schoolId = { key: "dbError.missingRef" };
   }
   if (verdict.grade) {
     problems.grade = {

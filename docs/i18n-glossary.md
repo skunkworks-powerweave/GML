@@ -138,6 +138,11 @@ PDF, Q1–Q4, URLs, email addresses.
   with a Session column and a Time column reads the same word twice. Pick a
   distinct word for one of them (for "session", perhaps ཚོགས་ཐེངས།) and it
   can be replaced across `bo/*.json` in one pass.
+- **Hindi "grade" and "class" are both कक्षा.** A message that has to name the
+  school year next to the class (the student's grade does not match the class's,
+  `adminData.validation.learnerGradeNotClass`) says "कक्षा संख्या" (grade number),
+  because ग्रेड is this file's word for a marks grade (ग्रेड स्केल). Confirm that
+  wording, or choose another, and use it for both.
 - **Bhoti plurals**: CLDR gives Tibetan only the "other" plural form, so
   `{count, plural, …}` messages in `bo` have one branch. Check that the
   counted phrases read naturally.

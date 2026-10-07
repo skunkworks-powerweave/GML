@@ -248,6 +248,10 @@
         "sectionsCount": "Sections",
         "classTeacherName": "Class teacher",
         "active": "Active"
+      },
+      "help": {
+        "schoolId": "Changing the school also changes the school of this class's students.",
+        "grade": "Changing the grade also changes the grade of this class's students."
       }
     },
     "course-outlines": {

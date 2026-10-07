@@ -24,6 +24,8 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import type { Client } from "pg";
 import { needsDatabase, withClient, tag } from "./_harness.js";
 import { fixture, form, type Fixture } from "./_admin-fixture.js";
 import { closeAppDb, signIn } from "./_server-actions.js";
@@ -79,6 +81,24 @@ const stored = async (f: Fixture, id: string) =>
     school_id: string;
     grade: number;
   };
+
+/**
+ * SQL run with the triggers off: how a student stored BEFORE the rule is made
+ * here. Editing a class now takes its students with it (_post/017) and a
+ * student's own write is checked (_post/016), so the contradiction that old
+ * data holds cannot be made any other way.
+ */
+const asOldRow = async (c: Client, sql: string, params: unknown[]) => {
+  await c.query("BEGIN");
+  try {
+    await c.query("SET LOCAL session_replication_role = replica");
+    await c.query(sql, params);
+    await c.query("COMMIT");
+  } catch (err) {
+    await c.query("ROLLBACK");
+    throw err;
+  }
+};
 
 const countNamed = async (f: Fixture, name: string): Promise<number> =>
   (await f.c.query(`SELECT count(*)::int AS n FROM learners WHERE name = $1`, [name])).rows[0].n as number;
@@ -209,7 +229,7 @@ test("the grid's Edit keeps school and grade with the class, and an old inconsis
       // she was added. Editing her guardian re-posts the same class, school
       // and grade, and is not refused; changing her grade to another wrong one
       // is, and a blank grade puts it right.
-      await c.query(`UPDATE classes SET grade = 8 WHERE id = $1`, [w.b5]);
+      await asOldRow(c, `UPDATE classes SET grade = 8 WHERE id = $1`, [w.b5]);
       const old = { classId: w.b5, schoolId: w.schoolB, grade: "5" };
       const guardian = await save({ ...old, guardian: "New" });
       assert.equal(guardian?.ok, true, `an unrelated edit of an old row: ${JSON.stringify(guardian)}`);
@@ -309,7 +329,7 @@ test("a CSV update with only some columns is judged against the row's stored sch
 
       // A student stored before the rule keeps her unrelated edits; a grade
       // that is still wrong is refused.
-      await c.query(`UPDATE classes SET grade = 8 WHERE id = $1`, [w.a6]);
+      await asOldRow(c, `UPDATE classes SET grade = 8 WHERE id = $1`, [w.a6]);
       const guardian = await only(`id,guardian\n${kid},Pema`);
       assert.equal(guardian.updated, 1, `an unrelated edit of an old row: ${JSON.stringify(guardian)}`);
       const wrong = await only(`id,grade\n${kid},9`);
@@ -374,7 +394,7 @@ test("the database holds the rule for any other writer, and leaves old rows edit
       // that leaves class, school and grade as they were goes through, even
       // when the statement names those columns; the read-only query an
       // administrator runs to list such rows finds her.
-      await c.query(`UPDATE classes SET grade = 8 WHERE id = $1`, [w.a5]);
+      await asOldRow(c, `UPDATE classes SET grade = 8 WHERE id = $1`, [w.a5]);
       await c.query(`UPDATE learners SET guardian = 'x', active = false WHERE id = $1`, [kid]);
       await c.query(`UPDATE learners SET class_id = class_id, school_id = school_id, grade = grade WHERE id = $1`, [kid]);
       await refused(`UPDATE learners SET grade = 7 WHERE id = $1`, [kid]);
@@ -386,6 +406,259 @@ test("the database holds the rule for any other writer, and leaves old rows edit
         [`% ${t}`],
       );
       assert.deepEqual(contradicting, [{ id: kid, class_grade: 8, learner_grade: 5 }]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── THE CLASS'S SIDE ────────────────────────────────────────────────────────
+//
+// The students' own writes are checked above; editing the CLASS's school or
+// grade used to be the one way left to make a student contradict her class
+// (Admin > Classes > Edit, set Grade 7: her students stayed Grade 5). The class
+// is the authority, so its students go with it, in the same transaction
+// (_post/017). classes_school_grade_uq allows one class per school and grade,
+// so there is no other class to move them to first: refusing the edit would
+// have left an administrator no way to correct a class's grade.
+
+const classForm = (rowId: string, schoolId: string, grade: number) =>
+  form({ entitySlug: "classes", rowId, schoolId, grade: String(grade), stage: "Primary", sectionsCount: "1", active: "true" });
+
+const placement = async (f: Fixture, id: string) =>
+  (await f.c.query(`SELECT school_id, grade FROM learners WHERE id = $1`, [id])).rows[0] as { school_id: string; grade: number };
+
+/** The read-only query docs/operations.md gives an administrator, narrowed to this test's rows. */
+const contradicting = async (f: Fixture, classId: string) =>
+  (
+    await f.c.query(
+      `SELECT l.id FROM learners l JOIN classes c ON c.id = l.class_id
+        WHERE (l.school_id <> c.school_id OR l.grade <> c.grade) AND c.id = $1`,
+      [classId],
+    )
+  ).rows.map((r) => r.id as string);
+
+test("editing a class's grade or school in the grid takes its students with it", { skip }, async () => {
+  const { updateRowAction } = await gridActions();
+  await withClient(async (c) => {
+    const t = tag("lfit-class-grid");
+    const f = fixture(c, t);
+    try {
+      const w = await world(f, t);
+      await asSuperAdmin(f);
+      const kid = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Kid ${t}` });
+      const gone = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Gone ${t}`, deleted_at: new Date(), active: false });
+      const bystander = await f.row("learners", { class_id: w.a6, school_id: w.schoolA, grade: 6, name: `Bystander ${t}` });
+      // Stored before the rule, already contradicting her class: not ours to rewrite.
+      const old = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Old ${t}` });
+      await asOldRow(c, `UPDATE learners SET grade = 9 WHERE id = $1`, [old]);
+
+      const grade = await updateRowAction(undefined, classForm(w.a5, w.schoolA, 7));
+      assert.equal(grade?.ok, true, JSON.stringify(grade));
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolA, grade: 7 });
+      assert.deepEqual(await placement(f, gone), { school_id: w.schoolA, grade: 7 }, "a removed student stays with her class too");
+      assert.deepEqual(await placement(f, bystander), { school_id: w.schoolA, grade: 6 }, "another class is not touched");
+      assert.equal((await placement(f, old)).grade, 9, "a student who already contradicted her class is left as she was");
+      assert.deepEqual(await contradicting(f, w.a5), [old], "and the administrator's query still lists her");
+
+      const school = await updateRowAction(undefined, classForm(w.a5, w.schoolB, 7));
+      assert.equal(school?.ok, true, JSON.stringify(school));
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolB, grade: 7 });
+
+      // One class per school and grade: a clash is refused, and no student moved.
+      const clash = await updateRowAction(undefined, classForm(w.b5, w.schoolB, 7));
+      assert.equal(clash?.ok, false, "Grade 7 at school B is taken by the class edited above");
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolB, grade: 7 });
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a teacher adds to a class whose grade was edited, and the roster still agrees", { skip }, async () => {
+  const { updateRowAction } = await gridActions();
+  const { addStudentAction } = await studentActions();
+  await withClient(async (c) => {
+    const t = tag("lfit-class-teacher");
+    const f = fixture(c, t);
+    try {
+      const w = await world(f, t);
+      await asSuperAdmin(f);
+      const kid = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Kid ${t}` });
+      const edit = await updateRowAction(undefined, classForm(w.a5, w.schoolA, 7));
+      assert.equal(edit?.ok, true, JSON.stringify(edit));
+
+      const login = await f.user("teacher", "tch");
+      const teacher = await f.row("teachers", { school_id: w.schoolA, full_name: `Teacher ${t}`, user_id: login });
+      const link = await f.row("teacher_classes", { teacher_id: teacher, class_id: w.a5 });
+      signIn({ id: login, role: "teacher", name: null, email: null });
+      const added = await addStudentAction(undefined, form({ linkId: link, name: `Tashi ${t}` }));
+      assert.equal(added?.error, undefined, JSON.stringify(added));
+      const grades = (await c.query(`SELECT DISTINCT grade FROM learners WHERE class_id = $1`, [w.a5])).rows;
+      assert.deepEqual(grades, [{ grade: 7 }], "one grade in the class");
+      assert.equal((await placement(f, kid)).grade, 7);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a CSV that edits a class's grade or school (by name) takes its students with it", { skip }, async () => {
+  const { importCsv } = await csvModule();
+  await withClient(async (c) => {
+    const t = tag("lfit-class-csv");
+    const f = fixture(c, t);
+    try {
+      const w = await world(f, t);
+      await asSuperAdmin(f);
+      const kid = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Kid ${t}` });
+
+      const grade = await importCsv("classes", `id,grade\n${w.a5},7`);
+      assert.equal(grade.updated, 1, JSON.stringify(grade));
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolA, grade: 7 });
+
+      const school = await importCsv("classes", `id,schoolId,grade\n${w.a5},${w.nameB},8`);
+      assert.equal(school.updated, 1, JSON.stringify(school));
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolB, grade: 8 });
+      assert.deepEqual(await contradicting(f, w.a5), []);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("the database takes a class's students with it for any writer, and only when school or grade change", { skip }, async () => {
+  await withClient(async (c) => {
+    const t = tag("lfit-class-db");
+    const f = fixture(c, t);
+    try {
+      const w = await world(f, t);
+      const kid = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Kid ${t}` });
+      const away = await f.row("learners", { class_id: w.a5, school_id: w.schoolA, grade: 5, name: `Away ${t}` });
+      await asOldRow(c, `UPDATE learners SET school_id = $2 WHERE id = $1`, [away, w.schoolB]);
+      const before = (await c.query(`SELECT updated_at FROM learners WHERE id = $1`, [kid])).rows[0].updated_at as Date;
+
+      // Nothing about school or grade changes: no student is written.
+      await c.query(`UPDATE classes SET stage = 'Middle' WHERE id = $1`, [w.a5]);
+      await c.query(`UPDATE classes SET school_id = school_id, grade = grade WHERE id = $1`, [w.a5]);
+      assert.deepEqual((await c.query(`SELECT updated_at FROM learners WHERE id = $1`, [kid])).rows[0].updated_at, before, "an edit that changes neither leaves students alone");
+
+      await c.query(`UPDATE classes SET grade = 7 WHERE id = $1`, [w.a5]);
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolA, grade: 7 });
+      // She was at another school than her class: left as she was, and the edit did not fail.
+      assert.deepEqual(await placement(f, away), { school_id: w.schoolB, grade: 5 });
+
+      await c.query(`UPDATE classes SET school_id = $2, grade = 9 WHERE id = $1`, [w.a5, w.schoolB]);
+      assert.deepEqual(await placement(f, kid), { school_id: w.schoolB, grade: 9 });
+      assert.deepEqual(await contradicting(f, w.a5), [away]);
+
+      // The repair docs/operations.md gives for her, and it passes the rule.
+      await c.query(
+        `UPDATE learners SET school_id = c.school_id, grade = c.grade FROM classes c WHERE c.id = learners.class_id AND learners.id = $1`,
+        [away],
+      );
+      assert.deepEqual(await placement(f, away), { school_id: w.schoolB, grade: 9 });
+      assert.deepEqual(await contradicting(f, w.a5), []);
+
+      // A student's own write is still judged against the class's new values.
+      await assert.rejects(c.query(`UPDATE learners SET grade = 5 WHERE id = $1`, [kid]), (e: { code?: string }) => e.code === "23514");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a school written in capitals, or one that does not exist, is refused as clearly as any other", { skip }, async () => {
+  const { createRowAction } = await gridActions();
+  const { importCsv } = await csvModule();
+  await withClient(async (c) => {
+    const t = tag("lfit-case");
+    const f = fixture(c, t);
+    try {
+      const w = await world(f, t);
+      await asSuperAdmin(f);
+      const nowhere = "99999999-9999-4999-8999-999999999999";
+      const add = (name: string, schoolId: string) =>
+        createRowAction(undefined, form({ entitySlug: "learners", active: "true", classId: w.a5, name: `${name} ${t}`, schoolId, grade: "5" }));
+
+      const capitals = await add("Capitals", w.schoolB.toUpperCase());
+      assert.equal(capitals?.ok, false);
+      const text = capitals?.fieldErrors?.schoolId ?? "";
+      assert.ok(text.includes(w.nameA) && text.includes(w.nameB), `both schools are named: ${JSON.stringify(capitals)}`);
+
+      const unknown = await add("Unknown", nowhere);
+      assert.equal(unknown?.ok, false);
+      assert.match(unknown?.fieldErrors?.schoolId ?? "", /does not exist/, JSON.stringify(unknown));
+      assert.equal(await countNamed(f, `Capitals ${t}`) + (await countNamed(f, `Unknown ${t}`)), 0);
+
+      // The class's own school in capitals is the class's school.
+      const same = await add("Same", w.schoolA.toUpperCase());
+      assert.equal(same?.ok, true, JSON.stringify(same));
+
+      const r = await importCsv(
+        "learners",
+        [
+          "classId,schoolId,grade,name",
+          `${w.a5},${w.schoolB.toUpperCase()},5,CsvCapitals ${t}`, // line 2
+          `${w.a5},${nowhere},5,CsvUnknown ${t}`, // line 3
+          `${w.a5},${w.schoolA.toUpperCase()},5,CsvSame ${t}`, // line 4
+        ].join("\n"),
+      );
+      assert.equal(r.inserted, 1, JSON.stringify(r));
+      assert.deepEqual(r.errors.map((e) => e.row), [2, 3], JSON.stringify(r.errors));
+      assert.ok(r.errors[0]!.message.includes(w.nameA) && r.errors[0]!.message.includes(w.nameB), r.errors[0]!.message);
+      assert.match(r.errors[1]!.message, /does not exist/);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+test("a CSV import reads each class once, however many rows name it, and not again on the next import", { skip }, async () => {
+  const { importCsv } = await csvModule();
+  const webRequire = createRequire(new URL("../../apps/web/package.json", import.meta.url));
+  type Pool = { query: (...args: unknown[]) => unknown };
+  const pools: Pool[] = [
+    (webRequire("@gml/db") as { getPool: () => Pool }).getPool(),
+    (await import("../../packages/db/src/client.ts")).getPool() as unknown as Pool,
+  ];
+  await withClient(async (c) => {
+    const t = tag("lfit-csv-memo");
+    const f = fixture(c, t);
+    try {
+      const w = await world(f, t);
+      await asSuperAdmin(f);
+      const rows = Array.from({ length: 40 }, (_, i) => `${w.a5},,,Row${i} ${t}`);
+
+      let classReads = 0;
+      const originals = pools.map((p) => p.query);
+      pools.forEach((p, i) => {
+        p.query = function (this: unknown, ...args: unknown[]) {
+          const first = args[0] as string | { text?: string } | undefined;
+          const text = typeof first === "string" ? first : (first?.text ?? "");
+          if (/from "classes"/i.test(text)) classReads += 1;
+          return (originals[i] as (...a: unknown[]) => unknown).apply(this, args);
+        };
+      });
+      let r;
+      try {
+        r = await importCsv("learners", ["classId,schoolId,grade,name", ...rows].join("\n"));
+      } finally {
+        pools.forEach((p, i) => void (p.query = originals[i]!));
+      }
+      assert.equal(r.inserted, 40, JSON.stringify(r.errors));
+      assert.ok(classReads <= 3, `the class was read ${classReads} times for 40 rows`);
+      assert.deepEqual(await stored(f, (await c.query(`SELECT id FROM learners WHERE name = $1`, [`Row0 ${t}`])).rows[0].id), {
+        class_id: w.a5,
+        school_id: w.schoolA,
+        grade: 5,
+      });
+
+      // What an import remembers ends with it: the class is read afresh next time.
+      await c.query(`UPDATE classes SET grade = 7 WHERE id = $1`, [w.b5]);
+      const next = await importCsv("learners", `classId,grade,name\n${w.b5},5,Late ${t}`);
+      assert.equal(next.inserted, 0, JSON.stringify(next));
+      assert.match(next.errors[0]?.message ?? "", /7/);
     } finally {
       await f.cleanup();
     }

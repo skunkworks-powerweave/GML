@@ -206,8 +206,10 @@ Two things to know:
 
 A student's school and grade are those of her class: the grid, the CSV import
 and a teacher's add-student screen refuse anything else, and a trigger on
-`learners` (`_post/016`) refuses it from any other writer. Students saved before
-that rule are NOT rewritten. This read-only query lists them:
+`learners` (`_post/016`) refuses it from any other writer. Editing a CLASS's
+school or grade takes its students with it, in the same transaction, from any
+writer (`_post/017`). Students saved before those rules are NOT rewritten. This
+read-only query lists them:
 
 ```sql
 SELECT l.id, l.name, l.roll_number,
@@ -224,8 +226,15 @@ SELECT l.id, l.name, l.roll_number,
 Such a student can still be edited for anything else (guardian, name, active).
 Changing her class, school or grade -- in the grid, by CSV, or in SQL -- needs
 the three to agree afterwards: leave the school and grade blank to take the
-class's. Edit a class's own school or grade only after its students are moved,
-or they will appear in this list.
+class's. That is the repair: in the grid, Edit her and empty School and Grade;
+by CSV, import `id,schoolId,grade` with the two cells empty; in SQL,
+`UPDATE learners SET school_id = c.school_id, grade = c.grade FROM classes c
+WHERE c.id = learners.class_id AND learners.id = '<her id>'`.
+
+When a class's school or grade is edited, only the students who agreed with its
+OLD school and grade follow it; one already on the list above is left as she was
+and stays on it. A class's grade can be corrected whatever its students: there
+is no other class to move them to first, since a school has one class per grade.
 
 ---
 
