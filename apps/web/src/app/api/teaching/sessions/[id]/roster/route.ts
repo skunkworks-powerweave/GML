@@ -15,12 +15,14 @@
 // list is (teaching.students.viewed), and the file is never cached.
 
 import { NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { db } from "@gml/db";
+import { classes, sessions } from "@gml/db/schema";
 import { requireApiRole } from "@/lib/api-guards";
 import { recordAudit } from "@/lib/audit";
 import { actorFrom } from "@/lib/visibility";
 import { myTeacher, roster } from "@/lib/teaching";
-import { ROSTER_COLUMNS } from "@/lib/teaching/attendance-csv";
+import { ROSTER_COLUMNS, rosterFilename } from "@/lib/teaching/attendance-csv";
 import { csvDownload } from "@/lib/teaching/csv";
 import { editableSessionOf } from "@/lib/teaching/records";
 
@@ -36,6 +38,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   if (found === "locked" || found.status === "cancelled") return NextResponse.json({ error: "not_editable" }, { status: 409 });
 
   const students = await roster(db, found.classId, found.section);
+  const [when] = await db
+    .select({ grade: classes.grade, date: sessions.scheduledDate })
+    .from(sessions)
+    .innerJoin(classes, eq(classes.id, sessions.classId))
+    .where(eq(sessions.id, found.id))
+    .limit(1);
   await recordAudit({
     action: "teaching.students.viewed",
     entityType: "session",
@@ -44,7 +52,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     metadata: { page: "roster_csv", rowCount: students.length },
   });
   return csvDownload(
-    `attendance-roster-${found.id.slice(0, 8)}.csv`,
+    rosterFilename(when!.grade, found.section, when!.date),
     ROSTER_COLUMNS,
     students.map((s) => ({ student: s.name, rollNumber: s.rollNumber ?? "", section: s.section ?? "", status: "" })),
   );

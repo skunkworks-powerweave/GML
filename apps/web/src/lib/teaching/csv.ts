@@ -13,14 +13,16 @@ import "server-only";
 //              keeps its spreadsheet line, so a problem is reported where she
 //              can find it
 //   writing    Papa.unparse with the export's escaping, so a name that begins
-//              with = + - @ cannot run in the spreadsheet she opens it in
+//              with = + - @ cannot run in the spreadsheet she opens it in, and
+//              a UTF-8 byte order mark, so Excel opens a Devanagari or Tibetan
+//              name as itself and not as Windows-1252
 //
 // The column names are a data contract with spreadsheets and stay English in
 // every language; what is said about a row is in her language (teaching.csv).
 
 import Papa from "papaparse";
 import type { getTranslations } from "next-intl/server";
-import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
+import { unescapeFormulaCell } from "@/admin/csv-safety";
 
 export type Translate = Awaited<ReturnType<typeof getTranslations>>;
 
@@ -35,7 +37,7 @@ export const CSV_MAX_ROWS = 1000;
 /** How many unimported rows are listed back; the rest are counted. */
 export const CSV_MAX_ISSUES = 50;
 
-export type CsvFailure = "noFile" | "tooBig" | "unreadable" | "empty" | "tooManyRows";
+export type CsvFailure = "noFile" | "tooBig" | "notCsv" | "unreadable" | "empty" | "tooManyRows";
 
 /** The words a failure is told in: teaching.csv.<failure>. */
 export function failureText(t: Translate, failure: CsvFailure): string {
@@ -47,7 +49,18 @@ export async function readUpload(fd: FormData, field = "file"): Promise<{ text: 
   const file = fd.get(field);
   if (!file || typeof file === "string" || file.size === 0) return { failure: "noFile" };
   if (file.size > CSV_MAX_BYTES) return { failure: "tooBig" };
-  return { text: await file.text() };
+  const text = await file.text();
+  return looksBinary(text) ? { failure: "notCsv" } : { text };
+}
+
+/**
+ * An Excel workbook (a zip, which starts "PK") or a "Unicode text" save (UTF-16:
+ * a NUL after every letter) read as UTF-8. Parsed as a CSV either gives rows of
+ * noise and an error about a column she can see is there. A few stray NULs are
+ * not this: that is one row's problem (students-csv.ts).
+ */
+function looksBinary(text: string): boolean {
+  return text.startsWith("PK\u0003\u0004") || text.slice(0, 4096).split("\u0000").length > 10;
 }
 
 /** A cell or a name as compared: Unicode-composed, spaces collapsed, case folded. */
@@ -106,12 +119,20 @@ export function issueLines(t: Translate, problems: ReadonlyArray<{ line: number;
   return lines;
 }
 
+// What the admin export escapes (admin/csv-safety.ts CSV_EXPORT_OPTIONS), with
+// one more case: Papa's own test, /^[=+\-@\t\r].*$/, stops at a line break, so a
+// cell like =HYPERLINK(..., <newline> "click") went out unescaped, and a
+// teacher's students CSV could put such a name on a colleague's roster.
+const ESCAPE_FORMULAE = { escapeFormulae: /^[=+\-@\t\r]/ } as const;
+
 /**
  * A CSV as a download. `no-store`: it names children, so no cache keeps it.
- * Formula-looking cells are escaped exactly as the admin export does.
+ * Formula-looking cells are escaped as the admin export does, line breaks
+ * included. The byte order mark makes Excel read the file as UTF-8; the
+ * importer drops it again.
  */
 export function csvDownload(filename: string, fields: string[], data: Array<Record<string, string>>): Response {
-  return new Response(Papa.unparse({ fields, data }, CSV_EXPORT_OPTIONS), {
+  return new Response(`﻿${Papa.unparse({ fields, data }, ESCAPE_FORMULAE)}`, {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",

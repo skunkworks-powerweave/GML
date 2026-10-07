@@ -16,9 +16,13 @@ import "server-only";
 //             any section, or none. Several links to one class that each name
 //             a section need the section said.
 //   rows      a row that cannot be added is reported with its line and the
-//             rest still land. A student already in the class (same name and
-//             section, or the same roll number in the section), or repeated
-//             earlier in the file, is reported and not added again.
+//             rest still land. A student already in the class (same name, or
+//             same roll number, in the same section), or repeated earlier in
+//             the file, is reported and not added again. A student with no
+//             section is on every section's roster (lib/teaching roster()), so
+//             she collides with the same name or roll in ANY section. A cell
+//             with a line break or another control character is refused: a
+//             name is one line, and a NUL byte would sink the whole insert.
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { learners } from "@gml/db/schema";
@@ -52,6 +56,9 @@ export type NewStudent = {
 };
 
 type Taught = { classId: string; schoolId: string; grade: number; sections: Array<string | null> };
+
+/** A line break, a tab, a NUL: not part of a name, a roll number or a section. */
+const hasControl = (value: string): boolean => /\p{Cc}/u.test(value);
 
 /** A class the way her pages label it (teaching/_components/ui.tsx classLabel). */
 const label = (t: Translate, grade: number, section: string | null): string =>
@@ -112,6 +119,10 @@ export async function studentsFromRows(
     const roll = cells.rollNumber ?? "";
     if (roll.length > 32) {
       problem(t("errors.tooLong", { field: t("fields.rollNumber"), max: 32 }));
+      continue;
+    }
+    if (hasControl(name) || hasControl(roll) || hasControl(cells.section ?? "")) {
+      problem(t("csv.students.badCharacters"));
       continue;
     }
 
@@ -176,28 +187,38 @@ export async function studentsFromRows(
           .select({ classId: learners.classId, name: learners.name, rollNumber: learners.rollNumber, section: learners.section })
           .from(learners)
           .where(and(inArray(learners.classId, classIds), eq(learners.active, true), isNull(learners.deletedAt)));
-  const names = new Map<string, number | null>();
-  const rolls = new Map<string, number | null>();
-  const nameKey = (s: { classId: string; section: string | null; name: string }) => `${s.classId}|${s.section ?? ""}|${fold(s.name)}`;
-  const rollKey = (s: { classId: string; section: string | null }, roll: string) => `${s.classId}|${s.section ?? ""}|${fold(roll)}`;
+  // line: null for a student on the class list already, else the line of this file that adds her.
+  type Seen = { section: string | null; line: number | null };
+  const names = new Map<string, Seen[]>();
+  const rolls = new Map<string, Seen[]>();
+  const remember = (map: Map<string, Seen[]>, key: string, seen: Seen) => map.set(key, [...(map.get(key) ?? []), seen]);
+  const nameKey = (s: { classId: string; name: string }) => `${s.classId}|${fold(s.name)}`;
+  const rollKey = (s: { classId: string }, roll: string) => `${s.classId}|${fold(roll)}`;
+  // The same section, or either has none: she is on every section's roster. The class list's own come first.
+  const clash = (seen: Seen[] | undefined, section: string | null) =>
+    seen?.find((s) => s.section === null || section === null || s.section === section);
+  const whereIs = (grade: number, section: string | null) =>
+    section ? t("common.gradeSection", { grade, section }) : t("common.gradeN", { grade });
   for (const s of stored) {
-    names.set(nameKey(s), null);
-    if (s.rollNumber) rolls.set(rollKey(s, s.rollNumber), null);
+    remember(names, nameKey(s), { section: s.section, line: null });
+    if (s.rollNumber) remember(rolls, rollKey(s, s.rollNumber), { section: s.section, line: null });
   }
 
   const students: Array<NewStudent & { line: number }> = [];
   for (const w of wanted) {
-    const where = w.section ? t("common.gradeSection", { grade: w.grade, section: w.section }) : t("common.gradeN", { grade: w.grade });
-    // null: on the class list already; a number: the earlier line of this file.
-    const sameName = names.get(nameKey(w));
-    const sameRoll = w.rollNumber ? rolls.get(rollKey(w, w.rollNumber)) : undefined;
-    if (sameName === null) problems.push({ line: w.line, message: t("csv.students.duplicateName", { name: w.name, where }) });
-    else if (sameRoll === null) problems.push({ line: w.line, message: t("csv.students.duplicateRoll", { roll: w.rollNumber!, where }) });
-    else if (sameName !== undefined) problems.push({ line: w.line, message: t("csv.students.repeats", { name: w.name, first: sameName }) });
-    else if (sameRoll !== undefined) problems.push({ line: w.line, message: t("csv.students.rollRepeats", { roll: w.rollNumber!, first: sameRoll }) });
-    else {
-      names.set(nameKey(w), w.line);
-      if (w.rollNumber) rolls.set(rollKey(w, w.rollNumber), w.line);
+    const sameName = clash(names.get(nameKey(w)), w.section);
+    const sameRoll = w.rollNumber ? clash(rolls.get(rollKey(w, w.rollNumber)), w.section) : undefined;
+    if (sameName && sameName.line === null) {
+      problems.push({ line: w.line, message: t("csv.students.duplicateName", { name: w.name, where: whereIs(w.grade, sameName.section) }) });
+    } else if (sameRoll && sameRoll.line === null) {
+      problems.push({ line: w.line, message: t("csv.students.duplicateRoll", { roll: w.rollNumber!, where: whereIs(w.grade, sameRoll.section) }) });
+    } else if (sameName) {
+      problems.push({ line: w.line, message: t("csv.students.repeats", { name: w.name, first: sameName.line! }) });
+    } else if (sameRoll) {
+      problems.push({ line: w.line, message: t("csv.students.rollRepeats", { roll: w.rollNumber!, first: sameRoll.line! }) });
+    } else {
+      remember(names, nameKey(w), { section: w.section, line: w.line });
+      if (w.rollNumber) remember(rolls, rollKey(w, w.rollNumber), { section: w.section, line: w.line });
       students.push(w);
     }
   }

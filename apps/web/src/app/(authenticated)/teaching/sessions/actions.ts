@@ -230,7 +230,12 @@ export async function saveAttendanceAction(_prev: ActionState, fd: FormData): Pr
     if (status) marks.push({ learnerId: st.id, status });
     else unmarked += 1;
   }
-  if (unmarked > 0) return { error: t("errors.attendanceIncomplete", { count: unmarked }) };
+  if (unmarked > 0) {
+    // The roster she is looking at is not the class as it is now (a student added since the page loaded, or a CSV in
+    // another tab), so show her the one that is.
+    revalidatePath(`/teaching/sessions/${s.id}`);
+    return { error: t("errors.attendanceIncomplete", { count: unmarked }) };
+  }
 
   const counts = await saveSessionMarks(db, s.id, me.actor.id, marks);
   if (!counts) return { error: t("errors.locked") };

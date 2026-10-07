@@ -306,6 +306,7 @@
   "csv": {
     "noFile": "Choose a CSV file first.",
     "tooBig": "That file is too large. Keep it under {max} KB.",
+    "notCsv": "That file is not a plain CSV. If it is an Excel workbook, choose Save as, then CSV UTF-8 (comma delimited), and upload that file.",
     "tooManyRows": "That file has more than {max} rows. Split it into smaller files.",
     "empty": "That file has no rows to import.",
     "unreadable": "That file could not be read as a CSV. Check that every quote is closed.",
@@ -315,11 +316,16 @@
     "line": "Line {line}: {message}",
     "roll": "roll {roll}",
     "noRoll": "no roll number",
+    "section": "section {section}",
     "failed": "The file could not be saved, so nothing was added. Try again.",
     "attendance": {
       "studentRequired": "Give a student name or a roll number.",
       "notOnRoster": "{who} is not on this session's roster.",
-      "ambiguous": "{who} matches {count} students ({options}). Add a rollNumber column to choose one.",
+      "ambiguous": "{who} matches {count} students ({options}). Put the roll number in a rollNumber column to choose one.",
+      "ambiguousSection": "{who} matches {count} students ({options}). Put the section in a section column to choose one.",
+      "ambiguousSame": "{who} matches {count} students ({options}) and a file cannot tell them apart. Give them different roll numbers under My students, or mark them on the session page.",
+      "nameMismatch": "{who} does not match the roster: {roll} is {actual}.",
+      "rollMismatch": "{who} does not match the roster: {name} has {actual}.",
       "statusMissing": "{who} has no status. Use one of: {statuses}.",
       "badStatus": "\"{value}\" is not a status. Use one of: {statuses}.",
       "repeats": "{who} is already marked on line {first}."
@@ -330,7 +336,8 @@
       "classAmbiguous": "\"{value}\" matches more than one of your classes. Your classes: {options}.",
       "sectionConflict": "The class says section {fromClass} but the section column says {typed}.",
       "sectionNeeded": "Say which section: {sections}.",
-      "duplicateName": "{name} is already in {where}.",
+      "badCharacters": "The name, roll number or section has a line break or another character that cannot be used.",
+      "duplicateName": "{name} is already in {where}. If this is a different child, add them one at a time under My students.",
       "duplicateRoll": "Roll number {roll} is already used in {where}.",
       "repeats": "{name} repeats line {first}.",
       "rollRepeats": "Roll number {roll} repeats line {first}."
