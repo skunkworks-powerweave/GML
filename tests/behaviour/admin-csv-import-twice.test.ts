@@ -20,13 +20,16 @@
 // than copied.
 //
 // Which tables are protected is each entity's own definition: a duplicateKey
-// where the data has no natural unique value (people, rosters), the database's
-// unique index where it has one (a school's code, a class's grade). Tables with
-// neither (RTT sessions, modules, lessons and readings, classroom sessions,
-// resources, tests) are not covered here: nothing in their rows says "the same
-// record", so an id-less file for them can still be added twice.
+// where the data has no natural unique value (people, rosters, classroom
+// sessions, resources, tests, the RTT lists), the database's unique index where
+// it has one (a school's code, a class's grade). The last test covers the tables
+// that had neither, so an id-less file for them was added again in full -- also
+// when the retry of a request whose answer never arrived sent it a second time.
+// What "the same record" means for them is each entity's duplicateKey, and the
+// row-level report names the stored row so an operator can update it instead.
 
 import { test } from "node:test";
+import { randomInt } from "node:crypto";
 import assert from "node:assert/strict";
 import "./_ui.js";
 import { needsDatabase, withClient, tag } from "./_harness.js";
@@ -185,6 +188,98 @@ test("an export imported straight back changes nothing and copies nothing", { sk
         assert.deepEqual({ inserted: r.inserted, errors: r.errors }, { inserted: 0, errors: [] }, `round ${round}`);
       }
       assert.equal(await count(f, `SELECT count(*)::int AS n FROM teachers WHERE school_id = $1`, [school]), 1);
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── THE TABLES THAT HAD NO WAY TO TELL ──────────────────────────────────────
+//
+// Classroom sessions, reading material, tests and the RTT sessions, modules,
+// lessons and readings have no unique value in their rows and no unique index,
+// so an id-less file for them was added again in full on every import --
+// including the retry of a request whose answer never arrived. Each now names
+// what makes two of its rows the same record (AdminEntity.duplicateKey).
+
+test("classroom sessions, reading material, tests and the RTT lists imported twice are added once", { skip }, async () => {
+  await withClient(async (c) => {
+    const t = tag("twice-more");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `Dist ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Zone ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `Hill ${t}`, code: t.slice(-12) });
+      const klass = await f.row("classes", { school_id: school, grade: 4, stage: "Primary" });
+      const subject = await f.row("subjects", { name: `Subj ${t}`, code: t.slice(-12) });
+      f.defer(`DELETE FROM teachers WHERE school_id = $1`, [school]);
+      const teacher = await f.row("teachers", { school_id: school, full_name: `Tea ${t}` });
+      const phase = await f.row("phases", { label: `PT ${t}`.slice(0, 24), sequence: 4_000_000 + randomInt(1_000_000_000) });
+      const term = await f.row("terms", { phase_id: phase, name: "Term 1", sequence: 1 });
+      const rttSubject = await f.row("rtt_subjects", { term_id: term, name: `RTT ${t}` });
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+
+      // classroom sessions: the same class, subject, teacher, day and topic
+      f.defer(`DELETE FROM sessions WHERE school_id = $1`, [school]);
+      const sessionsCsv = [
+        `schoolId,classId,subjectId,teacherId,scheduledDate,topic`,
+        `${school},${klass},${subject},${teacher},2026-10-05,Fractions ${t}`,
+        `${school},${klass},${subject},${teacher},2026-10-06,Decimals ${t}`,
+      ].join("\n");
+      const sessions = await twice("sessions", sessionsCsv);
+      assert.equal(sessions.first.inserted, 2, JSON.stringify(sessions.first));
+      assertReportedAsExisting("sessions", 2, sessions.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM sessions WHERE school_id = $1`, [school]), 2);
+      // Another day for the same class and subject is another session, not a repeat.
+      const { importCsv } = await csvModule();
+      const next = await importCsv("sessions", [`schoolId,classId,subjectId,teacherId,scheduledDate,topic`, `${school},${klass},${subject},${teacher},2026-10-07,Fractions ${t}`].join("\n"));
+      assert.equal(next.inserted, 1, JSON.stringify(next));
+
+      // reading material
+      f.defer(`DELETE FROM resources WHERE name LIKE $1`, [`% ${t}`]);
+      const resources = await twice("resources", [`name,kind,externalUrl`, `Guide A ${t},Guide,https://example.org/a`, `Guide B ${t},Worksheet,https://example.org/b`].join("\n"));
+      assert.equal(resources.first.inserted, 2, JSON.stringify(resources.first));
+      assertReportedAsExisting("resources", 2, resources.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM resources WHERE name LIKE $1`, [`% ${t}`]), 2);
+
+      // tests (assessments)
+      f.defer(`DELETE FROM assessments WHERE class_id = $1`, [klass]);
+      const tests = await twice(
+        "assessments",
+        [`teacherId,classId,subjectId,title,maxMarks,term`, `${teacher},${klass},${subject},Unit 1 ${t},50,1`, `${teacher},${klass},${subject},Unit 2 ${t},50,1`].join("\n"),
+      );
+      assert.equal(tests.first.inserted, 2, JSON.stringify(tests.first));
+      assertReportedAsExisting("assessments", 2, tests.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM assessments WHERE class_id = $1`, [klass]), 2);
+
+      // RTT: sessions, modules, then the lessons in a module, and readings
+      f.defer(`DELETE FROM rtt_sessions WHERE rtt_subject_id = $1`, [rttSubject]);
+      const rttSessions = await twice("rtt-sessions", [`rttSubjectId,sequence,title,type`, `${rttSubject},1,Webinar 1 ${t},webinar`, `${rttSubject},2,Webinar 2 ${t},webinar`].join("\n"));
+      assert.equal(rttSessions.first.inserted, 2, JSON.stringify(rttSessions.first));
+      assertReportedAsExisting("rtt-sessions", 2, rttSessions.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM rtt_sessions WHERE rtt_subject_id = $1`, [rttSubject]), 2);
+
+      f.defer(`DELETE FROM rtt_modules WHERE rtt_subject_id = $1`, [rttSubject]);
+      const modules = await twice("rtt-modules", [`rttSubjectId,sequence,title`, `${rttSubject},1,Module 1 ${t}`, `${rttSubject},2,Module 2 ${t}`].join("\n"));
+      assert.equal(modules.first.inserted, 2, JSON.stringify(modules.first));
+      assertReportedAsExisting("rtt-modules", 2, modules.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM rtt_modules WHERE rtt_subject_id = $1`, [rttSubject]), 2);
+
+      const moduleId = (await c.query(`SELECT id FROM rtt_modules WHERE rtt_subject_id = $1 AND sequence = 1`, [rttSubject])).rows[0].id as string;
+      f.defer(`DELETE FROM rtt_lessons WHERE rtt_module_id = $1`, [moduleId]);
+      const lessons = await twice("rtt-lessons", [`rttModuleId,sequence,title`, `${moduleId},1,Lesson 1 ${t}`, `${moduleId},2,Lesson 2 ${t}`].join("\n"));
+      assert.equal(lessons.first.inserted, 2, JSON.stringify(lessons.first));
+      assertReportedAsExisting("rtt-lessons", 2, lessons.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM rtt_lessons WHERE rtt_module_id = $1`, [moduleId]), 2);
+
+      f.defer(`DELETE FROM rtt_readings WHERE rtt_subject_id = $1`, [rttSubject]);
+      const readings = await twice(
+        "rtt-readings",
+        [`rttSubjectId,sequence,title,externalUrl`, `${rttSubject},1,Reading 1 ${t},https://example.org/r1`, `${rttSubject},2,Reading 2 ${t},https://example.org/r2`].join("\n"),
+      );
+      assert.equal(readings.first.inserted, 2, JSON.stringify(readings.first));
+      assertReportedAsExisting("rtt-readings", 2, readings.second);
+      assert.equal(await count(f, `SELECT count(*)::int AS n FROM rtt_readings WHERE rtt_subject_id = $1`, [rttSubject]), 2);
     } finally {
       await f.cleanup();
     }

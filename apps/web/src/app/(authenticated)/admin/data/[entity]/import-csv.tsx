@@ -137,7 +137,14 @@ export function ImportCsv({
       // rows again. The result stays; to import more, or the fixed rows, the
       // operator chooses a file again (a failed request, above, keeps the file
       // for a retry).
-      clearFile();
+      //
+      // EXCEPT WHEN THE SERVER COULD NOT DO THE WORK. It answers 207 for that
+      // too (the connection or the transaction failed, nothing was saved) and
+      // blames no row (row -1): the file is fine and a plain retry is right, so
+      // it stays, as it does after a request that got no answer.
+      const wholeRequestFailed =
+        body.inserted + (body.updated ?? 0) === 0 && body.errors.length > 0 && body.errors.every((e) => e.row < 0);
+      if (!wholeRequestFailed) clearFile();
       if (body.inserted > 0 || (body.updated ?? 0) > 0) {
         // Rows landed; the grid behind this panel is now stale.
         router.refresh();

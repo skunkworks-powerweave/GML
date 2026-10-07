@@ -123,8 +123,8 @@ export async function GET(_req: Request) {
   }));
 
   // The six columns operators already script against keep their place; every
-  // other column the mentors import takes follows (userId, bio, photoUrl,
-  // active), so an edited export can be imported again.
+  // other column the mentors import takes follows, in the entity's own order
+  // (exportColumnKeys), so an edited export can be imported again.
   const established = ["id", "name", "hindiName", "baseLocation", "expertiseAreas", "pairingsActive"];
   const headers = [...established, ...exportColumnKeys(mentorsEntity).filter((k) => !established.includes(k))];
   // Escaped: a spreadsheet evaluates a cell starting with = + - @ (admin/csv-safety.ts).

@@ -85,6 +85,19 @@ test("a school's page shows its zone and district and its address, and makes no 
   }
 });
 
+// Schools entered before the admin forms trimmed their text can hold an address
+// of nothing but blanks; "address when present" means present in the words, so
+// the page shows no empty Address row for it.
+test("an address of only blanks is no address: the page has no Address row for it", { skip }, async () => {
+  const w = await observationWorld("schoolblank");
+  try {
+    await w.c.query(`UPDATE schools SET address = $1 WHERE id = $2`, ["   \t ", w.schoolId]);
+    assert.doesNotMatch(await schoolPage(w, w.schoolId, "en"), /Address/, "a blank address leaves no empty row");
+  } finally {
+    await w.cleanup();
+  }
+});
+
 test("no bundle carries the fixed claim any more", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "apps", "web", "src", "i18n", "locales");
   const hits: string[] = [];

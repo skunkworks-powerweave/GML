@@ -52,5 +52,10 @@ export const sessionsEntity: AdminEntity = {
     section: z.string().trim().max(8).optional().nullable(),
   }).refine((v) => v.attendedCount <= v.totalCount, { message: "validation.attendedWithinTotal", path: ["attendedCount"] }),
   formFields: ["schoolId", "classId", "subjectId", "teacherId", "outlineLessonId", "scheduledDate", "scheduledTime", "durationMin", "topic", "status", "attendedCount", "totalCount", "observed", "observationCycleId", "section", "notes"],
+  // A year's timetable re-uploaded after a partial import (csv.ts): the same
+  // class, subject, teacher and day is the same lesson; a different topic (or a
+  // different section) on that day is another one. The time is not part of it:
+  // a typed "09:00" is stored as "09:00:00", so the two would never compare equal.
+  duplicateKey: ["classId", "subjectId", "scheduledDate", "teacherId", "section", "topic"],
   describeRow: (r) => `session:${r.scheduledDate}/${r.classId}`,
 };

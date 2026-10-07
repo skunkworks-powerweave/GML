@@ -48,7 +48,7 @@ test("050 — index renders the JSX prototype's table columns + serif h1", () =>
     ["common.subject", "Subject"],
     ["common.grade", "Grade"],
     ["common.term", "Term"],
-    ["common.sessions", "Sessions"],
+    ["common.sessions", "Classroom sessions"],
     ["common.weeks", "Weeks"],
     ["common.status", "Status"],
   ]) {

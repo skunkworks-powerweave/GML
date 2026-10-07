@@ -15,8 +15,10 @@
 // title, section heading, link and empty state that names the list of classroom
 // sessions carries the word the admin table already used for it in that
 // language (adminData.entities.sessions.label); and the rendered menu shows it.
-// Counts inside a sentence or a table column ("12 sessions") are not headings
-// and are left as they were.
+// The count tiles, column headers and detail rows that name the list (repo
+// common.sessions) say the same, so a tile never reads "Sessions" above a card
+// headed "Recent classroom sessions". Only a count inside a sentence
+// ("12 sessions") is left as it was.
 
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -46,6 +48,7 @@ const LISTS: Array<[ns: "root" | "repo" | "teaching", path: string]> = [
   ["root", "nav.teachingSessions"],
   ["root", "crumb.session"],
   ["root", "crumb.sessions"],
+  ["repo", "common.sessions"],
   ["repo", "common.noSessionsYet"],
   ["repo", "common.sessionsLogged"],
   ["repo", "common.allSessions"],

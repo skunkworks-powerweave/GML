@@ -180,6 +180,46 @@ test("a partly failed import clears the file too, and keeps its row-by-row repor
   );
 });
 
+// The import route also answers 207 when the server could not do the work at
+// all -- the connection or the transaction failed, and "Nothing was saved" --
+// reporting it against no row (row -1). That is the same case as a request that
+// got no answer: no rows landed, the file is fine, and a plain retry is the
+// right next move. Clearing the file there made the operator pick it again.
+test("an import the server could not complete keeps the file, so the operator can try again", async () => {
+  await importThrough(
+    () =>
+      new Response(
+        JSON.stringify({ ok: false, inserted: 0, updated: 0, skipped: 2, errors: [{ row: -1, message: "The import could not be completed. Nothing was saved." }] }),
+        { status: 207 },
+      ),
+    async (run) => {
+      assert.match(run.panel(), /s\.csv/, "the file is still chosen");
+      assert.match(run.panel(), /Import 2 rows/, "and still names its rows");
+      assert.equal(run.submit().props.disabled, false, "and the button still works");
+      assert.match(run.result() ?? "", /Nothing was saved/, "the failure is shown");
+      await run.pressSubmit();
+      assert.equal(run.calls(), 2, "a retry is sent");
+    },
+  );
+});
+
+test("an import that refused every row still clears the file: it has to be fixed before it is chosen again", async () => {
+  await importThrough(
+    () =>
+      new Response(
+        JSON.stringify({ ok: false, inserted: 0, updated: 0, skipped: 2, errors: [{ row: 2, message: "name: too short" }, { row: 3, message: "name: too short" }] }),
+        { status: 207 },
+      ),
+    async (run) => {
+      assert.doesNotMatch(run.panel(), /s\.csv/);
+      assert.equal(run.submit().props.disabled, true);
+      assert.match(run.result() ?? "", /Row 3: name: too short/);
+      await run.pressSubmit();
+      assert.equal(run.calls(), 1);
+    },
+  );
+});
+
 test("an import that got no answer keeps the file, so the operator can try again", async () => {
   await importThrough(
     () => new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }),

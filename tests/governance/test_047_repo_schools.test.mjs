@@ -93,7 +93,7 @@ test("schools index table has the expected columns from prototype", () => {
     ["common.district", "District"],
     ["common.teachers", "Teachers"],
     ["common.classes", "Classes"],
-    ["common.sessions", "Sessions"],
+    ["common.sessions", "Classroom sessions"],
   ]) {
     assert.match(src, new RegExp(`<th>\\{t\\("${key.replace(".", "\\.")}"\\)\\}</th>`), `column ${col} missing from index header`);
     readsCopy(src, key, col, `column ${col}`);

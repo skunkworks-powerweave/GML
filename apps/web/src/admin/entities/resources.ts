@@ -40,5 +40,8 @@ export const resourcesEntity: AdminEntity = {
   fields: {
     fileKey: { upload: "pdf" },
   },
+  // A catalogue re-uploaded after a partial import (csv.ts): a title of the same
+  // kind is the same item.
+  duplicateKey: ["name", "kind"],
   describeRow: (r) => `resource:${r.name ?? r.id}`,
 };
