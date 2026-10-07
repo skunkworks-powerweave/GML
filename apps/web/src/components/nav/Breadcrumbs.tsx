@@ -156,6 +156,9 @@ export const ROUTABLE: readonly string[] = [
   "/observation",
   "/observation/[cycleId]",
   "/observation/new",
+  // Student progress, for programme and super admins.
+  "/progress/students",
+  "/progress/students/[classId]",
   "/quizzes/[slug]",
   "/quizzes/[slug]/history",
   "/quizzes/[slug]/result/[submissionId]",
@@ -193,6 +196,7 @@ export const ROUTABLE: readonly string[] = [
   "/teaching/marks/[id]",
   "/teaching/plans",
   "/teaching/plans/[id]",
+  "/teaching/progress",
   "/teaching/sessions",
   "/teaching/sessions/[id]",
   "/teaching/students",

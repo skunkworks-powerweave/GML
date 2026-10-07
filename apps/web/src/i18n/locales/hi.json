@@ -47,7 +47,8 @@
     "progress": "मेरी प्रगति",
     "approvals": "स्वीकृतियाँ",
     "attendanceMarking": "प्रशिक्षण उपस्थिति दर्ज करें",
-    "grading": "ग्रेडिंग"
+    "grading": "ग्रेडिंग",
+    "studentProgress": "विद्यार्थी प्रगति"
   },
   "navSection": {
     "programme": "कार्यक्रम",

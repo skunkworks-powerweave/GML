@@ -71,7 +71,7 @@ function subjectsIn(place: Place): SQL {
 }
 
 /** A requested place, resolved; a zone names its own district. */
-async function resolvePlace(db: Db, requested: { district?: string; zone?: string }): Promise<Place | null> {
+export async function resolvePlace(db: Db, requested: { district?: string; zone?: string }): Promise<Place | null> {
   if (isUuid(requested.zone)) {
     const [z] = await db
       .select({ districtId: districts.id, districtName: districts.name, zoneId: zones.id, zoneName: zones.name })
@@ -142,6 +142,19 @@ export function teachersIn(place: Place | null): SQL | undefined {
     ? sql`(${place.zoneId}::uuid)`
     : sql`(SELECT ${zones.id} FROM ${zones} WHERE ${zones.districtId} = ${place.districtId})`;
   return inArray(teachers.schoolId, sql`(SELECT ${schools.id} FROM ${schools} WHERE ${schools.zoneId} IN ${zoneIds})`);
+}
+
+/**
+ * schools.id predicate for a staff place filter: the schools whose zone is in
+ * the place. Undefined for the whole programme. The student-progress overview
+ * (lib/teaching/progress.ts) lists schools, where teachersIn lists teachers.
+ */
+export function schoolsIn(place: Place | null): SQL | undefined {
+  if (!place) return undefined;
+  const zoneIds = place.zoneId
+    ? sql`(${place.zoneId}::uuid)`
+    : sql`(SELECT ${zones.id} FROM ${zones} WHERE ${zones.districtId} = ${place.districtId})`;
+  return inArray(schools.zoneId, zoneIds);
 }
 
 export type PlaceOption = { districtId: string; districtName: string; zones: Array<{ id: string; name: string }> };

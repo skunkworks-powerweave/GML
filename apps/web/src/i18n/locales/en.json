@@ -47,7 +47,8 @@
     "progress": "My progress",
     "approvals": "Approvals",
     "attendanceMarking": "Mark training attendance",
-    "grading": "Grading"
+    "grading": "Grading",
+    "studentProgress": "Student progress"
   },
   "navSection": {
     "programme": "Programme",

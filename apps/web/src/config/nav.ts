@@ -49,6 +49,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
         { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
         { id: "attendance", labelKey: "attendanceMarking", icon: "table", href: "/attendance" },
+        { id: "student-progress", labelKey: "studentProgress", icon: "cycle", href: "/progress/students" },
       ],
     },
     {
@@ -105,6 +106,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
         { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
         { id: "attendance", labelKey: "attendanceMarking", icon: "table", href: "/attendance" },
+        { id: "student-progress", labelKey: "studentProgress", icon: "cycle", href: "/progress/students" },
       ],
     },
     {
@@ -227,6 +229,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "teaching-plans", labelKey: "lessonPlans", icon: "file", href: "/teaching/plans" },
         { id: "teaching-sessions", labelKey: "teachingSessions", icon: "cycle", href: "/teaching/sessions" },
         { id: "teaching-marks", labelKey: "marks", icon: "table", href: "/teaching/marks" },
+        { id: "teaching-progress", labelKey: "studentProgress", icon: "cycle", href: "/teaching/progress" },
       ],
     },
     {

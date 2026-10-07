@@ -47,7 +47,8 @@
     "progress": "ངའི་ཡར་རྒྱས།",
     "approvals": "ཆོག་མཆན།",
     "attendanceMarking": "སྦྱོང་བརྡར་ཚོགས་འཛུལ་འགོད།",
-    "grading": "སྐར་རིམ།"
+    "grading": "སྐར་རིམ།",
+    "studentProgress": "སློབ་ཕྲུག་གི་ཡར་རྒྱས།"
   },
   "navSection": {
     "programme": "ལས་གཞི།",
