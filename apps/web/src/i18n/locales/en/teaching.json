@@ -78,14 +78,14 @@
       "classes": "Classes",
       "students": "Students",
       "plans": "Lesson plans",
-      "sessions": "Sessions",
+      "sessions": "Classroom sessions",
       "marks": "Marks"
     },
     "links": {
       "classes": "My classes",
       "students": "My students",
       "plans": "Lesson plans",
-      "sessions": "My sessions",
+      "sessions": "My classroom sessions",
       "marks": "Marks"
     },
     "returnedTitle": "Sent back to you ({count})",
@@ -172,7 +172,7 @@
     "lockedNote": "This plan is locked while it waits for approval, and once it is approved."
   },
   "sessions": {
-    "title": "My sessions",
+    "title": "My classroom sessions",
     "intro": "Your classroom sessions. Plan one, take attendance when it happens, then send it for approval.",
     "planTitle": "Plan a session",
     "planSub": "One of your classes, the subject and, if you like, a lesson from your plans or the programme curriculum.",
@@ -194,8 +194,8 @@
     "notesHint": "What happened in the session, in your words."
   },
   "session": {
-    "metaTitle": "Session",
-    "label": "Session",
+    "metaTitle": "Classroom session",
+    "label": "Classroom session",
     "detailsTitle": "Session details",
     "lessonFact": "{outline}: {n}. {title}",
     "minutes": "{minutes} min",

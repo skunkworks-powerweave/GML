@@ -96,7 +96,7 @@ test("a teacher's Repository shows her own records, and a colleague's answer 404
 
     // /repo -- her own figures, and what they mean.
     const home = await page("page.tsx");
-    assert.match(home.text, /Schools 1 .*Sessions 1 Teachers 1 Mentors 1 Learners 2 /, home.text.slice(0, 1500));
+    assert.match(home.text, /Schools 1 .*Classroom sessions 1 Teachers 1 Mentors 1 Learners 2 /, home.text.slice(0, 1500));
     assert.match(home.text, /Your own records/);
     shows(home.text, [], [w.topicB], "/repo");
 
@@ -137,7 +137,7 @@ test("a teacher's Repository shows her own records, and a colleague's answer 404
     const subject = await page("subject/[id]/page.tsx", w.subject);
     shows(
       subject.text,
-      [`Subject ${w.T}`, "Your sessions (1)", w.topicA, n.outlineP, n.planA],
+      [`Subject ${w.T}`, "Your classroom sessions (1)", w.topicA, n.outlineP, n.planA],
       [w.topicB, n.teacherB, n.planB, n.outlinePD, "Distinct teachers with sessions on this subject"],
       "/repo/subject",
     );
@@ -177,7 +177,7 @@ test("administrators and mentors keep the programme-wide Repository", { skip }, 
       shows(
         (await page("subject/[id]/page.tsx", w.subject)).text,
         [w.topicB, n.teacherB, n.planB, n.outlinePD, "Distinct teachers with sessions on this subject"],
-        ["Your sessions"],
+        ["Your classroom sessions"],
         `${role} /repo/subject`,
       );
       shows((await page("outlines/page.tsx", "", { q: w.T })).text, [n.planA, n.planB, n.outlinePD], [], `${role} /repo/outlines`);
@@ -232,7 +232,7 @@ test("a teacher's own Repository reads in Hindi and Bhoti", { skip }, async () =
     try {
       request.locale = "hi";
       const subject = await page("subject/[id]/page.tsx", w.subject);
-      shows(subject.text, ["आपके सत्र (1)", w.topicA], ["Your sessions", w.topicB], "hi /repo/subject");
+      shows(subject.text, ["आपके कक्षा सत्र (1)", w.topicA], ["Your classroom sessions", w.topicB], "hi /repo/subject");
       request.locale = "bo";
       const session = await page("session/[id]/page.tsx", w.sessionA);
       shows(session.text, ["ཆོག་མཆན་སྒུག་བཞིན།", w.topicA], ["Pending approval"], "bo /repo/session");

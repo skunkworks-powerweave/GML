@@ -13,8 +13,14 @@
 // a spreadsheet and importing it back does not grow a "'" on every phone
 // number (they start with "+") or formula-looking name.
 
-/** Pass to every Papa.unparse(...) call that produces a download. */
-export const CSV_EXPORT_OPTIONS = { escapeFormulae: true } as const;
+/**
+ * Pass to every Papa.unparse(...) call that produces a download.
+ *
+ * The pattern is given rather than `true`: PapaParse's own is /^[=+\-@\t\r].*$/,
+ * and `.` does not match a newline, so a cell that began with = and held a line
+ * break (a notes box, a bio) was written raw. Only the first character decides.
+ */
+export const CSV_EXPORT_OPTIONS = { escapeFormulae: /^[=+\-@\t\r]/ } as const;
 
 const ESCAPED_FORMULA = /^'[=+\-@\t\r]/;
 

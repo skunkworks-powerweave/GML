@@ -58,11 +58,11 @@ Never exercised before this release. Each needs a real server, domain or Meta ac
 | QA-TEA-01 | Dashboard | Tiles for uploads, cycles, quizzes, and a **My teaching** card. |
 | QA-TEA-02 | My classes → add a grade, optional section and subject | Listed. Remove deletes only her link, not the class. |
 | QA-TEA-03 | My students → add, edit, remove a student | Only her own classes' students are listed. Remove keeps the history. |
-| QA-TEA-04 | My sessions → plan a session (class, subject, date, status Complete) → take attendance → **Send for approval** | "Send for approval" appears only once attendance is taken. After sending, the session is locked and shows **Pending approval**. |
+| QA-TEA-04 | My classroom sessions → plan a session (class, subject, date, status Complete) → take attendance → **Send for approval** | "Send for approval" appears only once attendance is taken. After sending, the session is locked and shows **Pending approval**. |
 | QA-TEA-05 | Lesson plans → start a plan → add lessons → reorder → **Send for approval** | Needs at least one lesson. Locked once sent. |
 | QA-TEA-06 | Marks → set a test for her class → enter marks | Each student's % and grade, and the class average and pass count, update as you type. Send for approval locks them. |
 | QA-TEA-07 | After an admin **requests changes** (QA-PAD-06) | The **My teaching** page lists it under "Sent back to you" with the comment. The record is editable again, and the inbox has the notice. |
-| QA-TEA-08 | Repository: Teachers, Students, Sessions | Only **her own** records. Another teacher's record by URL gives 404. |
+| QA-TEA-08 | Repository: Teachers, Students, Classroom sessions | Only **her own** records. Another teacher's record by URL gives 404. |
 | QA-TEA-09 | My observations (Observation password) | Her cycles. The post-observation form is due on an "observed" cycle, and submitting it moves the cycle on. |
 | QA-TEA-10 | My phase → a subject: reading (PDF, no download button), SCORM module, quiz | The SCORM launches and resumes. The quiz gives a score, a grade band and a history. |
 | QA-TEA-11 | Upload a video (My uploads, or a teach-back from a subject) | A progress bar, resumable. About a minute later it plays in the library. |
@@ -94,8 +94,8 @@ Never exercised before this release. Each needs a real server, domain or Meta ac
 | ID | Check | Expected |
 |---|---|---|
 | QA-PAD-01 | Classroom Observation (password) → nominate a cycle | It appears as "nominated". |
-| QA-PAD-02 | Data tables: add, edit, delete a row; CSV export; CSV import | Works for subjects, schools, teachers, teacher classes, curriculum (course outlines and lessons), attendance and grading tables. A delete that would erase records of work is refused, with the reason. On a phone, rows show as cards. |
-| QA-PAD-03 | Mark attendance → an RTT session | Present, late, absent or excused per teacher, with who marked it. "Mark all present" marks everyone left. |
+| QA-PAD-02 | Data tables: add, edit, delete a row; CSV export; CSV import | Works for subjects, schools, teachers, teacher classes, curriculum (course outlines and lessons), training and student attendance, and grading tables. A delete that would erase records of work is refused, with the reason. On a phone, rows show as cards. |
+| QA-PAD-03 | Mark training attendance → an RTT session | Present, late, absent or excused per teacher, with who marked it. "Mark all present" marks everyone left. |
 | QA-PAD-04 | Grading → a scale: edit bands; make it the default; switch it off | Band counts are right. Gaps show as a warning. A scale that is in use cannot be deleted. |
 | QA-PAD-05 | Grading → the rubric: rename or reorder criteria | Scores already given stay attached. A scored criterion cannot be removed. |
 | QA-PAD-06 | Approvals: the teacher's session and plan (QA-TEA-04/05) | **Request changes** needs a comment. **Approve** locks the record. Each decision reaches the teacher's inbox. |
@@ -103,6 +103,7 @@ Never exercised before this release. Each needs a real server, domain or Meta ac
 | QA-PAD-08 | Users → create a teacher, change a role, deactivate, link to a teacher record | Works. A deactivated account cannot sign in. |
 | QA-PAD-09 | Audit log (admin password) → filter → export CSV | Every change made in these checks is listed. |
 | QA-PAD-10 | Should **not** be possible | Section gates, System settings, creating admin accounts, uploading SCORM. |
+| QA-PAD-11 | Data menu → **Training attendance**, then **Student attendance** | Training attendance opens the RTT attendance table (teachers at training sessions). Student attendance opens "Students' attendance (classroom sessions)" (session, student, attendance, marked by). Teachers, mentors and observers see neither item. |
 
 ## 7. Super admin
 

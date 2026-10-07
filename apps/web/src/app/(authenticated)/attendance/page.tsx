@@ -8,7 +8,7 @@
 // a session opens its roster to mark (./[rttSessionId]). The queries are
 // lib/rtt/attendance.ts.
 //
-// Programme admins and super admins only (the menu's Attendance item).
+// Programme admins and super admins only (the menu's Mark training attendance item).
 // Filters are a plain GET form: it works with no JavaScript on a slow link.
 
 import type { Metadata } from "next";

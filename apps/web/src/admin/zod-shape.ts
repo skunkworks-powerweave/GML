@@ -171,6 +171,13 @@ export function acceptsNull(zodType: z.ZodTypeAny | undefined): boolean {
  * `emptyMeansNull` (update): an emptied field is the user CLEARING it -- null
  * when the column accepts null, otherwise left out so zod reports the field
  * as required. Forwarding null to a required z.coerce.date() stored 1970.
+ *
+ * TEXT IS TRIMMED here, for the same reason: this is the one place a typed or
+ * pasted value enters, so " Tsering Dolma " was a different school, teacher or
+ * student from "Tsering Dolma" in the grid, in an import and in the duplicate
+ * check. Only the ends go -- spaces inside a value are the operator's -- and a
+ * value of nothing but whitespace is the empty value it looks like, so it takes
+ * the empty branch below instead of being stored as a blank.
  */
 export function coerceFormValues(
   fields: readonly string[],
@@ -180,8 +187,9 @@ export function coerceFormValues(
 ): Record<string, unknown> {
   const raw: Record<string, unknown> = {};
   for (const field of fields) {
-    const value = get(field);
-    if (value === null) continue;
+    const got = get(field);
+    if (got === null) continue;
+    const value = got.trim();
     const kind = fieldKind(shape[field]);
     if (value === "") {
       // An empty ARRAY box means an empty list, which is a real value -- not

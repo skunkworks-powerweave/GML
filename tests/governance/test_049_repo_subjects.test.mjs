@@ -62,7 +62,7 @@ test("spec 049 — index renders Subject/Grades/Outlines/Sessions/Readings colum
     ["common.subject", "Subject"],
     ["subjects.grades", "Grades"],
     ["common.outlines", "Outlines"],
-    ["common.sessions", "Sessions"],
+    ["common.sessions", "Classroom sessions"],
     ["common.readings", "Readings"],
   ]) {
     readsCopy(src, key, col, `index must render the "${col}" column header`);
@@ -97,7 +97,7 @@ test("spec 049 — detail renders the 4-stat strip + 3 section cards (JSX:508-55
   for (const [key, stat] of [
     ["common.gradesCovered", "Grades covered"],
     ["common.courseOutlines", "Course outlines"],
-    ["common.sessions", "Sessions"],
+    ["common.sessions", "Classroom sessions"],
     ["common.readings", "Readings"],
   ]) {
     assert.ok(src.includes(`<StatTile label={t("${key}")}`), `detail must render Stat "${stat}"`);
@@ -105,7 +105,7 @@ test("spec 049 — detail renders the 4-stat strip + 3 section cards (JSX:508-55
   }
   // Section cards.
   readsCopy(src, "subject.outlinesTitle", "Course outlines ({count})", "the outlines card");
-  readsCopy(src, "subject.recentTitle", "Recent sessions ({count})", "the sessions card");
+  readsCopy(src, "subject.recentTitle", "Recent classroom sessions ({count})", "the sessions card");
   readsCopy(src, "subject.readingTitle", "Reading material ({count})", "the readings card");
   // Outline status chip mapping per JSX:527: the stored status's label.
   assert.match(src, /enumLabel\(t,\s*"outlineStatus"/);

@@ -50,5 +50,10 @@ export const rttModulesEntity: AdminEntity = {
     "evaluationCriteria",
     "textbookRefs",
   ],
+  // A training subject's modules re-uploaded after a partial import (csv.ts): the same title at the same
+  // position under the same parent is the same row. The title leads because it is
+  // what tells the rows of one parent apart, so a file of thousands is not
+  // compared against itself in one lump.
+  duplicateKey: ["title", "rttSubjectId", "sequence"],
   describeRow: (r) => `rtt-module:${r.title ?? r.id}`,
 };
