@@ -61,6 +61,12 @@ exit 0
 
 const NODE = `
 printf 'node-env NODE_ENV=%s\\n' "\${NODE_ENV:-}" >> "$SANDBOX_LOG"
+case "$*" in
+  # deploy.sh's freshness probe: is there a passing drill from the last N days?
+  *--max-age-days*)
+    [ -n "\${FAKE_DRILL_STALE:-}\${FAKE_DRILL_REFUSES:-}" ] && exit 1
+    exit 0 ;;
+esac
 [ -n "\${FAKE_DRILL_REFUSES:-}" ] && { echo "[SM-5] restore drill is 45 days old" >&2; exit 1; }
 exit 0
 `;
@@ -820,4 +826,131 @@ test("deploy.sh never tags an image by an id it noted before the build", () => {
     !/docker tag "\$\{was_current\[/.test(sb_src()),
     "tagging by a remembered id is what died with 'No such image' once the build had moved the tag; tag from :pre-deploy",
   );
+});
+
+// ── the deploy runs the backup and the drill itself when the last is stale ──
+//
+// The SM-5 gate is unchanged: no deploy without a passing drill less than 30
+// days old. What changed is who runs the drill. On the first staging server
+// nobody had, so the second deploy stopped at the gate. deploy.sh now takes a
+// backup and runs the drill when the last passing one is missing, failed, or
+// more than DRILL_REFRESH_DAYS (7) old, and THEN asks the gate -- which still
+// has the last word.
+
+function withFakeBackupScripts(sb, { backupFails = false } = {}) {
+  sb.write(
+    "scripts/backup.sh",
+    `printf 'backup.sh db_only=%s fallback=%s\\n' "\${BACKUP_DB_ONLY:-}" "\${BACKUP_ROOT_FALLBACK:-}" >> "$SANDBOX_LOG"\n${backupFails ? 'echo "[backup] ERROR: pg_dump failed" >&2; exit 1' : "exit 0"}\n`,
+  );
+  sb.write(
+    "scripts/restore.sh",
+    `printf 'restore.sh fallback=%s\\n' "\${BACKUP_ROOT_FALLBACK:-}" >> "$SANDBOX_LOG"\nexit 0\n`,
+  );
+}
+
+test("a stale drill: the deploy backs up and runs the drill first, then the gate, then builds", () => {
+  const sb = deploySandbox();
+  try {
+    withFakeBackupScripts(sb);
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_DRILL_STALE: "1" } });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `${r.stderr}\n${calls.join("\n")}`);
+    const at = (re) => calls.findIndex((l) => re.test(l));
+    const backup = at(/^backup\.sh /);
+    const restore = at(/^restore\.sh /);
+    const gateCall = calls.findIndex((l, i) => i > restore && /^node .*check-restore-drill\.mjs$/.test(l));
+    const build = at(/^docker compose build/);
+    assert.ok(backup >= 0 && restore > backup, `backup, then the drill:\n${calls.join("\n")}`);
+    assert.ok(gateCall > restore, "the gate still decides, after the drill");
+    assert.ok(build > gateCall, "and only then is anything built");
+    assert.match(r.stdout, /restore drill/i, "the deploy log must say why it is backing up");
+    assert.equal(
+      calls[backup],
+      "backup.sh db_only=1 fallback=1",
+      "a deploy's backup is the database only (the drill needs nothing more) and may use the checkout's workspace",
+    );
+    assert.equal(calls[restore], "restore.sh fallback=1", "the drill must look where that backup went");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a fresh drill: the deploy does not back up or drill again", () => {
+  const sb = deploySandbox();
+  try {
+    withFakeBackupScripts(sb);
+    const r = sb.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = sb.invocations();
+    assert.ok(!calls.some((l) => /^(backup|restore)\.sh /.test(l)), calls.join("\n"));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failed backup: no drill on an old dump, and the gate stops the deploy before anything is built", () => {
+  const sb = deploySandbox();
+  try {
+    withFakeBackupScripts(sb, { backupFails: true });
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_DRILL_STALE: "1", FAKE_DRILL_REFUSES: "1" } });
+    const calls = sb.invocations();
+    assert.notEqual(r.status, 0);
+    assert.ok(calls.some((l) => /^backup\.sh /.test(l)));
+    assert.ok(!calls.some((l) => /^restore\.sh /.test(l)), "a drill on an older dump would prove nothing about today's backup");
+    assert.ok(!calls.some((l) => /^docker (tag|compose build|compose up)/.test(l)), calls.join("\n"));
+    assert.match(r.stderr, /backup failed/i, r.stderr);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("DEPLOY_AUTO_DRILL=0 leaves the drill to the operator, and the gate as it was", () => {
+  const sb = deploySandbox();
+  try {
+    withFakeBackupScripts(sb);
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_DRILL_STALE: "1", FAKE_DRILL_REFUSES: "1", DEPLOY_AUTO_DRILL: "0" } });
+    assert.notEqual(r.status, 0, "the gate still refuses a stale drill");
+    assert.ok(!sb.invocations().some((l) => /^backup\.sh /.test(l)));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the first deploy on a host does not try to back up a database it has not set up yet", () => {
+  const sb = deploySandbox({ deployedBefore: false });
+  try {
+    withFakeBackupScripts(sb);
+    const r = sb.run("scripts/deploy.sh", { env: { ...FAST, FAKE_FIRST_DEPLOY: "1", FAKE_DRILL_STALE: "1" } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!sb.invocations().some((l) => /^backup\.sh /.test(l)), sb.invocations().join("\n"));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("DEPLOY_AUTO_DRILL and DRILL_REFRESH_DAYS work from .env, where .env.example documents them", () => {
+  // deploy.sh does not source .env; it reads the keys it needs, as it does DOMAIN.
+  const off = deploySandbox();
+  try {
+    withFakeBackupScripts(off);
+    off.write(".env", `${ENV_FILE}DEPLOY_AUTO_DRILL=0\n`);
+    const r = off.run("scripts/deploy.sh", { env: { ...FAST, FAKE_DRILL_STALE: "1", FAKE_DRILL_REFUSES: "1" } });
+    assert.notEqual(r.status, 0);
+    assert.ok(!off.invocations().some((l) => /^backup\.sh /.test(l)), off.invocations().join("\n"));
+  } finally {
+    off.cleanup();
+  }
+  const days = deploySandbox();
+  try {
+    withFakeBackupScripts(days);
+    days.write(".env", `${ENV_FILE}DRILL_REFRESH_DAYS=3\n`);
+    const r = days.run("scripts/deploy.sh", { env: FAST });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(
+      days.invocations().some((l) => /^node .*check-restore-drill\.mjs --max-age-days 3$/.test(l)),
+      days.invocations().join("\n"),
+    );
+  } finally {
+    days.cleanup();
+  }
 });

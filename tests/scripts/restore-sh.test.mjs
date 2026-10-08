@@ -18,7 +18,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { makeSandbox, posixish, root } from "./_sandbox.mjs";
@@ -27,6 +27,8 @@ const FILES = [
   "scripts/restore.sh",
   "scripts/lib/pg-major.sh",
   "scripts/lib/audit-host-job.sh",
+  "scripts/lib/pg-tools.sh",
+  "scripts/lib/backup-root.sh",
   "scripts/check-restore-drill.mjs",
 ];
 
@@ -307,4 +309,158 @@ test("without DATABASE_URL the drill still runs, and says the panel will not sho
   } finally {
     sb.cleanup();
   }
+});
+
+// ── no PostgreSQL client on the host: the drill's tools come from Docker ───
+//
+// The drill already needs Docker for its throwaway server. With no client on
+// the host, pg_restore and psql run from the postgres image too (scripts/lib/
+// pg-tools.sh), the image backup.sh recorded next to the dumps.
+
+/**
+ * docker as the drill uses it: `run -d` starts the throwaway server, `rm -f`
+ * removes it, and `run --rm -i ... <image> <tool>` answers as pg_restore or
+ * psql would.
+ */
+const DOCKER_WITH_TOOLS = `
+case "$1" in
+  rm) exit 0 ;;
+esac
+case "$*" in
+  "run -d "*) echo "0123456789abcdef"; exit 0 ;;
+  *" pg_restore "*)
+    cat >/dev/null
+    case "$*" in
+      *" -l"*) printf ';\n;     Dumped from database version: %s\n' "\${FAKE_DUMP_SERVER_VERSION}" ;;
+    esac
+    exit 0 ;;
+  *" psql "*)
+    case "$*" in
+      *"-v action="*) cat >> "$SANDBOX_DIR/audit.sql"; exit 0 ;;
+      *information_schema.tables*) echo 45 ;;
+      *public.users*) echo 3 ;;
+      *public.audit_log*) echo 10 ;;
+      *public.video_submissions*) echo 2 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+`;
+
+function dockerToolsDrill() {
+  const sb = makeSandbox({ prefix: "gml-restore-" });
+  for (const f of FILES) if (existsSync(resolve(root, f))) sb.copy(f);
+  sb.stub("docker", DOCKER_WITH_TOOLS);
+  sb.write("backups/db/gml-20260920T020000Z.dump.gz", gzipSync(Buffer.from("PGDMP-not-a-real-dump")));
+  sb.write("backups/db/gml-20260920T020000Z.dump.gz.pg-tools-image", "postgres:17-alpine\n");
+  return sb;
+}
+
+test("with no PostgreSQL client on the host, the drill runs pg_restore and psql from Docker and passes", () => {
+  const sb = dockerToolsDrill();
+  try {
+    const r = sb.run("scripts/restore.sh", { env: env(sb) });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `the drill must not need a client installed on the host:\n${r.stderr}\n${calls.join("\n")}`);
+    assert.equal(stamp(sb).result, "ok", "a passing drill is what the deploy gate needs");
+    assert.ok(
+      calls.some((l) => /^docker run --rm -i --network host .*postgres:17-alpine pg_restore --no-owner/.test(l)),
+      `the restore reads the dump on stdin, from the image backup.sh recorded:\n${calls.join("\n")}`,
+    );
+    assert.ok(
+      calls.some((l) => /^docker run --rm --network host .*postgres:17-alpine psql .* -c /.test(l)),
+      `psql -c reads nothing on stdin, so it must not take -i:\n${calls.join("\n")}`,
+    );
+    assert.ok(calls.some((l) => /^docker run -d --rm --name .*postgres:17-alpine/.test(l)), "and the throwaway server is still started");
+    const gateRun = gate(sb);
+    assert.equal(gateRun.status, 0, `the SM-5 gate must accept this drill:\n${gateRun.stderr}`);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("with neither a PostgreSQL client nor Docker, the drill says what to install", () => {
+  const sb = makeSandbox({ prefix: "gml-restore-" });
+  try {
+    for (const f of FILES) if (existsSync(resolve(root, f))) sb.copy(f);
+    sb.write("backups/db/gml-20260920T020000Z.dump.gz", gzipSync(Buffer.from("PGDMP-not-a-real-dump")));
+    const r = sb.run("scripts/restore.sh", { env: env(sb) });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /PostgreSQL client/, r.stderr);
+    assert.match(r.stderr, /docker/i, r.stderr);
+    assert.equal(stamp(sb).result, "failed");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the drill finds the dumps where backup.sh put them when the system directory is not writable", () => {
+  const sb = dockerToolsDrill();
+  try {
+    // backup.sh fell back to workspace/backups (scripts/lib/backup-root.sh); so must the drill.
+    sb.write("workspace/backups/db/gml-20261008T020000Z.dump.gz", gzipSync(Buffer.from("PGDMP-not-a-real-dump")));
+    sb.write("workspace/backups/db/gml-20261008T020000Z.dump.gz.pg-tools-image", "postgres:17-alpine\n");
+    sb.write("blocker", "a file where a directory would have to be");
+    const e = env(sb, {
+      BACKUP_ROOT_SYSTEM_DIR: posixish(join(sb.dir, "blocker", "backups")),
+      BACKUP_ROOT_FALLBACK: "1", // as deploy.sh runs it
+    });
+    delete e.BACKUP_ROOT;
+    const r = sb.run("scripts/restore.sh", { env: e });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(stamp(sb).source, "gml-20261008T020000Z.dump.gz", "the drill must restore the dump in workspace/backups");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("check-restore-drill.mjs --max-age-days applies a stricter age, and the default stays 30 days", () => {
+  const sb = makeSandbox({ prefix: "gml-gate-" });
+  try {
+    sb.copy("scripts/check-restore-drill.mjs");
+    const run = (days, args = []) => {
+      const ranAt = new Date(Date.now() - days * 86_400_000).toISOString();
+      sb.write("workspace/last_restore_drill.json", JSON.stringify({ ranAt, result: "ok" }));
+      return spawnSync(process.execPath, [join(sb.dir, "scripts", "check-restore-drill.mjs"), ...args], {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: { NODE_ENV: "production", PATH: process.env.PATH },
+      }).status;
+    };
+    assert.equal(run(8), 0, "8 days passes the 30-day gate");
+    assert.equal(run(8, ["--max-age-days", "7"]), 1, "8 days is too old for --max-age-days 7");
+    assert.equal(run(3, ["--max-age-days", "7"]), 0);
+    assert.equal(run(31), 1, "the gate itself is unchanged");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a host client older than the dump is not used: the drill takes the recorded image from Docker", () => {
+  // Ubuntu's own postgresql-client is older than the Supabase server. backup.sh
+  // then dumps with postgres:17 from Docker; a pg_restore 16 cannot read that
+  // archive ("unsupported version in file header"), so the drill would fail and
+  // the gate would refuse every deploy.
+  const sb = dockerToolsDrill();
+  try {
+    sb.stub("pg_restore", 'case "$*" in --version) echo "pg_restore (PostgreSQL) 16.4"; exit 0 ;; esac; echo "pg_restore: error: unsupported version (1.16) in file header" >&2; exit 1');
+    sb.stub("psql", 'case "$*" in --version) echo "psql (PostgreSQL) 16.4" ;; esac; exit 0');
+    const r = sb.run("scripts/restore.sh", { env: env(sb) });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `${r.stderr}\n${calls.join("\n")}`);
+    assert.ok(!calls.some((l) => /^pg_restore (-l|--no-owner)/.test(l)), `the old host pg_restore must not read the dump:\n${calls.join("\n")}`);
+    assert.ok(calls.some((l) => /postgres:17-alpine pg_restore --no-owner/.test(l)), calls.join("\n"));
+    assert.equal(stamp(sb).result, "ok");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("the drill writes pg_restore's output to its own temporary file, not a fixed path in /tmp", () => {
+  // /tmp is sticky: a /tmp/restore-drill.log left by root's cron drill could not
+  // be written by the deploy's account (or the other way round), the redirect
+  // failed, pg_restore never ran, and every drill failed until /tmp was cleared.
+  const src = readFileSync(resolve(root, "scripts/restore.sh"), "utf8");
+  assert.doesNotMatch(src, /\/tmp\/restore-drill\.log/);
+  assert.match(src, /mktemp/);
 });

@@ -60,7 +60,10 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 [ -f .env ] && set -a && . ./.env && set +a
 
-BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/gml/backups}"
+# Where backup.sh put the dumps, resolved the same way (scripts/lib/backup-root.sh).
+# shellcheck source=lib/backup-root.sh
+. scripts/lib/backup-root.sh
+resolve_backup_root "${REPO_ROOT}"
 DB_DIR="${BACKUP_ROOT}/db"
 DRILL_DB="${DRILL_DB:-gml_restore_drill}"
 DRILL_PORT="${DRILL_PORT:-55432}"
@@ -104,6 +107,7 @@ trap 'DRILL_ERROR="${DRILL_ERROR:-line ${LINENO}: ${BASH_COMMAND}}"' ERR
 
 on_exit() {
   local rc=$?
+  [ -z "${RESTORE_LOG:-}" ] || rm -f "${RESTORE_LOG}"
   if [ -n "${DRILL_CONTAINER}" ]; then
     docker rm -f "${DRILL_CONTAINER}" >/dev/null 2>&1 \
       || echo "[restore] WARNING: could not remove drill container ${DRILL_CONTAINER}; remove it with: docker rm -f ${DRILL_CONTAINER}" >&2
@@ -116,8 +120,6 @@ on_exit() {
 }
 trap on_exit EXIT
 
-command -v pg_restore >/dev/null || fail "pg_restore not installed -- install the PostgreSQL client (README-deploy.md section 7)"
-command -v psql >/dev/null || fail "psql not installed -- install the PostgreSQL client (README-deploy.md section 7)"
 # shellcheck source=lib/pg-major.sh
 . scripts/lib/pg-major.sh
 
@@ -145,6 +147,45 @@ if [ -z "${LATEST}" ]; then
 fi
 DRILL_SOURCE="$(basename "${LATEST}")"
 log "restoring ${DRILL_SOURCE}"
+
+# ── The PostgreSQL tools ─────────────────────────────────────────────────────
+# The host's client when it can read this dump; otherwise pg_restore and psql
+# from Docker, which the drill needs for its throwaway server anyway (scripts/
+# lib/pg-tools.sh). A dump backup.sh wrote with Docker tools has the image
+# recorded beside it: a host client older than that (Ubuntu's own package is
+# older than Supabase's server) cannot read the archive ("unsupported version
+# in file header"), and the drill would fail on a good backup. PG_TOOLS=host or
+# PG_TOOLS=docker forces either.
+# shellcheck source=lib/pg-tools.sh
+. scripts/lib/pg-tools.sh
+PG_TOOLS="${PG_TOOLS:-auto}"
+recorded_image="$(head -n 1 "${LATEST}.pg-tools-image" 2>/dev/null | tr -d '[:space:]' || true)"
+case "${recorded_image}" in
+  postgres:[0-9][0-9]-alpine) : ;;
+  *) recorded_image="" ;;
+esac
+tools_why=""
+if [ "${PG_TOOLS}" = "docker" ]; then
+  tools_why="PG_TOOLS=docker"
+elif [ "${PG_TOOLS}" = "auto" ]; then
+  if ! pg_tools_host_has pg_restore psql; then
+    tools_why="this host has no PostgreSQL client"
+  elif [ -n "${recorded_image}" ]; then
+    host_major="$(pg_major "$(pg_restore --version 2>/dev/null || true)" || true)"
+    dump_major="$(pg_major "${recorded_image#postgres:}" || true)"
+    if [ -z "${host_major}" ] || { [ -n "${dump_major}" ] && [ "${host_major}" -lt "${dump_major}" ]; }; then
+      tools_why="pg_restore ${host_major:-?} on this host cannot read a dump made by PostgreSQL ${dump_major} tools"
+    fi
+  fi
+fi
+if [ -n "${tools_why}" ]; then
+  [ -n "$(type -P docker 2>/dev/null)" ] \
+    || fail "no usable PostgreSQL client on this host (pg_restore, psql) and no docker to run one from -- install the PostgreSQL client or Docker (README-deploy.md section 7)"
+  pg_tools_from_docker "${recorded_image:-${PG_TOOLS_DEFAULT_IMAGE}}"
+  log "using the PostgreSQL tools from Docker (${PG_TOOLS_IMAGE}): ${tools_why}"
+fi
+command -v pg_restore >/dev/null || fail "pg_restore not installed -- install the PostgreSQL client (README-deploy.md section 7)"
+command -v psql >/dev/null || fail "psql not installed -- install the PostgreSQL client (README-deploy.md section 7)"
 
 # Age check. A drill against a three-month-old dump proves the dump is
 # restorable and says nothing about whether backups are still RUNNING.
@@ -210,11 +251,16 @@ DRILL_URL="${drill_base%/*}/${DRILL_DB}${drill_query}"
 # is captured and judged rather than trusted.
 log "restoring"
 restore_rc=0
-gunzip -c "${LATEST}" | pg_restore --no-owner --no-acl --dbname="${DRILL_URL}" 2>/tmp/restore-drill.log \
+# Its own temporary file: a fixed log path in /tmp, left by another
+# account (root's cron drill, or the deploy's) cannot be written in sticky /tmp,
+# the redirect fails, pg_restore never runs, and every drill fails until /tmp
+# is cleared.
+RESTORE_LOG="$(mktemp "${TMPDIR:-/tmp}/gml-restore-drill.XXXXXX")"
+gunzip -c "${LATEST}" | pg_restore --no-owner --no-acl --dbname="${DRILL_URL}" 2>"${RESTORE_LOG}" \
   || restore_rc=$?
 if [ "${restore_rc}" -ne 0 ]; then
   echo "[restore] pg_restore exited ${restore_rc}; inspecting whether the data actually landed" >&2
-  tail -20 /tmp/restore-drill.log >&2 || true
+  tail -20 "${RESTORE_LOG}" >&2 || true
 fi
 
 # ── The actual assertions ────────────────────────────────────────────────────

@@ -31,6 +31,8 @@ import { BUCKETS } from "../../packages/shared/src/storage/buckets.ts";
 
 const LIB = "scripts/lib/pg-major.sh";
 const AUDIT_LIB = "scripts/lib/audit-host-job.sh";
+// backup.sh sources these too; without them in the sandbox every run would fail.
+const TOOLS_LIBS = ["scripts/lib/pg-tools.sh", "scripts/lib/backup-root.sh"];
 
 function sandboxFor(files) {
   const sb = makeSandbox({ prefix: "gml-backup-" });
@@ -91,7 +93,7 @@ fi
 `;
 
 function backupSandbox() {
-  const sb = sandboxFor(["scripts/backup.sh", LIB, AUDIT_LIB]);
+  const sb = sandboxFor(["scripts/backup.sh", LIB, AUDIT_LIB, ...TOOLS_LIBS]);
   sb.stub("pg_dump", PG_DUMP);
   sb.stub("psql", PSQL);
   sb.stub("rclone", RCLONE);
@@ -365,6 +367,199 @@ test("an audit write that fails does not fail the backup", () => {
     assert.equal(r.status, 0, `the dump is the backup; the audit row is a report of it:\n${r.stderr}`);
     assert.match(r.stderr, /WARNING: could not record backup\.complete in the audit log/, r.stderr);
     assert.ok(sb.exists("backups/last-backup.txt"));
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── no PostgreSQL client on the host: the tools come from Docker ───────────
+//
+// The first staging server had Docker (every deploy needs it) and no
+// PostgreSQL client, so no backup could run and, from its second deploy on,
+// the SM-5 gate refused every deploy. scripts/lib/pg-tools.sh runs pg_dump and
+// psql from the official postgres image instead, at the server's own major.
+
+/**
+ * docker, answering as the postgres image would for whichever tool and image
+ * it is asked to run. The major is read from the image tag the script chose.
+ */
+const DOCKER_PG = `
+img=""
+for a in "$@"; do case "$a" in postgres:*) img="$a"; break ;; esac; done
+major="\${img#postgres:}"; major="\${major%%-*}"
+case "$*" in
+  *" pg_dump --version"*) echo "pg_dump (PostgreSQL) \${major}.0"; exit 0 ;;
+  *" pg_dump "*)
+    case "$*" in *--file=*) echo "pg_dump: could not open output file: No such file or directory" >&2; exit 1 ;; esac
+    head -c 20480 /dev/urandom; exit 0 ;;
+  *"-v action="*) cat >> "$SANDBOX_DIR/audit.sql"; exit 0 ;;
+  *server_version_num*) echo "\${FAKE_PG_SERVER_NUM}"; exit 0 ;;
+esac
+exit 0
+`;
+
+function dockerToolsSandbox({ hostClient = false } = {}) {
+  const sb = sandboxFor(["scripts/backup.sh", LIB, AUDIT_LIB, ...TOOLS_LIBS]);
+  if (hostClient) {
+    sb.stub("pg_dump", PG_DUMP);
+    sb.stub("psql", PSQL);
+  }
+  sb.stub("docker", DOCKER_PG);
+  return sb;
+}
+
+function dumps(sb, root = "backups") {
+  const r = sb.bash(`ls ${root}/db 2>/dev/null | grep -E '^gml-.*\.dump\.gz$' || true`);
+  return r.stdout.split(/\r?\n/).filter(Boolean);
+}
+
+test("with no PostgreSQL client on the host, backup.sh dumps through Docker at the server's own major", () => {
+  const sb = dockerToolsSandbox();
+  try {
+    const r = sb.run("scripts/backup.sh", { env: baseEnv(sb, { FAKE_PG_SERVER_NUM: "170006" }) });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `the backup must not need a client installed on the host:\n${r.stderr}\n${calls.join("\n")}`);
+    const dump = calls.find((l) => /^docker run .* pg_dump --format=custom/.test(l));
+    assert.ok(dump, `pg_dump must run from the postgres image:\n${calls.join("\n")}`);
+    assert.match(dump, /--rm --network host/, "a throwaway container on the host's network");
+    assert.doesNotMatch(dump, / -i /, "pg_dump reads nothing on stdin, so it must not drain the caller's");
+    assert.ok(
+      calls.some((l) => /^docker run --rm -i --network host .* psql .*-v action=/.test(l)),
+      `the audit write sends its SQL on stdin, so that psql needs -i:\n${calls.join("\n")}`,
+    );
+    assert.match(dump, /postgres:17-alpine pg_dump/, "the tools must be the server's major");
+    assert.doesNotMatch(dump, /--file=/, "--file names a path INSIDE the container, which vanishes with it");
+    assert.equal(dumps(sb).length, 1, "the dump must land on the host");
+    assert.equal(
+      sb.read(`backups/db/${dumps(sb)[0]}.pg-tools-image`).trim(),
+      "postgres:17-alpine",
+      "restore.sh must be told which image wrote THIS dump",
+    );
+    assert.match(r.stdout, /from Docker/i, "the log must say where the tools came from");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("backup.sh moves the Docker tools to a newer server's major instead of failing", () => {
+  const sb = dockerToolsSandbox();
+  try {
+    const r = sb.run("scripts/backup.sh", { env: baseEnv(sb, { FAKE_PG_SERVER_NUM: "180002" }) });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `${r.stderr}\n${calls.join("\n")}`);
+    assert.ok(
+      calls.some((l) => /^docker run .*postgres:18-alpine pg_dump --format=custom/.test(l)),
+      `a PostgreSQL 18 server must be dumped by pg_dump 18:\n${calls.join("\n")}`,
+    );
+    assert.equal(sb.read(`backups/db/${dumps(sb)[0]}.pg-tools-image`).trim(), "postgres:18-alpine");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a host client too old for the server is replaced by Docker when Docker is there", () => {
+  const sb = dockerToolsSandbox({ hostClient: true });
+  try {
+    const r = sb.run("scripts/backup.sh", {
+      env: baseEnv(sb, { FAKE_PG_CLIENT_VERSION: "16.4", FAKE_PG_SERVER_NUM: "170006" }),
+    });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `${r.stderr}\n${calls.join("\n")}`);
+    assert.ok(calls.some((l) => /^docker run .*postgres:17-alpine pg_dump --format=custom/.test(l)), calls.join("\n"));
+    assert.ok(!calls.some((l) => /^pg_dump --format/.test(l)), "the too-old host pg_dump must not be used for the dump");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("with neither a PostgreSQL client nor Docker, backup.sh says what to install", () => {
+  const sb = sandboxFor(["scripts/backup.sh", LIB, AUDIT_LIB, ...TOOLS_LIBS]);
+  try {
+    const r = sb.run("scripts/backup.sh", { env: baseEnv(sb) });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /postgresql-client/, r.stderr);
+    assert.match(r.stderr, /docker/i, "Docker is the other way to get the tools, so the message must name it");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("with no BACKUP_ROOT and a system directory it cannot write, backup.sh keeps dumps in workspace/backups", () => {
+  const sb = dockerToolsSandbox({ hostClient: true });
+  try {
+    sb.write("blocker", "a file where a directory would have to be, so mkdir -p fails");
+    const e = baseEnv(sb, {
+      BACKUP_ROOT_SYSTEM_DIR: posixish(resolve(sb.dir, "blocker", "backups")),
+      BACKUP_ROOT_FALLBACK: "1", // as deploy.sh runs it
+    });
+    delete e.BACKUP_ROOT;
+    const r = sb.run("scripts/backup.sh", { env: e });
+    assert.equal(r.status, 0, `the deploy's own account must be able to back up:\n${r.stderr}`);
+    assert.equal(dumps(sb, "workspace/backups").length, 1, "the dump must be in the checkout's workspace/backups");
+    assert.match(r.stderr, /not writable[\s\S]*workspace\/backups/, "the fallback must be said, not silent");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a BACKUP_ROOT copied from .env.example that this account cannot write falls back the same way", () => {
+  // .env.example sets BACKUP_ROOT=/var/lib/gml/backups explicitly, so most .env
+  // files carry it. The deploy's account usually cannot write there; a backup
+  // that fails on it locks the deploy out exactly as no backup did.
+  const sb = dockerToolsSandbox({ hostClient: true });
+  try {
+    sb.write("blocker", "a file where a directory would have to be");
+    const r = sb.run("scripts/backup.sh", {
+      env: baseEnv(sb, { BACKUP_ROOT: posixish(resolve(sb.dir, "blocker", "backups")), BACKUP_ROOT_FALLBACK: "1" }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(dumps(sb, "workspace/backups").length, 1);
+    assert.match(r.stderr, /blocker\/backups is not writable/, r.stderr);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("outside a deploy, an unwritable BACKUP_ROOT still fails the backup loudly, as before", () => {
+  // The fallback is deploy.sh's (BACKUP_ROOT_FALLBACK=1). A nightly cron run whose
+  // backup disk failed to mount must say so, not quietly fill the root disk.
+  const sb = dockerToolsSandbox({ hostClient: true });
+  try {
+    sb.write("blocker", "a file where a directory would have to be");
+    const r = sb.run("scripts/backup.sh", {
+      env: baseEnv(sb, { BACKUP_ROOT: posixish(resolve(sb.dir, "blocker", "backups")) }),
+    });
+    assert.notEqual(r.status, 0, "the nightly backup must fail on a backup directory it cannot write");
+    assert.match(r.stderr, /cannot create directory.*blocker/, r.stderr);
+    assert.equal(dumps(sb, "workspace/backups").length, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("BACKUP_DB_ONLY=1 (a deploy's backup) dumps the database and leaves the video mirror and the off-site copy to the nightly run", () => {
+  // deploy.sh needs a dump to drill, quickly. The first video mirror can be
+  // ~100 GB, and a half-configured mirror (keys set, rclone missing) or a
+  // refused `aws s3 cp` used to fail the whole backup after a good dump.
+  const sb = sandboxFor(["scripts/backup.sh", LIB, AUDIT_LIB, ...TOOLS_LIBS]);
+  try {
+    sb.stub("pg_dump", PG_DUMP);
+    sb.stub("psql", PSQL);
+    sb.stub("aws", 'echo "upload failed: AccessDenied" >&2; exit 1');
+    // No rclone at all, although the mirror is configured.
+    const r = sb.run("scripts/backup.sh", {
+      env: baseEnv(sb, {
+        BACKUP_DB_ONLY: "1",
+        SUPABASE_S3_ACCESS_KEY_ID: "k",
+        SUPABASE_S3_SECRET_ACCESS_KEY: "s",
+        BACKUP_S3_BUCKET: "s3://dr",
+      }),
+    });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `${r.stderr}\n${calls.join("\n")}`);
+    assert.equal(dumps(sb).length, 1);
+    assert.ok(!calls.some((l) => /^(rclone|aws) /.test(l)), calls.join("\n"));
+    assert.match(r.stdout, /database only/i, "the log must say what was left out, and why");
   } finally {
     sb.cleanup();
   }

@@ -307,12 +307,66 @@ fi
 # workspace/ is gitignored, so `git clean -fdX` removes the marker -- the gate
 # then disarms for one deploy, which fails OPEN rather than locking the host.
 DEPLOYED_MARKER="workspace/.deploy-completed"
+#
+# THE DEPLOY RUNS THE DRILL ITSELF WHEN ONE IS DUE. The gate below is
+# unchanged: no deploy without a passing drill less than 30 days old. But the
+# drill used to be the operator's job alone (README-deploy.md section 7), and on
+# the first staging server nobody had run it, so the second deploy stopped
+# here. Now, when the last passing drill is missing, failed, or older than
+# DRILL_REFRESH_DAYS, this takes a backup and runs the drill first, and then
+# asks the gate, which still has the last word. Both need only Docker
+# (scripts/lib/pg-tools.sh), so a fresh host needs nothing installed for it.
+# It also means each such deploy takes a backup just before its migrations.
+#
+# A failed backup runs no drill: a drill on an older dump would pass and say
+# nothing about today's backups. The deploy's backup is the DATABASE ONLY
+# (BACKUP_DB_ONLY=1): the drill needs nothing more, and the video mirror (the
+# first can be ~100 GB) and the off-site copy stay with the nightly run, where
+# their failures cannot lock a deploy out. BACKUP_ROOT_FALLBACK=1 lets both
+# scripts use workspace/backups when this account cannot write BACKUP_ROOT
+# (scripts/lib/backup-root.sh). Each step is bounded by DRILL_STEP_TIMEOUT
+# (30m) where `timeout` exists, so a hung connection fails the deploy instead
+# of holding it.
+#
+# DEPLOY_AUTO_DRILL=0 leaves the drill to cron and the operator, as before.
+# It and DRILL_REFRESH_DAYS are read from the environment, else from .env,
+# like DOMAIN above: this script does not source .env.
+env_key() {
+  [ -f .env ] || return 0
+  grep -E "^$1=" .env | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' [:cntrl:]' || true
+}
+DEPLOY_AUTO_DRILL="${DEPLOY_AUTO_DRILL:-$(env_key DEPLOY_AUTO_DRILL)}"
+DRILL_REFRESH_DAYS="${DRILL_REFRESH_DAYS:-$(env_key DRILL_REFRESH_DAYS)}"
+case "${DRILL_REFRESH_DAYS}" in
+  "" | *[!0-9]* | 0) DRILL_REFRESH_DAYS=7 ;;
+esac
+with_step_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${DRILL_STEP_TIMEOUT:-30m}" "$@"
+  else
+    "$@"
+  fi
+}
 if [ -f "${DEPLOYED_MARKER}" ]; then
   log "restore-drill preflight (SM-5)"
+  if [ "${DEPLOY_AUTO_DRILL:-1}" != "0" ] \
+    && ! NODE_ENV="${NODE_ENV:-production}" node scripts/check-restore-drill.mjs --max-age-days "${DRILL_REFRESH_DAYS}" >/dev/null 2>&1; then
+    log "no passing restore drill in the last ${DRILL_REFRESH_DAYS} days: taking a database backup and running the restore drill now (scripts/backup.sh, then scripts/restore.sh)"
+    if with_step_timeout env BACKUP_DB_ONLY=1 BACKUP_ROOT_FALLBACK=1 "${BASH}" scripts/backup.sh; then
+      if with_step_timeout env BACKUP_ROOT_FALLBACK=1 "${BASH}" scripts/restore.sh; then
+        log "restore drill passed. This deploy's backup is the database only, and may be kept inside this checkout: the nightly backup and drill (cron, README-deploy.md section 7) and BACKUP_S3_BUCKET are still what protect the videos and survive losing this server."
+      else
+        log "the restore drill failed (above); the gate will refuse this deploy and say why"
+      fi
+    else
+      echo "[deploy] the backup failed (above), so no drill was run on an older dump; the gate decides" >&2
+    fi
+  fi
   NODE_ENV="${NODE_ENV:-production}" node scripts/check-restore-drill.mjs
 else
   log "FIRST DEPLOY ON THIS HOST (no ${DEPLOYED_MARKER}): the SM-5 restore-drill gate is not armed yet -- nothing can have been backed up."
-  log "  Before the NEXT deploy run:  bash scripts/backup.sh && bash scripts/restore.sh   (README-deploy.md section 7)."
+  log "  The NEXT deploy takes a backup and runs the drill itself when none has passed in ${DRILL_REFRESH_DAYS} days"
+  log "  (bash scripts/backup.sh && bash scripts/restore.sh, README-deploy.md section 7); keep them in cron as well."
   log "  From then on a deploy is refused without a passing drill less than 30 days old."
   # The seed creates the first administrator only from these two, and
   # verify-auth fails the deploy when no active super_admin exists -- say so
