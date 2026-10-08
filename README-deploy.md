@@ -747,7 +747,21 @@ bash scripts/backup.sh && bash scripts/restore.sh
 ```
 
 That first passing drill is also what the deploy gate needs: from a host's
-second deploy on, `deploy.sh` refuses to run without one (below).
+second deploy on, `deploy.sh` refuses to run without one (below). If nobody
+has run it, the deploy runs it itself (below, "The gate").
+
+**No PostgreSQL client installed?** Both scripts then run `pg_dump`,
+`pg_restore` and `psql` from the official `postgres:<server major>-alpine`
+Docker image instead (`scripts/lib/pg-tools.sh`), so Docker alone is enough;
+the log says "using the PostgreSQL tools from Docker". A host client that is
+new enough is still used. `PG_TOOLS=host` or `PG_TOOLS=docker` forces either.
+
+**Where the dumps go.** `BACKUP_ROOT` (default `/var/lib/gml/backups`). Run
+by hand or from cron, an unwritable `BACKUP_ROOT` fails the backup loudly, as
+it should. Only when `deploy.sh` runs them (below) do the scripts fall back to
+`workspace/backups` inside the checkout (gitignored), with a message saying so,
+because the deploy's account usually cannot write a system directory. Either
+way the dumps stay on this server until `BACKUP_S3_BUCKET` ships them off it.
 
 If the Storage credentials are absent, `backup.sh` **warns loudly on stderr and
 continues** rather than failing. Check the log after the first run: a backup that
@@ -782,6 +796,22 @@ gate is armed on every deploy **except a host's first deploy**, when nothing
 can have been backed up yet. It is skipped then, with a message saying what to
 run. Exporting `NODE_ENV` as anything other than `production` also skips it,
 so do not do that on the production box.
+
+**The deploy runs the drill when one is due.** Before asking the gate,
+`deploy.sh` checks for a passing drill from the last `DRILL_REFRESH_DAYS`
+(7) days. If there is none, it runs `scripts/backup.sh` and then
+`scripts/restore.sh` itself, and only then asks the gate, which still decides.
+So a host whose cron never ran is not locked out, and such a deploy takes a
+backup just before its migrations. That backup is **the database only**
+(`BACKUP_DB_ONLY=1`): the video mirror, whose first run can be ~100 GB, and
+the off-site copy stay with the nightly run, where their failures cannot block
+a deploy. A failed backup runs no drill (a drill on an older dump would prove
+nothing about today's), and the gate refuses with its reason. Each step is
+limited to `DRILL_STEP_TIMEOUT` (30m). Set `DEPLOY_AUTO_DRILL=0` (in `.env` or
+the deploy's environment) to leave the drill to cron and the operator, and
+`DRILL_REFRESH_DAYS` to change the 7 days. **Keep the cron lines above either
+way**: only the nightly run backs up the videos and ships the dump off the
+server.
 
 The stamp reports `"storage_verified": false`, honestly — the drill exercises the
 database only. To check the object mirror, pick a known key and confirm it exists

@@ -138,7 +138,11 @@ when it does not pass. `scripts/check-restore-drill.mjs` reads the stamp and
 `scripts/deploy.sh` runs it before building, with `NODE_ENV` defaulting to
 `production`, on every deploy **except a host's first**, when no backup can
 exist yet. (Until this was fixed the gate self-skipped on every deploy, because
-deploy.sh never set `NODE_ENV`.)
+deploy.sh never set `NODE_ENV`.) When no drill has passed in the last 7 days,
+deploy.sh runs `backup.sh` and `restore.sh` itself before asking the gate, so a
+host whose cron never ran is not locked out; the gate's 30-day rule is
+unchanged and still decides. Both scripts need only Docker: with no PostgreSQL
+client on the host they run the tools from the `postgres` image.
 
 **Scope, stated honestly.** The drill covers the **database only**. The stamp
 reports `"storage_verified": false`, because the object mirror is not exercised

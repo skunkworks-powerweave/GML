@@ -30,7 +30,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f .env ] && set -a && . ./.env && set +a
 
-BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/gml/backups}"
+# /var/lib/gml/backups, or workspace/backups when this account cannot write
+# there (a deploy runs this as its own user): scripts/lib/backup-root.sh.
+# shellcheck source=lib/backup-root.sh
+. scripts/lib/backup-root.sh
+resolve_backup_root "$(pwd)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DB_DIR="${BACKUP_ROOT}/db"
 KEEP_DAILY="${KEEP_DAILY:-14}"   # mirrors /admin/system-settings -> Backup retention
@@ -72,14 +76,41 @@ trap on_exit EXIT
 # failure below names both majors and the package that fixes it.
 # shellcheck source=lib/pg-major.sh
 . scripts/lib/pg-major.sh
+# shellcheck source=lib/pg-tools.sh
+. scripts/lib/pg-tools.sh
+
+# NO CLIENT, OR ONE TOO OLD: THE TOOLS COME FROM DOCKER (scripts/lib/pg-tools.sh).
+# Every host this deploys to has Docker, so a backup no longer waits for someone
+# to install postgresql-client-<major>. A host client that is new enough is
+# still the one used. PG_TOOLS=host or PG_TOOLS=docker forces either.
+have_docker() { [ -n "$(type -P docker 2>/dev/null)" ]; }
+PG_TOOLS="${PG_TOOLS:-auto}"
+if [ "${PG_TOOLS}" = "docker" ] || { [ "${PG_TOOLS}" = "auto" ] && ! pg_tools_host_has pg_dump psql && have_docker; }; then
+  pg_tools_from_docker "${PG_TOOLS_DEFAULT_IMAGE}"
+fi
 pg_rc=0
 pg_check_dump_client "${DATABASE_URL}" || pg_rc=$?
+if [ "${pg_rc}" = 1 ] && [ "${PG_TOOLS_SOURCE}" = "host" ] && [ "${PG_TOOLS}" = "auto" ] && have_docker; then
+  log "pg_dump ${PG_CLIENT_MAJOR} on this host cannot dump PostgreSQL ${PG_SERVER_MAJOR}; taking the tools from Docker instead"
+  pg_tools_from_docker "postgres:${PG_SERVER_MAJOR}-alpine"
+  pg_rc=0
+  pg_check_dump_client "${DATABASE_URL}" || pg_rc=$?
+fi
+# From Docker, the tools are always the server's own major, whatever image the
+# check started from: a newer server is dumped by its own pg_dump, and the
+# drill (restore.sh) restores with the same image, recorded next to the dumps.
+if [ "${PG_TOOLS_SOURCE}" = "docker" ] && [ -n "${PG_SERVER_MAJOR}" ] && [ "${PG_CLIENT_MAJOR}" != "${PG_SERVER_MAJOR}" ]; then
+  pg_tools_from_docker "postgres:${PG_SERVER_MAJOR}-alpine"
+  pg_rc=0
+  pg_check_dump_client "${DATABASE_URL}" || pg_rc=$?
+fi
+[ "${PG_TOOLS_SOURCE}" = "host" ] || log "using the PostgreSQL tools from Docker (${PG_TOOLS_IMAGE}): this host has no suitable client"
 case "${pg_rc}" in
   0) log "pg_dump ${PG_CLIENT_MAJOR} can dump this PostgreSQL ${PG_SERVER_MAJOR} server" ;;
   2)
     case "${PG_CHECK_ERROR}" in
       "pg_dump is not installed"*|"psql is not installed"*)
-        fail "${PG_CHECK_ERROR}. Install the PostgreSQL client from the PGDG repository (postgresql-client-<server major>) -- see README-deploy.md section 7" ;;
+        fail "${PG_CHECK_ERROR}, and there is no docker to run it from. Install the PostgreSQL client from the PGDG repository (postgresql-client-<server major>), or Docker -- see README-deploy.md section 7" ;;
       *) fail "${PG_CHECK_ERROR}. Refusing to attempt a dump whose client/server compatibility is unknown." ;;
     esac
     ;;
@@ -102,6 +133,21 @@ DUMP="${DUMP}.gz"
 # here rather than discovered during a restore.
 size="$(stat -c '%s' "${DUMP}")"
 [ "${size}" -gt 10240 ] || fail "dump is only ${size} bytes — refusing to treat that as a backup"
+# The drill restores with the image that wrote THIS dump (restore.sh reads it
+# beside the dump it picks). Not fatal: without it the drill starts from the
+# default image, which is no reason to lose the mirror and the off-site copy.
+[ "${PG_TOOLS_SOURCE}" = "host" ] || printf '%s\n' "${PG_TOOLS_IMAGE}" > "${DUMP}.pg-tools-image" \
+  || echo "[backup] WARNING: could not record ${PG_TOOLS_IMAGE} beside the dump; the drill will start from ${PG_TOOLS_DEFAULT_IMAGE}" >&2
+
+# A DEPLOY'S BACKUP IS THE DATABASE ONLY (deploy.sh sets BACKUP_DB_ONLY=1). The
+# deploy needs a fresh dump to drill, before its migrations, and quickly. The
+# first video mirror can be ~100 GB, and a half-configured mirror (keys set,
+# rclone missing) or a refused `aws s3 cp` would fail the whole run after a
+# good dump and lock the deploy out. The nightly run (cron, README-deploy.md
+# section 7) mirrors the videos and ships the dump off the box.
+DB_ONLY="${BACKUP_DB_ONLY:-0}"
+[ "${DB_ONLY}" != "1" ] \
+  || log "database only (BACKUP_DB_ONLY=1, as deploy.sh runs it): the video mirror and the off-site copy are left to the nightly run"
 log "dumped $(numfmt --to=iec "${size}" 2>/dev/null || echo "${size}B")"
 
 # ── 2. Storage objects ───────────────────────────────────────────────────────
@@ -157,7 +203,7 @@ fi
 # branch with a key and no secret, rclone failed on the first bucket, and
 # `set -e` ended the run before step 3 shipped the dump off the box -- so a
 # missing secret cost the off-site dump as well as the mirror.
-if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY}" ] \
+if [ "${DB_ONLY}" != "1" ] && [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY}" ] \
    && [ -n "${BACKUP_S3_BUCKET:-}" ]; then
   command -v rclone >/dev/null || fail "rclone not installed but SUPABASE_S3_* is configured"
 
@@ -207,7 +253,7 @@ if [ -n "${S3_ENDPOINT}" ] && [ -n "${S3_ACCESS_KEY}" ] && [ -n "${S3_SECRET_KEY
       --transfers 4 --checkers 8 --stats-one-line
   done
   STORAGE_MIRRORED=true
-else
+elif [ "${DB_ONLY}" != "1" ]; then
   echo "[backup] WARNING: Storage mirror SKIPPED. Needs an access key" >&2
   echo "[backup]          (SUPABASE_S3_ACCESS_KEY_ID), a secret" >&2
   echo "[backup]          (SUPABASE_S3_SECRET_ACCESS_KEY) and BACKUP_S3_BUCKET." >&2
@@ -217,11 +263,11 @@ else
 fi
 
 # ── 3. Ship the dump off the box ─────────────────────────────────────────────
-if [ -n "${BACKUP_S3_BUCKET:-}" ] && command -v aws >/dev/null; then
+if [ "${DB_ONLY}" != "1" ] && [ -n "${BACKUP_S3_BUCKET:-}" ] && command -v aws >/dev/null; then
   log "uploading dump to ${BACKUP_S3_BUCKET}"
   aws s3 cp "${DUMP}" "${BACKUP_S3_BUCKET}/db/$(basename "${DUMP}")"
   SHIPPED_OFFSITE=true
-else
+elif [ "${DB_ONLY}" != "1" ]; then
   echo "[backup] WARNING: dump kept only on this host — a host failure loses it too." >&2
 fi
 
@@ -230,6 +276,7 @@ fi
 # is how the NEXT backup fails silently.
 log "pruning local dumps older than ${KEEP_DAILY} days"
 find "${DB_DIR}" -name 'gml-*.dump.gz' -mtime "+${KEEP_DAILY}" -delete
+find "${DB_DIR}" -name 'gml-*.dump.gz.pg-tools-image' -mtime "+${KEEP_DAILY}" -delete
 
 date -u +%Y-%m-%dT%H:%M:%SZ > "${BACKUP_ROOT}/last-backup.txt"
 BACKUP_RECORDED=1

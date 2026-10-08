@@ -9,7 +9,18 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const drillFile = resolve(__dirname, "..", "workspace", "last_restore_drill.json");
-const MAX_AGE_DAYS = 30;
+
+// The gate's limit is 30 days. deploy.sh also asks with a SHORTER limit
+// (--max-age-days 7) to decide whether to run a fresh drill before the gate,
+// so a deploy never lands within days of the gate starting to refuse.
+function maxAgeDays() {
+  const i = process.argv.indexOf("--max-age-days");
+  if (i === -1) return 30;
+  const n = Number(process.argv[i + 1]);
+  if (!Number.isFinite(n) || n <= 0) fail(`--max-age-days needs a positive number of days, got: ${process.argv[i + 1]}`);
+  return n;
+}
+const MAX_AGE_DAYS = maxAgeDays();
 
 function fail(msg) {
   console.error(`[SM-5] ${msg}`);
