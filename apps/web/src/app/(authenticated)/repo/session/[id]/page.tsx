@@ -9,11 +9,13 @@ import { getTranslations } from "next-intl/server";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { uuidOrNotFound } from "@/lib/ids";
-import { actorFrom } from "@/lib/authz";
+import { actorFrom, sessionVideoAccess } from "@/lib/authz";
 import { linkedCycle } from "@/lib/gated-reads";
 import { observationAccess } from "@/lib/visibility";
 import { mayOpenSession, repoScope } from "@/lib/teaching/visibility";
 import { enumLabel } from "@/components/repo/repo-i18n";
+import { SessionVideosCard } from "@/components/video/SessionVideosCard";
+import { videosOfSessions } from "@/lib/video/session-videos";
 import { db } from "@gml/db";
 import {
   sessions,
@@ -106,6 +108,10 @@ export default async function RepoSessionPage({
   const cycle = s.observationCycleId
     ? await linkedCycle(db, await observationAccess(db, actor), s.observationCycleId)
     : null;
+
+  // The session's own teacher and administrators may see and add its videos.
+  const videoViewer = await sessionVideoAccess(actor, id);
+  const videos = videoViewer ? await videosOfSessions([id]) : [];
 
   const t = await getTranslations("repo");
   const statusChip = STATUS_CHIP[s.status] ?? STATUS_CHIP.planned;
@@ -245,6 +251,8 @@ export default async function RepoSessionPage({
               </div>
             </SectionCard>
           ) : null}
+
+          {videoViewer ? <SessionVideosCard videos={videos} upload={{ kind: "session", sessionId: id }} /> : null}
         </div>
 
         {/* Right col: KV details */}

@@ -6,6 +6,7 @@ import {
   mentorMeetings,
   mentorPairings,
   observationCycles,
+  sessions,
   videoSubmissions,
 } from "@gml/db/schema";
 import { hasAnyRole } from "@gml/shared/auth/roles";
@@ -166,6 +167,25 @@ export function pairingClosed(pairing: { status: string }): boolean {
 }
 
 /**
+ * May `actor` attach videos to, open and list the videos of, this classroom
+ * session? The session's own teacher, and programme administrators.
+ *
+ * That is the line the Repository draws for a teacher's sessions
+ * (lib/teaching/visibility.ts): a colleague's session is a 404, so is its
+ * video. Mentors and observers keep the programme-wide session list but not
+ * children's classroom videos. A malformed or unknown id names nothing: false.
+ */
+export async function sessionVideoAccess(actor: Actor, sessionId: string): Promise<boolean> {
+  if (!UUID_RE.test(sessionId)) return false;
+  const [row] = await db.select({ teacherId: sessions.teacherId }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (!row) return false;
+  if (isAdmin(actor)) return true;
+  if (actor.role !== "teacher") return false;
+  const tid = await teacherIdFor(actor);
+  return tid !== null && tid === row.teacherId;
+}
+
+/**
  * Authorise access to a video submission.
  *
  * Videos are the most sensitive surface here -- mentorship meeting recordings
@@ -221,9 +241,14 @@ export async function assertCanAccessVideo(actor: Actor, videoId: string) {
       if (hasAnyRole(actor.role, ["mentor", "observer"])) return video;
       break;
 
+    case "classroom_session":
+      // The session's own teacher, whoever uploaded the clip.
+      if (video.contextId && (await sessionVideoAccess(actor, video.contextId))) return video;
+      break;
+
     default:
-      // classroom_session / generic carry no ownership edge we can verify, so
-      // they stay admin-or-submitter only. Widen deliberately, never by default.
+      // generic carries no ownership edge we can verify, so it stays
+      // admin-or-submitter only. Widen deliberately, never by default.
       break;
   }
 
@@ -270,6 +295,15 @@ export async function videoVisibilityFilter(actor: Actor): Promise<SQL | undefin
         .where(eq(observationCycles.teacherId, tid));
       const scoped = cycleScope(rows.map((r) => r.id));
       if (scoped) clauses.push(scoped);
+
+      // The clips attached to her sessions, whoever uploaded them. A subquery,
+      // not an id list: a teacher can have a year of sessions.
+      clauses.push(
+        and(
+          eq(videoSubmissions.contextType, "classroom_session"),
+          inArray(videoSubmissions.contextId, db.select({ id: sessions.id }).from(sessions).where(eq(sessions.teacherId, tid))),
+        ) as SQL,
+      );
     }
   }
 
