@@ -64,7 +64,7 @@ test("Spec 046: renders the 5 stat labels from RepoHome JSX", () => {
     ["schools", "Schools"],
     ["classes", "Classes"],
     ["subjects", "Subjects"],
-    ["sessions", "Sessions logged"],
+    ["sessions", "Classroom sessions logged"],
     ["resources", "Resources"],
   ]) {
     assert.match(src, new RegExp(`<StatCard label=\\{t\\("home\\.stats\\.${key}"\\)\\}`), `must render Stat "${label}"`);

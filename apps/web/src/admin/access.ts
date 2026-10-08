@@ -19,7 +19,7 @@ import "server-only";
 import { db } from "@gml/db";
 import { ADMIN_ROLES, type RoleName } from "@gml/shared/auth/roles";
 import { getActiveGrant } from "@/lib/gates";
-import type { AdminDb, AdminEntity, AdminMessage } from "./types";
+import type { AdminDb, AdminEntity, AdminMessage, RowLookups } from "./types";
 
 /**
  * Who may BULK-EXPORT an entity: its readers, but administrators only.
@@ -45,18 +45,35 @@ export async function entityGateOpen(entity: AdminEntity, userId: string): Promi
 }
 
 /**
+ * The columns the entity fills in itself where a zod-valid row left them blank
+ * (AdminEntity.fillIn), to be merged into the row before entityRowProblems
+ * judges it. `conn` and `memo` as for entityRowProblems.
+ */
+export async function entityFilledColumns(
+  entity: AdminEntity,
+  row: Record<string, unknown>,
+  conn: AdminDb = db as unknown as AdminDb,
+  memo?: RowLookups,
+): Promise<Record<string, unknown>> {
+  if (!entity.fillIn) return {};
+  return entity.fillIn(conn, row, memo);
+}
+
+/**
  * The entity's database-backed field errors for a zod-valid row, or null:
  * field -> message key (admin/labels.ts problemsText says them).
  * `before` is the stored row an update replaces (absent on create); `conn` is
  * the transaction when the caller holds that row locked, so the check does not
- * wait on a second pool connection.
+ * wait on a second pool connection. `memo` is what an import has already read
+ * (AdminEntity.validate); only the import passes one.
  */
 export async function entityRowProblems(
   entity: AdminEntity,
   row: Record<string, unknown>,
   before?: Record<string, unknown>,
   conn: AdminDb = db as unknown as AdminDb,
+  memo?: RowLookups,
 ): Promise<Record<string, AdminMessage> | null> {
   if (!entity.validate) return null;
-  return entity.validate(conn, row, before);
+  return entity.validate(conn, row, before, memo);
 }

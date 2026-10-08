@@ -248,6 +248,10 @@
         "sectionsCount": "Sections",
         "classTeacherName": "Class teacher",
         "active": "Active"
+      },
+      "help": {
+        "schoolId": "Changing the school also changes the school of this class's students.",
+        "grade": "Changing the grade also changes the grade of this class's students."
       }
     },
     "course-outlines": {
@@ -395,6 +399,10 @@
         "guardian": "Guardian",
         "attendancePct": "Attend %",
         "active": "Active"
+      },
+      "help": {
+        "schoolId": "Leave blank to use the class's school.",
+        "grade": "Leave blank to use the class's grade."
       }
     },
     "grading-scales": {
@@ -698,6 +706,8 @@
     },
     "classAtTeachersSchool": "must be a class at the teacher's own school",
     "learnerNotInClass": "must be a student of that class (and section)",
+    "learnerSchoolNotClass": "The student's school ({school}) is not the class's school ({classSchool}). Choose {classSchool}, or leave this blank to use the class's school.",
+    "learnerGradeNotClass": "The student's grade ({grade}) is not the class's grade ({classGrade}). Enter {classGrade}, or leave this blank to use the class's grade.",
     "marksOverMaximum": "cannot be more than the test's maximum, {max}",
     "absentNoMarks": "leave empty for a student marked absent",
     "quizScope": "choose an RTT subject or a school subject: one, not both",

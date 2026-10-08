@@ -23,7 +23,7 @@ import { redirect } from "next/navigation";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
-import { entityRowProblems } from "@/admin/access";
+import { entityFilledColumns, entityRowProblems } from "@/admin/access";
 import type { AdminDb, AdminMessage } from "@/admin/types";
 import { auditRowLabel, deleteImage, MutationRefused, updateAudit } from "@/admin/audit-image";
 import { describeWriteError } from "@/admin/db-errors";
@@ -236,10 +236,14 @@ export async function createRowAction(
   if (!parse.success) {
     return shapeZodError(t, echo, parse.error.issues);
   }
-  const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>);
+  // Blank columns the entity takes from another row (a student's school and
+  // grade, from her class) are filled before its rules judge the row.
+  const parsed = parse.data as Record<string, unknown>;
+  const filled = { ...parsed, ...(await entityFilledColumns(entity, parsed)) };
+  const problems = await entityRowProblems(entity, filled);
   if (problems) return problemsState(t, echo, problems);
   // The columns the server sets itself (who marked an attendance, and when).
-  const values = { ...(parse.data as Record<string, unknown>), ...stampFor(entity, session.user.id, "create") };
+  const values = { ...filled, ...stampFor(entity, session.user.id, "create") };
 
   const audited = withAudit(
     async () =>
@@ -324,12 +328,15 @@ export async function updateRowAction(
           .where(eq(idCol as never, rowId))
           .for("update")) as Record<string, unknown>[];
         if (!before) throw new MutationRefused(t("write.rowGone"));
+        // A blank the entity fills from another row (a student's school and
+        // grade, from her class) is filled on an edit as on an add.
+        const filled = { ...next, ...(await entityFilledColumns(entity, next, tx as unknown as AdminDb)) };
         // A timestamp the minute-precision form posted back unchanged keeps
         // its seconds (admin/dates.ts keepStoredPrecision).
-        const write = keepStoredPrecision(before, next);
+        const write = keepStoredPrecision(before, filled);
         const reason = entity.guardMutation?.("update", before, { ...before, ...write });
         if (reason) throw new MutationRefused(adminMessage(t, reason));
-        const problems = await entityRowProblems(entity, next, before, tx as unknown as AdminDb);
+        const problems = await entityRowProblems(entity, filled, before, tx as unknown as AdminDb);
         if (problems) throw new RowProblems(problems);
         const stamped = { ...write, ...stampFor(entity, session.user.id, "update") };
         await keepDerivedCounts(entity.slug, tx as unknown as AdminDb, [before, { ...before, ...stamped }], () =>

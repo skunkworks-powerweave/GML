@@ -34,7 +34,8 @@ import {
 import type { Db } from "@/lib/visibility";
 import type { DbOrTx } from "@/lib/approvals/types";
 import { isEditable } from "@/lib/approvals/handlers/records";
-import { myClassLinks, roster, type ClassLink } from "./index";
+import { isUuid } from "@/lib/ids";
+import { myClassLinks, ownsSession, roster, type ClassLink } from "./index";
 
 export const SESSION_STATUSES = ["planned", "in_progress", "complete", "cancelled"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
@@ -334,6 +335,28 @@ export async function lockEditableSession(tx: DbOrTx, sessionId: string): Promis
   return !!row && isEditable(row.state);
 }
 
+/**
+ * Her session named by `id`, while she may still change it: its row, or why
+ * not -- "notFound" (no such session, or not hers: answered the same, so a
+ * colleague's id tells her nothing) or "locked" (pending approval, or
+ * approved). Every write on a session starts here.
+ */
+export async function editableSessionOf(
+  db: Db,
+  teacherId: string,
+  id: string,
+): Promise<{ id: string; classId: string; section: string | null; status: string } | "notFound" | "locked"> {
+  if (!isUuid(id) || !(await ownsSession(db, teacherId, id))) return "notFound";
+  const [row] = await db
+    .select({ id: sessions.id, classId: sessions.classId, section: sessions.section, status: sessions.status, state: sessions.approvalStatus })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  if (!row) return "notFound";
+  if (!isEditable(row.state)) return "locked";
+  return { id: row.id, classId: row.classId, section: row.section, status: row.status };
+}
+
 export async function lockEditablePlan(tx: DbOrTx, outlineId: string): Promise<boolean> {
   const [row] = await tx
     .select({ state: courseOutlines.approvalStatus })
@@ -381,11 +404,50 @@ export async function refreshLearnerAttendance(tx: DbOrTx, learnerIds: string[])
      WHERE l.id IN (${sql.join(learnerIds.map((id) => sql`${id}::uuid`), sql`, `)})`);
 }
 
+/** One of the four marks as a person or a file wrote it, or null. */
+export function attendanceStatus(raw: string): AttendanceStatus | null {
+  return (ATTENDANCE_STATUSES as readonly string[]).includes(raw) ? (raw as AttendanceStatus) : null;
+}
+
+/**
+ * Write students' marks on her session: upsert them, then bring the session's
+ * counts and each marked student's attendance % up to date, in one transaction
+ * that first confirms the session may still change. The roster form and the
+ * CSV upload both end here, so they cannot disagree about what a mark is.
+ * null when the session was sent for approval in the meantime.
+ */
+export async function saveSessionMarks(
+  db: Db,
+  sessionId: string,
+  userId: string,
+  marks: ReadonlyArray<{ learnerId: string; status: AttendanceStatus }>,
+): Promise<{ attended: number; total: number } | null> {
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    if (!(await lockEditableSession(tx, sessionId))) return null;
+    for (const m of marks) {
+      await tx
+        .insert(sessionAttendance)
+        .values({ sessionId, learnerId: m.learnerId, status: m.status, markedByUserId: userId, markedAt: now })
+        .onConflictDoUpdate({
+          target: [sessionAttendance.sessionId, sessionAttendance.learnerId],
+          set: { status: m.status, markedByUserId: userId, markedAt: now },
+        });
+    }
+    const counts = await recomputeSessionCounts(tx, sessionId);
+    await refreshLearnerAttendance(
+      tx,
+      marks.map((m) => m.learnerId),
+    );
+    return counts;
+  });
+}
+
 /**
  * Why a session cannot be sent for approval yet (an errors.* key), or null. A
- * session is sent once it has happened: complete -- with attendance taken,
- * when the class has students -- or cancelled. The page shows the reason in
- * place of the form; the action refuses with it.
+ * session is sent once it has happened: complete -- with every student of the
+ * class marked, when it has students -- or cancelled. The page shows the
+ * reason in place of the form; the action refuses with it.
  */
 export async function sessionSubmitBlocker(
   db: Db,
@@ -393,8 +455,13 @@ export async function sessionSubmitBlocker(
 ): Promise<"sessionNotDone" | "attendanceFirst" | null> {
   if (s.status !== "complete" && s.status !== "cancelled") return "sessionNotDone";
   if (s.status === "complete") {
-    const [marked] = await db.select({ c: count() }).from(sessionAttendance).where(eq(sessionAttendance.sessionId, s.id));
-    if ((marked?.c ?? 0) === 0 && (await roster(db, s.classId, s.section)).length > 0) return "attendanceFirst";
+    const students = await roster(db, s.classId, s.section);
+    // A CSV can mark some of the class and leave the rest unmarked; sent like
+    // that, the approver would see a total smaller than the class.
+    if (students.length > 0) {
+      const marked = await attendanceOf(db, s.id);
+      if (students.some((st) => !marked.has(st.id))) return "attendanceFirst";
+    }
   }
   return null;
 }

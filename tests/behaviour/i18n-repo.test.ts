@@ -111,8 +111,8 @@ test("/repo and its index and record pages are Hindi and Bhoti; names and codes 
     speaks(text(await repoPage(admin, "hi", () => Home())), [
       ["कार्यक्रम रिकॉर्ड", "Programme records"],
       ["रिकॉर्ड खोजें", "Find a record"],
-      ["इस सप्ताह के सत्र", "This week's sessions"],
-      ["दर्ज सत्र", "Sessions logged"],
+      ["इस सप्ताह के कक्षा सत्र", "This week's classroom sessions"],
+      ["दर्ज कक्षा सत्र", "Classroom sessions logged"],
     ]);
     speaks(text(await repoPage(admin, "bo", () => Home())), [
       ["ལས་གཞིའི་ཡིག་ཐོ།", "Programme records"],

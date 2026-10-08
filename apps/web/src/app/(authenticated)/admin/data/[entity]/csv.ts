@@ -13,9 +13,9 @@ import Papa from "papaparse";
 import { getTranslations } from "next-intl/server";
 import { db } from "@gml/db";
 import { ADMIN_ENTITIES } from "@/admin/registry";
-import type { AdminDb, AdminEntity } from "@/admin/types";
+import type { AdminDb, AdminEntity, RowLookups } from "@/admin/types";
 import { exportColumnKeys } from "@/admin/export-columns";
-import { entityRowProblems, exportRolesFor } from "@/admin/access";
+import { entityFilledColumns, entityRowProblems, exportRolesFor } from "@/admin/access";
 import { CSV_EXPORT_OPTIONS, unescapeFormulaCell } from "@/admin/csv-safety";
 import { eq, getTableColumns, inArray, sql, type AnyColumn } from "drizzle-orm";
 import { describeWriteError } from "@/admin/db-errors";
@@ -375,6 +375,8 @@ export async function importCsv(slug: string, csv: string): Promise<{
   const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
   const names = Object.keys(wantedNames).length ? await resolveReferenceNames(db, entity, refCtx, wantedNames) : null;
 
+  // What the rules read about other rows (a student's class), once for the file.
+  const lookups: RowLookups = new Map();
   for (const [i, original] of parsed.data.entries()) {
     const line = i + 2; // header is line 1
     // A copy of the row with each named link replaced by its id, or the row as it is.
@@ -452,17 +454,25 @@ export async function importCsv(slug: string, csv: string): Promise<{
       errors.push({ row: line, message: issue ? issueLine(t, issue) : t("import.invalidRow") });
       continue;
     }
+    // What the entity fills in where the row leaves a column blank (a student's
+    // school and grade, from her class), as the grid's form does. On an update
+    // that is a column the file carries and leaves empty: the columns it does
+    // not carry were taken from the stored row above, so they are not blank.
+    const parsedRow = parse.data as Record<string, unknown>;
+    const filled = await entityFilledColumns(entity, parsedRow, undefined, lookups);
+    const valid = { ...parsedRow, ...filled };
     // The entity's database-backed rules, which the grid's form enforces too
     // (a cycle's observer must be a live observer account). An update is
     // judged against the row it changes, so a stored value the file does not
     // change (an observer deactivated since) does not refuse it.
-    const problems = await entityRowProblems(entity, parse.data as Record<string, unknown>, before);
+    const problems = await entityRowProblems(entity, valid, before, undefined, lookups);
     if (problems) {
       errors.push({ row: line, message: problemsText(t, problems).summary });
       continue;
     }
-    const valid = parse.data as Record<string, unknown>;
-    const data = before ? Object.fromEntries(Object.keys(coerced).map((k) => [k, valid[k]])) : valid;
+    const data = before
+      ? Object.fromEntries([...Object.keys(coerced), ...Object.keys(filled)].map((k) => [k, valid[k]]))
+      : valid;
     validRows.push({ line, data, ...(id ? { id } : {}), ...(before ? { update: true } : {}) });
   }
 

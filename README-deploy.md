@@ -494,7 +494,7 @@ never writes `classes`, `course_outlines`, `outline_lessons`, `sessions`,
 `rtt_readings` or `rtt_sessions`, and the purge in 3.1 additionally empties
 `schools`, `teachers`,
 `mentors`, `mentor_pairings` and `observation_cycles`. So the Repository home
-shows Classes 0, Course outlines 0, Sessions 0, Learners 0 and Reading material
+shows Classes 0, Course outlines 0, Classroom sessions logged 0, Learners 0 and Reading material
 0 with an empty week table, every RTT subject page says "No modules yet", and
 `/observation` lists nothing, until you load your own rows.
 

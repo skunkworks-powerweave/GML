@@ -177,7 +177,7 @@ The data tables added for teaching records (`/admin/data/<slug>`, `apps/web/src/
 
 | Action | Fires when | Metadata captured |
 |---|---|---|
-| `learners.view` | A single class's learners list was rendered on `/repo/class/[id]/learners` (SM-9 — every learner-PII read writes an audit row), by a `programme_admin` / `super_admin`, or by a teacher for a class she teaches (her own students only; any other class answers 404 and writes nothing). `entity_type` `class`, `entity_id` the class, `user_id` the reader | `route`, `schoolId`, `grade` |
+| `learners.view` | A single class's learners list was rendered on `/repo/class/[id]/learners`, or a class's student progress on `/progress/students/[classId]` (SM-9 — every learner-PII read writes an audit row), by a `programme_admin` / `super_admin`, or by a teacher for a class she teaches (her own students only; any other class answers 404 and writes nothing; the progress page is the admins' only). `entity_type` `class`, `entity_id` the class, `user_id` the reader | `route`, `schoolId`, `grade` |
 | `learners.bulk_view` | The all-learners surface `/repo/students` rendered (multi-class scan) — for a teacher, her own students only. `entity_type` `all`, `user_id` the reader | `piiAudited`, `rowCount`, `page`, `schoolFilter`, `qFilter` |
 | `learners.search` | `/repo/students` rendered with a name search (`?q=`); one row per reader, search and hour (deduplicated), beside that render's `learners.bulk_view` | `q`, `resultCount`, `__dedupKey` (the reader and search it deduplicates on) |
 | `learners.bulk_export` | A `super_admin` downloaded the learners CSV via `/api/admin/learners/export` (SM-9 bulk-export gate) | `actorId`, `rowCount`, `filterApplied` |
@@ -387,7 +387,8 @@ which fields changed.
 | `teaching.student.created` | A teacher added a student to one of her classes (`learner`) | `classId`, `section` |
 | `teaching.student.updated` | A teacher changed one of her students (`learner`); nothing is written when nothing changed | `classId`, `changed` (the field names: name, rollNumber, age, guardian, section) |
 | `teaching.student.removed` | A teacher removed one of her students (`learner`): `deleted_at` is set, history stays | `classId` |
-| `teaching.students.viewed` | Learner names were rendered for a signed-in user (SM-9): `/teaching/students` (entity `teacher`, her teachers row) or a session's attendance list on `/teaching/sessions/[id]` (entity `session`) | `page` ("students" / "session"), `rowCount` |
+| `teaching.students.imported` | A teacher uploaded a students CSV on `/teaching/students` (entity `teacher`, her teachers row): one row per upload, written only when at least one student was added; the school and grade of each student came from her class, and no name is recorded | `rows` (data rows in the file), `created` (students added), `rejected` (rows not added: bad, or already on the list), `classIds` (the classes they were added to) |
+| `teaching.students.viewed` | Learner names were rendered or downloaded for a signed-in user (SM-9): `/teaching/students` or `/teaching/progress` (entity `teacher`, her teachers row), a session's attendance list on `/teaching/sessions/[id]` (entity `session`), or its roster CSV, `GET /api/teaching/sessions/[id]/roster` (entity `session`) | `page` ("students" / "progress" / "session" / "roster_csv"), `rowCount` |
 | `teaching.plan.created` | A teacher created a lesson plan (`course_outline` owned by her), from scratch or by starting from a programme outline | `subjectId`, `grade`, `term`; when started from a programme outline also `copiedFrom` (the outline) and `lessonCount` (lessons copied) |
 | `teaching.plan.updated` | A teacher changed an editable plan's details (`course_outline`) | `subjectId`, `grade`, `term` |
 | `teaching.plan.deleted` | A teacher deleted an editable plan and its lessons (`course_outline`) | `lessonCount` |
@@ -396,7 +397,8 @@ which fields changed.
 | `teaching.lesson.moved` | A teacher moved a lesson up or down (`outline_lesson`); a move past either end writes nothing | `outlineId`, `from`, `to` (sequence numbers) |
 | `teaching.session.created` | A teacher planned a session for one of her classes (`session`, a draft) | `classId`, `subjectId`, `scheduledDate` |
 | `teaching.session.updated` | A teacher changed an editable session (`session`) | `classId`, `subjectId`, `scheduledDate`, `status` |
-| `teaching.attendance.saved` | A teacher saved an editable session's attendance (`session`); the session's counts were recomputed in the same transaction | `present`, `absent`, `late`, `excused` (students marked each way), `attended` (present + late), `total` |
+| `teaching.attendance.saved` | A teacher saved an editable session's attendance (`session`) from the roster form: every student marked, or Mark all present; the session's counts were recomputed in the same transaction | `present`, `absent`, `late`, `excused` (students marked each way), `attended` (present + late), `total` |
+| `teaching.attendance.imported` | A teacher uploaded an editable session's attendance as a CSV (`session`), written only when at least one student was marked; students the file does not name keep the mark they had, and the session's counts were recomputed in the same transaction | `rows` (data rows in the file), `marked` (students marked), `rejected` (rows not used), `present`, `absent`, `late`, `excused` (students the file marked each way), `attended` (present + late, over the whole session), `total` (students marked on the session) |
 
 ## Deferred prefixes (reserved but not yet wired)
 

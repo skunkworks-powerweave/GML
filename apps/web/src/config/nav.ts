@@ -49,6 +49,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
         { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
         { id: "attendance", labelKey: "attendanceMarking", icon: "table", href: "/attendance" },
+        { id: "student-progress", labelKey: "studentProgress", icon: "cycle", href: "/progress/students" },
       ],
     },
     {
@@ -69,7 +70,11 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "tbl-schools", labelKey: "schools", icon: "school", href: "/admin/data/schools" },
         { id: "tbl-mentors", labelKey: "mentors", icon: "users", href: "/admin/data/mentors" },
         { id: "tbl-pairings", labelKey: "pairings", icon: "users", href: "/admin/data/mentor-pairings" },
-        { id: "tbl-attendance", labelKey: "attendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        // Two attendances, named for what each is: "Attendance" alone opened
+        // the RTT table (teachers at training sessions) and hid the students'
+        // one under All tables.
+        { id: "tbl-attendance", labelKey: "trainingAttendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        { id: "tbl-student-attendance", labelKey: "studentAttendance", icon: "table", href: "/admin/data/session-attendance" },
         // The index of ALL 20 tables. Without it the desktop sidebar reached 5
         // of them, and classes, learners, sessions, resources, RTT content and
         // observation cycles -- the tables a fresh deployment is empty in --
@@ -101,6 +106,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "videos", labelKey: "videos", icon: "video", href: "/videos" },
         { id: "approvals", labelKey: "approvals", icon: "check", href: "/approvals" },
         { id: "attendance", labelKey: "attendanceMarking", icon: "table", href: "/attendance" },
+        { id: "student-progress", labelKey: "studentProgress", icon: "cycle", href: "/progress/students" },
       ],
     },
     {
@@ -119,7 +125,9 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
       items: [
         { id: "tbl-teachers", labelKey: "teachers", icon: "users", href: "/admin/data/teachers" },
         { id: "tbl-schools", labelKey: "schools", icon: "school", href: "/admin/data/schools" },
-        { id: "tbl-attendance", labelKey: "attendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        // Training and student attendance, as for the super_admin Data section.
+        { id: "tbl-attendance", labelKey: "trainingAttendance", icon: "table", href: "/admin/data/rtt-attendance" },
+        { id: "tbl-student-attendance", labelKey: "studentAttendance", icon: "table", href: "/admin/data/session-attendance" },
         { id: "tbl-pairings", labelKey: "pairings", icon: "users", href: "/admin/data/mentor-pairings" },
         // See the super_admin Data section: the index of every table.
         { id: "tbl-all", labelKey: "allTables", icon: "table", href: "/admin" },
@@ -221,6 +229,7 @@ export const NAV_BY_ROLE: Record<RoleName, NavSection[]> = {
         { id: "teaching-plans", labelKey: "lessonPlans", icon: "file", href: "/teaching/plans" },
         { id: "teaching-sessions", labelKey: "teachingSessions", icon: "cycle", href: "/teaching/sessions" },
         { id: "teaching-marks", labelKey: "marks", icon: "table", href: "/teaching/marks" },
+        { id: "teaching-progress", labelKey: "studentProgress", icon: "cycle", href: "/teaching/progress" },
       ],
     },
     {

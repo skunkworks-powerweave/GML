@@ -78,15 +78,16 @@
       "classes": "Classes",
       "students": "Students",
       "plans": "Lesson plans",
-      "sessions": "Sessions",
+      "sessions": "Classroom sessions",
       "marks": "Marks"
     },
     "links": {
       "classes": "My classes",
       "students": "My students",
       "plans": "Lesson plans",
-      "sessions": "My sessions",
-      "marks": "Marks"
+      "sessions": "My classroom sessions",
+      "marks": "Marks",
+      "progress": "Student progress"
     },
     "returnedTitle": "Sent back to you ({count})",
     "returnedSub": "A programme administrator asked for changes to these or did not approve them. Open one to see why and fix it.",
@@ -127,7 +128,13 @@
     "remove": "Remove student",
     "add": "Add a student",
     "addSubmit": "Add student",
-    "sectionFixed": "Section {section}: the section you teach in this class."
+    "sectionFixed": "Section {section}: the section you teach in this class.",
+    "csvTitle": "Upload students CSV",
+    "csvIntro": "Add many students at once. The first row names the columns: name, rollNumber, section and class. The school and grade come from the class, never from the file. A student already on a class list is reported, not added twice.",
+    "csvClasses": "In the class column write the grade (for example 5) or one of your classes: {classes}.",
+    "template": "Download template",
+    "csvFile": "CSV file",
+    "csvSubmit": "Upload students"
   },
   "plans": {
     "title": "Lesson plans",
@@ -172,7 +179,7 @@
     "lockedNote": "This plan is locked while it waits for approval, and once it is approved."
   },
   "sessions": {
-    "title": "My sessions",
+    "title": "My classroom sessions",
     "intro": "Your classroom sessions. Plan one, take attendance when it happens, then send it for approval.",
     "planTitle": "Plan a session",
     "planSub": "One of your classes, the subject and, if you like, a lesson from your plans or the programme curriculum.",
@@ -194,8 +201,8 @@
     "notesHint": "What happened in the session, in your words."
   },
   "session": {
-    "metaTitle": "Session",
-    "label": "Session",
+    "metaTitle": "Classroom session",
+    "label": "Classroom session",
     "detailsTitle": "Session details",
     "lessonFact": "{outline}: {n}. {title}",
     "minutes": "{minutes} min",
@@ -207,7 +214,12 @@
     "studentWithRoll": "{name} ({roll})",
     "saveAttendance": "Save attendance",
     "allPresent": "Mark all present",
-    "attendanceHint": "Everyone starts as present. Mark all present saves every student as present at once."
+    "attendanceHint": "Mark each student, then save. Mark all present marks every student present at once.",
+    "csvTitle": "Attendance from a CSV file",
+    "csvIntro": "Download the roster, fill in the status column for each student (present, absent, late or excused) and upload it here. A student the file leaves out stays unmarked.",
+    "downloadRoster": "Download roster CSV",
+    "uploadCsv": "Upload attendance CSV",
+    "uploadCsvSubmit": "Upload"
   },
   "approval": {
     "title": "Approval",
@@ -266,7 +278,8 @@
     "cancelledNoAttendance": "This session is cancelled, so it has no attendance.",
     "noStudents": "This class has no students to mark.",
     "sessionNotDone": "Mark the session complete or cancelled before sending it for approval.",
-    "attendanceFirst": "Take attendance before sending the session for approval."
+    "attendanceFirst": "Take attendance for every student before sending the session for approval.",
+    "attendanceIncomplete": "{count, plural, one {# student has no attendance mark yet} other {# students have no attendance mark yet}}. Mark every student, or use Mark all present."
   },
   "done": {
     "classAdded": "Class added.",
@@ -280,12 +293,116 @@
     "lessonDeleted": "Lesson deleted.",
     "sessionSaved": "Session saved.",
     "attendanceSaved": "Attendance saved: {attended} of {total} attended.",
-    "submitted": "Sent for approval. A programme administrator will review it."
+    "submitted": "Sent for approval. A programme administrator will review it.",
+    "attendanceUploaded": "Attendance uploaded: {marked, plural, one {# student} other {# students}} marked. {attended} of {total} attended.",
+    "csvSkipped": "{count, plural, one {# row was} other {# rows were}} not imported:",
+    "studentsUploaded": "{count, plural, one {# student} other {# students}} added."
   },
   "dashboard": {
     "title": "My teaching",
     "summary": "{classes, plural, one {# class} other {# classes}} · {students, plural, one {# student} other {# students}} · {plans, plural, one {# lesson plan} other {# lesson plans}} · {sessions, plural, one {# session} other {# sessions}}",
     "returned": "{count, plural, one {# record was sent back to you} other {# records were sent back to you}}",
     "open": "Open My teaching"
+  },
+  "progress": {
+    "title": "Student progress",
+    "intro": "How the students of your classes are getting on: attendance, marks and sessions held. Only your own sessions and tests are counted.",
+    "howTitle": "How these numbers are worked out",
+    "rule": {
+      "attendance": "Attendance % = the sessions a student was present or late, out of the sessions where attendance was taken. Absent and excused count as not attended. Cancelled sessions are left out.",
+      "sessions": "Sessions held = the sessions marked Complete or with attendance taken, out of all sessions planned. Cancelled sessions are left out.",
+      "marks": "Average marks is the mean of each recorded mark as a percentage of its test's total; absent and blank marks are left out.",
+      "low": "Students below {threshold}% attendance are highlighted."
+    },
+    "noClasses": "Add a class first; its progress then appears here.",
+    "noStudents": "No students in this class yet.",
+    "addStudents": "Add students",
+    "percent": "{value}%",
+    "sort": {
+      "label": "Order students by",
+      "roll": "Roll number",
+      "attendance": "Lowest attendance first"
+    },
+    "stat": {
+      "students": "Students",
+      "sessions": "Sessions held (of planned)",
+      "sessionsOf": "{held} of {planned}",
+      "attendance": "Attendance",
+      "marks": "Average marks",
+      "low": "Below {threshold}% attendance"
+    },
+    "student": {
+      "attendance": "Attendance",
+      "attendanceValue": "{pct}% ({attended} of {marked, plural, one {# session} other {# sessions}})",
+      "attendanceRoster": "{pct}% on the student list (no sessions marked yet)",
+      "notMarked": "Not marked yet",
+      "marks": "Marks",
+      "noMarks": "None yet",
+      "last": "Last session",
+      "noSession": "None yet"
+    },
+    "low": "Low attendance",
+    "admin": {
+      "label": "Programme",
+      "intro": "Every school and class in the programme: students, sessions held, attendance and marks. Open a class to see its students.",
+      "schoolFilter": "School",
+      "allSchools": "All schools",
+      "show": "Show",
+      "noSchools": "No schools match this filter.",
+      "showAll": "Show all schools",
+      "noClasses": "No classes at this school yet.",
+      "open": "Open",
+      "openClass": "Open Grade {grade}",
+      "page": "Page {page} of {pages}",
+      "prev": "Previous",
+      "next": "Next",
+      "pages": "Pages of schools",
+      "schoolSub": "{code} · {district} · {zone}",
+      "allClasses": "All classes",
+      "classIntro": "{school}: attendance, marks and sessions held for every student in this class.",
+      "classTitle": "{school}: Grade {grade}",
+      "piiNote": "Student names are confidential. Opening this page is recorded in the audit log.",
+      "back": "Student progress"
+    }
+  },
+  "csv": {
+    "noFile": "Choose a CSV file first.",
+    "tooBig": "That file is too large. Keep it under {max} KB.",
+    "notCsv": "That file is not a plain CSV. If it is an Excel workbook, choose Save as, then CSV UTF-8 (comma delimited), and upload that file.",
+    "tooManyRows": "That file has more than {max} rows. Split it into smaller files.",
+    "empty": "That file has no rows to import.",
+    "unreadable": "That file could not be read as a CSV. Check that every quote is closed.",
+    "missingColumn": "The first row of the file needs a {column} column.",
+    "nothingImported": "No rows were imported.",
+    "moreIssues": "…and {count, plural, one {# more row} other {# more rows}} not imported.",
+    "line": "Line {line}: {message}",
+    "roll": "roll {roll}",
+    "noRoll": "no roll number",
+    "section": "section {section}",
+    "failed": "The file could not be saved, so nothing was added. Try again.",
+    "attendance": {
+      "studentRequired": "Give a student name or a roll number.",
+      "notOnRoster": "{who} is not on this session's roster.",
+      "ambiguous": "{who} matches {count} students ({options}). Put the roll number in a rollNumber column to choose one.",
+      "ambiguousSection": "{who} matches {count} students ({options}). Put the section in a section column to choose one.",
+      "ambiguousSame": "{who} matches {count} students ({options}) and a file cannot tell them apart. Give them different roll numbers under My students, or mark them on the session page.",
+      "nameMismatch": "{who} does not match the roster: {roll} is {actual}.",
+      "rollMismatch": "{who} does not match the roster: {name} has {actual}.",
+      "statusMissing": "{who} has no status. Use one of: {statuses}.",
+      "badStatus": "\"{value}\" is not a status. Use one of: {statuses}.",
+      "repeats": "{who} is already marked on line {first}."
+    },
+    "students": {
+      "classRequired": "Say which class this student is in. Your classes: {options}.",
+      "classUnknown": "\"{value}\" is not one of your classes. Your classes: {options}.",
+      "classAmbiguous": "\"{value}\" matches more than one of your classes. Your classes: {options}.",
+      "sectionConflict": "The class says section {fromClass} but the section column says {typed}.",
+      "sectionNeeded": "Say which section: {sections}.",
+      "badCharacters": "The name, roll number or section has a line break or another character that cannot be used.",
+      "duplicateName": "{name} is already in {where}. If this is a different child, add them one at a time under My students.",
+      "duplicateRoll": "Roll number {roll} is already used in {where}.",
+      "repeats": "{name} repeats line {first}.",
+      "rollRepeats": "Roll number {roll} repeats line {first}."
+    }
   }
 }

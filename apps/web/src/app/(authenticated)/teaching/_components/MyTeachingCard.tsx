@@ -39,6 +39,9 @@ export async function myTeachingCard(userId: string) {
           <Link href="/teaching/sessions" className="btn btn-sm btn-ghost">
             {t("hub.links.sessions")}
           </Link>
+          <Link href="/teaching/progress" className="btn btn-sm btn-ghost">
+            {t("hub.links.progress")}
+          </Link>
         </div>
       </div>
     </article>

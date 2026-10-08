@@ -1,8 +1,9 @@
 // /teaching/students -- "My students": the learners of the classes a teacher
 // teaches, class by class, with their roll number, section, age and guardian.
 // She adds, edits and removes them here; the actions re-check that each one
-// is hers (./actions.ts). Learner details are PII: rendering this list is
-// audited (teaching.students.viewed), as every learner list is (SM-9).
+// is hers (./actions.ts). A CSV adds many at once (./students-csv.ts). Learner
+// details are PII: rendering this list is audited (teaching.students.viewed),
+// as every learner list is (SM-9).
 
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -17,6 +18,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { ActionForm } from "../_components/ActionForm";
 import { Card, classLabel, Empty, Field, fieldGrid, listRow, mutedText, NoTeacherRecord, PageHeader, wrapRow, type Translate } from "../_components/ui";
 import { addStudentAction, removeStudentAction, updateStudentAction } from "./actions";
+import { uploadStudentsCsvAction } from "./students-csv";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +77,27 @@ export default async function MyStudentsPage() {
               </Link>
             </div>
           </section>
+        ) : null}
+        {groups.length > 0 ? (
+          <Card title={t("students.csvTitle")}>
+            <p style={{ ...mutedText, margin: 0 }}>{t("students.csvIntro")}</p>
+            <p style={{ ...mutedText, margin: 0 }}>
+              {t("students.csvClasses", { classes: groups.map(({ link }) => classLabel(t, link.grade, link.section)).join(", ") })}
+            </p>
+            <div style={wrapRow}>
+              <a className="btn btn-sm" href="/api/teaching/students/template" download>
+                {t("students.template")}
+              </a>
+            </div>
+            <ActionForm action={uploadStudentsCsvAction}>
+              <Field label={t("students.csvFile")}>
+                <input type="file" name="file" accept=".csv,text/csv" required />
+              </Field>
+              <div>
+                <SubmitButton className="btn btn-primary">{t("students.csvSubmit")}</SubmitButton>
+              </div>
+            </ActionForm>
+          </Card>
         ) : null}
         {groups.map(({ link, students }) => (
           <Card

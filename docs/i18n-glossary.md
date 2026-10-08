@@ -75,7 +75,7 @@ PDF, Q1–Q4, URLs, email addresses.
 | RTT phase | RTT चरण | RTT དུས་རིམ། |
 | module (SCORM) | मॉड्यूल | ལེ་ཚན། |
 | subject | विषय | སློབ་ཚན། |
-| session (class) | सत्र | དུས་ཚོད། |
+| classroom session (a lesson in a class) | कक्षा सत्र | འཛིན་གྲྭའི་དུས་ཚོད། |
 | reading material | पठन सामग्री | ཀློག་དེབ། |
 | teach-back | टीच-बैक | ཕྱིར་སློབ། |
 | course outline | पाठ्यक्रम रूपरेखा | སློབ་ཚན་གྱི་སྡོམ་གཞི། |
@@ -84,6 +84,8 @@ PDF, Q1–Q4, URLs, email addresses.
 | district / zone | ज़िला / ज़ोन | རྫོང་ཁག / ས་ཁུལ། |
 | class / student | कक्षा / विद्यार्थी | འཛིན་གྲྭ། / སློབ་ཕྲུག |
 | attendance | उपस्थिति | ཚོགས་འཛུལ། |
+| training attendance (teachers at RTT sessions) | प्रशिक्षण उपस्थिति | སྦྱོང་བརྡར་ཚོགས་འཛུལ། |
+| student attendance (students in classroom sessions) | विद्यार्थियों की उपस्थिति | སློབ་ཕྲུག་གི་ཚོགས་འཛུལ། |
 | video | वीडियो | བརྙན་ཕབ། |
 | upload | अपलोड | འགྲེམས་སྤེལ། |
 | recording | रिकॉर्डिंग | ཕབ་ཟིན་པའི་བརྙན། |
@@ -132,12 +134,29 @@ PDF, Q1–Q4, URLs, email addresses.
 | package (SCORM) | पैकेज | ཐུམ་སྒྲིལ། |
 | the programme's name | RTT — रिफ़्रेशर शिक्षक प्रशिक्षण | དགེ་རྒན་བསྐྱར་སྦྱོང་། |
 
+### Which form where
+
+- **Classroom session.** A lesson in a classroom is the long form (classroom
+  session, कक्षा सत्र, འཛིན་གྲྭའི་དུས་ཚོད།) wherever it names a list, a page, a menu
+  item, a tile, a column header or a detail row: a bare "session" is ambiguous
+  next to an RTT training session. The bare word is for a count inside a
+  sentence ("12 sessions") only. An RTT session stays "RTT session".
+- **Attendance.** The word alone is never a menu item. Training attendance
+  (teachers at RTT sessions) and student attendance (students in classroom
+  sessions) are named apart wherever both could be meant.
+
 ### Open for the native reviewer
 
-- **Bhoti དུས་ཚོད།** is used for both "session (class)" and "time". A table
-  with a Session column and a Time column reads the same word twice. Pick a
-  distinct word for one of them (for "session", perhaps ཚོགས་ཐེངས།) and it
-  can be replaced across `bo/*.json` in one pass.
+- **Bhoti དུས་ཚོད།** is used for both "classroom session" (the long form
+  འཛིན་གྲྭའི་དུས་ཚོད། keeps it) and "time". A table with a Session column and a Time
+  column reads the same word twice. Pick a distinct word for one of them (for
+  "session", perhaps ཚོགས་ཐེངས།) and it can be replaced across `bo/*.json` in
+  one pass.
+- **Hindi "grade" and "class" are both कक्षा.** A message that has to name the
+  school year next to the class (the student's grade does not match the class's,
+  `adminData.validation.learnerGradeNotClass`) says "कक्षा संख्या" (grade number),
+  because ग्रेड is this file's word for a marks grade (ग्रेड स्केल). Confirm that
+  wording, or choose another, and use it for both.
 - **Bhoti plurals**: CLDR gives Tibetan only the "other" plural form, so
   `{count, plural, …}` messages in `bo` have one branch. Check that the
   counted phrases read naturally.

@@ -38,6 +38,9 @@ export const assessmentsEntity: AdminEntity = {
     gradingScaleId: z.string().uuid().optional().nullable(),
   }),
   formFields: ["teacherId", "classId", "subjectId", "section", "term", "title", "maxMarks", "assessedOn", "gradingScaleId"],
+  // A mark sheet's tests re-uploaded after a partial import (csv.ts): the same
+  // title for the same class, subject, teacher and term is the same test.
+  duplicateKey: ["title", "classId", "subjectId", "teacherId", "section", "term"],
   writeStamp: ({ op }) => (op === "update" ? { updatedAt: new Date() } : {}),
   validate: allRules(classAtTeachersSchool(), scaleOfKind("gradingScaleId", "student")),
   describeRow: (r) => `assessment:${r.title ?? r.id}`,

@@ -7,6 +7,14 @@ import type { GateSlug } from "@/lib/gates";
 export type AdminDb = NodePgDatabase<Record<string, unknown>>;
 
 /**
+ * What a CSV import has already read, for a rule that would otherwise read the
+ * same row for every line (a roster names a handful of classes). One per import,
+ * so it never outlives the file it served; keys are the rule's own. The grid's
+ * single writes pass none.
+ */
+export type RowLookups = Map<string, unknown>;
+
+/**
  * A sentence for the interface, as a key in the adminData translation
  * namespace plus its ICU values. The rules in these definitions run on the
  * server, in the CSV importer and in tests, none of which has the viewer's
@@ -107,6 +115,14 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
    */
   gate?: GateSlug;
   /**
+   * Columns the entity fills in from another row when a write leaves them blank
+   * (a student's school and grade, from her class): the values to add to the
+   * row, or {}. Run by the create and update actions and by CSV import, after
+   * zod and before `validate`, which then judges the row as it will be stored.
+   * Its fields are optional in `formSchema`, so a blank is not a zod error.
+   */
+  fillIn?: (db: AdminDb, row: Record<string, unknown>, memo?: RowLookups) => Promise<Record<string, unknown>>;
+  /**
    * Rules zod cannot check because they need the database (an observer id must
    * belong to a live observer account). Returns field -> message, or null.
    * Run by the create and update actions and by CSV import, after zod. On an
@@ -118,6 +134,7 @@ export type AdminEntity<TTable extends AnyPgTable = AnyPgTable> = {
     db: AdminDb,
     row: Record<string, unknown>,
     before?: Record<string, unknown>,
+    memo?: RowLookups,
   ) => Promise<Record<string, AdminMessage> | null>;
   /**
    * State-dependent write rules. Called by the grid's update (with the row as

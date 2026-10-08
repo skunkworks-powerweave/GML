@@ -445,7 +445,7 @@
     }
   },
   "marking": {
-    "metaTitle": "Attendance",
+    "metaTitle": "Training attendance",
     "eyebrow": "Refresher Teacher Training",
     "listTitle": "RTT attendance",
     "intro": "Open an RTT session to see the teachers it is for, mark each one present, late, absent or excused, and save.",
