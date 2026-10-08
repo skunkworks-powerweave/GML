@@ -62,7 +62,7 @@ import { recordAudit } from "@/lib/audit";
 import { lookupOwn } from "@/lib/lookup";
 import { getDeviceType } from "@/lib/device";
 import { MobileEntityCardList } from "@/admin/components/MobileEntityCardList";
-import { referenceLabels, referenceOptions, withCurrentValues, type RefContext } from "@/admin/references";
+import { importLinkFields, referenceLabels, referenceOptions, withCurrentValues, type RefContext } from "@/admin/references";
 import { exportRolesFor } from "@/admin/access";
 import { istDayRange, toIstDate, toIstDateTime } from "@/admin/dates";
 import { dateInputType, enumOptions } from "@/admin/zod-shape";
@@ -456,6 +456,8 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
   // Links into a gated table are named only for a viewer holding its
   // password (admin/references.ts).
   const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
+  // The import panel says which columns take a name (csv.ts resolves them).
+  const linkedColumns = await importLinkFields(entity, refCtx);
   // The row a read-only panel shows is named the same way as the grid's rows.
   const refLabels = await referenceLabels(db, entity, editRow && !canMutate ? [...rows, editRow] : rows, refCtx);
   // Each column's allowed values, where it is an enum -- a ZodEnum over a
@@ -632,7 +634,13 @@ export default async function AdminGridPage({ params, searchParams }: PageProps)
               entitySlug={slug}
               entityLabel={title}
               // `id` too: a row carrying one updates that row (csv.ts importCsv).
-              acceptedColumns={["id", ...entity.formFields]}
+              acceptedColumns={[
+                "id",
+                ...entity.formFields,
+                // `zone` is read as `zoneId` (csv.ts)
+                ...linkedColumns.map((c) => c.replace(/Id$/, "")),
+              ]}
+              linkedColumns={linkedColumns}
               reportsDuplicates={Boolean(entity.duplicateKey)}
             />
           ) : null}

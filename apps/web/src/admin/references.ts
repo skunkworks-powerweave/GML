@@ -29,7 +29,7 @@
 // language (adminData.references).
 
 import "server-only";
-import { and, asc, eq, getTableColumns, getTableName, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, getTableName, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { getTableConfig, type AnyPgTable, type PgColumn } from "drizzle-orm/pg-core";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { getLocale, getTranslations } from "next-intl/server";
@@ -68,6 +68,11 @@ type LabelSource = {
   join?: { table: AnyPgTable; on: SQL };
   /** Rows the picker leaves out (soft-deleted accounts). */
   hide?: SQL;
+  /**
+   * Other spellings that name a row in a CSV cell, besides its label: a school's name or
+   * code alone, an account's address. Used only by resolveReferenceNames.
+   */
+  keys?: SQL<string>[];
 };
 
 /** How a row of each referenceable table is named, keyed by SQL table name. */
@@ -78,6 +83,7 @@ const LABELS: Record<string, LabelSource> = {
     table: s.schools,
     id: s.schools.id,
     label: sql<string>`${s.schools.name} || ' (' || ${s.schools.code} || ')'`,
+    keys: [sql<string>`${s.schools.name}`, sql<string>`${s.schools.code}`],
   },
   teachers: { table: s.teachers, id: s.teachers.id, label: sql<string>`${s.teachers.fullName}` },
   mentors: { table: s.mentors, id: s.mentors.id, label: sql<string>`${s.mentors.name}` },
@@ -89,6 +95,7 @@ const LABELS: Record<string, LabelSource> = {
     label: sql<string>`CASE WHEN coalesce(${s.users.name}, '') = '' THEN ${s.users.email}
       ELSE ${s.users.name} || ' <' || ${s.users.email} || '>' END`,
     hide: isNull(s.users.deletedAt),
+    keys: [sql<string>`${s.users.email}`],
   },
   phases: { table: s.phases, id: s.phases.id, label: sql<string>`${s.phases.label}` },
   // "Term 1" exists in every phase, so a term alone is ambiguous.
@@ -109,6 +116,8 @@ const LABELS: Record<string, LabelSource> = {
     label: (t) =>
       sqlMessage(t, "references.classLabel", { school: sql`${s.schools.name}`, grade: sql`${s.classes.grade}` }),
     join: { table: s.schools, on: eq(s.schools.id, s.classes.schoolId) },
+    // The English wording as well, whatever the viewer's language: CSV templates are written in it.
+    keys: [sql<string>`${s.schools.name} || ' · Grade ' || ${s.classes.grade}`],
   },
   course_outlines: { table: s.courseOutlines, id: s.courseOutlines.id, label: sql<string>`${s.courseOutlines.name}` },
   outline_lessons: {
@@ -149,6 +158,7 @@ const LABELS: Record<string, LabelSource> = {
     id: s.learners.id,
     label: sql<string>`${s.learners.name} || coalesce(' #' || ${s.learners.rollNumber}, '')`,
     hide: isNull(s.learners.deletedAt),
+    keys: [sql<string>`${s.learners.name}`],
   },
   // A session has no name: its date and topic.
   sessions: {
@@ -358,4 +368,119 @@ export async function referenceLabels(
     out[field] = Object.fromEntries(labelsByTarget.get(target) ?? []);
   }
   return out;
+}
+
+
+// ── Naming a record in a CSV cell ──────────────────────────────────────────
+
+/** A name as compared: trimmed, runs of spaces collapsed, case-folded (the same folding as the SQL below). */
+export function nameKey(v: string): string {
+  return v.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+const folded = (e: SQL): SQL<string> => sql<string>`lower(regexp_replace(btrim((${e})::text), '\\s+', ' ', 'g'))`;
+
+/** Names looked up per query: a bind parameter each, well under Postgres' 65,535. */
+const NAME_LOOKUP_CHUNK = 10_000;
+
+/** How many candidates an "ambiguous" message lists. */
+const NAME_CANDIDATES_SHOWN = 4;
+
+export type NameMatch =
+  | { kind: "found"; id: string }
+  | { kind: "none" }
+  | { kind: "many"; total: number; candidates: Array<{ id: string; label: string }> };
+
+export type NameResolution = {
+  /** The link fields of this entity the viewer may name (a gated target is left out), mapped to the SQL table they point at. */
+  fields: Record<string, string>;
+  /** What `value` names in `field`: one record, none, or several. */
+  match: (field: string, value: string) => NameMatch;
+};
+
+/**
+ * Resolve the names in an import file to ids.
+ *
+ * A link in a CSV (a zone's districtId, a student's classId) takes the name the
+ * form's drop-down shows for the record (LABELS, and for a few tables a second
+ * spelling such as a school's code), in any case and spacing, as well as the
+ * id from an export. `wanted` maps each link field to the distinct cell values
+ * that are not ids; one query per field looks up only those.
+ *
+ * Two rules keep this from widening what a viewer can learn. A field that
+ * visibleReferenceFields leaves out (a link into a gated table the viewer has
+ * not unlocked: an observation cycle's code) is not resolved at all, so its
+ * cells stay ids. And an ambiguous name is never guessed: it is reported with
+ * its candidates, so the operator picks by id.
+ */
+export async function resolveReferenceNames(
+  db: Db,
+  entity: AdminEntity,
+  ctx: RefContext,
+  wanted: Record<string, Iterable<string>>,
+): Promise<NameResolution> {
+  const fields = await visibleReferenceFields(entity, ctx);
+  const t = Object.keys(wanted).length ? await translator() : null;
+  const table = new Map<string, Map<string, Map<string, string>>>(); // field -> key -> id -> label
+
+  for (const [field, values] of Object.entries(wanted)) {
+    const target = fields[field];
+    if (!target) continue;
+    const keys = [...new Set([...values].map(nameKey).filter(Boolean))];
+    if (!keys.length) continue;
+    const src = LABELS[target]!;
+    const roles = target === "users" ? entity.fields?.[field]?.userRoles : undefined;
+    const exprs = [labelOf(src, t!), ...(src.keys ?? [])];
+    const byKey = new Map<string, Map<string, string>>();
+    for (let start = 0; start < keys.length; start += NAME_LOOKUP_CHUNK) {
+      const chunk = keys.slice(start, start + NAME_LOOKUP_CHUNK);
+      const columns = {
+        id: src.id,
+        ...Object.fromEntries(exprs.map((e, i) => [`k${i}`, e])),
+      };
+      const base = db.select(columns as never).from(src.table as never).$dynamic();
+      const joined = src.join ? base.innerJoin(src.join.table as never, src.join.on) : base;
+      const filters = [
+        src.hide,
+        roles?.length ? inArray(s.users.role, roles) : undefined,
+        or(...exprs.map((e) => inArray(folded(e), chunk))),
+      ].filter((f): f is SQL => Boolean(f));
+      const rows = (await joined.where(and(...filters))) as unknown as Array<Record<string, unknown>>;
+      for (const r of rows) {
+        const id = String(r.id);
+        const label = String(r.k0 ?? id);
+        for (let i = 0; i < exprs.length; i++) {
+          const k = nameKey(String(r[`k${i}`] ?? ""));
+          if (!k || !chunk.includes(k)) continue;
+          if (!byKey.has(k)) byKey.set(k, new Map());
+          byKey.get(k)!.set(id, label);
+        }
+      }
+    }
+    table.set(field, byKey);
+  }
+
+  return {
+    fields,
+    match(field, value) {
+      const hits = [...(table.get(field)?.get(nameKey(value)) ?? new Map<string, string>()).entries()];
+      if (hits.length === 0) return { kind: "none" };
+      if (hits.length === 1) return { kind: "found", id: hits[0]![0] };
+      return {
+        kind: "many",
+        total: hits.length,
+        candidates: hits.slice(0, NAME_CANDIDATES_SHOWN).map(([id, label]) => ({ id, label })),
+      };
+    },
+  };
+}
+
+/**
+ * The link fields of an entity's import file that a viewer may write as a name
+ * (the import panel lists them): the form's link fields, minus links into a
+ * gated table the viewer has not unlocked.
+ */
+export async function importLinkFields(entity: AdminEntity, ctx: RefContext): Promise<string[]> {
+  const visible = await visibleReferenceFields(entity, ctx);
+  return entity.formFields.filter((f) => f in visible);
 }

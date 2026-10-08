@@ -53,12 +53,15 @@ export function ImportCsv({
   entitySlug,
   entityLabel,
   acceptedColumns,
+  linkedColumns = [],
   reportsDuplicates = false,
 }: {
   entitySlug: string;
   entityLabel: string;
   /** The entity's form fields — what the importer will actually read. */
   acceptedColumns: string[];
+  /** The columns that link to another table: a name as the form's list shows it, or an id (csv.ts). */
+  linkedColumns?: string[];
   /** The entity declares a duplicateKey: an id-less row matching a stored record is reported (csv.ts). */
   reportsDuplicates?: boolean;
 }) {
@@ -179,6 +182,12 @@ export function ImportCsv({
           code: (chunks) => <code className="text-[11px]">{chunks}</code>,
         })}
       </p>
+
+      {linkedColumns.length > 0 ? (
+        <p className="mb-3 text-xs text-neutral-600" data-testid="import-csv-linked">
+          {t("importCsv.linked", { columns: linkedColumns.join(", ") })}
+        </p>
+      ) : null}
 
       <input
         ref={fileInput}

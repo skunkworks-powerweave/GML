@@ -26,6 +26,8 @@ import { acceptsNull, coerceFormValues, unwrapShape } from "@/admin/zod-shape";
 import { keepStoredPrecision } from "@/admin/dates";
 import { keepDerivedCounts } from "@/admin/derived-counts";
 import { requireRole } from "@/lib/guards";
+import { getActiveGrant } from "@/lib/gates";
+import { referenceFields, resolveReferenceNames, type RefContext } from "@/admin/references";
 import { withAudit } from "@/lib/audit";
 import { lookupOwn } from "@/lib/lookup";
 
@@ -313,6 +315,26 @@ export async function importCsv(slug: string, csv: string): Promise<{
   const shape = unwrapShape(entity.formSchema);
   const hasIdColumn = "id" in (getTableColumns(entity.table) as Record<string, unknown>);
   const idCol = (entity.table as unknown as { id: unknown }).id;
+  // LINKS MAY BE NAMED, AND THEIR COLUMN MAY DROP THE `Id`. A link field (a
+  // school's zoneId) takes a name as the form's drop-down shows it, or an id;
+  // see admin/references.ts resolveReferenceNames. A file whose header says
+  // `zone` is read as `zoneId` when it has no `zoneId` column of its own.
+  const linkFields = entity.formFields.filter((f) => f in referenceFields(entity));
+  const headerNames = parsed.meta.fields ?? [];
+  const aliases = new Map<string, string>();
+  for (const h of headerNames) {
+    if (h === "id" || entity.formFields.includes(h)) continue;
+    const field = linkFields.find((f) => f.toLowerCase() === `${h.trim().toLowerCase()}id`);
+    if (field && !headerNames.includes(field) && ![...aliases.values()].includes(field)) aliases.set(h, field);
+  }
+  if (aliases.size > 0) {
+    parsed.meta.fields = headerNames.map((h) => aliases.get(h) ?? h);
+    parsed.data = parsed.data.map((row) => {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row)) out[aliases.get(k) ?? k] = v;
+      return out;
+    });
+  }
   // The columns this file carries. An update writes those and nothing else.
   const carried = new Set(parsed.meta.fields ?? []);
 
@@ -339,8 +361,53 @@ export async function importCsv(slug: string, csv: string): Promise<{
     for (const r of found) existing.set(String(r.id), r);
   }
 
-  for (const [i, raw] of parsed.data.entries()) {
+  // The names this file uses in its link columns, resolved in one query per
+  // column. The ids it already uses are left alone.
+  const wantedNames: Record<string, Set<string>> = {};
+  for (const raw of parsed.data) {
+    for (const field of linkFields) {
+      const cell = raw[field];
+      if (typeof cell !== "string") continue;
+      const value = unescapeFormulaCell(cell).trim();
+      if (value && !UUID_RE.test(value)) (wantedNames[field] ??= new Set()).add(value);
+    }
+  }
+  const refCtx: RefContext = { gateOpen: async (gate) => Boolean(await getActiveGrant(session.user.id, gate)) };
+  const names = Object.keys(wantedNames).length ? await resolveReferenceNames(db, entity, refCtx, wantedNames) : null;
+
+  for (const [i, original] of parsed.data.entries()) {
     const line = i + 2; // header is line 1
+    // A copy of the row with each named link replaced by its id, or the row as it is.
+    let raw = original;
+    if (names) {
+      let problem: string | null = null;
+      for (const field of linkFields) {
+        const cell = original[field];
+        if (typeof cell !== "string" || !(field in names.fields)) continue;
+        const value = unescapeFormulaCell(cell).trim();
+        if (!value || UUID_RE.test(value)) continue;
+        const found = names.match(field, value);
+        if (found.kind === "found") {
+          if (raw === original) raw = { ...original };
+          raw[field] = found.id;
+        } else if (found.kind === "none") {
+          problem = t("import.referenceNone", { field, value });
+          break;
+        } else {
+          problem = t("import.referenceMany", {
+            field,
+            value,
+            count: String(found.total),
+            options: found.candidates.map((c) => c.label).join("; "),
+          });
+          break;
+        }
+      }
+      if (problem) {
+        errors.push({ row: line, message: problem });
+        continue;
+      }
+    }
     const id = idOf(raw);
     if (id && !UUID_RE.test(id)) {
       errors.push({ row: line, message: t("import.notRowId") });
