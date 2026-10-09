@@ -796,6 +796,13 @@ test("the admin overview names each Open link by its class, labels its pages, an
         [w.z1, tag("a1"), tag("a1").replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()],
       );
       f.defer(`DELETE FROM schools WHERE zone_id = $1 AND name LIKE 'Pg %'`, [w.z1]);
+      // Only schools with classes are cards, and so only they are paged.
+      await c.query(
+        `INSERT INTO classes (school_id, grade, stage)
+         SELECT id, 4, 'Primary' FROM schools WHERE zone_id = $1 AND name LIKE 'Pg %'`,
+        [w.z1],
+      );
+      f.defer(`DELETE FROM classes WHERE school_id IN (SELECT id FROM schools WHERE zone_id = $1 AND name LIKE 'Pg %')`, [w.z1]);
       const paged = await pageOutcome(overviewPage, { searchParams: Promise.resolve({ district: w.d1 }) });
       assert.match((paged as { html: string }).html, /<nav [^>]*aria-label="Pages of schools"/);
     } finally {
@@ -992,4 +999,40 @@ test("/progress is gated to admins in the proxy as /admin is, and the new pages 
   for (const route of ["/teaching/progress", "/progress/students", "/progress/students/[classId]"]) {
     assert.ok(crumbs.includes(`"${route}"`), `${route} is in ROUTABLE`);
   }
+});
+
+// QA on the live site, 9 Oct 2026: "Student progress is empty". It was not: of
+// 14 schools, 13 had no classes yet and filled the screen with "No classes at
+// this school yet", and the one school with data was 12th, under them. Schools
+// with classes now come first and are the only ones paged; the rest are named
+// once, together, at the end.
+test("the overview pages only schools that have classes, and names the others once, after them", { skip }, async () => {
+  await withClient(async (c) => {
+    const f = fixture(c, tag("prog"));
+    try {
+      const w = await world(f, tag("nocls"));
+      const code = tag("nc").replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase();
+      const empty1 = await f.row("schools", { zone_id: w.z2, name: `Aaa empty ${code}`, code: `E1${code}`.slice(0, 16) });
+      const empty2 = await f.row("schools", { zone_id: w.z2, name: `Zzz empty ${code}`, code: `E2${code}`.slice(0, 16) });
+      const { db } = await dbModule();
+      const p = await progressLib();
+      const place = (districtId: string) => ({ districtId, districtName: "", zoneId: null, zoneName: null });
+
+      const d2 = await p.programmeProgress(db, { place: place(w.d2) });
+      assert.deepEqual(d2.schools.map((s: { id: string }) => s.id), [w.s2], "only the school with a class is a card, although 'Aaa empty' sorts first");
+      assert.equal(d2.total, 1, "pages count schools with classes");
+      assert.deepEqual(
+        d2.withoutClasses.map((s: { id: string }) => s.id),
+        [empty1, empty2],
+        "the schools with no classes, by name",
+      );
+
+      // Choosing one school with no classes says so, rather than showing nothing.
+      const one = await p.programmeProgress(db, { schoolId: empty1 });
+      assert.deepEqual(one.schools, []);
+      assert.deepEqual(one.withoutClasses.map((s: { id: string }) => s.id), [empty1]);
+    } finally {
+      await f.cleanup();
+    }
+  });
 });

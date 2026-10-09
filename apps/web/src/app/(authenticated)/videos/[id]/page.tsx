@@ -10,7 +10,8 @@ import { redirect } from "next/navigation";
 import { recordAudit } from "@/lib/audit";
 import { HlsPlayer } from "@/components/video/HlsPlayer";
 import { signPosterUrls } from "@/lib/video/storage";
-import { contextTypeLabel, sourceLabel, statusLabel, type VideoTranslate } from "@/lib/video/labels";
+import { contextTypeLabel, isVideoProcessing, sourceLabel, statusLabel, type VideoTranslate } from "@/lib/video/labels";
+import { RefreshWhileProcessing } from "@/components/video/RefreshWhileProcessing";
 import { ExternalEmbed } from "@/components/video/ExternalEmbed";
 
 export const dynamic = "force-dynamic";
@@ -108,6 +109,8 @@ export default async function VideoPlayerPage({ params }: { params: Promise<{ id
 
   return (
     <div>
+      {/* Still processing: the player appears by itself once it is ready. */}
+      <RefreshWhileProcessing active={isVideoProcessing(video.status)} />
       <div className="page-header">
         <Link href="/videos" className="btn btn-sm btn-ghost" style={{ marginBottom: 6 }}>
           {t("detail.back")}

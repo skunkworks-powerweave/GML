@@ -43,3 +43,15 @@ export function contextTypeLabel(t: VideoTranslate, contextType: string): string
 export function sourceLabel(t: VideoTranslate, source: string): string {
   return t("sourceName", { source });
 }
+
+const PROCESSING: ReadonlySet<string> = new Set(["received", "queued", "transcoding"]);
+
+/**
+ * Still on its way to playable: uploaded, waiting for the worker, or being
+ * transcoded. A page showing such a video keeps itself current
+ * (components/video/RefreshWhileProcessing.tsx); ready, failed and the review
+ * states are where a video stays.
+ */
+export function isVideoProcessing(status: string): boolean {
+  return PROCESSING.has(status);
+}

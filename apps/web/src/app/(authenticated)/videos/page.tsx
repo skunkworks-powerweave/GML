@@ -35,7 +35,8 @@ import { UploadModal } from "@/components/video/UploadModal";
 import { whatsappPhoneForUsers } from "@/lib/env";
 import { getSystemSettings } from "@/lib/system-settings";
 import { signPosterUrls } from "@/lib/video/storage";
-import { contextTypeLabel, sourceLabel, statusLabel } from "@/lib/video/labels";
+import { contextTypeLabel, isVideoProcessing, sourceLabel, statusLabel } from "@/lib/video/labels";
+import { RefreshWhileProcessing } from "@/components/video/RefreshWhileProcessing";
 import { parsePage } from "@/lib/observation/list";
 
 export const dynamic = "force-dynamic";
@@ -219,6 +220,8 @@ export default async function VideoLibraryPage({
   // meetings" is exactly the fact the visibility scope exists to withhold.
   return (
     <div>
+      {/* A video still processing: keep its status current without a reload. */}
+      <RefreshWhileProcessing active={rows.some((r) => isVideoProcessing(r.status))} />
       <div className="page-header">
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>

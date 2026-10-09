@@ -337,13 +337,13 @@ test("spec 157 — bulk-toolbar.tsx exports the four named functions", () => {
   }
 });
 
-test("spec 157 — BulkDeleteToolbar gates submit with window.confirm and posts bulkDeleteAction", () => {
+test("spec 157 — BulkDeleteToolbar asks on the page, then posts bulkDeleteAction", () => {
   const src = read(TOOLBAR_PATH);
-  assert.match(
-    src,
-    /window\.confirm/,
-    "BulkDeleteToolbar must gate submit with window.confirm (matches DeleteRowButton from spec 114)",
-  );
+  // Not window.confirm(): see test_114 -- some browsers never show the dialog,
+  // and the bulk delete then silently did nothing.
+  assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""), /window\.confirm\s*\(/, "BulkDeleteToolbar must not depend on a browser dialog");
+  assert.match(src, /data-confirm-yes/, "BulkDeleteToolbar must offer 'Yes, delete' on the page");
+  assert.match(src, /data-confirm-cancel/, "BulkDeleteToolbar must offer 'Cancel' on the page");
   assert.match(
     src,
     /bulkDeleteAction/,

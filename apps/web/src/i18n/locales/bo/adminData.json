@@ -958,13 +958,17 @@
       "clear": "འདེམས་པ་གཙང་སེལ།",
       "deleting": "བསུབ་བཞིན།…",
       "delete": "འདེམས་པ་ {count} བསུབ།",
-      "confirmWithEffects": "{count, plural, other {འདེམས་པའི་ཐིག་ཕྲེང་ # བསུབ་བམ།}}\n\n{effects}\n\nའདི་ཕྱིར་ལྡོག་མི་ཐུབ།"
+      "confirmWithEffects": "{count, plural, other {འདེམས་པའི་ཐིག་ཕྲེང་ # བསུབ་བམ།}}\n\n{effects}\n\nའདི་ཕྱིར་ལྡོག་མི་ཐུབ།",
+      "yes": "{count, plural, other {ཡིན། ཐིག་ཕྲེང་ # བསུབ།}}",
+      "cancel": "ཕྱིར་འཐེན།"
     },
     "deleteRow": {
       "rowFallback": "ཐིག་ཕྲེང་ {id}",
       "confirm": "{target} བསུབ་བམ། འདི་ཕྱིར་ལྡོག་མི་ཐུབ།",
       "deleting": "བསུབ་བཞིན།…",
-      "confirmWithEffects": "{target} བསུབ་བམ།\n\n{effects}\n\nའདི་ཕྱིར་ལྡོག་མི་ཐུབ།"
+      "confirmWithEffects": "{target} བསུབ་བམ།\n\n{effects}\n\nའདི་ཕྱིར་ལྡོག་མི་ཐུབ།",
+      "yes": "ཡིན། བསུབ།",
+      "cancel": "ཕྱིར་འཐེན།"
     },
     "importCsv": {
       "open": "CSV ནང་འདྲེན།",

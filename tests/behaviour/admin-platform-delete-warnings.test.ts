@@ -21,7 +21,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { getTableName } from "drizzle-orm";
-import { h, render, mount, withAppRouter, request } from "./_ui.js";
+import { h, render, mount, withAppRouter, request, hostElements, textOf } from "./_ui.js";
 import { needsDatabase, withClient, tag } from "./_harness.js";
 import { fixture } from "./_admin-fixture.js";
 import { closeAppDb, signIn } from "./_server-actions.js";
@@ -150,15 +150,35 @@ test("the grid's Delete and bulk delete carry the warning, and the confirmation 
       // The page renders with it.
       await render(withAppRouter(tree));
 
-      // The confirmation: the row, then what else goes, then "cannot be undone".
-      let asked = "";
+      // The confirmation: the row, then what else goes, then "cannot be undone",
+      // ON THE PAGE. It used to be window.confirm(), which a browser that
+      // shows no dialogs (the desktop app's browser pane, some phones' in-app
+      // browsers) answers "Cancel" at once: every Delete silently did
+      // nothing (live QA, 9 Oct 2026). A dialog now fails this test.
       const g = globalThis as Record<string, unknown>;
       const had = "window" in g;
       const previous = g.window;
-      g.window = { confirm: (m: string) => ((asked = m), false) };
+      g.window = {
+        confirm: () => {
+          throw new Error("window.confirm must not be used: some browsers never show it");
+        },
+      };
+      let asked = "";
       try {
         const m = mount(DeleteRowButton as (p: unknown) => unknown, { entitySlug: "phases", rowId: phase, rowLabel: "P", warning: expected }, { intl: "bo" });
         (m.tree as El).props.onSubmit!.call(null, { preventDefault() {} } as never);
+        const asking = m.rerender();
+        asked = textOf(asking);
+        const buttons = hostElements(asking).filter((e) => e.type === "button");
+        const yes = buttons.find((b) => b.props["data-confirm-yes"] === "true");
+        const cancel = buttons.find((b) => b.props["data-confirm-cancel"] === "true");
+        assert.ok(yes && cancel, `the page itself must offer the choice:\n${asked}`);
+        (cancel!.props.onClick as () => void)();
+        const back = m.rerender();
+        assert.ok(
+          hostElements(back).some((e) => e.type === "form" && e.props["data-confirm-delete"] === "true"),
+          "Cancel puts the Delete button back",
+        );
       } finally {
         if (had) g.window = previous;
         else delete g.window;

@@ -39,7 +39,7 @@ import "server-only";
 // Aggregated in SQL, grouped by student or by class: the number of queries
 // does not grow with the number of students, sessions or schools.
 
-import { and, asc, count, eq, inArray, isNotNull, isNull, max, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, exists, inArray, isNotNull, isNull, max, ne, not, or, sql } from "drizzle-orm";
 import { assessmentMarks, assessments, classes, districts, learners, schools, sessionAttendance, sessions, zones } from "@gml/db/schema";
 import type { Db } from "@/lib/visibility";
 import { schoolsIn, type Place } from "@/lib/rtt/scope";
@@ -333,7 +333,19 @@ export async function programmeProgress(
   q: { place?: Place | null; schoolId?: string | null; page?: number; pageSize?: number } = {},
 ) {
   const pageSize = q.pageSize ?? SCHOOLS_PER_PAGE;
-  const where = and(eq(schools.active, true), schoolsIn(q.place ?? null), q.schoolId ? eq(schools.id, q.schoolId) : undefined);
+  const inScope = and(eq(schools.active, true), schoolsIn(q.place ?? null), q.schoolId ? eq(schools.id, q.schoolId) : undefined);
+  // SCHOOLS WITH CLASSES ARE THE CARDS, and the only ones paged. Every active
+  // school used to be a card, in district order: on the live site 13 of 14
+  // schools had no classes yet, filled the screen with "No classes at this
+  // school yet", and the one with data was 12th -- the page read as empty
+  // (QA, 9 Oct 2026). The rest are named once, after them (withoutClasses).
+  const hasClasses = exists(
+    db
+      .select({ one: sql`1` })
+      .from(classes)
+      .where(and(eq(classes.schoolId, schools.id), eq(classes.active, true))),
+  );
+  const where = and(inScope, hasClasses);
 
   const [{ n: total } = { n: 0 }] = await db.select({ n: count() }).from(schools).where(where);
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -365,5 +377,14 @@ export async function programmeProgress(
       .map((c) => ({ classId: c.id, grade: c.grade, stage: c.stage, figures: figures.get(c.id)! }));
     return { ...s, classes: mine, totals: sumFigures(mine.map((c) => c.figures)) };
   });
-  return { total, page, pages, pageSize, schools: schoolsOut };
+  const withoutClasses = await db
+    .select({ id: schools.id, name: schools.name })
+    .from(schools)
+    .where(and(inScope, not(hasClasses)))
+    .orderBy(asc(schools.name), asc(schools.id))
+    .limit(WITHOUT_CLASSES_SHOWN);
+  return { total, page, pages, pageSize, schools: schoolsOut, withoutClasses };
 }
+
+/** How many schools without classes the overview names (all of them, in practice). */
+const WITHOUT_CLASSES_SHOWN = 500;
