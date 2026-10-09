@@ -98,6 +98,12 @@ test("spec 108: deploy.sh invokes check-restore-drill BEFORE docker compose up",
   );
 });
 
+// The migrate one-off, gated: the deploy stops when it fails. It may run
+// through with_db_retry, which runs it again only while Supabase's pooler is
+// full (GML-Staging builds #6/#7, 9 Oct 2026); tests/scripts/deploy-flow.test.mjs
+// executes both the retry and the stop.
+const MIGRATE_GATE = /if ! (?:with_db_retry )?docker compose run --rm --no-deps migrate; then/;
+
 test("spec 108: deploy.sh waits on /api/health AFTER the migrate gate, through caddy", () => {
   const src = code(read(DEPLOY_PATH));
   assert.match(src, /curl/, "deploy.sh must curl /api/health for the health-wait");
@@ -115,7 +121,7 @@ test("spec 108: deploy.sh waits on /api/health AFTER the migrate gate, through c
   // Migrations now run on their own first, and up only once they succeeded
   // (tests/scripts/deploy-flow.test.mjs executes the failing case).
   const upIdx = src.indexOf("docker compose up");
-  const migrateGateIdx = src.search(/if ! docker compose run --rm --no-deps migrate; then/);
+  const migrateGateIdx = src.search(MIGRATE_GATE);
   const curlIdx = src.search(/until\s+curl|curl[^\n]*HEALTH_URL/);
   assert.ok(upIdx >= 0, "deploy.sh must invoke 'docker compose up'");
   assert.ok(migrateGateIdx >= 0, "deploy.sh must run the migrations on their own and stop when they fail");
@@ -201,7 +207,7 @@ test("spec 108: migrations run in the migrate service, and the seed runs in the 
   // the deploy before anything that is serving is touched.
   assert.match(
     src,
-    /if ! docker compose run --rm --no-deps migrate; then[\s\S]*?migrations FAILED[\s\S]*?exit 1/,
+    new RegExp(MIGRATE_GATE.source + /[\s\S]*?migrations FAILED[\s\S]*?exit 1/.source),
     "deploy.sh must stop the deploy, saying so, when the migrations fail",
   );
 
@@ -213,7 +219,7 @@ test("spec 108: migrations run in the migrate service, and the seed runs in the 
     "deploy.sh must run seed_all.ts in the migrate image (the only one with pnpm + tsx + packages/db)",
   );
   assert.ok(
-    src.search(/if ! docker compose run --rm --no-deps migrate; then/) < src.indexOf("seed_all.ts"),
+    src.search(MIGRATE_GATE) < src.indexOf("seed_all.ts"),
     "migrations must be confirmed before the seed runs",
   );
 });

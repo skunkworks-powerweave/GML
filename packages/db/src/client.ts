@@ -7,8 +7,24 @@ import { Pool, type PoolConfig } from "pg";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "./schema";
 
-let _pool: Pool | null = null;
 let _db: NodePgDatabase<typeof schema> | null = null;
+
+/**
+ * ONE POOL PER PROCESS, not one per copy of this module.
+ *
+ * The Next.js production build puts this module into several server chunks
+ * (six of them on 9 Oct 2026), and a process that loads more than one gets
+ * more than one copy of every module-level variable. The pool used to be one
+ * of those, so DB_POOL_MAX limited each copy, not the process: a local
+ * production server with DB_POOL_MAX=10 held 13 connections under load. On the
+ * live site the app's budgeted 8 plus the worker's 4 then filled Supabase's
+ * session pooler (15 slots), and the deploy's migrate run was refused --
+ * "(EMAXCONNSESSION) max clients reached in session mode" (GML-Staging builds
+ * #6 and #7). The pool now lives on globalThis under a registry key, so every
+ * copy finds the same one. Only the pool: a drizzle wrapper per copy is free.
+ */
+const POOL_KEY = Symbol.for("@gml/db.pool");
+const registry = globalThis as typeof globalThis & { [POOL_KEY]?: Pool };
 
 /**
  * The connection settings every Postgres client in this repository uses.
@@ -131,8 +147,9 @@ function readCaCert(): string | undefined {
 }
 
 export function getPool(): Pool {
-  if (!_pool) {
-    _pool = new Pool(poolConfig());
+  let pool = registry[POOL_KEY];
+  if (!pool) {
+    pool = registry[POOL_KEY] = new Pool(poolConfig());
     // pg-pool re-emits an IDLE client's error -- the server ending the
     // connection in a pooler restart, a failover, a TCP reset -- as an 'error'
     // event on the Pool, and an EventEmitter with no listener throws it. That
@@ -142,7 +159,7 @@ export function getPool(): Pool {
     // dials a fresh one on next use, so there is nothing to do but say so.
     // (The Next.js server survived only because Next installs its own
     // uncaughtException handler.)
-    _pool.on("error", (err) => {
+    pool.on("error", (err) => {
       console.warn(`[db] an idle pooled connection failed and was discarded: ${err.message}`);
     });
     // ...and the same for a CHECKED-OUT client. pg-pool removes its own
@@ -152,11 +169,11 @@ export function getPool(): Pool {
     // listening. Nothing needs doing here: whoever holds the client already
     // gets the error (its query rejects, or its next one does, "not
     // queryable"), and the pool discards an unqueryable client on release.
-    _pool.on("connect", (client) => {
+    pool.on("connect", (client) => {
       client.on("error", () => undefined);
     });
   }
-  return _pool;
+  return pool;
 }
 
 export function getDb(): NodePgDatabase<typeof schema> {
