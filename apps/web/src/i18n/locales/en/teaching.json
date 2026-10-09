@@ -362,7 +362,9 @@
       "classIntro": "{school}: attendance, marks and sessions held for every student in this class.",
       "classTitle": "{school}: Grade {grade}",
       "piiNote": "Student names are confidential. Opening this page is recorded in the audit log.",
-      "back": "Student progress"
+      "back": "Student progress",
+      "withoutClassesTitle": "{count, plural, one {# school has no classes yet} other {# schools have no classes yet}}",
+      "withoutClassesHint": "Add classes under Data › All tables › Classes; they then appear above with their figures."
     }
   },
   "csv": {

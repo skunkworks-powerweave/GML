@@ -451,7 +451,10 @@
         "validation_failed": "The request was not valid. Reload the page and try again.",
         "recipient_not_found": "That person's account was not found.",
         "recipient_no_phone": "That person has no WhatsApp number on their account."
-      }
+      },
+      "yesRotate": "Yes, rotate",
+      "yesShare": "Yes, send",
+      "cancel": "Cancel"
     }
   }
 }

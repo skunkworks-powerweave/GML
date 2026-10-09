@@ -252,8 +252,11 @@ test("spec 115 — RotateControls client component POSTs to /rotate and /share e
   assert.match(src, /\/api\/admin\/gates\/.+\/rotate/);
   assert.match(src, /\/api\/admin\/gates\/.+\/share/);
   assert.match(src, /method:\s*"POST"/);
-  // Confirm dialog before destructive rotate
-  assert.match(src, /confirm\(/);
+  // A confirmation before the destructive rotate (and the share), on the page:
+  // window.confirm() is answered "Cancel" by browsers that show no dialogs.
+  assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""), /window\.confirm\s*\(/);
+  assert.match(src, /data-confirm-yes/);
+  assert.match(src, /data-confirm-cancel/);
 });
 
 test("spec 115 — /admin index page links to /admin/gates (no longer a placeholder)", () => {

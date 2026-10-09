@@ -9,6 +9,8 @@ import Link from "next/link";
 import { getLocale, getTranslations } from "next-intl/server";
 import { INTL_LOCALE, normalizeLocale } from "@/i18n/config";
 import type { SessionVideo } from "@/lib/video/session-videos";
+import { isVideoProcessing } from "@/lib/video/labels";
+import { RefreshWhileProcessing } from "./RefreshWhileProcessing";
 
 export type UploadChoice =
   /** A session page: one button for this session. */
@@ -39,6 +41,8 @@ export async function SessionVideosCard({
 
   return (
     <section className="card card-hi" style={{ minWidth: 0 }} data-testid="session-videos">
+      {/* A video still processing: keep its status current without a reload. */}
+      <RefreshWhileProcessing active={videos.some((v) => isVideoProcessing(v.status))} />
       <header style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
         <h2 className="serif" style={{ fontSize: 16, fontWeight: 600 }}>
           {t("sessionVideos.title")}

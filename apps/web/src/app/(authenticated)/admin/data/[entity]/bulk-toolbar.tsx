@@ -154,8 +154,10 @@ export function BulkSelectAllCheckbox() {
 
 /**
  * Sticky toolbar that appears above the table when ≥1 row is selected.
- * The "Delete N selected" button gates submit with window.confirm() then
- * posts bulkDeleteAction(entitySlug, ids[]).
+ * "Delete N selected" asks first, in the toolbar itself ("Yes, delete" /
+ * "Cancel"), then posts bulkDeleteAction(entitySlug, ids[]). Not
+ * window.confirm(): a browser that shows no dialogs answers it "Cancel" at
+ * once (delete-button.tsx says more).
  */
 export function BulkDeleteToolbar({
   entitySlug,
@@ -167,16 +169,16 @@ export function BulkDeleteToolbar({
 }) {
   const { selected, clear } = useSelectedRows();
   const [pending, startTransition] = useTransition();
+  const [asking, setAsking] = useState(false);
   const t = useTranslations("adminData.client");
   const count = selected.size;
 
   if (count === 0) return null;
 
+  const question = warning ? t("bulk.confirmWithEffects", { count, effects: warning }) : t("bulk.confirm", { count });
+
   const handleDelete = () => {
-    const message = warning ? t("bulk.confirmWithEffects", { count, effects: warning }) : t("bulk.confirm", { count });
-    if (typeof window !== "undefined" && !window.confirm(message)) {
-      return;
-    }
+    setAsking(false);
     const formData = new FormData();
     formData.set("entitySlug", entitySlug);
     for (const id of selected) {
@@ -196,6 +198,28 @@ export function BulkDeleteToolbar({
       aria-label={t("bulk.region")}
     >
       <span className="text-red-900">{t("bulk.selected", { count })}</span>
+      {asking ? (
+        <div role="group" aria-label={question} data-confirm-open="true" className="flex flex-wrap items-center gap-3">
+          <span className="whitespace-pre-line text-xs text-red-900">{question}</span>
+          <button
+            type="button"
+            data-confirm-yes="true"
+            onClick={handleDelete}
+            disabled={pending}
+            className="rounded-md bg-red-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+          >
+            {t("bulk.yes", { count })}
+          </button>
+          <button
+            type="button"
+            data-confirm-cancel="true"
+            onClick={() => setAsking(false)}
+            className="text-xs text-red-900 hover:underline"
+          >
+            {t("bulk.cancel")}
+          </button>
+        </div>
+      ) : (
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -206,7 +230,7 @@ export function BulkDeleteToolbar({
         </button>
         <button
           type="button"
-          onClick={handleDelete}
+          onClick={() => setAsking(true)}
           disabled={pending}
           data-bulk-delete-button="true"
           className="rounded-md bg-red-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
@@ -214,6 +238,7 @@ export function BulkDeleteToolbar({
           {pending ? t("bulk.deleting") : t("bulk.delete", { count })}
         </button>
       </div>
+      )}
     </div>
   );
 }

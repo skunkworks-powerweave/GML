@@ -11,9 +11,12 @@
 //   4. Offers a "Share via WhatsApp" button that POSTs to /share and then
 //      window.open()s the returned wa.me URL
 //
-// Native confirm() guards both the rotate (destructive — invalidates every
+// A confirmation guards both the rotate (destructive — invalidates every
 // active grant for the slug) and the share (re-confirm before opening the
-// WhatsApp tab). Matches the spec-114 ConfirmModal pattern.
+// WhatsApp tab). It is ON THE PAGE ("Yes, ..." / "Cancel" under the buttons),
+// not window.confirm(): a browser that shows no dialogs answers that "Cancel"
+// at once, and the rotate silently did nothing (the admin grid's Delete did
+// exactly that on the live site, QA 9 Oct 2026).
 
 import { useState, useTransition, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
@@ -37,6 +40,8 @@ export function RotateControls({ slug, label, recipients }: Props) {
   const [recipientId, setRecipientId] = useState<string>(
     recipients[0]?.id ?? "",
   );
+  // Which action is waiting for "Yes": the question is shown on the page.
+  const [asking, setAsking] = useState<"rotate" | "share" | null>(null);
   // admin.client.rotateControls.*; `label` and the recipients' labels arrive
   // already translated from the page. The rotate and share APIs answer with
   // an error code (forbidden, invalid_slug, recipient_no_phone, ...); it is
@@ -47,10 +52,11 @@ export function RotateControls({ slug, label, recipients }: Props) {
 
   const handleRotate = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const message = t("confirmRotate", { gate: label });
-    if (typeof window !== "undefined" && !window.confirm(message)) {
-      return;
-    }
+    setAsking("rotate");
+  };
+
+  const doRotate = () => {
+    setAsking(null);
     setError(null);
     startTransition(async () => {
       try {
@@ -74,6 +80,12 @@ export function RotateControls({ slug, label, recipients }: Props) {
     });
   };
 
+  const question = () => {
+    if (asking === "rotate") return t("confirmRotate", { gate: label });
+    const recipient = recipients.find((r) => r.id === recipientId);
+    return t("confirmShare", { gate: label, recipient: recipient?.label ?? "" });
+  };
+
   const handleCopy = async () => {
     if (!plaintext) return;
     try {
@@ -91,14 +103,15 @@ export function RotateControls({ slug, label, recipients }: Props) {
     }
   };
 
-  const handleShare = async () => {
+  const handleShare = () => {
     if (!plaintext || !recipientId) return;
-    const recipient = recipients.find((r) => r.id === recipientId);
-    if (!recipient) return;
-    const confirmMsg = t("confirmShare", { gate: label, recipient: recipient.label });
-    if (typeof window !== "undefined" && !window.confirm(confirmMsg)) {
-      return;
-    }
+    if (!recipients.some((r) => r.id === recipientId)) return;
+    setAsking("share");
+  };
+
+  const doShare = async () => {
+    setAsking(null);
+    if (!plaintext || !recipientId) return;
     setError(null);
     try {
       const res = await fetch(`/api/admin/gates/${slug}/share`, {
@@ -133,6 +146,36 @@ export function RotateControls({ slug, label, recipients }: Props) {
           {pending ? t("rotating") : t("rotate")}
         </button>
       </form>
+
+      {asking ? (
+        <div
+          role="group"
+          aria-label={question()}
+          data-confirm-open="true"
+          className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs"
+        >
+          <span className="text-amber-900">{question()}</span>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-confirm-yes="true"
+              disabled={pending}
+              onClick={() => (asking === "rotate" ? doRotate() : void doShare())}
+              className="rounded-md bg-neutral-900 px-3 py-1 font-medium text-white disabled:opacity-50"
+            >
+              {asking === "rotate" ? t("yesRotate") : t("yesShare")}
+            </button>
+            <button
+              type="button"
+              data-confirm-cancel="true"
+              onClick={() => setAsking(null)}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1"
+            >
+              {t("cancel")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {error ? (
         <div

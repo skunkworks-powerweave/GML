@@ -958,13 +958,17 @@
       "clear": "Clear selection",
       "deleting": "Deleting…",
       "delete": "Delete {count} selected",
-      "confirmWithEffects": "{count, plural, one {Delete # selected row?} other {Delete # selected rows?}}\n\n{effects}\n\nThis cannot be undone."
+      "confirmWithEffects": "{count, plural, one {Delete # selected row?} other {Delete # selected rows?}}\n\n{effects}\n\nThis cannot be undone.",
+      "yes": "{count, plural, one {Yes, delete # row} other {Yes, delete # rows}}",
+      "cancel": "Cancel"
     },
     "deleteRow": {
       "rowFallback": "row {id}",
       "confirm": "Delete {target}? This cannot be undone.",
       "deleting": "Deleting…",
-      "confirmWithEffects": "Delete {target}?\n\n{effects}\n\nThis cannot be undone."
+      "confirmWithEffects": "Delete {target}?\n\n{effects}\n\nThis cannot be undone.",
+      "yes": "Yes, delete",
+      "cancel": "Cancel"
     },
     "importCsv": {
       "open": "Import CSV",

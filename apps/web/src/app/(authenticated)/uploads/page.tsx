@@ -34,7 +34,8 @@ import { getLocale, getTranslations } from "next-intl/server";
 import { and, desc, eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { normalizeLocale } from "@/i18n/config";
-import { statusLabel, type VideoTranslate } from "@/lib/video/labels";
+import { isVideoProcessing, statusLabel, type VideoTranslate } from "@/lib/video/labels";
+import { RefreshWhileProcessing } from "@/components/video/RefreshWhileProcessing";
 import { actorFrom } from "@/lib/authz";
 import { db } from "@gml/db";
 import { videoSubmissions, files, observationCycles } from "@gml/db/schema";
@@ -298,6 +299,8 @@ export default async function UploadsPage({
 
   return (
     <div>
+      {/* A video still processing: keep its status current without a reload. */}
+      <RefreshWhileProcessing active={rows.some((r) => isVideoProcessing(r.status))} />
       <div className="page-header">
         <div className="label">
           {t("uploads.label")}

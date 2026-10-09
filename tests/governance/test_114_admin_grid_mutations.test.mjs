@@ -76,11 +76,18 @@ test("spec 114: RowForm supports mode='edit' with rowId + initialValues and disp
   assert.match(src, /isEdit\s*\?\s*updateRowAction\s*:\s*createRowAction/, "RowForm must switch actions by mode");
 });
 
-test("spec 114: DeleteRowButton client wrapper exists and gates submit with window.confirm", () => {
+// The confirmation is ON THE PAGE, not window.confirm(): a browser that shows
+// no dialogs (the desktop app's browser pane, some phones' in-app browsers)
+// answers that "Cancel" at once, and every Delete silently did nothing (live
+// QA, 9 Oct 2026). tests/behaviour/admin-platform-delete-warnings.test.ts
+// clicks through it.
+test("spec 114: DeleteRowButton client wrapper exists and asks on the page before it deletes", () => {
   assert.ok(existsSync(resolve(root, DELETE_BUTTON)), "delete-button.tsx must exist");
   const src = read(DELETE_BUTTON);
   assert.match(src, /^"use client"/m, "DeleteRowButton must be a client component");
-  assert.match(src, /window\.confirm/, "DeleteRowButton must gate submit with window.confirm");
+  assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""), /window\.confirm\s*\(/, "DeleteRowButton must not depend on a browser dialog");
+  assert.match(src, /data-confirm-yes/, "DeleteRowButton must offer 'Yes, delete' on the page");
+  assert.match(src, /data-confirm-cancel/, "DeleteRowButton must offer 'Cancel' on the page");
   assert.match(src, /deleteRowAction/, "DeleteRowButton must call deleteRowAction");
 });
 

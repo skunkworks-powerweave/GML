@@ -82,7 +82,7 @@ export default async function ProgressOverviewPage({ searchParams }: { searchPar
           </form>
         </div>
 
-        {overview.schools.length === 0 ? (
+        {overview.schools.length === 0 && overview.withoutClasses.length === 0 ? (
           <section className="card card-hi" style={{ padding: 16, display: "grid", gap: 10 }}>
             <Empty>{t("progress.admin.noSchools")}</Empty>
             <div>
@@ -129,6 +129,23 @@ export default async function ProgressOverviewPage({ searchParams }: { searchPar
           </Card>
         ))}
 
+        {overview.withoutClasses.length > 0 ? (
+          // Named once, after the schools with figures, instead of a card each
+          // saying "No classes at this school yet".
+          <section
+            className="card"
+            style={{ padding: 14, display: "grid", gap: 6 }}
+            data-testid="schools-without-classes"
+          >
+            <div style={{ fontWeight: 600 }}>
+              {t("progress.admin.withoutClassesTitle", { count: overview.withoutClasses.length })}
+            </div>
+            <div style={{ ...mutedText, overflowWrap: "anywhere" }}>
+              {overview.withoutClasses.map((s) => s.name).join(", ")}
+            </div>
+            <div style={mutedText}>{t("progress.admin.withoutClassesHint")}</div>
+          </section>
+        ) : null}
         {overview.pages > 1 ? (
           <nav aria-label={t("progress.admin.pages")} style={{ ...wrapRow, justifyContent: "space-between" }}>
             {overview.page > 1 ? (

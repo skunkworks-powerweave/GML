@@ -958,13 +958,17 @@
       "clear": "चयन हटाएँ",
       "deleting": "हटा रहे हैं…",
       "delete": "चुनी गई {count} हटाएँ",
-      "confirmWithEffects": "{count, plural, one {# चुनी गई पंक्ति हटाएँ?} other {# चुनी गई पंक्तियाँ हटाएँ?}}\n\n{effects}\n\nयह वापस नहीं लिया जा सकता।"
+      "confirmWithEffects": "{count, plural, one {# चुनी गई पंक्ति हटाएँ?} other {# चुनी गई पंक्तियाँ हटाएँ?}}\n\n{effects}\n\nयह वापस नहीं लिया जा सकता।",
+      "yes": "{count, plural, one {हाँ, # पंक्ति हटाएँ} other {हाँ, # पंक्तियाँ हटाएँ}}",
+      "cancel": "रद्द करें"
     },
     "deleteRow": {
       "rowFallback": "पंक्ति {id}",
       "confirm": "{target} हटाएँ? यह वापस नहीं लिया जा सकता।",
       "deleting": "हटा रहे हैं…",
-      "confirmWithEffects": "{target} हटाएँ?\n\n{effects}\n\nयह वापस नहीं लिया जा सकता।"
+      "confirmWithEffects": "{target} हटाएँ?\n\n{effects}\n\nयह वापस नहीं लिया जा सकता।",
+      "yes": "हाँ, हटाएँ",
+      "cancel": "रद्द करें"
     },
     "importCsv": {
       "open": "CSV आयात करें",
