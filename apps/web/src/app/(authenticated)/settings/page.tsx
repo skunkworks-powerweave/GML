@@ -44,6 +44,7 @@ export default async function SettingsPage() {
   if (!session?.user?.id) redirect("/login");
 
   const userId = session.user.id;
+  const passwordRequired = session.user.mustChangePassword === true;
   const email = session.user.email ?? "—";
   const role = session.user.role ?? "teacher";
   const t = await getTranslations("home.settings");
@@ -86,6 +87,38 @@ export default async function SettingsPage() {
       </div>
 
       <div className="page-body">
+        {/* A password an administrator set must be replaced first: the proxy
+            sends every page here until it is, so the menu looks dead. Said at
+            the TOP, where the page opens. The form's own notice sat in the
+            Account card at the bottom, below the fold, and a new teacher read
+            "Your preferences" and nothing else (live QA, 9 Oct 2026). */}
+        {passwordRequired ? (
+          <section
+            aria-labelledby="password-first-title"
+            data-testid="password-required-banner"
+            style={{
+              background: "var(--saffron-soft)",
+              border: "1px solid oklch(0.82 0.08 60)",
+              borderRadius: "var(--r-2)",
+              padding: 14,
+              marginBottom: 18,
+              display: "grid",
+              gap: 8,
+              maxWidth: 780,
+            }}
+          >
+            <h2 id="password-first-title" className="serif" style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
+              {t("passwordFirst.title")}
+            </h2>
+            <p style={{ fontSize: 13, margin: 0, color: "var(--ink-2)" }}>{t("passwordFirst.body")}</p>
+            <div>
+              <a href="#change-password" className="btn btn-primary" data-testid="password-required-go">
+                {t("passwordFirst.cta")}
+              </a>
+            </div>
+          </section>
+        ) : null}
+
         <section
           style={{
             display: "grid",
@@ -101,7 +134,7 @@ export default async function SettingsPage() {
             email={email}
             roleLabel={roleLabel}
             roleChipKind={ROLE_COLORS[role] ?? ""}
-            passwordRequired={session.user.mustChangePassword === true}
+            passwordRequired={passwordRequired}
           />
         </section>
 

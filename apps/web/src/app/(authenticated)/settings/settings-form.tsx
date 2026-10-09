@@ -281,7 +281,9 @@ export function SettingsForm({ initial, email, roleLabel, roleChipKind, password
             {roleLabel}
           </span>
         </KvRow>
-        <KvRow label={t("password")}>
+        {/* id: the target of the "Change password now" button Settings shows
+            at the top while an administrator-set password must be replaced. */}
+        <KvRow label={t("password")} id="change-password">
           {/* Was an <a href="/account/security"> — a route that has never
               existed. With self-service reset off until IT configures SMTP,
               this is the ONLY way a user can change the password an
@@ -485,10 +487,13 @@ function LangPill({
   );
 }
 
-function KvRow({ label, children }: { label: string; children: React.ReactNode }) {
+function KvRow({ label, id, children }: { label: string; id?: string; children: React.ReactNode }) {
   return (
     <div
+      id={id}
       style={{
+        // An in-page link to the row lands it below the sticky top bar.
+        scrollMarginTop: 80,
         display: "flex",
         flexWrap: "wrap",
         alignItems: "center",

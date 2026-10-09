@@ -14,6 +14,7 @@
 // none). When counts is missing the static prototype numbers still render —
 // chrome stays readable in degraded mode.
 
+import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { NAV_BY_ROLE } from "@/config/nav";
 import { applyNavCounts, type NavCounts } from "@/lib/chrome-counts";
@@ -29,9 +30,16 @@ type SidebarProps = {
   /** Spec 128 — live count badges keyed by nav item id. Optional; falls back
    * to NAV_BY_ROLE's static prototype numbers when absent. */
   counts?: NavCounts;
+  /**
+   * An administrator-set password must be replaced before anything else, and
+   * until it is the proxy sends every page to Settings. The menu stays (it is
+   * the map of what is coming) but is dimmed, under a note that says why and
+   * links to the form.
+   */
+  locked?: boolean;
 };
 
-export async function Sidebar({ role, activeId, counts }: SidebarProps) {
+export async function Sidebar({ role, activeId, counts, locked = false }: SidebarProps) {
   // Static config + live counts merge. When `counts` is absent (layout opted
   // out, or the chrome is rendered outside the authenticated route group),
   // applyNavCounts is a no-op and the prototype's seed numbers remain.
@@ -81,6 +89,30 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
         </div>
       </div>
 
+      {locked ? (
+        <Link
+          href="/settings#change-password"
+          id="nav-locked-note"
+          data-testid="nav-locked"
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "flex-start",
+            padding: "8px 10px",
+            background: "var(--saffron-soft)",
+            border: "1px solid oklch(0.82 0.08 60)",
+            borderRadius: "var(--r-2)",
+            color: "var(--ink)",
+            fontSize: 12,
+            lineHeight: 1.4,
+            textDecoration: "none",
+          }}
+        >
+          <Icon name="lock" size={14} />
+          <span>{t("chrome.menuLocked")}</span>
+        </Link>
+      ) : null}
+
       {sections.map((section) => {
         const sectionLabel = tSection(section.section);
         return (
@@ -106,6 +138,10 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
               // for an admin, "Pending review" for a mentor), and an id-keyed
               // map once gave a mentor the admin's wording.
               const itemLabel = tNav(item.labelKey);
+              // Locked: dimmed, and stated as unavailable with the note as the
+              // reason -- a screen reader heard a plain link that went nowhere.
+              // Settings itself stays as it is: it is where the note sends you.
+              const itemLocked = locked && item.href !== "/settings";
               return (
                 <ActiveNavLink
                   key={item.id}
@@ -115,6 +151,8 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                   serverActive={activeId === item.id}
                   href={item.href}
                   data-help-anchor={`nav-${item.id}`}
+                  aria-disabled={itemLocked || undefined}
+                  aria-describedby={itemLocked ? "nav-locked-note" : undefined}
                   // The current page is stated (aria-current), not only drawn
                   // with a background and a border.
                   style={{
@@ -130,6 +168,7 @@ export async function Sidebar({ role, activeId, counts }: SidebarProps) {
                     fontWeight: 400,
                     textDecoration: "none",
                     border: "1px solid transparent",
+                    opacity: itemLocked ? 0.5 : undefined,
                   }}
                   activeStyle={{ color: "var(--ink)", background: "var(--card-hi)", fontWeight: 500, border: "1px solid var(--line)" }}
                 >

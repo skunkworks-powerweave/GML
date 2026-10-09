@@ -133,7 +133,21 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   // false for every item on every page and nothing in the chrome ever showed
   // where the user was. A layout cannot read the URL, which is why it was never
   // wired; proxy.ts now sets x-pathname on every request, so it can.
-  const pathname = (await headers()).get("x-pathname");
+  const requestHeaders = await headers();
+  const pathname = requestHeaders.get("x-pathname");
+
+  // While an administrator-set password must be replaced, the proxy sends
+  // every page to Settings: the menu is there but leads nowhere else. The
+  // shells say so instead of letting each click bounce back in silence (live
+  // QA, 9 Oct 2026: "cannot click on any of the left menu").
+  const navLocked = session.user.mustChangePassword === true;
+  // Nor in the response to the password change itself. A cookie-writing server
+  // action re-renders the layout from the re-minted token, which no longer
+  // carries the flag, so the tour would open over "Password changed" (and over
+  // the warning when other devices could not be signed out). The form then
+  // loads the dashboard, where it plays. Settings' preference saves are fetches,
+  // not actions, so this is the password form (or sign-out, which leaves).
+  const passwordJustChanged = requestHeaders.has("next-action") && (pathname ?? "").startsWith("/settings");
 
   const content = device === "mobile" ? (
     <MobileShell
@@ -141,6 +155,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       navCounts={navCounts}
       unreadCount={unreadCount}
       activeTab={activeTabIdFor(user.role, pathname)}
+      navLocked={navLocked}
     >
       {children}
     </MobileShell>
@@ -152,6 +167,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
       queueDepth={queueDepth}
       locale={locale}
       activeNavId={activeNavIdFor(user.role, pathname)}
+      navLocked={navLocked}
     >
       {children}
     </DesktopShell>
@@ -170,7 +186,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
           proxy sends every page to Settings until it is, so the tour would
           sit over the password form pointing at pages that lead back there.
           ftux_seen_at stays unset, so it plays on the first page after. */}
-      {prefsFailed || session.user.mustChangePassword ? null : (
+      {prefsFailed || session.user.mustChangePassword || passwordJustChanged ? null : (
         <FTUXTour role={user.role} ftuxSeenAt={ftuxSeenAt} whatsapp={whatsappPhoneForUsers() !== null} />
       )}
       <QuickFind userId={user.id} />

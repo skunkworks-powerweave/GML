@@ -105,6 +105,7 @@ test("with the setting on, /settings still changes the password", { skip }, asyn
     form({ currentPassword: u.password, newPassword: "chosen-with-setting-1", confirmPassword: "chosen-with-setting-1" }),
   );
   assert.ok(res.ok, JSON.stringify(res));
+  assert.ok(!res.continueToDashboard, "a change nobody required leaves them on Settings");
   assert.equal(fake.users.get(u.id)!.password, "chosen-with-setting-1");
 });
 

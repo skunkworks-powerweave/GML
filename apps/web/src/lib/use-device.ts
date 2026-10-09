@@ -9,7 +9,12 @@ import type { DeviceType } from "./device";
 
 const MOBILE_QUERY = "(max-width: 768px)";
 
-export function useDeviceType(initial: DeviceType = "desktop"): DeviceType {
+/**
+ * `onFirstMismatch` runs once, on mount, when the viewport disagrees with
+ * `initial` (the server's guess). DeviceSync uses it to switch the shell at
+ * once; see there for why.
+ */
+export function useDeviceType(initial: DeviceType = "desktop", onFirstMismatch?: () => void): DeviceType {
   const [device, setDevice] = useState<DeviceType>(initial);
 
   useEffect(() => {
@@ -20,10 +25,14 @@ export function useDeviceType(initial: DeviceType = "desktop"): DeviceType {
       setDevice(next);
       // Set cookie for next server render.
       document.cookie = `gml-device=${next}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
+      return next;
     };
-    apply();
+    if (apply() !== initial) onFirstMismatch?.();
     mql.addEventListener?.("change", apply);
     return () => mql.removeEventListener?.("change", apply);
+    // Mount only: `initial` is the server's guess for this document, and the
+    // correction is for that guess alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return device;

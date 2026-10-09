@@ -29,15 +29,34 @@
 // updates it when the viewport crosses the breakpoint, so the NEXT server
 // render picks the right shell. It renders nothing.
 
+//
+// ── A WRONG FIRST GUESS IS CORRECTED AT ONCE ────────────────────────────────
+//
+// On a device's first visit there is no cookie, so the shell comes from the
+// User-Agent sniff, and it can be wrong for the width: an iPad in portrait
+// (it sends a Mac UA), an Android tablet in landscape, a narrow desktop
+// window. The correction used to wait for "the next navigation". But a server
+// action that writes a cookie re-renders the layout in its own response, and
+// that render read the corrected cookie and swapped the shell -- remounting
+// the whole page under it and dropping the action's result. A new teacher's
+// first password change did exactly that: password changed, no confirmation,
+// no way on, the form back as if nothing happened (review, 9 Oct 2026).
+//
+// So a guess the viewport contradicts is replaced straight away, once per
+// device (the cookie is right from then on), before anyone has typed anything.
+// A later rotation still waits for the next navigation: refreshing then could
+// throw away what someone is typing.
+
+import { useRouter } from "next/navigation";
 import { useDeviceType } from "@/lib/use-device";
 import type { DeviceType } from "@/lib/device";
 
 export function DeviceSync({ initial }: { initial: DeviceType }) {
+  const router = useRouter();
   // The hook owns the matchMedia listener and the cookie write. Seeding it with
   // what the server decided means the first client render agrees with the HTML
-  // that was just delivered, so there is no hydration mismatch -- and the
-  // correction, if any, lands on the following navigation rather than as a
-  // flash of the wrong shell.
-  useDeviceType(initial);
+  // that was just delivered, so there is no hydration mismatch; the refresh
+  // then re-renders with the cookie it has just written.
+  useDeviceType(initial, () => router.refresh());
   return null;
 }
