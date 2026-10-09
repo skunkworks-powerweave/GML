@@ -301,10 +301,14 @@ test("a deploy without WhatsApp configured completes, and says WhatsApp ingest i
 //                             finishes and is tagged, and the build exits 1 --
 //                             what real Compose does when one target fails
 //   image rm REF              untags REF
-//   compose run --rm --no-deps migrate    exits FAKE_MIGRATE_EXIT (default 0)
+//   compose run --rm --no-deps migrate    exits FAKE_MIGRATE_EXIT (default 0) --
+//                             after refusing FAKE_POOL_FULL_TIMES runs the way
+//                             Supabase's session pooler does when it is full
 //   compose up ...            exits FAKE_UP_EXIT (default 0) -- or 1 when the
 //                             migration fails, as the real one does after it
-//                             has already recreated app and worker
+//                             has already recreated app and worker -- and fails
+//                             its first FAKE_UP_POOL_FULL_TIMES runs with the
+//                             pooler's refusal in the migrate container's log
 //   compose ps --status running -q app    a container id, or nothing when
 //                             FAKE_NOTHING_RUNNING is set (no stack is up)
 
@@ -337,8 +341,32 @@ case "$*" in
       printf '%s' "sha256:\${FAKE_BUILD:-v1}-$s" > "$(tagfile "gml-lms-$s:current")"
     done
     exit 0 ;;
-  "compose run --rm --no-deps migrate") exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
-  "compose up"*) [ "\${FAKE_MIGRATE_EXIT:-0}" = 0 ] || exit 1; exit "\${FAKE_UP_EXIT:-0}" ;;
+  "compose run --rm --no-deps migrate")
+    n="$(cat "$SANDBOX_DIR/pool-full-runs" 2>/dev/null || echo 0)"
+    if [ "$n" -lt "\${FAKE_POOL_FULL_TIMES:-0}" ]; then
+      echo $((n + 1)) > "$SANDBOX_DIR/pool-full-runs"
+      echo "[migrate] failed: error: (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15" >&2
+      exit 1
+    fi
+    exit "\${FAKE_MIGRATE_EXIT:-0}" ;;
+  "compose up"*)
+    [ "\${FAKE_MIGRATE_EXIT:-0}" = 0 ] || exit 1
+    # The refusal belongs to the attempt that hit it: --since (below) sees
+    # only the current attempt's lines, like the real migrate container's log.
+    rm -f "$SANDBOX_DIR/up-pool-full-now"
+    n="$(cat "$SANDBOX_DIR/up-pool-full-runs" 2>/dev/null || echo 0)"
+    if [ "$n" -lt "\${FAKE_UP_POOL_FULL_TIMES:-0}" ]; then
+      echo $((n + 1)) > "$SANDBOX_DIR/up-pool-full-runs"
+      touch "$SANDBOX_DIR/up-pool-full-now"
+      echo "service \"migrate\" didn't complete successfully: exit 1" >&2
+      exit 1
+    fi
+    exit "\${FAKE_UP_EXIT:-0}" ;;
+  "compose logs"*)
+    # Without --since, the whole log -- earlier attempts' refusals included.
+    case "$*" in *--since*) [ -f "$SANDBOX_DIR/up-pool-full-now" ] || exit 0 ;; esac
+    [ -f "$SANDBOX_DIR/up-pool-full-runs" ] && echo "gml-lms-migrate-1  | [migrate] failed: error: (EMAXCONNSESSION) max clients reached in session mode"
+    exit 0 ;;
   "compose ps --status running -q app") [ -n "\${FAKE_NOTHING_RUNNING:-}" ] || echo "0123456789ab" ;;
   "compose ps --format"*) echo "app healthy" ;;
 esac
@@ -497,6 +525,11 @@ test("a failed migration restarts nothing: the release that was serving keeps se
         `serving app before migrate even starts, so the site goes 502.\n${calls.join("\n")}`,
     );
     assert.ok(calls.includes("docker compose run --rm --no-deps migrate"), "migrations must run on their own, first");
+    assert.equal(
+      calls.filter((l) => l === "docker compose run --rm --no-deps migrate").length,
+      1,
+      "a migration that failed for its own reason is not run again: only a full pooler is waited out",
+    );
     assert.match(r.stderr, /migrations FAILED[\s\S]*still serving/);
     assert.ok(!calls.some((l) => /seed_all\.ts/.test(l)), "nothing may be seeded after a failed migration");
     for (const svc of ["app", "worker"]) {
@@ -589,6 +622,110 @@ test("a build that fails part-way leaves :current and :previous on the releases 
     for (const svc of ["app", "worker"]) {
       assert.equal(imageId(sb, `gml-lms-${svc}:previous`), `sha256:v1-${svc}`, `gml-lms-${svc}:previous after the re-run`);
     }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ── A full pooler is waited out, not reported as a broken release ────────────
+//
+// GML-Staging builds #6 and #7 (9 Oct 2026) stopped at the migrate one-off:
+// "(EMAXCONNSESSION) max clients reached in session mode - max clients are
+// limited to pool_size: 15". The release still serving held its share of
+// Supabase's session pooler; nothing was wrong with what was being deployed.
+
+const MIGRATE = "docker compose run --rm --no-deps migrate";
+const NO_WAIT = { DB_BUSY_WAIT_SECONDS: "0" };
+
+test("a migrate run refused because the pooler is full is run again, and the deploy goes on", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, ...NO_WAIT, FAKE_BUILD: "v2", FAKE_POOL_FULL_TIMES: "2" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `the deploy gave up on a pooler that freed up:
+${r.stdout}
+${r.stderr}`);
+    assert.equal(calls.filter((l) => l === MIGRATE).length, 3, "refused twice, then applied");
+    assert.match(r.stdout, /pooler had no free connection \(attempt 1 of 6\)/);
+    assert.match(r.stdout, /pooler had no free connection \(attempt 2 of 6\)/);
+    assert.match(r.stdout, /EMAXCONNSESSION/, "the refusal itself is still shown in the log");
+    assert.match(r.stdout, /migrations applied/);
+    assert.ok(calls.some((l) => /^docker compose up/.test(l)), "the stack is started once migrations are in");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a pooler that stays full fails the deploy after DB_BUSY_ATTEMPTS, restarting nothing", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, ...NO_WAIT, DB_BUSY_ATTEMPTS: "3", FAKE_BUILD: "v2", FAKE_POOL_FULL_TIMES: "99" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.notEqual(r.status, 0);
+    assert.equal(calls.filter((l) => l === MIGRATE).length, 3, "bounded: it does not wait for ever");
+    assert.match(r.stderr, /migrations FAILED[\s\S]*still serving/);
+    assert.ok(!calls.some((l) => /^docker compose up/.test(l)), "nothing is started on a failed migration");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("`docker compose up` is run again when its migrate run found the pooler full", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, ...NO_WAIT, FAKE_BUILD: "v2", FAKE_UP_POOL_FULL_TIMES: "1" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.equal(r.status, 0, `${r.stdout}
+${r.stderr}`);
+    assert.equal(calls.filter((l) => /^docker compose up/.test(l)).length, 2, "refused once, then started");
+    assert.ok(
+      calls.some((l) => /^docker compose logs .*--since \S+ migrate/.test(l)),
+      "the reason is read from the migrate container's log, this attempt's lines only",
+    );
+    assert.match(r.stdout, /pooler had no free connection \(attempt 1 of 6\)/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("after a pooler refusal, an `up` that fails for another reason fails at once, not as a full pooler", () => {
+  // Compose restarts the same migrate container, whose log keeps the earlier
+  // refusal: read whole, every later failure looked like a full pooler.
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, ...NO_WAIT, FAKE_BUILD: "v2", FAKE_UP_POOL_FULL_TIMES: "1", FAKE_UP_EXIT: "1" },
+      timeout: SLOW,
+    });
+    const calls = sb.invocations();
+    assert.notEqual(r.status, 0);
+    assert.equal(calls.filter((l) => /^docker compose up/.test(l)).length, 2, "refused once, then failed for its own reason");
+    assert.equal((r.stdout.match(/pooler had no free connection/g) ?? []).length, 1, "the second failure is not blamed on the pooler");
+    assert.match(r.stderr, /'docker compose up' failed/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a mistyped DB_BUSY_ATTEMPTS cannot make the wait unbounded", () => {
+  const sb = storeSandbox({ serving: "v1", previous: "v0" });
+  try {
+    const r = sb.run("scripts/deploy.sh", {
+      env: { ...FAST, ...NO_WAIT, DB_BUSY_ATTEMPTS: "six", FAKE_BUILD: "v2", FAKE_POOL_FULL_TIMES: "99" },
+      timeout: SLOW,
+    });
+    assert.notEqual(r.status, 0);
+    assert.equal(sb.invocations().filter((l) => l === MIGRATE).length, 6, "the default cap applies");
+    assert.match(r.stdout, /attempt 5 of 6/);
   } finally {
     sb.cleanup();
   }

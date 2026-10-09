@@ -90,6 +90,59 @@ SMOKE_BASE_URL="${SMOKE_BASE_URL:-https://${DOMAIN_VALUE}}"
 log() { echo "[deploy] $(date -Iseconds) — $*"; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 
+# THE POOLER CAN BE FULL FOR A MOMENT. DATABASE_URL is Supabase's session
+# pooler, which admits only as many clients as its pool size (15 by default),
+# and the release still serving holds its share while this script runs its own
+# database one-offs. When every slot was taken, the migrate run was refused at
+# connect -- "(EMAXCONNSESSION) max clients reached in session mode" -- and the
+# deploy failed although nothing was wrong with the release (GML-Staging
+# builds #6 and #7, 9 Oct 2026). A connection the serving release is not using
+# is closed about 30 s after its last use (idleTimeoutMillis, packages/db), so
+# a refusal for THAT reason is waited out and the step run again; any other
+# failure fails at once, as before. Every step retried is safe to
+# re-run: migrate's two ledgers, the seeds' skip-if-exists, verify-auth's
+# throwaway probe, and `up` itself.
+DB_BUSY_ATTEMPTS="${DB_BUSY_ATTEMPTS:-6}"
+DB_BUSY_WAIT_SECONDS="${DB_BUSY_WAIT_SECONDS:-20}"
+# Whole numbers only, as DRILL_REFRESH_DAYS below. "six" fails every integer
+# test, so the cap would never trip and a full pooler would hold the deploy
+# for ever.
+case "${DB_BUSY_ATTEMPTS}" in "" | *[!0-9]* | 0) DB_BUSY_ATTEMPTS=6 ;; esac
+case "${DB_BUSY_WAIT_SECONDS}" in "" | *[!0-9]*) DB_BUSY_WAIT_SECONDS=20 ;; esac
+POOLER_FULL_RE='EMAXCONNSESSION|max clients reached|too many clients already|remaining connection slots are reserved'
+
+pooler_full_wait() {
+  log "the Supabase pooler had no free connection (attempt $1 of ${DB_BUSY_ATTEMPTS}): the release still serving holds its share, and connections it is not using close about 30s after their last use. Trying again in ${DB_BUSY_WAIT_SECONDS}s."
+  sleep "${DB_BUSY_WAIT_SECONDS}"
+}
+
+# Run a database one-off with its output shown as it goes (stderr merged into
+# stdout, which is what the Jenkins console shows anyway); run it again while
+# it fails only because the pooler was full.
+#
+# The copy it reads is kept only for the length of the step. On a first deploy
+# the seed's output carries the generated section-gate passwords, so the file
+# is emptied when the step ends and removed when the script does, however it
+# ends (bash runs an EXIT trap on errexit and on SIGTERM, a Jenkins abort).
+DB_RETRY_OUT=""
+trap '[ -z "${DB_RETRY_OUT}" ] || rm -f "${DB_RETRY_OUT}"' EXIT
+with_db_retry() {
+  local attempt=1 status
+  [ -n "${DB_RETRY_OUT}" ] || DB_RETRY_OUT="$(mktemp)"
+  while :; do
+    set +e
+    "$@" 2>&1 | tee "${DB_RETRY_OUT}"
+    status=${PIPESTATUS[0]}
+    set -e
+    if [ "${status}" -eq 0 ] || [ "${attempt}" -ge "${DB_BUSY_ATTEMPTS}" ] || ! grep -qE "${POOLER_FULL_RE}" "${DB_RETRY_OUT}"; then
+      : > "${DB_RETRY_OUT}"
+      return "${status}"
+    fi
+    pooler_full_wait "${attempt}"
+    attempt=$((attempt + 1))
+  done
+}
+
 # DRY RUN — resolve configuration, print it, and stop. Testing hook only.
 #
 # tests/scripts/deploy-sh.test.mjs uses this to prove that the HEALTH_*
@@ -476,7 +529,7 @@ fi
 # A one-off migrate first makes that promise true. `up` then re-runs migrate as
 # the no-op its two ledgers make it, and only then recreates app and worker.
 log "applying migrations (nothing that is serving is touched until they succeed)"
-if ! docker compose run --rm --no-deps migrate; then
+if ! with_db_retry docker compose run --rm --no-deps migrate; then
   # :current back on what was serving (restore_current, step 1). :previous has
   # not moved yet (below), so the rollback target is untouched too.
   restore_current
@@ -527,7 +580,27 @@ for svc in app worker migrate; do
 done
 
 log "starting stack"
-if ! docker compose up -d --remove-orphans; then
+# `up` runs migrate once more (the no-op its ledgers make it) before it starts
+# app and worker, and that run can find the pooler full too. Its error is in
+# the migrate container's log, not in `up`'s own output, so look there -- at
+# THIS attempt's lines only. Compose restarts the same exited migrate container
+# when its image is unchanged, and its log keeps every earlier run: read whole,
+# an old refusal made any later `up` failure look like a full pooler. The
+# script and the Docker daemon share this host's clock.
+up_attempt=1
+up_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+until docker compose up -d --remove-orphans; do
+  if [ "${up_attempt}" -lt "${DB_BUSY_ATTEMPTS}" ] \
+    && docker compose logs --no-color --since "${up_since}" migrate 2>&1 | grep -E "${POOLER_FULL_RE}" >/dev/null; then
+    pooler_full_wait "${up_attempt}"
+    up_attempt=$((up_attempt + 1))
+    up_since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    continue
+  fi
+  up_failed=1
+  break
+done
+if [ -n "${up_failed:-}" ]; then
   echo "[deploy] 'docker compose up' failed. Container state and recent logs:" >&2
   docker compose ps -a >&2 || true
   docker compose logs --no-color --tail 40 migrate app worker >&2 || true
@@ -591,11 +664,11 @@ log "healthy after ${elapsed}s (app container: $(app_container_health))"
 # Run in the MIGRATE image, which has pnpm, tsx and packages/db. The app image
 # has none of them — that was defect 2 above.
 log "seeding (idempotent: skips anything that already exists)"
-docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
+with_db_retry docker compose run --rm --no-deps migrate pnpm exec tsx src/scripts/seed_all.ts
 
 # ── 5. Verify ────────────────────────────────────────────────────────────────
 log "verifying auth configuration"
-docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
+with_db_retry docker compose run --rm --no-deps migrate pnpm exec tsx scripts/verify-auth.mjs
 
 # Seed and verify-auth have both succeeded: this host now holds data a backup
 # can capture and a restore drill can check, so from the next deploy on the

@@ -66,6 +66,16 @@ sized to fit 15 exactly:
 the app more, raise the pool size in the dashboard first, then
 `APP_DB_POOL_MAX`.
 
+These numbers are per **process**: `@gml/db` keeps one pool per process
+however many copies of it the Next.js build loads (until 9 Oct 2026 each copy
+had its own, and the app exceeded its 8). With no headroom in the table, a
+deploy can still find the pooler full for a moment while the old release is
+serving. `deploy.sh` then waits and retries its database steps
+(`DB_BUSY_ATTEMPTS`, default 6, `DB_BUSY_WAIT_SECONDS` apart, default 20) and
+fails only if the pooler stays full, or for any other reason at once. For a
+margin, raise the pool size in the dashboard (a 60-connection compute can
+take 25 to 30).
+
 ### 2.2 Manual dashboard steps
 
 None has a SQL equivalent. The application does not work without the first,
