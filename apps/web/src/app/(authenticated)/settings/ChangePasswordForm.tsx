@@ -6,11 +6,54 @@
 // the only affordance for changing your own password in the entire application
 // was a 404.
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
 import { changePasswordAction, type ChangePasswordState } from "./actions";
+
+/** Long enough to read "Password changed", in Hindi or Bhoti too, before the dashboard opens. */
+export const CONTINUE_AFTER_MS = 3000;
+
+const goToDashboard = () => window.location.assign("/dashboard");
+
+/**
+ * After a REQUIRED change: say it worked and open the dashboard. Until now
+ * every page led back to Settings, so leaving the person here made the menu
+ * look as dead as before (live QA, 9 Oct 2026).
+ *
+ * Automatically only on a clean success. When the other devices could not be
+ * signed out (`warning`), that sentence is the only place the person learns a
+ * session opened with the handed-over password may still be alive, so it stays
+ * on screen until they choose to go on. A button goes there at once either way.
+ *
+ * A full page load, not router.push: the first-run tour, held back on this
+ * response (layout.tsx), then plays on the dashboard from a fresh layout.
+ */
+export function ContinueToDashboard({ message, warning = false }: { message: string; warning?: boolean }) {
+  const t = useTranslations("home.client.changePassword");
+  useEffect(() => {
+    if (warning) return;
+    const timer = window.setTimeout(goToDashboard, CONTINUE_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [warning]);
+  return (
+    <div style={{ display: "grid", gap: 8, maxWidth: 320 }}>
+      <span
+        role={warning ? "alert" : "status"}
+        data-testid="password-changed-continuing"
+        style={{ fontSize: 12, color: warning ? "var(--ink)" : "var(--ok-ink, #047857)" }}
+      >
+        {warning ? message : `${message} ${t("continuing")}`}
+      </span>
+      <div>
+        <button type="button" className="btn btn-primary" onClick={goToDashboard} autoFocus={warning} data-testid="password-changed-go">
+          {t("goToDashboard")}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const field: React.CSSProperties = {
   padding: "6px 8px",
@@ -35,6 +78,13 @@ export function ChangePasswordForm({ required: requiredBySession = false }: { re
     changePasswordAction,
     undefined,
   );
+
+  // From the action's result, not `required`: the action re-mints the token
+  // and Next re-renders this page with it in the same response, so the prop
+  // reads false by the time state.ok arrives.
+  if (state?.ok && state.continueToDashboard) {
+    return <ContinueToDashboard message={state.ok} warning={state.othersStillSignedIn === true} />;
+  }
 
   if (state?.ok) {
     return (

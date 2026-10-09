@@ -303,7 +303,7 @@ type AnyElement = { type: unknown; props: Record<string, unknown> };
 export function mount<P>(
   component: (props: P) => unknown,
   props: P,
-  opts: { effects?: boolean; client?: boolean; intl?: RequestState["locale"] } = {},
+  opts: { effects?: boolean; client?: boolean; intl?: RequestState["locale"]; actionState?: unknown } = {},
 ) {
   const internals = (React as unknown as Record<string, { H: unknown } | undefined>)
     .__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
@@ -358,11 +358,22 @@ export function mount<P>(
     useDeferredValue<T>(v: T) { cursor++; return v; },
     useId() { return `mount-id-${cursor++}`; },
     useContext(ctx: { _currentValue: unknown }) { return ctx._currentValue; },
+    // use(context) only (Next 16's useSearchParams reads its context this way);
+    // a promise has no meaning without a Suspense boundary, so it fails loudly.
+    use(usable: { _currentValue?: unknown } | PromiseLike<unknown>) {
+      if (usable && typeof usable === "object" && "_currentValue" in usable) return usable._currentValue;
+      throw new Error("mount(): use(promise) is not supported; render the component instead");
+    },
     useSyncExternalStore<T>(_s: unknown, get: () => T, getServer?: () => T) {
       cursor++;
       return (opts.client ? get : (getServer ?? get))();
     },
-    useActionState<S>(_a: unknown, initial: S) { cursor++; return [initial, () => undefined, false]; },
+    // `actionState`: what the form's server action last returned, as after a
+    // submit; without it, the initial state of a form not yet submitted.
+    useActionState<S>(_a: unknown, initial: S) {
+      cursor++;
+      return ["actionState" in opts ? (opts.actionState as S) : initial, () => undefined, false];
+    },
     useOptimistic<S>(v: S) { cursor++; return [v, () => undefined]; },
     useDebugValue() {},
   };

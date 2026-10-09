@@ -25,6 +25,9 @@ type Props = {
   /** Merged over `style` while this is the current page. */
   activeStyle: CSSProperties;
   "data-help-anchor"?: string;
+  /** Set while the menu is locked (Sidebar, BottomTabs). */
+  "aria-disabled"?: boolean;
+  "aria-describedby"?: string;
   children: ReactNode;
 };
 

@@ -25,6 +25,8 @@ type DesktopShellProps = {
   queueDepth?: QueueDepth;
   /** Spec 155 — current UI locale, forwarded to the topbar language picker. */
   locale?: Locale;
+  /** An administrator-set password must be replaced first; see Sidebar. */
+  navLocked?: boolean;
   children: ReactNode;
 };
 
@@ -36,6 +38,7 @@ export function DesktopShell({
   unreadCount,
   queueDepth,
   locale,
+  navLocked = false,
   children,
 }: DesktopShellProps) {
   // Spec 125 — Topbar and Sidebar are now async server components (they call
@@ -47,7 +50,7 @@ export function DesktopShell({
       {/* First in tab order, ahead of the sidebar. position:fixed (globals.css)
           keeps it out of the grid's column placement. */}
       <SkipLink />
-      <Sidebar role={user.role} activeId={activeNavId} counts={navCounts} />
+      <Sidebar role={user.role} activeId={activeNavId} counts={navCounts} locked={navLocked} />
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Topbar
           user={user}

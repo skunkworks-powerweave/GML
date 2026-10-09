@@ -179,6 +179,11 @@
   "settings": {
     "title": "Your preferences",
     "intro": "Saved to your account as you change them, and applied straight away on every device you sign in on.",
+    "passwordFirst": {
+      "title": "Choose your own password to continue",
+      "body": "An administrator set the password you signed in with. Until you replace it with one only you know, every page brings you back here and the menu stays locked. Once you save it, your dashboard opens.",
+      "cta": "Change password now"
+    },
     "footer": "Programme-wide settings (video pipeline, notifications, backups) live under <link>Admin</link> and require a programme admin role.",
     "password": {
       "sessionEnded": "Your session has ended. Sign in again.",
@@ -205,7 +210,8 @@
       "full": "<strong>Confidential.</strong> All materials on this platform are for internal programme use only. Unauthorized sharing, copying, or distribution is not permitted. Viewed by <code>{stamp}</code>.",
       "compact": "<strong>Confidential.</strong> All materials on this platform are for internal programme use only. Unauthorized sharing, copying, or distribution is not permitted.",
       "anonymous": "anonymous"
-    }
+    },
+    "menuLocked": "Menu locked. Choose your own password in Settings to open it."
   },
   "client": {
     "signOut": {
@@ -380,7 +386,9 @@
       "new": "New password ({min}+ characters)",
       "confirm": "Confirm new password",
       "submit": "Change password",
-      "note": "This signs you out on other devices."
+      "note": "This signs you out on other devices.",
+      "continuing": "Opening your dashboard…",
+      "goToDashboard": "Go to your dashboard"
     }
   }
 }

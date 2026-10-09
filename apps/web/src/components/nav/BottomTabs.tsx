@@ -22,6 +22,11 @@ type BottomTabsProps = {
   counts?: NavCounts;
   /** Spec 128 — unread notifications count; drives the inbox dot. */
   unreadCount?: number;
+  /**
+   * An administrator-set password must be replaced first (see Sidebar): the
+   * tabs are dimmed. The Settings page they lead to says why, at the top.
+   */
+  locked?: boolean;
 };
 
 /**
@@ -42,6 +47,19 @@ const TAB_HELP_ANCHOR: Record<string, string> = {
   audit: "audit",
 };
 
+/** Out of sight, still read out: the standard clip pattern. */
+const VISUALLY_HIDDEN: React.CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
 // id → resolver matching the same convention as the sidebar (chrome-counts.ts).
 // Mobile tab ids ("observe", "pairings", "inbox") differ from sidebar nav ids
 // so we keep the mapping local.
@@ -51,9 +69,10 @@ const TAB_BADGE: Record<string, (c: NavCounts, unread: number) => number | undef
   inbox: (_, unread) => (unread > 0 ? unread : undefined),
 };
 
-export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: BottomTabsProps) {
+export async function BottomTabs({ role, activeTab, counts, unreadCount = 0, locked = false }: BottomTabsProps) {
   const tabs = TABS_BY_ROLE[role] ?? TABS_BY_ROLE.teacher;
   const tNav = await getTranslations("nav");
+  const t = await getTranslations("home");
   // Label size per script. 10px was set for every locale, which is small but
   // legible in Latin and not in Tibetan, whose stacked glyphs need both more
   // size and more line height; Devanagari's matras sit between the two.
@@ -66,6 +85,7 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
       // Named, in the user's language: on a phone this bar is the ONLY
       // navigation, so it is the landmark a screen-reader user jumps to.
       aria-label={tNav("primary")}
+      data-locked={locked ? "true" : undefined}
       style={{
         position: "fixed",
         left: 0,
@@ -80,6 +100,13 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
         paddingBottom: "env(safe-area-inset-bottom, 0)",
       }}
     >
+      {/* Why the tabs are dimmed, for a screen reader (each locked tab points
+          here). Sighted users read it at the top of Settings. */}
+      {locked ? (
+        <span id="nav-locked-note-tabs" style={VISUALLY_HIDDEN}>
+          {t("chrome.menuLocked")}
+        </span>
+      ) : null}
       {tabs.map((tab) => {
         const badgeFn = TAB_BADGE[tab.id];
         const badgeVal = badgeFn ? badgeFn(counts ?? {}, unreadCount) : undefined;
@@ -98,6 +125,8 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
             serverActive={activeTab === tab.id}
             href={tab.href}
             data-help-anchor={TAB_HELP_ANCHOR[tab.id] ? `nav-${TAB_HELP_ANCHOR[tab.id]}` : undefined}
+            aria-disabled={locked || undefined}
+            aria-describedby={locked ? "nav-locked-note-tabs" : undefined}
             // The 3px bar and the weight change are visual only; the current
             // tab is stated by aria-current (ActiveNavLink).
             style={{
@@ -112,6 +141,9 @@ export async function BottomTabs({ role, activeTab, counts, unreadCount = 0 }: B
               fontWeight: 400,
               textDecoration: "none",
               position: "relative",
+              // The tabs, not the bar: a translucent fixed bar would show the
+              // page scrolling behind it.
+              opacity: locked ? 0.5 : undefined,
             }}
             activeStyle={{ color: "var(--ink)", fontWeight: 500 }}
           >

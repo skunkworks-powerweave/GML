@@ -144,6 +144,7 @@ test("an account an administrator creates must change its password before using 
     form({ currentPassword: initial, newPassword: "my-own-choice-1", confirmPassword: "my-own-choice-1" }),
   );
   assert.ok(changed.ok, JSON.stringify(changed));
+  assert.equal(changed.continueToDashboard, true, "the form goes on to the dashboard (QA, 9 Oct 2026)");
   assert.equal(fakeUserByEmail(email)?.appMetadata.must_change_password, undefined, "the flag is cleared");
   assert.equal(await proxyRedirect("/dashboard"), null, "and this browser's session no longer carries it");
   assert.equal((await auth())?.user.mustChangePassword, false);

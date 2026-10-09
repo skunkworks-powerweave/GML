@@ -39,7 +39,19 @@ export async function signOutAction(): Promise<void> {
 // written down. There is no recovery path either, because self-service reset
 // is off until SMTP is configured.
 
-export type ChangePasswordState = { error?: string; ok?: string };
+export type ChangePasswordState = {
+  error?: string;
+  ok?: string;
+  /**
+   * The password an administrator set has just been replaced and the flag
+   * lifted: the form opens the dashboard. Decided here, from the session as it
+   * was before the change; the page's own props are re-rendered from the new
+   * token in the same response.
+   */
+  continueToDashboard?: boolean;
+  /** Other devices could not be signed out: `ok` says so and must stay readable. */
+  othersStillSignedIn?: boolean;
+};
 
 export async function changePasswordAction(
   _prev: ChangePasswordState | undefined,
@@ -105,7 +117,8 @@ export async function changePasswordAction(
 
   // A password they chose themselves: lift the must-change flag an
   // administrator-set one carries, and re-mint this browser's token without it.
-  await clearMustChangePassword(session.user.id, supabase);
+  const wasRequired = session.user.mustChangePassword === true;
+  const cleared = await clearMustChangePassword(session.user.id, supabase);
 
   // Never log the password, its length, or any derivative.
   void recordAudit({
@@ -115,5 +128,11 @@ export async function changePasswordAction(
     metadata: { selfService: true, otherSessionsEnded: !signOutError },
   });
 
-  return { ok: signOutError ? t("changedOthersFailed") : t("changed") };
+  return {
+    ok: signOutError ? t("changedOthersFailed") : t("changed"),
+    // Only once the flag is really gone: otherwise the dashboard would send
+    // them straight back here.
+    continueToDashboard: wasRequired && cleared,
+    othersStillSignedIn: signOutError ? true : undefined,
+  };
 }

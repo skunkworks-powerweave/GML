@@ -30,6 +30,8 @@ type MobileShellProps = {
   navCounts?: NavCounts;
   /** Spec 128 — unread notifications count; drives the inbox-tab dot. */
   unreadCount?: number;
+  /** An administrator-set password must be replaced first; see BottomTabs. */
+  navLocked?: boolean;
   children: ReactNode;
 };
 
@@ -39,6 +41,7 @@ export async function MobileShell({
   activeTab,
   navCounts,
   unreadCount,
+  navLocked = false,
   children,
 }: MobileShellProps) {
   const tAction = await getTranslations("action");
@@ -139,6 +142,7 @@ export async function MobileShell({
         activeTab={activeTab}
         counts={navCounts}
         unreadCount={unreadCount}
+        locked={navLocked}
       />
     </div>
   );
