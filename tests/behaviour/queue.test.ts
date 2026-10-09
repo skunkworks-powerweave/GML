@@ -441,3 +441,50 @@ test("W3-59: a dead job the old reaper left without completed_at is pruned once 
     await close();
   }
 });
+
+// QA, 9 Oct 2026: the admin header said "1 failed" for good. The dead job was a
+// transcode of a test video that had since been deleted; /admin/transcode-jobs
+// offers Retry and Drop only on a video that still exists and is failed, so
+// nothing could clear it. A dead transcode whose video no longer exists has
+// nothing left to retry or drop: it no longer counts as needing a human (it
+// stays in the table until pruneFinished removes it, as all dead jobs do).
+test("a dead transcode whose video was deleted no longer counts as failed; one whose video exists still does", { skip }, async () => {
+  const { db, close } = makeDb();
+  const { sql } = await import("drizzle-orm");
+  const name = tag("orphan-dead");
+  const one = async (q: ReturnType<typeof sql>) =>
+    ((await db.execute(q)) as unknown as { rows: Array<{ id: string }> }).rows[0]!.id;
+  let fileId: string | null = null;
+  let videoId: string | null = null;
+  try {
+    const dead = (payload: Record<string, unknown>) =>
+      db.execute(sql`
+        INSERT INTO jobs (queue, name, payload, status, attempts, max_attempts, completed_at)
+        VALUES ('transcode', ${name}, ${JSON.stringify(payload)}::jsonb, 'dead', 3, 3, now())
+      `);
+    const before = (await queueDepth(db, "transcode")).dead;
+
+    // The video was deleted after its transcode died: nothing to do.
+    await dead({ videoSubmissionId: "00000000-0000-4000-8000-0000000000ff" });
+    assert.equal((await queueDepth(db, "transcode")).dead, before, "an orphaned dead job is not a failure anyone can act on");
+
+    // A failed video that still exists: still a failure to act on.
+    fileId = await one(sql`
+      INSERT INTO files (bucket, object_key, mime_type, kind, status, original_filename)
+      VALUES ('videos-original', ${`test/${name}.mp4`}, 'video/mp4', 'video_original', 'stored', 'x.mp4') RETURNING id`);
+    videoId = await one(sql`
+      INSERT INTO video_submissions (file_id, source, status, context_type)
+      VALUES (${fileId}, 'direct', 'failed', 'generic') RETURNING id`);
+    await dead({ videoSubmissionId: videoId });
+    assert.equal((await queueDepth(db, "transcode")).dead, before + 1, "a dead job for an existing video still counts");
+
+    // A dead job that names no video at all is unchanged too.
+    await dead({});
+    assert.equal((await queueDepth(db, "transcode")).dead, before + 2);
+  } finally {
+    await cleanup(db, name);
+    if (videoId) await db.execute(sql`DELETE FROM video_submissions WHERE id = ${videoId}`);
+    if (fileId) await db.execute(sql`DELETE FROM files WHERE id = ${fileId}`);
+    await close();
+  }
+});

@@ -48,9 +48,30 @@ async function withDeadJobs(
     await body(t, q);
   } finally {
     await c.query(`DELETE FROM jobs WHERE last_error LIKE $1`, [`%${t}%`]);
+    await c.query(`DELETE FROM video_submissions WHERE file_id IN (SELECT id FROM files WHERE object_key LIKE $1)`, [`%${t}%`]);
+    await c.query(`DELETE FROM files WHERE object_key LIKE $1`, [`%${t}%`]);
     await c.end();
   }
 }
+
+/**
+ * A failed video that EXISTS, for a dead transcode to be about. A dead
+ * transcode whose video was deleted no longer counts as a failure anyone can
+ * act on (packages/db/src/queue.ts UNRESOLVED_DEAD_SQL), so these fixtures
+ * must not point at a made-up id.
+ */
+const insertFailedVideo = async (q: <R>(sql: string, p?: unknown[]) => Promise<R[]>, t: string) => {
+  const [file] = await q<{ id: string }>(
+    `INSERT INTO files (bucket, object_key, mime_type, kind, status, original_filename)
+       VALUES ('videos-original', $1, 'video/mp4', 'video_original', 'stored', 'x.mp4') RETURNING id`,
+    [`test/${t}/${randomUUID()}.mp4`],
+  );
+  const [video] = await q<{ id: string }>(
+    `INSERT INTO video_submissions (file_id, source, status, context_type) VALUES ($1, 'direct', 'failed', 'generic') RETURNING id`,
+    [file!.id],
+  );
+  return video!.id;
+};
 
 const insertDead = (q: <R>(sql: string, p?: unknown[]) => Promise<R[]>, queue: string, name: string, payload: object, lastError: string) =>
   q(
@@ -61,7 +82,7 @@ const insertDead = (q: <R>(sql: string, p?: unknown[]) => Promise<R[]>, queue: s
 
 test("F145: the topbar's queue depth is shown to programme and super admins only", { skip }, async () => {
   await withDeadJobs(async (t, q) => {
-    await insertDead(q, "transcode", "transcode", { videoSubmissionId: randomUUID() }, `boom ${t}`);
+    await insertDead(q, "transcode", "transcode", { videoSubmissionId: await insertFailedVideo(q, t) }, `boom ${t}`);
     const { transcodeQueueDepth } = await import("../../apps/web/src/lib/queue.ts");
     const depthFor = transcodeQueueDepth as (role: string) => Promise<{ queued: number; running: number; dead: number }>;
     for (const role of ["teacher", "mentor", "observer"]) {
@@ -87,7 +108,7 @@ test("F145: the DLQ lists dead jobs of EVERY queue with their last error, ledger
       // A retention sweep that died, and a transcode the reaper dead-lettered
       // before its handler ever wrote a ledger row.
       await insertDead(q, "retention", "deleteOldNotifications", {}, `relation "notifications" is locked ${t}`);
-      const video = randomUUID();
+      const video = await insertFailedVideo(q, t);
       await insertDead(q, "transcode", "transcode", { videoSubmissionId: video }, `never started ${t} [lease expired: worker stopped responding]`);
     } finally {
       await c.end();

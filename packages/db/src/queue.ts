@@ -359,11 +359,18 @@ export async function reapExpiredLeases(
  * key and leave the dead one behind as history; counting those kept the
  * "N failed" chip, the DLQ list and WhatsApp's "gave up" count on failures an
  * operator had already dealt with, for the 30 days pruneFinished keeps them.
+ *
+ * Nor does a dead TRANSCODE whose video has since been deleted: there is
+ * nothing left to retry or drop (/admin/transcode-jobs acts only on a video
+ * that exists and is failed), so it kept the chip at "1 failed" with no way to
+ * clear it (QA, 9 Oct 2026). It stays in the table until pruned, like the rest.
  * The outer table must be `jobs`, unaliased.
  */
 export const UNRESOLVED_DEAD_SQL = `status = 'dead' AND NOT EXISTS (
   SELECT 1 FROM jobs newer
-   WHERE newer.queue = jobs.queue AND newer.dedupe_key = jobs.dedupe_key AND newer.created_at > jobs.created_at)`;
+   WHERE newer.queue = jobs.queue AND newer.dedupe_key = jobs.dedupe_key AND newer.created_at > jobs.created_at)
+  AND NOT (jobs.queue = 'transcode' AND jobs.payload->>'videoSubmissionId' IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM video_submissions vs WHERE vs.id::text = jobs.payload->>'videoSubmissionId'))`;
 
 /** Depth by status, for the topbar chip and the admin DLQ view. */
 export async function queueDepth(
