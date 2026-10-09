@@ -20,6 +20,14 @@
 // The seed's own lookup and insert run inside a transaction that is rolled
 // back. Any OBS-2026-001 already in the database is renamed for the duration,
 // inside the same transaction, so the test sees only the cycle it made.
+//
+// The table is locked against writes first. Test files run in parallel on one
+// database, and the nominate action (observation-notifications,
+// i18n-observation) mints max+1 -- OBS-2026-001 on a database with no 2026
+// codes. One that committed between the rename and the insert failed this
+// test with a duplicate code (CI, 9 Oct 2026). The lock waits for writers
+// already in flight, so the rename sees what they committed, and holds new
+// ones off until the rollback; readers are not blocked.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -44,6 +52,8 @@ async function withAnchor(
   const T = tag("tplseed");
   try {
     await c.query("BEGIN");
+    // First, before this transaction holds anything another could wait on.
+    await c.query("LOCK TABLE observation_cycles IN SHARE ROW EXCLUSIVE MODE");
     await c.query(`UPDATE observation_cycles SET code = code || $1 WHERE code = 'OBS-2026-001'`, [`-aside-${T}`]);
     const one = async (q: string, p: unknown[]) => (await c.query(q, p)).rows[0].id as string;
     const d = await one(`INSERT INTO districts (name, code) VALUES ($1, $2) RETURNING id`, [`D ${T}`, T.slice(-12)]);
