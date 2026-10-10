@@ -64,10 +64,14 @@ async function deliverAndExhaust(w: Parameters<Parameters<typeof withWorld>[0]>[
   await fetchWhatsAppMedia(job!.payload as never, { attempt: 10, maxAttempts: 10 }, { env: {}, put: async () => undefined }).catch(
     () => undefined,
   );
-  // What the queue does with a job whose last attempt failed.
-  await w.c.query(`UPDATE jobs SET status = 'dead', last_error = 'WHATSAPP_ACCESS_TOKEN is not set', completed_at = now() WHERE id = $1`, [
-    job!.id,
-  ]);
+  // What the queue does with a job whose last attempt failed. Two days ago:
+  // /api/health counts fetches that gave up in the last 24 hours across the
+  // whole database, and whatsapp-observability's F93 asserts that count rises
+  // while this file's retry and cleanup would take this one back out of it.
+  await w.c.query(
+    `UPDATE jobs SET status = 'dead', last_error = 'WHATSAPP_ACCESS_TOKEN is not set', completed_at = now() - interval '2 days' WHERE id = $1`,
+    [job!.id],
+  );
   const sub = await w.submission(id);
   assert.equal(sub!.status, "failed");
   return { id, submissionId: String(sub!.id) };

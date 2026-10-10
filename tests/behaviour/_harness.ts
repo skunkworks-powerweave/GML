@@ -82,6 +82,24 @@ export async function withRlsProbeLock<T>(mode: "exclusive" | "shared", body: ()
   }
 }
 
+/**
+ * Serialise the tests that commit an expired job lease and then reap it
+ * (queue.test.ts's lease test, whatsapp-observability.test.ts's F93).
+ * reapExpiredLeases() takes every expired lease in the table, so one of them
+ * reaping while the other's lease has expired takes the other's job. Hold it
+ * from committing the expired lease until the reap is done; a test that adds
+ * either a committed expired lease or a committed reap must take it too.
+ */
+export async function withExpiredLeaseLock<T>(body: () => Promise<T>): Promise<T> {
+  const c = await connect();
+  try {
+    await c.query(`SELECT pg_advisory_lock(hashtext('tests:expired-job-lease'))`);
+    return await body();
+  } finally {
+    await c.end().catch(() => undefined); // ending the session releases the lock
+  }
+}
+
 /** A unique tag so concurrent test files cannot collide on shared tables. */
 export function tag(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
