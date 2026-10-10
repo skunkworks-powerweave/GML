@@ -23,7 +23,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
+import { needsDatabase, DATABASE_URL, tag, withExpiredLeaseLock } from "./_harness.js";
 import { render, request, resetRequest } from "./_ui.js";
 import {
   acceptAndClaim,
@@ -261,15 +261,22 @@ test("F93: a fetch dead-lettered by the lease reaper counts as a fetch that gave
   await withEnv(PARTLY, () =>
     withWorld(async (w) => {
       const { job } = await acceptAndClaim(w);
-      // The worker died mid-attempt on the last try.
-      await w.c.query(`UPDATE jobs SET attempts = max_attempts, lease_expires_at = now() - interval '1 minute' WHERE id = $1`, [job.id]);
       const dead = async () =>
         Number(((await health()).details as Record<string, Record<string, unknown>>).whatsapp!.deadFetches24h);
+      // Read while the lease is live: once it has expired, another file's
+      // reaper (they act on the whole table) may dead-letter this job first,
+      // and `before` would already count it. A running job is not counted, so
+      // this is the number it would be just after the update.
       const before = await dead();
+      // This reap takes every expired lease in the table, queue.test.ts's too.
+      await withExpiredLeaseLock(async () => {
+        // The worker died mid-attempt on the last try.
+        await w.c.query(`UPDATE jobs SET attempts = max_attempts, lease_expires_at = now() - interval '1 minute' WHERE id = $1`, [job.id]);
 
-      const { reapExpiredLeases } = await import("../../packages/db/src/queue.ts");
-      const { db } = await import("../../packages/db/src/index.ts");
-      await reapExpiredLeases(db as never);
+        const { reapExpiredLeases } = await import("../../packages/db/src/queue.ts");
+        const { db } = await import("../../packages/db/src/index.ts");
+        await reapExpiredLeases(db as never);
+      });
 
       const [row] = (await w.c.query(`SELECT status, completed_at FROM jobs WHERE id = $1`, [job.id])).rows;
       assert.equal(row.status, "dead");

@@ -97,28 +97,32 @@ test("FR-10: mentors and observers reach the teach-back queue, and its badge kee
   // that had waited longest dropped out of it while /rtt/teach-back kept it.
   const w = await observationWorld("navteach");
   const db = drizzle(w.c) as unknown as Db;
-  let fileId: string | undefined;
   try {
-    const before = (await navCounts(db, w.mentor.id, "mentor")).pendingReview ?? 0;
-    fileId = (
+    // The badge counts every unreviewed teach-back in the database, and other
+    // files add, review and delete theirs meanwhile (teach-back-queue removes
+    // 85 at once): both counts and the clip are in one snapshot on w.c, which
+    // navCounts reads through, and the clip is rolled back with it.
+    await w.c.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+    try {
+      const before = (await navCounts(db, w.mentor.id, "mentor")).pendingReview ?? 0;
+      const fileId = (
+        await w.c.query(
+          `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos', $1, 'video/mp4', 'video_original', 'stored') RETURNING id`,
+          [`test/${w.T}/teach-back`],
+        )
+      ).rows[0].id as string;
       await w.c.query(
-        `INSERT INTO files (bucket, object_key, mime_type, kind, status) VALUES ('videos', $1, 'video/mp4', 'video_original', 'stored') RETURNING id`,
-        [`test/${w.T}/teach-back`],
-      )
-    ).rows[0].id as string;
-    await w.c.query(
-      `INSERT INTO video_submissions (file_id, source, status, context_type, hls_master_key, verified_at, created_at)
-       VALUES ($1, 'direct', 'ready', 'teach_back', 'hls/test/master.m3u8', now(), now() - interval '40 days')`,
-      [fileId],
-    );
-    const mentor = (await navCounts(db, w.mentor.id, "mentor")).pendingReview ?? 0;
-    assert.ok(mentor >= before + 1, `a 40-day-old unreviewed teach-back is counted (${before} -> ${mentor})`);
-    assert.ok(((await navCounts(db, w.observer.id, "observer")).pendingReview ?? 0) >= 1, "the observer's badge counts it too");
-  } finally {
-    if (fileId) {
-      await w.c.query(`DELETE FROM video_submissions WHERE file_id = $1`, [fileId]);
-      await w.c.query(`DELETE FROM files WHERE id = $1`, [fileId]);
+        `INSERT INTO video_submissions (file_id, source, status, context_type, hls_master_key, verified_at, created_at)
+         VALUES ($1, 'direct', 'ready', 'teach_back', 'hls/test/master.m3u8', now(), now() - interval '40 days')`,
+        [fileId],
+      );
+      const mentor = (await navCounts(db, w.mentor.id, "mentor")).pendingReview ?? 0;
+      assert.ok(mentor >= before + 1, `a 40-day-old unreviewed teach-back is counted (${before} -> ${mentor})`);
+      assert.ok(((await navCounts(db, w.observer.id, "observer")).pendingReview ?? 0) >= 1, "the observer's badge counts it too");
+    } finally {
+      await w.c.query("ROLLBACK");
     }
+  } finally {
     await w.cleanup();
   }
 });

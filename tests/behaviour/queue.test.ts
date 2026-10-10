@@ -24,8 +24,9 @@ import {
   reapExpiredLeases,
   succeed,
   queueDepth,
+  type QueueName,
 } from "@gml/db/queue";
-import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
+import { needsDatabase, DATABASE_URL, tag, withExpiredLeaseLock } from "./_harness.js";
 
 const skip = needsDatabase();
 
@@ -34,25 +35,68 @@ function makeDb() {
   return { db: drizzle(pool), close: () => pool.end() };
 }
 
+type Db = ReturnType<typeof makeDb>["db"];
+
 /** Remove only the rows a given test created. */
-async function cleanup(db: ReturnType<typeof makeDb>["db"], name: string) {
+async function cleanup(db: Db, name: string) {
   const { sql } = await import("drizzle-orm");
   await db.execute(sql`DELETE FROM jobs WHERE name = ${name}`);
+}
+
+// Other test files run at the same time against the same jobs table, and
+// commit and remove 'transcode' jobs as they go (uploads, WhatsApp fetches,
+// DLQ Retry). claim() takes the OLDEST runnable job of a queue across the whole
+// table, reapExpiredLeases() and pruneFinished() act on every row, and
+// queueDepth() counts every row of a queue. So each test here either works on
+// a queue of its own, or runs those calls in a transaction it rolls back.
+
+/**
+ * A queue only the calling test uses: no other file's job can be claimed here,
+ * and none of this test's can be claimed by anyone else. For properties that
+ * do not depend on the queue being 'transcode' (UNRESOLVED_DEAD_SQL's special
+ * case does). jobs.queue is varchar(64) with no CHECK.
+ */
+function privateQueue(prefix: string): QueueName {
+  return tag(`q-${prefix}`) as QueueName;
+}
+
+class Rollback extends Error {}
+
+/**
+ * Run `body` in one transaction that is always rolled back: other files never
+ * see what it did, and with "repeatable read" its reads never see what other
+ * files commit meanwhile. Everything in `body` must go through its handle:
+ * another connection would not see the transaction's rows, and one that
+ * touched a row the transaction holds would wait on it forever.
+ */
+async function rolledBack(db: Db, body: (t: Db) => Promise<void>, isolationLevel?: "repeatable read") {
+  await db
+    .transaction(
+      async (tx) => {
+        await body(tx as unknown as Db);
+        throw new Rollback();
+      },
+      isolationLevel ? { isolationLevel } : undefined,
+    )
+    .catch((e: unknown) => {
+      if (!(e instanceof Rollback)) throw e;
+    });
 }
 
 test("two concurrent claims never return the same job", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("claim-race");
+  const queue = privateQueue("claim-race");
   try {
     // Ten jobs, ten simultaneous claims. Without SKIP LOCKED the second claimer
     // BLOCKS on the row the first locked, and a naive read-then-update returns
     // the same row to both.
     for (let i = 0; i < 10; i += 1) {
-      await enqueue(db, { queue: "transcode", name, payload: { i } });
+      await enqueue(db, { queue, name, payload: { i } });
     }
 
     const claimed = await Promise.all(
-      Array.from({ length: 10 }, (_, i) => claim(db, "transcode", `w${i}`)),
+      Array.from({ length: 10 }, (_, i) => claim(db, queue, `w${i}`)),
     );
     const mine = claimed.filter((j) => j && j.name === name);
     const ids = mine.map((j) => j!.id);
@@ -72,16 +116,17 @@ test("two concurrent claims never return the same job", { skip }, async () => {
 test("a claimed job is not visible to another claim", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("exclusive");
+  const queue = privateQueue("exclusive");
   try {
-    await enqueue(db, { queue: "transcode", name, payload: {} });
-    const first = await claim(db, "transcode", "worker-a");
+    await enqueue(db, { queue, name, payload: {} });
+    const first = await claim(db, queue, "worker-a");
     assert.ok(first, "the job should have been claimable");
 
     // Drain anything else that happens to be queued, then confirm ours is not
     // among what remains.
     const seen: string[] = [];
     for (let i = 0; i < 5; i += 1) {
-      const j = await claim(db, "transcode", "worker-b");
+      const j = await claim(db, queue, "worker-b");
       if (!j) break;
       seen.push(j.id);
     }
@@ -99,24 +144,29 @@ test("an expired lease is requeued; a heartbeated one is not", { skip }, async (
   const { db, close } = makeDb();
   const { sql } = await import("drizzle-orm");
   const name = tag("lease");
+  const queue = privateQueue("lease");
   try {
-    await enqueue(db, { queue: "transcode", name, payload: { which: "abandoned" } });
-    await enqueue(db, { queue: "transcode", name, payload: { which: "alive" } });
+    await enqueue(db, { queue, name, payload: { which: "abandoned" } });
+    await enqueue(db, { queue, name, payload: { which: "alive" } });
 
-    const a = await claim(db, "transcode", "dying-worker");
-    const b = await claim(db, "transcode", "healthy-worker");
+    const a = await claim(db, queue, "dying-worker");
+    const b = await claim(db, queue, "healthy-worker");
     assert.ok(a && b, "both jobs should have been claimable");
 
-    // Simulate a worker killed with SIGKILL: no catch block ran, nothing marked
-    // the job failed, and the lease simply stops being extended.
-    await db.execute(sql`
-      UPDATE jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = ${a!.id}::uuid
-    `);
-    // The other worker is slow but alive.
-    await heartbeat(db, b!.id, 900);
+    // The reaper takes every expired lease in the table: another file's
+    // reaper could take a's first, and this one could take another file's.
+    await withExpiredLeaseLock(async () => {
+      // Simulate a worker killed with SIGKILL: no catch block ran, nothing marked
+      // the job failed, and the lease simply stops being extended.
+      await db.execute(sql`
+        UPDATE jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = ${a!.id}::uuid
+      `);
+      // The other worker is slow but alive.
+      await heartbeat(db, b!.id, 900);
 
-    const reaped = await reapExpiredLeases(db);
-    assert.ok(reaped.some((r) => r.id === a!.id && !r.dead), "the abandoned job was not requeued");
+      const reaped = await reapExpiredLeases(db);
+      assert.ok(reaped.some((r) => r.id === a!.id && !r.dead), "the abandoned job was not requeued");
+    });
 
     const rows = await db.execute<{ id: string; status: string }>(sql`
       SELECT id, status FROM jobs WHERE name = ${name}
@@ -146,29 +196,34 @@ test("F04: a lease reaped at max attempts is dead-lettered WITH completed_at, so
   const { sql } = await import("drizzle-orm");
   const name = tag("reap-dead");
   try {
-    // The state a worker SIGKILLed on the job's last attempt leaves behind. Set
-    // directly rather than through claim(), which could hand this test another
-    // file's job from the shared queue.
-    const j = await enqueue(db, { queue: "transcode", name, payload: {}, maxAttempts: 1 });
-    await db.execute(sql`
-      UPDATE jobs SET status = 'running', attempts = 1, locked_by = 'killed',
-                      lease_expires_at = now() - interval '1 minute'
-       WHERE id = ${j.id}::uuid
-    `);
+    // The reaper and the pruner act on every row in the table: run them, and
+    // set up what they act on, in a transaction that is rolled back, so neither
+    // touches another file's jobs for good.
+    await rolledBack(db, async (t) => {
+      // The state a worker SIGKILLed on the job's last attempt leaves behind. Set
+      // directly rather than through claim(), which could hand this test another
+      // file's job from the shared queue.
+      const j = await enqueue(t, { queue: "transcode", name, payload: {}, maxAttempts: 1 });
+      await t.execute(sql`
+        UPDATE jobs SET status = 'running', attempts = 1, locked_by = 'killed',
+                        lease_expires_at = now() - interval '1 minute'
+         WHERE id = ${j.id}::uuid
+      `);
 
-    await reapExpiredLeases(db);
-    const row = async () =>
-      ((await db.execute<{ status: string; completed: boolean }>(sql`
-        SELECT status, completed_at IS NOT NULL AS completed FROM jobs WHERE id = ${j.id}::uuid
-      `)) as unknown as { rows: { status: string; completed: boolean }[] }).rows[0];
-    assert.equal((await row())?.status, "dead");
-    // pruneFinished keys dead jobs on completed_at. Without it the row -- and
-    // the 'N failed' topbar chip that counts it -- stayed forever.
-    assert.equal((await row())?.completed, true, "a reaper dead-letter must set completed_at like fail() does");
+      await reapExpiredLeases(t);
+      const row = async () =>
+        ((await t.execute<{ status: string; completed: boolean }>(sql`
+          SELECT status, completed_at IS NOT NULL AS completed FROM jobs WHERE id = ${j.id}::uuid
+        `)) as unknown as { rows: { status: string; completed: boolean }[] }).rows[0];
+      assert.equal((await row())?.status, "dead");
+      // pruneFinished keys dead jobs on completed_at. Without it the row -- and
+      // the 'N failed' topbar chip that counts it -- stayed forever.
+      assert.equal((await row())?.completed, true, "a reaper dead-letter must set completed_at like fail() does");
 
-    await db.execute(sql`UPDATE jobs SET completed_at = now() - interval '31 days' WHERE id = ${j.id}::uuid`);
-    await pruneFinished(db, { deadOlderThanDays: 30 });
-    assert.equal(await row(), undefined, "a month-old dead job was not pruned");
+      await t.execute(sql`UPDATE jobs SET completed_at = now() - interval '31 days' WHERE id = ${j.id}::uuid`);
+      await pruneFinished(t, { deadOlderThanDays: 30 });
+      assert.equal(await row(), undefined, "a month-old dead job was not pruned");
+    });
   } finally {
     await cleanup(db, name);
     await close();
@@ -200,9 +255,10 @@ test("a deliberate retry AFTER completion is allowed", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("retry-after");
   const key = tag("submission");
+  const queue = privateQueue("retry-after");
   try {
-    const first = await enqueue(db, { queue: "transcode", name, payload: {}, dedupeKey: key });
-    const job = await claim(db, "transcode", "w");
+    const first = await enqueue(db, { queue, name, payload: {}, dedupeKey: key });
+    const job = await claim(db, queue, "w");
     assert.ok(job);
     await succeed(db, job!.id);
 
@@ -212,7 +268,7 @@ test("a deliberate retry AFTER completion is allowed", { skip }, async () => {
     // the same class of mistake as the plain INSERT against
     // files_bucket_objectkey_uq that made transcode attempts 2 and 3 fail by
     // construction.
-    const again = await enqueue(db, { queue: "transcode", name, payload: {}, dedupeKey: key });
+    const again = await enqueue(db, { queue, name, payload: {}, dedupeKey: key });
     assert.equal(again.deduped, false, "a retry after completion must create a NEW job");
     assert.notEqual(again.id, first.id);
   } finally {
@@ -225,10 +281,11 @@ test("failures back off, then dead-letter rather than looping", { skip }, async 
   const { db, close } = makeDb();
   const { sql } = await import("drizzle-orm");
   const name = tag("backoff");
+  const queue = privateQueue("backoff");
   try {
-    await enqueue(db, { queue: "transcode", name, payload: {}, maxAttempts: 2 });
+    await enqueue(db, { queue, name, payload: {}, maxAttempts: 2 });
 
-    const a = await claim(db, "transcode", "w");
+    const a = await claim(db, queue, "w");
     assert.ok(a);
     const r1 = await fail(db, a!.id, "boom", a!.attempts, a!.maxAttempts);
     assert.equal(r1.willRetry, true, "attempt 1 of 2 should be retried");
@@ -244,7 +301,7 @@ test("failures back off, then dead-letter rather than looping", { skip }, async 
 
     // Make it runnable again and exhaust it.
     await db.execute(sql`UPDATE jobs SET run_at = now() WHERE id = ${a!.id}::uuid`);
-    const b = await claim(db, "transcode", "w");
+    const b = await claim(db, queue, "w");
     assert.ok(b);
     const r2 = await fail(db, b!.id, "boom again", b!.attempts, b!.maxAttempts);
     assert.equal(r2.willRetry, false);
@@ -359,13 +416,20 @@ test("queueDepth counts what the admin view renders", { skip }, async () => {
   const { db, close } = makeDb();
   const name = tag("depth");
   try {
-    const before = await queueDepth(db, "transcode");
-    await enqueue(db, { queue: "transcode", name, payload: {} });
-    const after = await queueDepth(db, "transcode");
-    assert.equal(
-      after.queued,
-      before.queued + 1,
-      "an enqueued job must show up in the depth the topbar chip reads",
+    // One snapshot for both counts: other files' jobs come and go meanwhile.
+    await rolledBack(
+      db,
+      async (t) => {
+        const before = await queueDepth(t, "transcode");
+        await enqueue(t, { queue: "transcode", name, payload: {} });
+        const after = await queueDepth(t, "transcode");
+        assert.equal(
+          after.queued,
+          before.queued + 1,
+          "an enqueued job must show up in the depth the topbar chip reads",
+        );
+      },
+      "repeatable read",
     );
   } finally {
     await cleanup(db, name);
@@ -377,10 +441,11 @@ test("pruneFinished does not delete live work", { skip }, async () => {
   const { db, close } = makeDb();
   const { sql } = await import("drizzle-orm");
   const name = tag("prune");
+  const queue = privateQueue("prune");
   try {
-    await enqueue(db, { queue: "transcode", name, payload: { keep: true } });
-    const done = await enqueue(db, { queue: "transcode", name, payload: { drop: true } });
-    const j = await claim(db, "transcode", "w");
+    await enqueue(db, { queue, name, payload: { keep: true } });
+    const done = await enqueue(db, { queue, name, payload: { drop: true } });
+    const j = await claim(db, queue, "w");
     if (j) await succeed(db, j.id);
     // Age the completed row past the retention window.
     await db.execute(sql`
@@ -388,19 +453,22 @@ test("pruneFinished does not delete live work", { skip }, async () => {
        WHERE name = ${name} AND status = 'succeeded'
     `);
 
-    await pruneFinished(db, { succeededOlderThanHours: 24 });
+    // The pruner deletes every aged row in the table, other files' included.
+    await rolledBack(db, async (t) => {
+      await pruneFinished(t, { succeededOlderThanHours: 24 });
 
-    const left = await db.execute<{ status: string }>(sql`
-      SELECT status FROM jobs WHERE name = ${name}
-    `);
-    const statuses = ((left as unknown as { rows: { status: string }[] }).rows ?? []).map(
-      (r) => r.status,
-    );
-    assert.ok(
-      statuses.every((s) => s !== "succeeded"),
-      "aged successes should be pruned",
-    );
-    assert.ok(statuses.length >= 1, "pruning must not touch queued work");
+      const left = await t.execute<{ status: string }>(sql`
+        SELECT status FROM jobs WHERE name = ${name}
+      `);
+      const statuses = ((left as unknown as { rows: { status: string }[] }).rows ?? []).map(
+        (r) => r.status,
+      );
+      assert.ok(
+        statuses.every((s) => s !== "succeeded"),
+        "aged successes should be pruned",
+      );
+      assert.ok(statuses.length >= 1, "pruning must not touch queued work");
+    });
     void done;
   } finally {
     await cleanup(db, name);
@@ -413,29 +481,32 @@ test("W3-59: a dead job the old reaper left without completed_at is pruned once 
   const { sql } = await import("drizzle-orm");
   const name = tag("prune-legacy-dead");
   try {
-    // What reapExpiredLeases wrote before it set completed_at: 'dead', with
-    // completed_at NULL and updated_at the moment it was reaped. Rows like it
-    // are in every deployment that ran that reaper, and `completed_at < ...`
-    // is never true of NULL -- so they stayed in the 'N failed' chip and the
-    // DLQ list for good.
-    await db.execute(sql`
-      INSERT INTO jobs (queue, name, payload, status, attempts, max_attempts, completed_at, created_at, updated_at)
-      VALUES ('transcode', ${name}, '{"which":"legacy-old"}', 'dead', 3, 3, NULL,
-              now() - interval '32 days', now() - interval '31 days'),
-             ('transcode', ${name}, '{"which":"legacy-recent"}', 'dead', 3, 3, NULL,
-              now() - interval '3 days', now() - interval '2 days')
-    `);
+    // The pruner deletes every aged row in the table, other files' included.
+    await rolledBack(db, async (t) => {
+      // What reapExpiredLeases wrote before it set completed_at: 'dead', with
+      // completed_at NULL and updated_at the moment it was reaped. Rows like it
+      // are in every deployment that ran that reaper, and `completed_at < ...`
+      // is never true of NULL -- so they stayed in the 'N failed' chip and the
+      // DLQ list for good.
+      await t.execute(sql`
+        INSERT INTO jobs (queue, name, payload, status, attempts, max_attempts, completed_at, created_at, updated_at)
+        VALUES ('transcode', ${name}, '{"which":"legacy-old"}', 'dead', 3, 3, NULL,
+                now() - interval '32 days', now() - interval '31 days'),
+               ('transcode', ${name}, '{"which":"legacy-recent"}', 'dead', 3, 3, NULL,
+                now() - interval '3 days', now() - interval '2 days')
+      `);
 
-    await pruneFinished(db, { deadOlderThanDays: 30 });
+      await pruneFinished(t, { deadOlderThanDays: 30 });
 
-    const left = await db.execute<{ which: string }>(sql`
-      SELECT payload->>'which' AS which FROM jobs WHERE name = ${name}
-    `);
-    assert.deepEqual(
-      ((left as unknown as { rows: { which: string }[] }).rows ?? []).map((r) => r.which),
-      ["legacy-recent"],
-      "a legacy dead job past the window must go, and one inside it must stay",
-    );
+      const left = await t.execute<{ which: string }>(sql`
+        SELECT payload->>'which' AS which FROM jobs WHERE name = ${name}
+      `);
+      assert.deepEqual(
+        ((left as unknown as { rows: { which: string }[] }).rows ?? []).map((r) => r.which),
+        ["legacy-recent"],
+        "a legacy dead job past the window must go, and one inside it must stay",
+      );
+    });
   } finally {
     await cleanup(db, name);
     await close();
@@ -452,39 +523,44 @@ test("a dead transcode whose video was deleted no longer counts as failed; one w
   const { db, close } = makeDb();
   const { sql } = await import("drizzle-orm");
   const name = tag("orphan-dead");
-  const one = async (q: ReturnType<typeof sql>) =>
-    ((await db.execute(q)) as unknown as { rows: Array<{ id: string }> }).rows[0]!.id;
-  let fileId: string | null = null;
-  let videoId: string | null = null;
   try {
-    const dead = (payload: Record<string, unknown>) =>
-      db.execute(sql`
-        INSERT INTO jobs (queue, name, payload, status, attempts, max_attempts, completed_at)
-        VALUES ('transcode', ${name}, ${JSON.stringify(payload)}::jsonb, 'dead', 3, 3, now())
-      `);
-    const before = (await queueDepth(db, "transcode")).dead;
+    // One snapshot for every count: other files commit and remove dead
+    // transcodes meanwhile (queue-visibility, dlq-actions). The queue must stay
+    // 'transcode', which UNRESOLVED_DEAD_SQL special-cases.
+    await rolledBack(
+      db,
+      async (t) => {
+        const one = async (q: ReturnType<typeof sql>) =>
+          ((await t.execute(q)) as unknown as { rows: Array<{ id: string }> }).rows[0]!.id;
+        const dead = (payload: Record<string, unknown>) =>
+          t.execute(sql`
+            INSERT INTO jobs (queue, name, payload, status, attempts, max_attempts, completed_at)
+            VALUES ('transcode', ${name}, ${JSON.stringify(payload)}::jsonb, 'dead', 3, 3, now())
+          `);
+        const before = (await queueDepth(t, "transcode")).dead;
 
-    // The video was deleted after its transcode died: nothing to do.
-    await dead({ videoSubmissionId: "00000000-0000-4000-8000-0000000000ff" });
-    assert.equal((await queueDepth(db, "transcode")).dead, before, "an orphaned dead job is not a failure anyone can act on");
+        // The video was deleted after its transcode died: nothing to do.
+        await dead({ videoSubmissionId: "00000000-0000-4000-8000-0000000000ff" });
+        assert.equal((await queueDepth(t, "transcode")).dead, before, "an orphaned dead job is not a failure anyone can act on");
 
-    // A failed video that still exists: still a failure to act on.
-    fileId = await one(sql`
-      INSERT INTO files (bucket, object_key, mime_type, kind, status, original_filename)
-      VALUES ('videos-original', ${`test/${name}.mp4`}, 'video/mp4', 'video_original', 'stored', 'x.mp4') RETURNING id`);
-    videoId = await one(sql`
-      INSERT INTO video_submissions (file_id, source, status, context_type)
-      VALUES (${fileId}, 'direct', 'failed', 'generic') RETURNING id`);
-    await dead({ videoSubmissionId: videoId });
-    assert.equal((await queueDepth(db, "transcode")).dead, before + 1, "a dead job for an existing video still counts");
+        // A failed video that still exists: still a failure to act on.
+        const fileId = await one(sql`
+          INSERT INTO files (bucket, object_key, mime_type, kind, status, original_filename)
+          VALUES ('videos-original', ${`test/${name}.mp4`}, 'video/mp4', 'video_original', 'stored', 'x.mp4') RETURNING id`);
+        const videoId = await one(sql`
+          INSERT INTO video_submissions (file_id, source, status, context_type)
+          VALUES (${fileId}, 'direct', 'failed', 'generic') RETURNING id`);
+        await dead({ videoSubmissionId: videoId });
+        assert.equal((await queueDepth(t, "transcode")).dead, before + 1, "a dead job for an existing video still counts");
 
-    // A dead job that names no video at all is unchanged too.
-    await dead({});
-    assert.equal((await queueDepth(db, "transcode")).dead, before + 2);
+        // A dead job that names no video at all is unchanged too.
+        await dead({});
+        assert.equal((await queueDepth(t, "transcode")).dead, before + 2);
+      },
+      "repeatable read",
+    );
   } finally {
     await cleanup(db, name);
-    if (videoId) await db.execute(sql`DELETE FROM video_submissions WHERE id = ${videoId}`);
-    if (fileId) await db.execute(sql`DELETE FROM files WHERE id = ${fileId}`);
     await close();
   }
 });
