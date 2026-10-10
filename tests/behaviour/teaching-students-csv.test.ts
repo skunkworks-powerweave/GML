@@ -66,10 +66,18 @@ async function inWorld(body: (w: TeachingWorld) => Promise<void>) {
 }
 
 type Row = { name: string; roll_number: string | null; section: string | null; grade: number; school_id: string; class_id: string };
+/**
+ * This world's learners with these names. Scoped to the world's two schools --
+ * where its fixture and every upload here put learners, and what its cleanup
+ * removes -- because the behaviour files run in parallel on one database and
+ * names repeat across them: unscoped, another file's "Tenzin" (another school,
+ * section B, roll 2) answered for this one's.
+ */
 const learnersOf = async (w: TeachingWorld, names: string[]): Promise<Record<string, Row>> => {
   const { rows } = await w.c.query(
-    `SELECT name, roll_number, section, grade, school_id, class_id FROM learners WHERE name = ANY($1) AND deleted_at IS NULL`,
-    [names],
+    `SELECT name, roll_number, section, grade, school_id, class_id FROM learners
+      WHERE name = ANY($1) AND school_id = ANY($2) AND deleted_at IS NULL`,
+    [names, [w.school, w.otherSchool]],
   );
   return Object.fromEntries(rows.map((r) => [r.name as string, r as Row]));
 };
