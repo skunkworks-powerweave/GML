@@ -81,9 +81,14 @@ test("F93: a dead-lettered fetch shows its reason and can be queued again once t
 
       const { default: Page } = await page();
       const html = await render(await Page({ searchParams: Promise.resolve({}) }));
-      const row = html.slice(html.indexOf(submissionId.slice(0, 10)) - 2000, html.indexOf(submissionId.slice(0, 10)) + 2000);
+      // This submission's own row: the page lists every file's WhatsApp videos,
+      // and a neighbour's reason or button would do; and its button, which the
+      // reason's own "use Retry fetch on /admin/whatsapp-log" would stand in for.
+      const at = html.indexOf(submissionId.slice(0, 10));
+      assert.ok(at > 0, "the submission is listed");
+      const row = html.slice(html.lastIndexOf("<tr", at), html.indexOf("</tr>", at));
       assert.match(row, /WHATSAPP_ACCESS_TOKEN/, "the failure's reason must be on the page, not only in the jobs table");
-      assert.match(row, /Retry fetch/, "a video whose media never arrived must be recoverable from here");
+      assert.match(row, /<button[^>]*>Retry fetch<\/button>/, "a video whose media never arrived must be recoverable from here");
 
       const { retryWhatsAppFetchAction } = await actions();
       const r = await outcome(() => retryWhatsAppFetchAction(form(submissionId)));

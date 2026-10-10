@@ -21,6 +21,7 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { needsDatabase, DATABASE_URL, tag } from "./_harness.js";
@@ -37,6 +38,7 @@ import {
   waitFor,
   withEnv,
   withWorld,
+  type World,
 } from "./_whatsapp.js";
 
 const skip = needsDatabase();
@@ -61,6 +63,41 @@ const PARTLY = {
 async function health(): Promise<Record<string, unknown>> {
   const { GET } = await import("../../apps/web/src/app/api/health/route.ts");
   return (await (await GET()).json()) as Record<string, unknown>;
+}
+
+type Queryable = { query: (...args: unknown[]) => unknown };
+
+/**
+ * Run `body` in one REPEATABLE READ snapshot on `c`, rolled back, with the
+ * app's pool sending its queries to `c` meanwhile, so that what /api/health
+ * reports is read in that snapshot too; `body` gets the statements sent. Both
+ * instances of the pool: the one `import("@gml/db")` gives, and the one
+ * apps/web's require() does (tsx loads apps/web as CommonJS). One at a time:
+ * a pg Client given a query while another runs is deprecated.
+ */
+async function inSnapshot<T>(c: World["c"], body: (statements: string[]) => Promise<T>): Promise<T> {
+  const { getPool } = await import("../../packages/db/src/client.ts");
+  const web = createRequire(new URL("../../apps/web/package.json", import.meta.url))("@gml/db") as { getPool: () => Queryable };
+  const pools = [...new Set([getPool() as unknown as Queryable, web.getPool()])];
+  const own = pools.map((p) => p.query);
+  const statements: string[] = [];
+  let last: Promise<unknown> = Promise.resolve();
+  const routed = (...args: unknown[]) => {
+    const q = args[0] as string | { text?: string };
+    statements.push(typeof q === "string" ? q : (q?.text ?? ""));
+    const result = last.then(() => (c.query as (...a: unknown[]) => Promise<unknown>).apply(c, args));
+    last = result.catch(() => undefined);
+    return result;
+  };
+  await c.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+  for (const p of pools) p.query = routed;
+  try {
+    return await body(statements);
+  } finally {
+    pools.forEach((p, i) => (p.query = own[i]!));
+    await last;
+    await c.query("ROLLBACK");
+  }
 }
 
 /** Collect what console.warn / console.error print while `body` runs. */
@@ -95,6 +132,32 @@ test("F139: /api/health says whether WhatsApp is off, partly set up or on, and w
         ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN"],
       );
       assert.ok(Number(wa.pendingFetches) >= 1, "videos waiting on a fetch are counted");
+
+      // The count is every file's waiting fetches, so the line above also
+      // passes on another file's, even with none of this test's (the fetch
+      // above may fail silently). Count again in one snapshot, with this
+      // world's fetches waiting and then not: only they can make the difference.
+      const mine = (
+        await w.c.query(
+          `SELECT id FROM jobs WHERE name = 'whatsapp_fetch' AND status IN ('queued', 'running') AND payload->>'msgId' LIKE $1`,
+          [`wamid.${w.T}%`],
+        )
+      ).rows.map((r) => r.id as string);
+      assert.ok(mine.length >= 1, "this test's videos are waiting on a fetch");
+      const pending = async () => {
+        const n = ((await health()).details as Record<string, Record<string, unknown>>).whatsapp!.pendingFetches;
+        // A database error leaves no count, which Number() would make 0.
+        assert.equal(typeof n, "number", "health read the waiting fetches");
+        return n as number;
+      };
+      const counted = await inSnapshot(w.c, async (statements) => {
+        const all = await pending();
+        await w.c.query(`UPDATE jobs SET status = 'succeeded' WHERE id = ANY($1)`, [mine]);
+        const rest = await pending();
+        assert.equal(statements.filter((s) => s.includes("whatsapp_fetch")).length, 2, "both counts were read in the snapshot");
+        return all - rest;
+      });
+      assert.equal(counted, mine.length, "this test's waiting videos are the ones counted");
     }),
   );
   await withEnv(
@@ -139,7 +202,10 @@ test("F139: the ingest log says what the configuration is missing", { skip }, as
     };
     const { default: Page } = await import("../../apps/web/src/app/(authenticated)/admin/whatsapp-log/page.tsx");
     const html = await render(await Page({ searchParams: Promise.resolve({}) }));
-    assert.match(html, /WHATSAPP_ACCESS_TOKEN/, "the page an operator opens first must say why videos are not arriving");
+    // The notice itself: the rows below list every file's WhatsApp videos, and
+    // another file's failed fetch names the token in its own reason.
+    const notice = /<section\b[^>]*\bdata-testid="whatsapp-config"[^>]*>[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+    assert.match(notice, /WHATSAPP_ACCESS_TOKEN/, "the page an operator opens first must say why videos are not arriving");
   });
 });
 

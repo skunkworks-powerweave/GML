@@ -102,25 +102,31 @@ test("the gate cards' counts come from one grouped query per table, and are righ
       actAs(admin, "super_admin");
       const statements: string[] = [];
       const original = pool.query;
-      pool.query = function (this: unknown, ...args: unknown[]) {
+      // Other tests add gate attempts and add and remove grants as this runs,
+      // and a grant added after one count and removed before the next was on
+      // the page and in neither. So the page and the count read one snapshot:
+      // the page reads through the app's pool, whose statements go to this
+      // connection meanwhile.
+      // One at a time: a pg Client given a query while another runs is deprecated.
+      let last: Promise<unknown> = Promise.resolve();
+      await c.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      pool.query = function (...args: unknown[]) {
         const q = args[0] as string | { text?: string };
         statements.push(typeof q === "string" ? q : (q?.text ?? ""));
-        return original.apply(this, args);
+        const result = last.then(() => (c.query as (...a: unknown[]) => Promise<unknown>).apply(c, args));
+        last = result.catch(() => undefined);
+        return result;
       };
-      // Other tests write gate attempts too; retry until nothing moved
-      // while the page was rendering.
       let shown: Record<string, Card> = {};
       let expected: Record<string, Card> = {};
       try {
-        for (let i = 0; i < 5; i++) {
-          const before = await truth();
-          statements.length = 0;
-          shown = cards(await render(await GatesPage()));
-          expected = await truth();
-          if (JSON.stringify(before) === JSON.stringify(expected)) break;
-        }
+        shown = cards(await render(await GatesPage()));
+        await last;
+        expected = await truth();
       } finally {
         pool.query = original;
+        await last;
+        await c.query("COMMIT"); // the page's own audit row, as before
       }
 
       assert.deepEqual(shown, expected, "each card shows the database's own counts");
