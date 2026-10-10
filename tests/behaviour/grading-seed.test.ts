@@ -31,11 +31,20 @@ test("the seed makes the three default scales and the default rubric, once, and 
   const { seedGrading, DEFAULT_SCALES, DEFAULT_RUBRIC } = await import("../../packages/db/src/scripts/seed_grading.ts");
   const { db } = await import("@gml/db");
   const { gradingScales, gradingBands, observationRubrics, rubricCriteria } = await import("@gml/db/schema");
-  const { and, asc, eq, inArray } = await import("drizzle-orm");
+  const { and, asc, eq, inArray, sql } = await import("drizzle-orm");
   const names = DEFAULT_SCALES.map((s) => s.name);
 
   await db
     .transaction(async (tx) => {
+      // The seed asks "is there a default already?" across the whole table,
+      // and other files commit their own quiz default (admin-platform-entities):
+      // hold off every other write to grading_scales until this transaction
+      // rolls back, so no default appears between clearing them and seeding.
+      // EXCLUSIVE, not SHARE ROW EXCLUSIVE: clearing that file's default needs
+      // its row, which its edit holds FOR UPDATE before writing; this waits for
+      // the edit to finish instead of deadlocking with it. Plain reads are not
+      // blocked.
+      await tx.execute(sql`LOCK TABLE grading_scales IN EXCLUSIVE MODE`);
       // As on a fresh deployment: none of the seed's rows, no defaults.
       await tx.delete(observationRubrics).where(eq(observationRubrics.name, DEFAULT_RUBRIC.name));
       await tx.delete(gradingScales).where(inArray(gradingScales.name, names));

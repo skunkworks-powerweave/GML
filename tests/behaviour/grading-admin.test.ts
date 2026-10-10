@@ -202,7 +202,7 @@ test("one default per kind: making a scale the default takes it from the previou
   const l = await lib();
   const { resolveScale } = await scalesLib();
   const { gradingScales, gradingBands } = await import("@gml/db/schema");
-  const { and, eq } = await import("drizzle-orm");
+  const { and, eq, sql } = await import("drizzle-orm");
   await withClient(async (c) => {
     const t = tag("gdef");
     const f = fixture(c, t);
@@ -210,6 +210,12 @@ test("one default per kind: making a scale the default takes it from the previou
       const pa = await admin(f);
       await rolledBack(async (tx: never) => {
         const d = tx as unknown as import("drizzle-orm/node-postgres").NodePgDatabase<Record<string, unknown>>;
+        // "Other kinds are untouched" reads the quiz default across the whole
+        // table, twice, and other files commit and delete their own quiz
+        // default (admin-platform-entities): hold off every other write to
+        // grading_scales until this transaction rolls back, so the two reads
+        // see the same table. Plain reads and foreign-key checks are not blocked.
+        await d.execute(sql`LOCK TABLE grading_scales IN SHARE ROW EXCLUSIVE MODE`);
         const make = async (name: string, appliesTo: "student" | "quiz") => {
           const [row] = await d.insert(gradingScales).values({ name: `${name} ${t}`, appliesTo }).returning({ id: gradingScales.id });
           await d.insert(gradingBands).values({ scaleId: row!.id, label: "All", minPct: 0, maxPct: 100, isPass: true, sequence: 1 });

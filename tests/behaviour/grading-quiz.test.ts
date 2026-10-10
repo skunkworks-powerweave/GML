@@ -90,11 +90,19 @@ test("a quiz that names no scale is graded with the default quiz scale, and with
   const { quizGrader } = await import("../../apps/web/src/lib/grading/quiz.ts");
   const { db } = await import("@gml/db");
   const { gradingScales, gradingBands } = await import("@gml/db/schema");
-  const { and, eq } = await import("drizzle-orm");
+  const { and, eq, sql } = await import("drizzle-orm");
   class Rollback extends Error {}
   const t = tag("gqdef");
   await db
     .transaction(async (tx) => {
+      // The default is read across the whole table, and other files commit
+      // their own quiz default (admin-platform-entities): hold off every other
+      // write to grading_scales until this transaction rolls back, so none
+      // appears between clearing the defaults and reading them. EXCLUSIVE, not
+      // SHARE ROW EXCLUSIVE: clearing that file's default needs its row, which
+      // its edit holds FOR UPDATE before writing; this waits for the edit to
+      // finish instead of deadlocking with it. Plain reads are not blocked.
+      await tx.execute(sql`LOCK TABLE grading_scales IN EXCLUSIVE MODE`);
       // Nothing is the default: no grade, only the score.
       await tx.update(gradingScales).set({ isDefault: false }).where(and(eq(gradingScales.appliesTo, "quiz"), eq(gradingScales.isDefault, true)));
       const none = await quizGrader(tx as never, { gradingScaleId: null });
